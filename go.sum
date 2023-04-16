@@ -1,0 +1,7 @@
+github.com/google/go-cmp v0.5.9 h1:O2Tfq5qg4qc4AmwVlvv0oLiVAGB7enBSJ2x2DqQFi38=
+github.com/onsi/gomega v1.27.5 h1:T/X6I0RNFw/kTqgfkZPcQ5KU6vCnWNBGdtrIx2dpGeQ=
+github.com/rueian/rueidis v0.0.98 h1:dYIcyxGokQJNTRaYngEeKJ0giwpZEHoyVGLiT+hC39o=
+github.com/rueian/rueidis v0.0.98/go.mod h1:ivvsRYRtAUcf9OnheuKc5Gpa8IebrkLT1P45Lr2jlXE=
+golang.org/x/net v0.8.0 h1:Zrh2ngAOFYneWTAIAPethzeaQLuHwhuBkuV6ZiRnUaQ=
+golang.org/x/text v0.8.0 h1:57P1ETyNKtuIjB4SRd15iJxuhj8Gc416Y78H3qgMh68=
+gopkg.in/yaml.v3 v3.0.1 h1:fxVm/GzAzEWqLHuvctI91KS9hhNmmWOoWu0XTYJS7CA=
