@@ -5,26 +5,26 @@ import (
 
 	"friday/pkg/friday"
 	"friday/pkg/llm/prompts"
+	"friday/pkg/utils/logger"
 )
 
 func main() {
+	logger.InitLogger()
+	defer logger.Sync()
+
 	f, err := friday.NewFriday(&friday.Config{
 		EmbeddingType:   "openai",
 		VectorStoreType: "redis",
 		VectorUrl:       "localhost:6379",
 		LLMType:         "openai",
+		SpliterType:     "text",
+		ChunkSize:       400,
 	})
 	if err != nil {
 		panic(err)
 	}
 
-	//f.Ingest("1", "I love cats.")
-	//f.Ingest("2", "I love dogs.")
-	//f.Ingest("3", "Cats like eating fish.")
-	//f.Ingest("4", "Dogs like eating meat.")
-	//f.Ingest("5", "I do not like cats.")
-	//
-	query := "What is my favorite animal that eats fish?"
+	query := "如何查看 JuiceFS 的监控？"
 	p := prompts.NewKnowledgePrompt()
 	a, err := f.Question(p, query)
 	if err != nil {

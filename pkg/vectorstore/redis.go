@@ -2,6 +2,7 @@ package vectorstore
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strconv"
 
@@ -51,6 +52,7 @@ func (r RedisClient) initIndex() error {
 		context.Background(),
 		r.client.B().Arbitrary("FT.CREATE", r.index, "ON", "HASH", "PREFIX", "1", r.prefix, "SCHEMA").
 			Args("id", "TEXT").
+			Args("metadata", "TEXT").
 			Args("content", "TEXT").
 			Args("vector", "VECTOR", "FLAT", "6", "TYPE", "FLOAT32", "DIM", strconv.Itoa(r.dim), "DISTANCE_METRIC", "L2").
 			Build()).Error(); err != nil {
@@ -59,41 +61,55 @@ func (r RedisClient) initIndex() error {
 	return nil
 }
 
-func (r RedisClient) EmbeddingDoc(id, content string, vectors []float32) {
+func (r RedisClient) EmbeddingDoc(id, content string, metadata map[string]interface{}, vectors []float32) error {
 	ctx := context.Background()
 
-	if err := r.client.Do(ctx, r.client.B().Hset().Key(fmt.Sprintf("%s:%s", r.prefix, id)).FieldValue().
-		FieldValue("id", id).
-		FieldValue("content", content).
-		FieldValue("vector", rueidis.VectorString32(vectors)).Build()).Error(); err != nil {
-		panic(err)
+	var m string
+	if metadata != nil {
+		b, err := json.Marshal(metadata)
+		if err != nil {
+			return err
+		}
+		m = string(b)
 	}
+	return r.client.Do(ctx, r.client.B().Hset().Key(fmt.Sprintf("%s:%s", r.prefix, id)).FieldValue().
+		FieldValue("id", id).
+		FieldValue("metadata", m).
+		FieldValue("content", content).
+		FieldValue("vector", rueidis.VectorString32(vectors)).Build()).Error()
 }
 
-func (r RedisClient) Search(vectors []float32, k int) ([]string, error) {
+func (r RedisClient) Search(vectors []float32, k int) ([]Doc, error) {
 	ctx := context.Background()
 
 	resp, err := r.client.Do(ctx, r.client.B().FtSearch().Index(r.index).
 		Query("*=>[KNN 10 @vector $B AS vector_score]").
-		Return("3").Identifier("id").Identifier("content").Identifier("vector_score").
+		Return("4").Identifier("id").Identifier("content").
+		Identifier("metadata").Identifier("vector_score").
 		Sortby("vector_score").
 		Params().Nargs(2).NameValue().
 		NameValue("B", rueidis.VectorString32(vectors)).
-		//NameValue("K", strconv.Itoa(k)).
-		//NameValue("EF", strconv.Itoa(150)).
 		Dialect(2).Build()).ToArray()
 	if err != nil {
 		return nil, err
 	}
-	results := make([]string, 0)
+	results := make([]Doc, 0)
 
 	for i := 1; i < len(resp[1:]); i += 2 {
 		res, err := resp[i+1].AsStrMap()
 		if err != nil {
 			return nil, err
 		}
-		results = append(results, res["content"])
-		fmt.Printf("id: %s, content: %s, score: %s\n", res["id"], res["content"], res["vector_score"])
+		metadata := make(map[string]interface{})
+		if err := json.Unmarshal([]byte(res["metadata"]), &metadata); err != nil {
+			return nil, err
+		}
+		results = append(results, Doc{
+			Id:       res["id"],
+			Metadata: metadata,
+			Content:  res["content"],
+		})
+		//fmt.Printf("id: %s, content: %s, score: %s\n", res["id"], res["content"], res["vector_score"])
 		if len(results) >= k {
 			break
 		}
