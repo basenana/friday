@@ -13,12 +13,12 @@ func main() {
 	defer logger.Sync()
 
 	f, err := friday.NewFriday(&friday.Config{
-		EmbeddingType:   "openai",
-		VectorStoreType: "redis",
-		VectorUrl:       "localhost:6379",
 		LLMType:         "openai",
 		SpliterType:     "text",
 		ChunkSize:       400,
+		EmbeddingType:   "openai",
+		VectorStoreType: "redis",
+		VectorUrl:       "localhost:6379",
 	})
 	if err != nil {
 		panic(err)

@@ -9,6 +9,7 @@ import (
 	"friday/pkg/embedding"
 	openaiembedding "friday/pkg/embedding/openai/v1"
 	"friday/pkg/llm"
+	glm_6b "friday/pkg/llm/client/glm-6b"
 	openaiv1 "friday/pkg/llm/client/openai/v1"
 	"friday/pkg/llm/prompts"
 	"friday/pkg/spliter"
@@ -41,6 +42,9 @@ func NewFriday(config *Config) (f *Friday, err error) {
 	)
 	if config.LLMType == "openai" {
 		llmClient = openaiv1.NewOpenAIV1()
+	}
+	if config.LLMType == "glm-6b" {
+		llmClient = glm_6b.NewGLM("http://localhost:8000")
 	}
 	if config.EmbeddingType == "openai" {
 		embeddingModel = openaiembedding.NewOpenAIEmbedding()
