@@ -7,6 +7,7 @@ import (
 	"strconv"
 
 	"github.com/rueian/rueidis"
+	"go.uber.org/zap"
 )
 
 const (
@@ -15,6 +16,7 @@ const (
 )
 
 type RedisClient struct {
+	log    *zap.SugaredLogger
 	client rueidis.Client
 	prefix string
 	index  string
@@ -61,7 +63,7 @@ func (r RedisClient) initIndex() error {
 	return nil
 }
 
-func (r RedisClient) EmbeddingDoc(id, content string, metadata map[string]interface{}, vectors []float32) error {
+func (r RedisClient) Store(id, content string, metadata map[string]interface{}, vectors []float32) error {
 	ctx := context.Background()
 
 	var m string

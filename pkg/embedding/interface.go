@@ -1,5 +1,6 @@
 package embedding
 
 type Embedding interface {
-	Vector(doc string) ([]float32, error)
+	VectorQuery(doc string) ([]float32, error)
+	VectorDocs(docs []string) ([][]float32, error)
 }

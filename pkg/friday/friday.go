@@ -1,54 +1,69 @@
 package friday
 
 import (
-	"fmt"
+	"encoding/json"
 	"os"
-	"path/filepath"
 	"strings"
 
+	"github.com/google/uuid"
+	"go.uber.org/zap"
+
+	"friday/config"
 	"friday/pkg/embedding"
+	huggingfaceembedding "friday/pkg/embedding/huggingface"
 	openaiembedding "friday/pkg/embedding/openai/v1"
 	"friday/pkg/llm"
 	glm_6b "friday/pkg/llm/client/glm-6b"
 	openaiv1 "friday/pkg/llm/client/openai/v1"
 	"friday/pkg/llm/prompts"
-	"friday/pkg/spliter"
+	"friday/pkg/utils/logger"
 	"friday/pkg/vectorstore"
 )
 
 type Friday struct {
+	log *zap.SugaredLogger
+
 	llm       llm.LLM
 	embedding embedding.Embedding
 	vector    vectorstore.VectorStore
-	spliter   spliter.Spliter
 }
 
-type Config struct {
-	EmbeddingType   string
-	EmbeddingDim    int
-	VectorStoreType string
-	VectorUrl       string
-	LLMType         string
-	SpliterType     string
-	ChunkSize       int
+type Element struct {
+	Content  string   `json:"content"`
+	Metadata Metadata `json:"metadata"`
 }
 
-func NewFriday(config *Config) (f *Friday, err error) {
+type Metadata struct {
+	Title      string `json:"title"`
+	PageNumber int    `json:"page_number"`
+	Category   string `json:"category"`
+}
+
+func NewFriday(config *config.Config) (f *Friday, err error) {
 	var (
 		llmClient      llm.LLM
 		embeddingModel embedding.Embedding
 		vectorStore    vectorstore.VectorStore
-		textSpliter    spliter.Spliter
 	)
 	if config.LLMType == "openai" {
 		llmClient = openaiv1.NewOpenAIV1()
 	}
 	if config.LLMType == "glm-6b" {
-		llmClient = glm_6b.NewGLM("http://localhost:8000")
+		llmClient = glm_6b.NewGLM(config.LLMUrl)
 	}
+
 	if config.EmbeddingType == "openai" {
 		embeddingModel = openaiembedding.NewOpenAIEmbedding()
 	}
+	if config.EmbeddingType == "huggingface" {
+		embeddingModel = huggingfaceembedding.NewHuggingFace(config.EmbeddingUrl, config.EmbeddingModel)
+		testEmbed, err := embeddingModel.VectorQuery("test")
+		if err != nil {
+			return nil, err
+		}
+		config.EmbeddingDim = len(testEmbed)
+	}
+
 	if config.VectorStoreType == "redis" {
 		if config.EmbeddingDim == 0 {
 			vectorStore, err = vectorstore.NewRedisClient(config.VectorUrl)
@@ -62,96 +77,57 @@ func NewFriday(config *Config) (f *Friday, err error) {
 			}
 		}
 	}
-	if config.SpliterType == "text" {
-		textSpliter = spliter.NewTextSpliter(config.ChunkSize, 200, "\n")
-	}
+
 	f = &Friday{
+		log:       logger.NewLogger("friday"),
 		llm:       llmClient,
 		embedding: embeddingModel,
 		vector:    vectorStore,
-		spliter:   textSpliter,
 	}
 	return
 }
 
-func (f Friday) Ingest(ps string) error {
-	docs, err := f.readFiles(ps)
+func (f Friday) Ingest(elements []Element) error {
+	texts := []string{}
+	for _, element := range elements {
+		texts = append(texts, element.Content)
+	}
+	f.log.Infof("Ingesting %d ...", len(elements))
+	vectors, err := f.embedding.VectorDocs(texts)
 	if err != nil {
 		return err
 	}
-	for title, doc := range docs {
-		texts := f.spliter.Split(doc)
-		for i, text := range texts {
-			t := strings.TrimSpace(text)
-			id := fmt.Sprintf("%s-%d", title, i)
-			metadata := map[string]interface{}{
-				"title": title,
-			}
-			v, err := f.embedding.Vector(t)
-			if err != nil {
-				return err
-			}
-			if err := f.vector.EmbeddingDoc(id, t, metadata, v); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
 
-func (f Friday) ingest(title, doc string) error {
-	texts := f.spliter.Split(doc)
 	for i, text := range texts {
-		id := fmt.Sprintf("%s-%d", title, i)
+		t := strings.TrimSpace(text)
+		id := uuid.New().String()
 		metadata := map[string]interface{}{
-			"title": title,
+			"title":    elements[i].Metadata.Title,
+			"category": elements[i].Metadata.Category,
 		}
-		v, err := f.embedding.Vector(text)
-		if err != nil {
-			return err
-		}
-		if err := f.vector.EmbeddingDoc(id, doc, metadata, v); err != nil {
+		v := vectors[i]
+		f.log.Infof("store vector %s ...", t)
+		if err := f.vector.Store(id, t, metadata, v); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (f Friday) readFiles(ps string) (docs map[string]string, err error) {
-	var p os.FileInfo
-	docs = map[string]string{}
-	p, err = os.Stat(ps)
-	if err != nil {
-		return
-	}
-	if p.IsDir() {
-		var subFiles []os.DirEntry
-		subFiles, err = os.ReadDir(ps)
-		if err != nil {
-			return
-		}
-		for _, subFile := range subFiles {
-			subDocs := make(map[string]string)
-			subDocs, err = f.readFiles(filepath.Join(ps, subFile.Name()))
-			if err != nil {
-				return
-			}
-			for k, v := range subDocs {
-				docs[k] = v
-			}
-		}
-		return
-	}
+func (f Friday) IngestFromElementFile(ps string) error {
 	doc, err := os.ReadFile(ps)
 	if err != nil {
-		return
+		return err
 	}
-	docs[ps] = string(doc)
-	return
+	elements := []Element{}
+	if err := json.Unmarshal(doc, &elements); err != nil {
+		return err
+	}
+	return f.Ingest(elements)
 }
 
 func (f Friday) Question(prompt prompts.PromptTemplate, q string) (string, error) {
-	qv, err := f.embedding.Vector(q)
+	qv, err := f.embedding.VectorQuery(q)
 	if err != nil {
 		return "", err
 	}
@@ -159,6 +135,7 @@ func (f Friday) Question(prompt prompts.PromptTemplate, q string) (string, error
 	if err != nil {
 		return "", err
 	}
+	f.log.Debugf("vector query contexts: %v", contexts)
 	texts := make([]string, len(contexts))
 	for _, con := range contexts {
 		texts = append(texts, con.Content)
