@@ -6,10 +6,10 @@ import (
 )
 
 type EmbeddingResult struct {
-	Object string         `json:"object"`
-	Data   []Embeddings   `json:"data"`
-	Model  string         `json:"model"`
-	Usage  map[string]int `json:"usage"`
+	Object string       `json:"object"`
+	Data   []Embeddings `json:"data"`
+	Model  string       `json:"model"`
+	Usage  Usage        `json:"usage"`
 }
 
 type EmbeddingData struct {
@@ -22,7 +22,12 @@ type Embeddings struct {
 	Embedding []float32 `json:"embedding"`
 }
 
-func (o *OpenAIV1) Embedding(doc string) ([]float32, error) {
+type Usage struct {
+	PromptTokens int `json:"prompt_tokens"`
+	TotalTokens  int `json:"total_tokens"`
+}
+
+func (o *OpenAIV1) Embedding(doc string) (*EmbeddingResult, error) {
 	path := "embeddings"
 
 	model := "text-embedding-ada-002"
@@ -39,5 +44,5 @@ func (o *OpenAIV1) Embedding(doc string) ([]float32, error) {
 
 	var res EmbeddingResult
 	err = json.Unmarshal(respBody, &res)
-	return res.Data[0].Embedding, err
+	return &res, err
 }

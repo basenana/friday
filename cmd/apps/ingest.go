@@ -5,6 +5,7 @@ import (
 
 	"friday/config"
 	"friday/pkg/friday"
+	"friday/pkg/utils/logger"
 )
 
 var IngestCmd = &cobra.Command{
@@ -21,6 +22,9 @@ var IngestCmd = &cobra.Command{
 			panic(err)
 		}
 
+		if cfg.Debug {
+			logger.SetDebug(cfg.Debug)
+		}
 		if err := ingest(&cfg, ps); err != nil {
 			panic(err)
 		}

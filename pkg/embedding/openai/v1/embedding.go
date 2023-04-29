@@ -17,18 +17,33 @@ func NewOpenAIEmbedding() embedding.Embedding {
 	}
 }
 
-func (o *OpenAIEmbedding) VectorQuery(doc string) ([]float32, error) {
-	return o.Embedding(doc)
+func (o *OpenAIEmbedding) VectorQuery(doc string) ([]float32, map[string]interface{}, error) {
+	res, err := o.Embedding(doc)
+	if err != nil {
+		return nil, nil, err
+	}
+	usage := res.Usage
+	metadata := make(map[string]interface{})
+	metadata["prompt_tokens"] = usage.PromptTokens
+	metadata["total_tokens"] = usage.TotalTokens
+
+	return res.Data[0].Embedding, metadata, nil
 }
 
-func (o *OpenAIEmbedding) VectorDocs(docs []string) ([][]float32, error) {
+func (o *OpenAIEmbedding) VectorDocs(docs []string) ([][]float32, []map[string]interface{}, error) {
 	res := make([][]float32, len(docs))
-	var err error
+	metadata := make([]map[string]interface{}, len(docs))
+
 	for i, doc := range docs {
-		res[i], err = o.Embedding(doc)
+		r, err := o.Embedding(doc)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
+		}
+		res[i] = r.Data[0].Embedding
+		metadata[i] = map[string]interface{}{
+			"prompt_tokens": r.Usage.PromptTokens,
+			"total_tokens":  r.Usage.TotalTokens,
 		}
 	}
-	return res, nil
+	return res, metadata, nil
 }

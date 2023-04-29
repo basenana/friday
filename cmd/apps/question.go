@@ -9,6 +9,7 @@ import (
 	"friday/config"
 	"friday/pkg/friday"
 	"friday/pkg/llm/prompts"
+	"friday/pkg/utils/logger"
 )
 
 var QuestionCmd = &cobra.Command{
@@ -22,6 +23,9 @@ var QuestionCmd = &cobra.Command{
 			panic(err)
 		}
 
+		if cfg.Debug {
+			logger.SetDebug(cfg.Debug)
+		}
 		if err := run(&cfg, question); err != nil {
 			panic(err)
 		}
@@ -38,6 +42,7 @@ func run(config *config.Config, question string) error {
 	if err != nil {
 		return err
 	}
+	fmt.Println("Answer: ")
 	fmt.Println(a)
 	return nil
 }

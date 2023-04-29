@@ -38,7 +38,7 @@ type vectorResults struct {
 	Result [][]float32
 }
 
-func (h HuggingFace) VectorQuery(doc string) ([]float32, error) {
+func (h HuggingFace) VectorQuery(doc string) ([]float32, map[string]interface{}, error) {
 	path := "/embeddings/query"
 
 	model := h.model
@@ -50,15 +50,15 @@ func (h HuggingFace) VectorQuery(doc string) ([]float32, error) {
 
 	respBody, err := h.request(path, "POST", bytes.NewBuffer(postBody))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	var res vectorResult
 	err = json.Unmarshal(respBody, &res)
-	return res.Result, err
+	return res.Result, nil, err
 }
 
-func (h HuggingFace) VectorDocs(docs []string) ([][]float32, error) {
+func (h HuggingFace) VectorDocs(docs []string) ([][]float32, []map[string]interface{}, error) {
 	path := "/embeddings/docs"
 
 	model := h.model
@@ -70,12 +70,12 @@ func (h HuggingFace) VectorDocs(docs []string) ([][]float32, error) {
 
 	respBody, err := h.request(path, "POST", bytes.NewBuffer(postBody))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	var res vectorResults
 	err = json.Unmarshal(respBody, &res)
-	return res.Result, err
+	return res.Result, nil, err
 }
 
 func (h HuggingFace) request(path string, method string, body io.Reader) ([]byte, error) {

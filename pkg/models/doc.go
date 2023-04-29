@@ -1,4 +1,4 @@
-package vectorstore
+package models
 
 type Doc struct {
 	Id       string

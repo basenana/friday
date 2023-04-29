@@ -8,6 +8,9 @@ import (
 
 	"github.com/rueian/rueidis"
 	"go.uber.org/zap"
+
+	"friday/pkg/models"
+	"friday/pkg/utils/logger"
 )
 
 const (
@@ -38,7 +41,13 @@ func newRedisClient(redisUrl string, prefix, index string, embeddingDim int) (Ve
 	if err != nil {
 		return nil, err
 	}
-	r := RedisClient{client: client, prefix: prefix, index: index, dim: embeddingDim}
+	r := RedisClient{
+		log:    logger.NewLogger("redis"),
+		client: client,
+		prefix: prefix,
+		index:  index,
+		dim:    embeddingDim,
+	}
 	err = r.client.Do(context.Background(), r.client.B().FtInfo().Index(index).Build()).Error()
 	if err != nil {
 		if err.Error() == "Unknown Index name" {
@@ -81,7 +90,7 @@ func (r RedisClient) Store(id, content string, metadata map[string]interface{}, 
 		FieldValue("vector", rueidis.VectorString32(vectors)).Build()).Error()
 }
 
-func (r RedisClient) Search(vectors []float32, k int) ([]Doc, error) {
+func (r RedisClient) Search(vectors []float32, k int) ([]models.Doc, error) {
 	ctx := context.Background()
 
 	resp, err := r.client.Do(ctx, r.client.B().FtSearch().Index(r.index).
@@ -95,7 +104,7 @@ func (r RedisClient) Search(vectors []float32, k int) ([]Doc, error) {
 	if err != nil {
 		return nil, err
 	}
-	results := make([]Doc, 0)
+	results := make([]models.Doc, 0)
 
 	for i := 1; i < len(resp[1:]); i += 2 {
 		res, err := resp[i+1].AsStrMap()
@@ -106,12 +115,12 @@ func (r RedisClient) Search(vectors []float32, k int) ([]Doc, error) {
 		if err := json.Unmarshal([]byte(res["metadata"]), &metadata); err != nil {
 			return nil, err
 		}
-		results = append(results, Doc{
+		results = append(results, models.Doc{
 			Id:       res["id"],
 			Metadata: metadata,
 			Content:  res["content"],
 		})
-		//fmt.Printf("id: %s, content: %s, score: %s\n", res["id"], res["content"], res["vector_score"])
+		r.log.Debugf("id: %s, content: %s, score: %s\n", res["id"], res["content"], res["vector_score"])
 		if len(results) >= k {
 			break
 		}
