@@ -39,40 +39,40 @@ type Friday struct {
 	spliter   spliter.Spliter
 }
 
-func NewFriday(config *config.Config) (f *Friday, err error) {
+func NewFriday(conf *config.Config) (f *Friday, err error) {
 	var (
 		llmClient      llm.LLM
 		embeddingModel embedding.Embedding
 		vectorStore    vectorstore.VectorStore
 		docStore       *docs.BleveClient
 	)
-	if config.LLMType == "openai" {
+	if conf.LLMType == config.LLMOpenAI {
 		llmClient = openaiv1.NewOpenAIV1()
 	}
-	if config.LLMType == "glm-6b" {
-		llmClient = glm_6b.NewGLM(config.LLMUrl)
+	if conf.LLMType == config.LLMGLM6B {
+		llmClient = glm_6b.NewGLM(conf.LLMUrl)
 	}
 
-	if config.EmbeddingType == "openai" {
+	if conf.EmbeddingType == config.EmbeddingOpenAI {
 		embeddingModel = openaiembedding.NewOpenAIEmbedding()
 	}
-	if config.EmbeddingType == "huggingface" {
-		embeddingModel = huggingfaceembedding.NewHuggingFace(config.EmbeddingUrl, config.EmbeddingModel)
+	if conf.EmbeddingType == config.EmbeddingHuggingFace {
+		embeddingModel = huggingfaceembedding.NewHuggingFace(conf.EmbeddingUrl, conf.EmbeddingModel)
 		testEmbed, _, err := embeddingModel.VectorQuery("test")
 		if err != nil {
 			return nil, err
 		}
-		config.EmbeddingDim = len(testEmbed)
+		conf.EmbeddingDim = len(testEmbed)
 	}
 
-	if config.VectorStoreType == "redis" {
-		if config.EmbeddingDim == 0 {
-			vectorStore, err = vectorstore.NewRedisClient(config.VectorUrl)
+	if conf.VectorStoreType == config.VectorStoreRedis {
+		if conf.EmbeddingDim == 0 {
+			vectorStore, err = vectorstore.NewRedisClient(conf.VectorUrl)
 			if err != nil {
 				return nil, err
 			}
 		} else {
-			vectorStore, err = vectorstore.NewRedisClientWithDim(config.VectorUrl, config.EmbeddingDim)
+			vectorStore, err = vectorstore.NewRedisClientWithDim(conf.VectorUrl, conf.EmbeddingDim)
 			if err != nil {
 				return nil, err
 			}
@@ -80,8 +80,8 @@ func NewFriday(config *config.Config) (f *Friday, err error) {
 	}
 
 	bleveIndex := docs.DefaultIndexname
-	if config.BleveIndexName != "" {
-		bleveIndex = config.BleveIndexName
+	if conf.BleveIndexName != "" {
+		bleveIndex = conf.BleveIndexName
 	}
 
 	docStore, err = docs.NewBleveClient(bleveIndex)
@@ -92,14 +92,14 @@ func NewFriday(config *config.Config) (f *Friday, err error) {
 	chunkSize := spliter.DefaultChunkSize
 	overlapSize := spliter.DefaultChunkOverlap
 	separator := "\n"
-	if config.SpliterChunkSize != 0 {
-		chunkSize = config.SpliterChunkSize
+	if conf.SpliterChunkSize != 0 {
+		chunkSize = conf.SpliterChunkSize
 	}
-	if config.SpliterChunkOverlap != 0 {
-		overlapSize = config.SpliterChunkOverlap
+	if conf.SpliterChunkOverlap != 0 {
+		overlapSize = conf.SpliterChunkOverlap
 	}
-	if config.SpliterSeparator != "" {
-		separator = config.SpliterSeparator
+	if conf.SpliterSeparator != "" {
+		separator = conf.SpliterSeparator
 	}
 	textSpliter := spliter.NewTextSpliter(chunkSize, overlapSize, separator)
 
