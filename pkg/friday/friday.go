@@ -1,12 +1,14 @@
 package friday
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
-	"github.com/google/uuid"
 	"go.uber.org/zap"
 
 	"friday/config"
@@ -19,9 +21,13 @@ import (
 	openaiv1 "friday/pkg/llm/client/openai/v1"
 	"friday/pkg/llm/prompts"
 	"friday/pkg/models"
+	"friday/pkg/spliter"
+	"friday/pkg/utils/files"
 	"friday/pkg/utils/logger"
 	"friday/pkg/vectorstore"
 )
+
+const defaultTopK = 6
 
 type Friday struct {
 	log *zap.SugaredLogger
@@ -30,6 +36,7 @@ type Friday struct {
 	embedding embedding.Embedding
 	vector    vectorstore.VectorStore
 	doc       *docs.BleveClient
+	spliter   spliter.Spliter
 }
 
 func NewFriday(config *config.Config) (f *Friday, err error) {
@@ -82,45 +89,61 @@ func NewFriday(config *config.Config) (f *Friday, err error) {
 		return nil, err
 	}
 
+	chunkSize := spliter.DefaultChunkSize
+	overlapSize := spliter.DefaultChunkOverlap
+	separator := "\n"
+	if config.SpliterChunkSize != 0 {
+		chunkSize = config.SpliterChunkSize
+	}
+	if config.SpliterChunkOverlap != 0 {
+		overlapSize = config.SpliterChunkOverlap
+	}
+	if config.SpliterSeparator != "" {
+		separator = config.SpliterSeparator
+	}
+	textSpliter := spliter.NewTextSpliter(chunkSize, overlapSize, separator)
+
 	f = &Friday{
 		log:       logger.NewLogger("friday"),
 		llm:       llmClient,
 		embedding: embeddingModel,
 		vector:    vectorStore,
 		doc:       docStore,
+		spliter:   textSpliter,
 	}
 	return
 }
 
 func (f *Friday) Ingest(elements []models.Element) error {
-	texts := []string{}
-	for _, element := range elements {
-		texts = append(texts, element.Content)
-	}
-	f.log.Infof("Ingesting %d ...", len(elements))
+	f.log.Debugf("Ingesting %d ...", len(elements))
+	for i, element := range elements {
+		// id: sha256(source)-group
+		h := sha256.New()
+		h.Write([]byte(element.Metadata.Source))
+		val := hex.EncodeToString(h.Sum(nil))[:64]
+		id := fmt.Sprintf("%s-%s", val, element.Metadata.Group)
+		if f.vector.Exist(id) {
+			f.log.Debugf("vector %d(th) id(%s) source(%s) exist, skip ...", i, id, element.Metadata.Source)
+			continue
+		}
 
-	// store docs
-	if err := f.doc.IndexDocByGroup(elements); err != nil {
-		return err
-	}
+		vectors, m, err := f.embedding.VectorQuery(element.Content)
+		if err != nil {
+			return err
+		}
 
-	vectors, m, err := f.embedding.VectorDocs(texts)
-	if err != nil {
-		return err
-	}
+		t := strings.TrimSpace(element.Content)
 
-	for i, text := range texts {
-		t := strings.TrimSpace(text)
-		id := uuid.New().String()
 		metadata := make(map[string]interface{})
 		if m != nil {
-			metadata = m[i]
+			metadata = m
 		}
-		metadata["title"] = elements[i].Metadata.Title
-		metadata["category"] = elements[i].Metadata.Category
-		metadata["group"] = elements[i].Metadata.Group
-		v := vectors[i]
-		f.log.Infof("store vector %s ...", t)
+		metadata["title"] = element.Metadata.Title
+		metadata["source"] = element.Metadata.Source
+		metadata["category"] = element.Metadata.Category
+		metadata["group"] = element.Metadata.Group
+		v := vectors
+		f.log.Debugf("store %d(th) vector id (%s) source(%s) ...", i, id, element.Metadata.Source)
 		if err := f.vector.Store(id, t, metadata, v); err != nil {
 			return err
 		}
@@ -137,6 +160,31 @@ func (f *Friday) IngestFromElementFile(ps string) error {
 	if err := json.Unmarshal(doc, &elements); err != nil {
 		return err
 	}
+	merged := f.spliter.Merge(elements)
+	return f.Ingest(merged)
+}
+
+func (f *Friday) IngestFromFile(ps string) error {
+	fs, err := files.ReadFiles(ps)
+	if err != nil {
+		return err
+	}
+
+	elements := []models.Element{}
+	for n, file := range fs {
+		subDocs := f.spliter.Split(file)
+		for i, subDoc := range subDocs {
+			e := models.Element{
+				Content: subDoc,
+				Metadata: models.Metadata{
+					Source: n,
+					Group:  strconv.Itoa(i),
+				},
+			}
+			elements = append(elements, e)
+		}
+	}
+
 	return f.Ingest(elements)
 }
 
@@ -164,26 +212,15 @@ func (f *Friday) searchDocs(q string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("vector embedding error: %w", err)
 	}
-	contexts, err := f.vector.Search(qv, 2)
+	contexts, err := f.vector.Search(qv, defaultTopK)
 	if err != nil {
 		return "", fmt.Errorf("vector search error: %w", err)
 	}
-	texts := make([]string, len(contexts))
-	docMap := make(map[string]models.Element)
-	for _, con := range contexts {
-		doc, err := f.doc.Search(con.Content)
-		if err != nil {
-			continue
-		}
-		if doc == nil {
-			continue
-		}
-		id := fmt.Sprintf("%s-%s", doc.Metadata.Title, doc.Metadata.Group)
-		docMap[id] = *doc
+
+	cs := []string{}
+	for _, c := range contexts {
+		f.log.Debugf("searched from [%s] for %s", c.Metadata["source"], c.Content)
+		cs = append(cs, c.Content)
 	}
-	for id, doc := range docMap {
-		f.log.Debugf("docs query contexts, id: %s, context: %s", id, doc.Content)
-		texts = append(texts, doc.Content)
-	}
-	return strings.Join(texts, "\n"), nil
+	return strings.Join(cs, "\n"), nil
 }

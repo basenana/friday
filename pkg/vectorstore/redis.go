@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/rueian/rueidis"
+	"github.com/redis/rueidis"
 	"go.uber.org/zap"
 
 	"friday/pkg/models"
@@ -88,6 +88,17 @@ func (r RedisClient) Store(id, content string, metadata map[string]interface{}, 
 		FieldValue("metadata", m).
 		FieldValue("content", content).
 		FieldValue("vector", rueidis.VectorString32(vectors)).Build()).Error()
+}
+
+func (r RedisClient) Exist(id string) (exist bool) {
+	ctx := context.Background()
+	resp := r.client.Do(ctx, r.client.B().Get().Key(fmt.Sprintf("%s:%s", r.prefix, id)).Build())
+	if resp.RedisError() != nil && resp.RedisError().IsNil() {
+		exist = false
+		return
+	}
+	exist = true
+	return
 }
 
 func (r RedisClient) Search(vectors []float32, k int) ([]models.Doc, error) {

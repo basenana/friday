@@ -15,4 +15,8 @@ type Config struct {
 	LLMUrl  string `json:"llm_url,omitempty"`
 
 	BleveIndexName string `json:"bleve_index_name,omitempty"`
+
+	SpliterChunkSize    int    `json:"spliter_chunk_size,omitempty"`
+	SpliterChunkOverlap int    `json:"spliter_chunk_overlap,omitempty"`
+	SpliterSeparator    string `json:"spliter_separator,omitempty"`
 }

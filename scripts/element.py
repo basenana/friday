@@ -1,5 +1,6 @@
 import json
 import os
+import sys
 from typing import List
 
 import nltk
@@ -39,8 +40,8 @@ def _element(f, elements) -> List:
         if hasattr(element, "tag") and element.tag == "h2":
             group += 1
         metadata = {
+            "source": f,
             "title": os.path.basename(f),
-            "group": str(group),
         }
         if hasattr(element, "metadata"):
             metadata.update(element.metadata.to_dict())
@@ -78,12 +79,17 @@ def write_elements(elements, output_path):
         f.write(elements_json)
 
 
-def main():
-    dir_path = "/Users/weiwei/go/src/github.com/juicedata/juicefs/docs/zh_cn/administration/monitoring.md"
-    dir_path = os.getenv("DOCS_DIR", dir_path)
+def main(dir_path, output_path):
     doc_elements = get_elements(dir_path)
-    write_elements(doc_elements, os.path.join(script_path, "output.json"))
+    write_elements(doc_elements, output_path)
 
 
 if __name__ == "__main__":
-    main()
+    if len(sys.argv) < 2:
+        print("Please provide a directory path you want to parse.")
+        sys.exit(1)
+    if len(sys.argv) < 3:
+        output = os.path.join(script_path, "output.json")
+    else:
+        output = sys.argv[2]
+    main(sys.argv[1], output)

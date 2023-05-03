@@ -6,6 +6,7 @@ type Element struct {
 }
 
 type Metadata struct {
+	Source   string `json:"source"`
 	Title    string `json:"title"`
 	Group    string `json:"group"`
 	Category string `json:"category"`
