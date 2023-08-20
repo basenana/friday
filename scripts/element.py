@@ -11,7 +11,7 @@ from unstructured.partition.html import partition_html
 from unstructured.partition.md import partition_md
 
 script_path = os.path.dirname(__file__)
-nltk.data.path = [os.path.join(os.path.dirname(__file__), "nltk_data")] + nltk.data.path
+nltk.data.path = [os.getenv("NLTK_DATA", os.path.join(os.path.dirname(__file__), "nltk_data"))] + nltk.data.path
 
 
 def get_elements(file_path, **unstructured_kwargs) -> List:
