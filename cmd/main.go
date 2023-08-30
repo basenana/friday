@@ -21,6 +21,7 @@ var RootCmd = &cobra.Command{
 func init() {
 	RootCmd.AddCommand(apps.QuestionCmd)
 	RootCmd.AddCommand(apps.IngestCmd)
+	RootCmd.AddCommand(apps.WeChatCmd)
 	RootCmd.PersistentFlags().StringVar(&config.FilePath, "config", path.Join(config.LocalUserPath(), config.DefaultConfigBase), "friday config file")
 }
 
