@@ -38,7 +38,7 @@ func chat(config *config.Config, ps string) error {
 		return err
 	}
 	p := prompts.NewWeChatPrompt()
-	a, err := f.ChatConclusionFromElementFile(p, ps)
+	a, err := f.ChatConclusionFromFile(p, ps)
 	if err != nil {
 		return err
 	}

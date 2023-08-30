@@ -47,7 +47,7 @@ func (f *Friday) ChatConclusionFromElementFile(prompt prompts.PromptTemplate, ch
 }
 
 func (f *Friday) ChatConclusionFromFile(prompt prompts.PromptTemplate, chatFile string) (string, error) {
-	//var ans []string
+	var ans []string
 	fs, err := files.ReadFiles(chatFile)
 	if err != nil {
 		return "", err
@@ -67,22 +67,12 @@ func (f *Friday) ChatConclusionFromFile(prompt prompts.PromptTemplate, chatFile 
 			elements = append(elements, e)
 		}
 	}
-	//doc, err := os.ReadFile(chatFile)
-	//if err != nil {
-	//	return "", err
-	//}
-	//elements := []models.Element{}
-	//if err = json.Unmarshal(doc, &elements); err != nil {
-	//	return "", err
-	//}
-	//merged := f.spliter.Merge(elements)
-	//for _, m := range merged {
-	//	a, err := f.ChatConclusion(prompt, m.Content)
-	//	if err != nil {
-	//		return "", err
-	//	}
-	//	ans = append(ans, a)
-	//}
-	//return strings.Join(ans, "\n===========\n"), nil
-	return "", err
+	for _, m := range elements {
+		a, err := f.ChatConclusion(prompt, m.Content)
+		if err != nil {
+			return "", err
+		}
+		ans = append(ans, a)
+	}
+	return strings.Join(ans, "\n=============\n"), nil
 }
