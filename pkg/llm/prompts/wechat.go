@@ -10,7 +10,7 @@ type WeChatPrompt struct {
 	Context  string
 }
 
-const WeChatTemplate = `以下是 weiwei 和 hypo 过去的聊天记录。请把这些聊天记录以聊天内容相近的合并成一个主题，并以主题为单位，整理成概要。注意请不要写成流水账。
+const WeChatTemplate = `以下是一段聊天记录。请把这些聊天记录以聊天内容相近的合并成一个主题，并以主题为单位，整理成概要。注意请不要写成流水账。
 
 返回的概要格式：
 主题1：xxx

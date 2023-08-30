@@ -47,7 +47,6 @@ func (f *Friday) ChatConclusionFromElementFile(prompt prompts.PromptTemplate, ch
 }
 
 func (f *Friday) ChatConclusionFromFile(prompt prompts.PromptTemplate, chatFile string) (string, error) {
-	var ans []string
 	fs, err := files.ReadFiles(chatFile)
 	if err != nil {
 		return "", err
@@ -67,6 +66,8 @@ func (f *Friday) ChatConclusionFromFile(prompt prompts.PromptTemplate, chatFile 
 			elements = append(elements, e)
 		}
 	}
+
+	var ans []string
 	for _, m := range elements {
 		a, err := f.ChatConclusion(prompt, m.Content)
 		if err != nil {
