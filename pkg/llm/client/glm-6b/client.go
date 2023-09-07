@@ -83,3 +83,32 @@ func (o *GLM) Completion(prompt prompts.PromptTemplate, parameters map[string]st
 	ans := []string{res.Response}
 	return ans, err
 }
+
+func (o *GLM) Chat(prompt prompts.PromptTemplate, parameters map[string]string) ([]string, error) {
+	path := ""
+
+	p, err := prompt.String(parameters)
+	if err != nil {
+		return nil, err
+	}
+	data := map[string]interface{}{
+		"prompt":      p,
+		"max_length":  10240,
+		"temperature": 0.7,
+		"top_p":       1,
+	}
+	postBody, _ := json.Marshal(data)
+
+	respBody, err := o.request(path, "POST", bytes.NewBuffer(postBody))
+	if err != nil {
+		return nil, err
+	}
+
+	var res CompletionResult
+	err = json.Unmarshal(respBody, &res)
+	if err != nil {
+		return nil, err
+	}
+	ans := []string{res.Response}
+	return ans, err
+}
