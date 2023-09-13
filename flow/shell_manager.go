@@ -6,69 +6,80 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/basenana/go-flow/exec"
 	goflow "github.com/basenana/go-flow/flow"
 	"github.com/basenana/go-flow/utils"
 	"github.com/google/uuid"
 
-	"friday/flow/operator"
+	"friday/config"
 	"friday/flow/task"
 )
 
-var (
-	storage goflow.Storage
-	ctrl    *goflow.Controller
-)
-
-func init() {
-	register := exec.NewLocalOperatorBuilderRegister()
-	_ = register.Register("IngestOperator", operator.NewIngestOperator)
-
-	goflow.RegisterExecutorBuilder("local", func(flow *goflow.Flow) goflow.Executor {
-		return exec.NewLocalExecutor(flow, register)
-	})
-	storage = goflow.NewInMemoryStorage()
-	ctrl = goflow.NewFlowController(storage)
+type ShellManager struct {
+	binDir       string
+	fridayConfig config.Config
+	log          utils.Logger
 }
 
-type Manager struct {
-	binDir string
-	log    utils.Logger
-}
-
-func NewManager(binDir string) *Manager {
-	return &Manager{
-		binDir: binDir,
-		log:    utils.NewLogger("flow"),
+func NewShellManager(binDir string, fridayConfig config.Config) *ShellManager {
+	return &ShellManager{
+		binDir:       binDir,
+		fridayConfig: fridayConfig,
+		log:          utils.NewLogger("flow"),
 	}
 }
 
-func (m *Manager) NewIngestFlow(id string, knowledgeDir string) (goflow.Flow, error) {
+func (m *ShellManager) NewIngestFlowInShell(id string, knowledgeDir string) (goflow.Flow, error) {
 	elementOutput := filepath.Join(m.binDir, "element.json")
 	elementTask := task.NewElementTask(m.binDir, knowledgeDir, elementOutput)
-
-	ingestTask, err := task.NewIngestTask(elementOutput)
+	configTask, err := task.NewConfigTask(m.binDir, m.fridayConfig)
+	if err != nil {
+		return goflow.Flow{}, err
+	}
+	ingestTask, err := task.NewIngestTaskInShell(m.binDir, elementOutput)
 	if err != nil {
 		return goflow.Flow{}, err
 	}
 
 	// set task dependency
-	elementTask.Next.OnSucceed = ingestTask.Name
+	elementTask.Next.OnSucceed = configTask.Name
+	configTask.Next.OnSucceed = ingestTask.Name
 
 	return goflow.Flow{
 		ID:            id,
 		Describe:      "Ingest knowledge.",
 		Executor:      "local",
 		ControlPolicy: goflow.ControlPolicy{FailedPolicy: goflow.PolicyFastFailed},
-		Tasks:         []goflow.Task{elementTask, ingestTask},
+		Tasks:         []goflow.Task{elementTask, configTask, ingestTask},
 	}, nil
 }
 
-func (m *Manager) Ingest(ctx context.Context, knowledgeDir string) (err error) {
+func (m *ShellManager) NewQuestionFlow(id string, question string) (goflow.Flow, error) {
+	configTask, err := task.NewConfigTask(m.binDir, m.fridayConfig)
+	if err != nil {
+		return goflow.Flow{}, err
+	}
+	questionTask, err := task.NewQuestionTask(m.binDir, question)
+	if err != nil {
+		return goflow.Flow{}, err
+	}
+
+	// set task dependency
+	configTask.Next.OnSucceed = questionTask.Name
+
+	return goflow.Flow{
+		ID:            id,
+		Describe:      "Question based on knowledge.",
+		Executor:      "local",
+		ControlPolicy: goflow.ControlPolicy{FailedPolicy: goflow.PolicyFastFailed},
+		Tasks:         []goflow.Task{configTask, questionTask},
+	}, nil
+}
+
+func (m *ShellManager) Question(ctx context.Context, question string) (err error) {
 	// build flow
 	var flow goflow.Flow
 	flowId := uuid.New().String()
-	flow, err = m.NewIngestFlow(flowId, knowledgeDir)
+	flow, err = m.NewQuestionFlow(flowId, question)
 	if err != nil {
 		return
 	}
@@ -77,7 +88,7 @@ func (m *Manager) Ingest(ctx context.Context, knowledgeDir string) (err error) {
 	return m.run(ctx, &flow)
 }
 
-func (m *Manager) run(ctx context.Context, flow *goflow.Flow) (err error) {
+func (m *ShellManager) run(ctx context.Context, flow *goflow.Flow) (err error) {
 	flowId := flow.ID
 	// save flow
 	if err = storage.SaveFlow(ctx, flow); err != nil {

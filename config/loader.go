@@ -17,8 +17,12 @@ type localLoader struct{}
 func (l localLoader) GetConfig() (Config, error) {
 	result := Config{}
 
+	fp := os.Getenv("FRIDAY_CONFIG")
+	if fp != "" {
+		FilePath = fp
+	}
 	if FilePath == "" {
-		return result, fmt.Errorf("--config not set")
+		return result, fmt.Errorf("--config or FRIDAY_CONFIG not set")
 	}
 
 	_, err := os.Stat(FilePath)

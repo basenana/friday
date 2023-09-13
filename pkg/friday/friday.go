@@ -1,8 +1,6 @@
 package friday
 
 import (
-	"go.uber.org/zap"
-
 	"friday/config"
 	"friday/pkg/docs"
 	"friday/pkg/embedding"
@@ -19,7 +17,7 @@ import (
 const defaultTopK = 6
 
 type Friday struct {
-	log *zap.SugaredLogger
+	log logger.Logger
 
 	llm       llm.LLM
 	embedding embedding.Embedding

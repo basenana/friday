@@ -1,4 +1,4 @@
-package flow
+package task
 
 import (
 	"fmt"
@@ -9,7 +9,7 @@ import (
 	goflow "github.com/basenana/go-flow/flow"
 )
 
-func NewIngestTask(binDir, knowledge string) (goflow.Task, error) {
+func NewIngestTaskInShell(binDir, knowledge string) (goflow.Task, error) {
 	openaiKey := os.Getenv("OPENAI_KEY")
 	if openaiKey == "" {
 		return goflow.Task{}, fmt.Errorf("OPENAI_KEY is not set")
@@ -24,6 +24,18 @@ func NewIngestTask(binDir, knowledge string) (goflow.Task, error) {
 			Script: &goflow.Script{
 				Command: []string{filepath.Join(binDir, "friday"), "ingest", knowledge, "--config", filepath.Join(binDir, "friday.conf")},
 				Env:     envs,
+			},
+		},
+	}, nil
+}
+
+func NewIngestTask(knowledge string) (goflow.Task, error) {
+	return goflow.Task{
+		Name: "ingest",
+		OperatorSpec: goflow.Spec{
+			Type: "IngestOperator",
+			Parameters: map[string]string{
+				"knowledge": knowledge,
 			},
 		},
 	}, nil

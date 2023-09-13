@@ -1,4 +1,4 @@
-package flow
+package task
 
 import (
 	"github.com/basenana/go-flow/exec"

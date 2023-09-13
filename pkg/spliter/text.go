@@ -4,8 +4,6 @@ import (
 	"strconv"
 	"strings"
 
-	"go.uber.org/zap"
-
 	"friday/pkg/models"
 	"friday/pkg/utils/logger"
 )
@@ -16,7 +14,7 @@ const (
 )
 
 type TextSpliter struct {
-	log          *zap.SugaredLogger
+	log          logger.Logger
 	separator    string
 	chunkSize    int
 	chunkOverlap int

@@ -7,7 +7,6 @@ import (
 	"strconv"
 
 	"github.com/redis/rueidis"
-	"go.uber.org/zap"
 
 	"friday/pkg/models"
 	"friday/pkg/utils/logger"
@@ -19,7 +18,7 @@ const (
 )
 
 type RedisClient struct {
-	log    *zap.SugaredLogger
+	log    logger.Logger
 	client rueidis.Client
 	prefix string
 	index  string

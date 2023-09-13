@@ -5,45 +5,9 @@ import (
 	"log"
 	"os"
 
-	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 )
-
-var _ = Describe("TestQuestion", func() {
-	Context("do", func() {
-		var (
-			manager *Manager
-		)
-		It("init manager should be succeed", func() {
-			manager = NewManager(binDir, fridayConfig)
-		})
-		It("create question workflow should be succeed", func() {
-			question := "What is JuiceFS?"
-			err := manager.Question(context.TODO(), question)
-			Expect(err).Should(BeNil())
-		})
-	})
-})
-
-var _ = Describe("TestQuestionFlow", func() {
-	Context("do", func() {
-		var (
-			manager *Manager
-		)
-		It("init manager should be succeed", func() {
-			manager = NewManager(binDir, fridayConfig)
-		})
-		It("create question workflow should be succeed", func() {
-			id := uuid.New().String()
-			question := "What is JuiceFS?"
-
-			flow, err := manager.NewQuestionFlow(id, question)
-			Expect(err).Should(BeNil())
-			Expect(flow).ShouldNot(BeNil())
-		})
-	})
-})
 
 var _ = Describe("TestIngest", func() {
 	Context("do", func() {
@@ -52,7 +16,7 @@ var _ = Describe("TestIngest", func() {
 			knowledgeDir string
 		)
 		It("init manager should be succeed", func() {
-			manager = NewManager(binDir, fridayConfig)
+			manager = NewManager(binDir)
 		})
 		It("init a knowledge dir", func() {
 			knowledgeDir = "/tmp/fridaytest.txt"
