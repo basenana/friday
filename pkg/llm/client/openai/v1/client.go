@@ -7,14 +7,13 @@ import (
 	"net/url"
 	"os"
 
-	"go.uber.org/zap"
-
 	"friday/pkg/llm"
 	"friday/pkg/utils/logger"
 )
 
 type OpenAIV1 struct {
-	log     *zap.SugaredLogger
+	log logger.Logger
+
 	baseUri string
 	key     string
 }

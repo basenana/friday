@@ -8,14 +8,12 @@ import (
 	"net/http"
 	"net/url"
 
-	"go.uber.org/zap"
-
 	"friday/pkg/embedding"
 	"friday/pkg/utils/logger"
 )
 
 type HuggingFace struct {
-	log     *zap.SugaredLogger
+	log     logger.Logger
 	baseUri string
 	model   string
 }

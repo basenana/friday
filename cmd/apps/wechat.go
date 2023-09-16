@@ -9,7 +9,6 @@ import (
 	"friday/config"
 	"friday/pkg/friday"
 	"friday/pkg/llm/prompts"
-	"friday/pkg/utils/logger"
 )
 
 var WeChatCmd = &cobra.Command{
@@ -23,9 +22,6 @@ var WeChatCmd = &cobra.Command{
 			panic(err)
 		}
 
-		if cfg.Debug {
-			logger.SetDebug(cfg.Debug)
-		}
 		if err := chat(&cfg, ps); err != nil {
 			panic(err)
 		}

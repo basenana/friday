@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	"github.com/blevesearch/bleve"
-	"go.uber.org/zap"
 
 	"friday/pkg/models"
 	"friday/pkg/utils/logger"
@@ -14,7 +13,7 @@ import (
 const DefaultIndexname = "friday.bleve"
 
 type BleveClient struct {
-	log       *zap.SugaredLogger
+	log       logger.Logger
 	IndexName string
 }
 

@@ -7,7 +7,6 @@ import (
 
 	"friday/cmd/apps"
 	"friday/config"
-	"friday/pkg/utils/logger"
 )
 
 var RootCmd = &cobra.Command{
@@ -26,9 +25,6 @@ func init() {
 }
 
 func main() {
-	logger.InitLogger()
-	defer logger.Sync()
-
 	if err := RootCmd.Execute(); err != nil {
 		panic(err)
 	}
