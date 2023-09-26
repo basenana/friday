@@ -1,5 +1,10 @@
 package models
 
+type File struct {
+	Source  string `json:"source"`
+	Content string `json:"content"`
+}
+
 type Element struct {
 	Content  string   `json:"content"`
 	Metadata Metadata `json:"metadata"`

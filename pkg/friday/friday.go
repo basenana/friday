@@ -2,7 +2,6 @@ package friday
 
 import (
 	"friday/config"
-	"friday/pkg/docs"
 	"friday/pkg/embedding"
 	huggingfaceembedding "friday/pkg/embedding/huggingface"
 	openaiembedding "friday/pkg/embedding/openai/v1"
@@ -22,7 +21,6 @@ type Friday struct {
 	llm       llm.LLM
 	embedding embedding.Embedding
 	vector    vectorstore.VectorStore
-	doc       *docs.BleveClient
 	spliter   spliter.Spliter
 }
 
@@ -31,8 +29,8 @@ func NewFriday(conf *config.Config) (f *Friday, err error) {
 		llmClient      llm.LLM
 		embeddingModel embedding.Embedding
 		vectorStore    vectorstore.VectorStore
-		docStore       *docs.BleveClient
 	)
+	// init LLM client
 	if conf.LLMType == config.LLMOpenAI {
 		llmClient = openaiv1.NewOpenAIV1()
 	}
@@ -40,6 +38,7 @@ func NewFriday(conf *config.Config) (f *Friday, err error) {
 		llmClient = glm_6b.NewGLM(conf.LLMUrl)
 	}
 
+	// init embedding client
 	if conf.EmbeddingType == config.EmbeddingOpenAI {
 		embeddingModel = openaiembedding.NewOpenAIEmbedding()
 	}
@@ -52,6 +51,7 @@ func NewFriday(conf *config.Config) (f *Friday, err error) {
 		conf.EmbeddingDim = len(testEmbed)
 	}
 
+	// init vector store
 	if conf.VectorStoreType == config.VectorStoreRedis {
 		if conf.EmbeddingDim == 0 {
 			vectorStore, err = vectorstore.NewRedisClient(conf.VectorUrl)
@@ -66,23 +66,14 @@ func NewFriday(conf *config.Config) (f *Friday, err error) {
 		}
 	}
 
-	bleveIndex := docs.DefaultIndexname
-	if conf.BleveIndexName != "" {
-		bleveIndex = conf.BleveIndexName
-	}
-
-	docStore, err = docs.NewBleveClient(bleveIndex)
-	if err != nil {
-		return nil, err
-	}
-
+	// init text spliter
 	chunkSize := spliter.DefaultChunkSize
 	overlapSize := spliter.DefaultChunkOverlap
 	separator := "\n"
-	if conf.SpliterChunkSize != 0 {
+	if conf.SpliterChunkSize > 0 {
 		chunkSize = conf.SpliterChunkSize
 	}
-	if conf.SpliterChunkOverlap != 0 {
+	if conf.SpliterChunkOverlap > 0 {
 		overlapSize = conf.SpliterChunkOverlap
 	}
 	if conf.SpliterSeparator != "" {
@@ -95,7 +86,6 @@ func NewFriday(conf *config.Config) (f *Friday, err error) {
 		llm:       llmClient,
 		embedding: embeddingModel,
 		vector:    vectorStore,
-		doc:       docStore,
 		spliter:   textSpliter,
 	}
 	return

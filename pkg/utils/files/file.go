@@ -6,6 +6,7 @@ import (
 	"strings"
 )
 
+// ReadFiles read files recursively for only txt and md
 func ReadFiles(ps string) (docs map[string]string, err error) {
 	var p os.FileInfo
 	docs = map[string]string{}

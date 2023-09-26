@@ -5,7 +5,7 @@ import (
 
 	"github.com/basenana/go-flow/flow"
 
-	flow2 "friday/flow"
+	fridayflow "friday/flow"
 )
 
 type ingestOperator struct {
@@ -19,5 +19,5 @@ func NewIngestOperator(task flow.Task, operatorSpec flow.Spec) (flow.Operator, e
 
 func (i *ingestOperator) Do(ctx context.Context, param *flow.Parameter) error {
 	knowledge := i.spec.Parameters["knowledge"]
-	return flow2.FD.IngestFromElementFile(knowledge)
+	return fridayflow.FD.IngestFromElementFile(knowledge)
 }

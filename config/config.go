@@ -3,22 +3,24 @@ package config
 type Config struct {
 	Debug bool `json:"debug,omitempty"`
 
+	// embedding config
 	EmbeddingType  EmbeddingType `json:"embedding_type"`
-	EmbeddingDim   int           `json:"embedding_dim,omitempty"`
-	EmbeddingUrl   string        `json:"embedding_url,omitempty"`
-	EmbeddingModel string        `json:"embedding_model,omitempty"`
+	EmbeddingUrl   string        `json:"embedding_url,omitempty"`   // only needed for huggingface
+	EmbeddingModel string        `json:"embedding_model,omitempty"` // only needed for huggingface
 
+	// vector store config
 	VectorStoreType VectorStoreType `json:"vector_store_type"`
 	VectorUrl       string          `json:"vector_url"`
+	EmbeddingDim    int             `json:"embedding_dim,omitempty"` // embedding dimension, default is 1536
 
+	// LLM
 	LLMType LLMType `json:"llm_type"`
-	LLMUrl  string  `json:"llm_url,omitempty"`
+	LLMUrl  string  `json:"llm_url,omitempty"` // only needed for glm-6b
 
-	BleveIndexName string `json:"bleve_index_name,omitempty"`
-
-	SpliterChunkSize    int    `json:"spliter_chunk_size,omitempty"`
-	SpliterChunkOverlap int    `json:"spliter_chunk_overlap,omitempty"`
-	SpliterSeparator    string `json:"spliter_separator,omitempty"`
+	// text spliter
+	SpliterChunkSize    int    `json:"spliter_chunk_size,omitempty"`    // chunk of files splited to store, default is 4000
+	SpliterChunkOverlap int    `json:"spliter_chunk_overlap,omitempty"` // overlap of each chunks, default is 200
+	SpliterSeparator    string `json:"spliter_separator,omitempty"`     // separator to split files, default is \n
 }
 
 type LLMType string

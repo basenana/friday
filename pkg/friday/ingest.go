@@ -13,6 +13,26 @@ import (
 	"friday/pkg/utils/files"
 )
 
+// IngestFromFile ingest a whole file providing models.File
+func (f *Friday) IngestFromFile(file models.File) error {
+	elements := []models.Element{}
+	// split doc
+	subDocs := f.spliter.Split(file.Content)
+	for i, subDoc := range subDocs {
+		e := models.Element{
+			Content: subDoc,
+			Metadata: models.Metadata{
+				Source: file.Source,
+				Group:  strconv.Itoa(i),
+			},
+		}
+		elements = append(elements, e)
+	}
+	// ingest
+	return f.Ingest(elements)
+}
+
+// Ingest ingest elements of a file
 func (f *Friday) Ingest(elements []models.Element) error {
 	f.log.Debugf("Ingesting %d ...", len(elements))
 	for i, element := range elements {
@@ -50,6 +70,7 @@ func (f *Friday) Ingest(elements []models.Element) error {
 	return nil
 }
 
+// IngestFromElementFile ingest a whole file given an element-style origin file
 func (f *Friday) IngestFromElementFile(ps string) error {
 	doc, err := os.ReadFile(ps)
 	if err != nil {
@@ -63,7 +84,8 @@ func (f *Friday) IngestFromElementFile(ps string) error {
 	return f.Ingest(merged)
 }
 
-func (f *Friday) IngestFromFile(ps string) error {
+// IngestFromOriginFile ingest a whole file given an origin file
+func (f *Friday) IngestFromOriginFile(ps string) error {
 	fs, err := files.ReadFiles(ps)
 	if err != nil {
 		return err
