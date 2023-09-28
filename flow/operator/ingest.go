@@ -35,5 +35,5 @@ func NewIngestOperator(task flow.Task, operatorSpec flow.Spec) (flow.Operator, e
 
 func (i *ingestOperator) Do(ctx context.Context, param *flow.Parameter) error {
 	knowledge := i.spec.Parameters["knowledge"]
-	return fridayflow.FD.IngestFromElementFile(knowledge)
+	return fridayflow.Fri.IngestFromElementFile(knowledge)
 }

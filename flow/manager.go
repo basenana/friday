@@ -27,16 +27,20 @@ import (
 	"github.com/basenana/go-flow/utils"
 	"github.com/google/uuid"
 
+	"friday/config"
 	"friday/flow/operator"
 	"friday/flow/task"
+	"friday/pkg/friday"
 )
 
 var (
 	storage goflow.Storage
 	ctrl    *goflow.Controller
+	Fri     *friday.Friday
 )
 
 func init() {
+	// register flow operator
 	register := exec.NewLocalOperatorBuilderRegister()
 	_ = register.Register("IngestOperator", operator.NewIngestOperator)
 
@@ -45,6 +49,18 @@ func init() {
 	})
 	storage = goflow.NewInMemoryStorage()
 	ctrl = goflow.NewFlowController(storage)
+
+	// init friday
+	loader := config.NewConfigLoader()
+	cfg, err := loader.GetConfig()
+	if err != nil {
+		panic(err)
+	}
+
+	Fri, err = friday.NewFriday(&cfg)
+	if err != nil {
+		panic(err)
+	}
 }
 
 type Manager struct {
