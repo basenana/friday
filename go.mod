@@ -1,4 +1,4 @@
-module friday
+module github.com/basenana/friday
 
 go 1.20
 
