@@ -22,9 +22,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"friday/config"
-	"friday/pkg/friday"
-	"friday/pkg/llm/prompts"
+	"github.com/basenana/friday/config"
+	"github.com/basenana/friday/pkg/friday"
+	"github.com/basenana/friday/pkg/llm/prompts"
 )
 
 var QuestionCmd = &cobra.Command{

@@ -23,9 +23,9 @@ import (
 	"strconv"
 	"strings"
 
-	"friday/pkg/llm/prompts"
-	"friday/pkg/models"
-	"friday/pkg/utils/files"
+	"github.com/basenana/friday/pkg/llm/prompts"
+	"github.com/basenana/friday/pkg/models"
+	"github.com/basenana/friday/pkg/utils/files"
 )
 
 func (f *Friday) ChatConclusion(prompt prompts.PromptTemplate, chat string) (string, error) {

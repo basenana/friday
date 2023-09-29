@@ -20,7 +20,7 @@ import (
 	"fmt"
 	"strings"
 
-	"friday/pkg/llm/prompts"
+	"github.com/basenana/friday/pkg/llm/prompts"
 )
 
 func (f *Friday) Question(prompt prompts.PromptTemplate, q string) (string, error) {

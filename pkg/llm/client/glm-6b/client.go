@@ -24,8 +24,8 @@ import (
 	"net/http"
 	"net/url"
 
-	"friday/pkg/llm"
-	"friday/pkg/llm/prompts"
+	"github.com/basenana/friday/pkg/llm"
+	"github.com/basenana/friday/pkg/llm/prompts"
 )
 
 type GLM struct {

@@ -16,7 +16,7 @@
 
 package spliter
 
-import "friday/pkg/models"
+import "github.com/basenana/friday/pkg/models"
 
 type Spliter interface {
 	Split(text string) []string

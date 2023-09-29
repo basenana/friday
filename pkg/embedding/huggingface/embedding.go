@@ -24,8 +24,8 @@ import (
 	"net/http"
 	"net/url"
 
-	"friday/pkg/embedding"
-	"friday/pkg/utils/logger"
+	"github.com/basenana/friday/pkg/embedding"
+	"github.com/basenana/friday/pkg/utils/logger"
 )
 
 type HuggingFace struct {
