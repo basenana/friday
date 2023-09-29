@@ -27,10 +27,10 @@ import (
 	"github.com/basenana/go-flow/utils"
 	"github.com/google/uuid"
 
-	"friday/config"
-	"friday/flow/operator"
-	"friday/flow/task"
-	"friday/pkg/friday"
+	"github.com/basenana/friday/config"
+	"github.com/basenana/friday/flow/operator"
+	"github.com/basenana/friday/flow/task"
+	"github.com/basenana/friday/pkg/friday"
 )
 
 var (

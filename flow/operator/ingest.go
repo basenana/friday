@@ -21,7 +21,7 @@ import (
 
 	"github.com/basenana/go-flow/flow"
 
-	fridayflow "friday/flow"
+	fridayflow "github.com/basenana/friday/flow"
 )
 
 type ingestOperator struct {

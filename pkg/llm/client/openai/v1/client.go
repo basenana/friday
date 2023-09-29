@@ -23,8 +23,8 @@ import (
 	"net/url"
 	"os"
 
-	"friday/pkg/llm"
-	"friday/pkg/utils/logger"
+	"github.com/basenana/friday/pkg/llm"
+	"github.com/basenana/friday/pkg/utils/logger"
 )
 
 type OpenAIV1 struct {

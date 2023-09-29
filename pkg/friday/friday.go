@@ -17,16 +17,16 @@
 package friday
 
 import (
-	"friday/config"
-	"friday/pkg/embedding"
-	huggingfaceembedding "friday/pkg/embedding/huggingface"
-	openaiembedding "friday/pkg/embedding/openai/v1"
-	"friday/pkg/llm"
-	glm_6b "friday/pkg/llm/client/glm-6b"
-	openaiv1 "friday/pkg/llm/client/openai/v1"
-	"friday/pkg/spliter"
-	"friday/pkg/utils/logger"
-	"friday/pkg/vectorstore"
+	"github.com/basenana/friday/config"
+	"github.com/basenana/friday/pkg/embedding"
+	huggingfaceembedding "github.com/basenana/friday/pkg/embedding/huggingface"
+	openaiembedding "github.com/basenana/friday/pkg/embedding/openai/v1"
+	"github.com/basenana/friday/pkg/llm"
+	glm_6b "github.com/basenana/friday/pkg/llm/client/glm-6b"
+	openaiv1 "github.com/basenana/friday/pkg/llm/client/openai/v1"
+	"github.com/basenana/friday/pkg/spliter"
+	"github.com/basenana/friday/pkg/utils/logger"
+	"github.com/basenana/friday/pkg/vectorstore"
 )
 
 const defaultTopK = 6

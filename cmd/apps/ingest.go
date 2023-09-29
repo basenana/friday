@@ -19,8 +19,8 @@ package apps
 import (
 	"github.com/spf13/cobra"
 
-	"friday/config"
-	"friday/pkg/friday"
+	"github.com/basenana/friday/config"
+	"github.com/basenana/friday/pkg/friday"
 )
 
 var IngestCmd = &cobra.Command{

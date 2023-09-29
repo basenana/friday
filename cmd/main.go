@@ -21,8 +21,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"friday/cmd/apps"
-	"friday/config"
+	"github.com/basenana/friday/cmd/apps"
+	"github.com/basenana/friday/config"
 )
 
 var RootCmd = &cobra.Command{

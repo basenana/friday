@@ -25,7 +25,7 @@ import (
 	"github.com/basenana/go-flow/exec"
 	goflow "github.com/basenana/go-flow/flow"
 
-	"friday/config"
+	"github.com/basenana/friday/config"
 )
 
 func NewConfigTask(binDir string, config config.Config) (goflow.Task, error) {

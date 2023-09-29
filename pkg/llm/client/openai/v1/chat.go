@@ -20,7 +20,7 @@ import (
 	"bytes"
 	"encoding/json"
 
-	"friday/pkg/llm/prompts"
+	"github.com/basenana/friday/pkg/llm/prompts"
 )
 
 type ChatResult struct {

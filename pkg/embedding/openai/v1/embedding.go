@@ -17,8 +17,8 @@
 package v1
 
 import (
-	"friday/pkg/embedding"
-	"friday/pkg/llm/client/openai/v1"
+	"github.com/basenana/friday/pkg/embedding"
+	"github.com/basenana/friday/pkg/llm/client/openai/v1"
 )
 
 type OpenAIEmbedding struct {

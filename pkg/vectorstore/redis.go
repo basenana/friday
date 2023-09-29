@@ -24,8 +24,8 @@ import (
 
 	"github.com/redis/rueidis"
 
-	"friday/pkg/models"
-	"friday/pkg/utils/logger"
+	"github.com/basenana/friday/pkg/models"
+	"github.com/basenana/friday/pkg/utils/logger"
 )
 
 const (

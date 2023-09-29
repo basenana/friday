@@ -25,8 +25,8 @@ import (
 	"strconv"
 	"strings"
 
-	"friday/pkg/models"
-	"friday/pkg/utils/files"
+	"github.com/basenana/friday/pkg/models"
+	"github.com/basenana/friday/pkg/utils/files"
 )
 
 // IngestFromFile ingest a whole file providing models.File
