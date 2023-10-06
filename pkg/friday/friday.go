@@ -56,7 +56,7 @@ func NewFriday(conf *config.Config) (f *Friday, err error) {
 
 	// init embedding client
 	if conf.EmbeddingType == config.EmbeddingOpenAI {
-		embeddingModel = openaiembedding.NewOpenAIEmbedding()
+		embeddingModel = openaiembedding.NewOpenAIEmbedding(conf.OpenAIKey, conf.LLMRateLimit)
 	}
 	if conf.EmbeddingType == config.EmbeddingHuggingFace {
 		embeddingModel = huggingfaceembedding.NewHuggingFace(conf.EmbeddingUrl, conf.EmbeddingModel)
