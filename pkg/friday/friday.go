@@ -48,7 +48,7 @@ func NewFriday(conf *config.Config) (f *Friday, err error) {
 	)
 	// init LLM client
 	if conf.LLMType == config.LLMOpenAI {
-		llmClient = openaiv1.NewOpenAIV1()
+		llmClient = openaiv1.NewOpenAIV1(conf.OpenAIKey, conf.LLMRateLimit)
 	}
 	if conf.LLMType == config.LLMGLM6B {
 		llmClient = glm_6b.NewGLM(conf.LLMUrl)

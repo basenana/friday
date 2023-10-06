@@ -19,7 +19,6 @@ package task
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 
 	"github.com/basenana/go-flow/exec"
@@ -44,20 +43,12 @@ func NewConfigTask(binDir string, config config.Config) (goflow.Task, error) {
 }
 
 func NewQuestionTask(binDir, question string) (goflow.Task, error) {
-	openaiKey := os.Getenv("OPENAI_KEY")
-	if openaiKey == "" {
-		return goflow.Task{}, fmt.Errorf("OPENAI_KEY is not set")
-	}
-	envs := map[string]string{
-		"OPENAI_KEY": openaiKey,
-	}
 	return goflow.Task{
 		Name: "question",
 		OperatorSpec: goflow.Spec{
 			Type: exec.ShellOperator,
 			Script: &goflow.Script{
 				Command: []string{"sh", "-c", fmt.Sprintf("%s question %s --config %s > %s/output.txt", filepath.Join(binDir, "friday"), question, filepath.Join(binDir, "friday.conf"), binDir)},
-				Env:     envs,
 			},
 		},
 	}, nil
