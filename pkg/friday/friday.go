@@ -31,6 +31,10 @@ import (
 
 const defaultTopK = 6
 
+var (
+	Fri *Friday
+)
+
 type Friday struct {
 	log logger.Logger
 

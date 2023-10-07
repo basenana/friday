@@ -35,12 +35,13 @@ func NewIngestTaskInShell(binDir, knowledge string) (goflow.Task, error) {
 	}, nil
 }
 
-func NewIngestTask(knowledge string) (goflow.Task, error) {
+func NewIngestTask(name, knowledge string) (goflow.Task, error) {
 	return goflow.Task{
 		Name: "ingest",
 		OperatorSpec: goflow.Spec{
 			Type: "IngestOperator",
 			Parameters: map[string]string{
+				"source":    name,
 				"knowledge": knowledge,
 			},
 		},

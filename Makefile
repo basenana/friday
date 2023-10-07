@@ -8,3 +8,6 @@ friday:
 
 friday.linux:
 	GOOS=linux GOARCH=amd64 go build -ldflags="$(LDFLAGS)"  -o bin/friday-linux cmd/main.go
+
+test:
+	@go test ./...
