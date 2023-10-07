@@ -17,12 +17,11 @@
 package main
 
 import (
-	"path"
-
 	"github.com/spf13/cobra"
 
 	"github.com/basenana/friday/cmd/apps"
 	"github.com/basenana/friday/config"
+	"github.com/basenana/friday/pkg/friday"
 )
 
 var RootCmd = &cobra.Command{
@@ -34,11 +33,22 @@ var RootCmd = &cobra.Command{
 }
 
 func init() {
+	// init friday
+	loader := config.NewConfigLoader()
+	cfg, err := loader.GetConfig()
+	if err != nil {
+		panic(err)
+	}
+
+	friday.Fri, err = friday.NewFriday(&cfg)
+	if err != nil {
+		panic(err)
+	}
+
 	RootCmd.AddCommand(apps.QuestionCmd)
 	RootCmd.AddCommand(apps.IngestCmd)
 	RootCmd.AddCommand(apps.WeChatCmd)
 	RootCmd.AddCommand(apps.SummaryCmd)
-	RootCmd.PersistentFlags().StringVar(&config.FilePath, "config", path.Join(config.LocalUserPath(), config.DefaultConfigBase), "friday config file")
 }
 
 func main() {
