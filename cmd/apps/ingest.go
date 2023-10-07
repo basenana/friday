@@ -19,7 +19,6 @@ package apps
 import (
 	"github.com/spf13/cobra"
 
-	"github.com/basenana/friday/config"
 	"github.com/basenana/friday/pkg/friday"
 )
 
@@ -31,24 +30,15 @@ var IngestCmd = &cobra.Command{
 			panic("ingest path is needed")
 		}
 		ps := args[0]
-		loader := config.NewConfigLoader()
-		cfg, err := loader.GetConfig()
-		if err != nil {
-			panic(err)
-		}
 
-		if err := ingest(&cfg, ps); err != nil {
+		if err := ingest(ps); err != nil {
 			panic(err)
 		}
 	},
 }
 
-func ingest(config *config.Config, ps string) error {
-	f, err := friday.NewFriday(config)
-	if err != nil {
-		return err
-	}
-	err = f.IngestFromElementFile(ps)
+func ingest(ps string) error {
+	err := friday.Fri.IngestFromElementFile(ps)
 	if err != nil {
 		return err
 	}

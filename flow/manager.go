@@ -19,7 +19,6 @@ package flow
 import (
 	"context"
 	"fmt"
-	"path/filepath"
 	"time"
 
 	"github.com/basenana/go-flow/exec"
@@ -27,16 +26,13 @@ import (
 	"github.com/basenana/go-flow/utils"
 	"github.com/google/uuid"
 
-	"github.com/basenana/friday/config"
 	"github.com/basenana/friday/flow/operator"
 	"github.com/basenana/friday/flow/task"
-	"github.com/basenana/friday/pkg/friday"
 )
 
 var (
 	storage goflow.Storage
 	ctrl    *goflow.Controller
-	Fri     *friday.Friday
 )
 
 func init() {
@@ -50,17 +46,6 @@ func init() {
 	storage = goflow.NewInMemoryStorage()
 	ctrl = goflow.NewFlowController(storage)
 
-	// init friday
-	loader := config.NewConfigLoader()
-	cfg, err := loader.GetConfig()
-	if err != nil {
-		panic(err)
-	}
-
-	Fri, err = friday.NewFriday(&cfg)
-	if err != nil {
-		panic(err)
-	}
 }
 
 type Manager struct {
@@ -75,32 +60,26 @@ func NewManager(binDir string) *Manager {
 	}
 }
 
-func (m *Manager) NewIngestFlow(id string, knowledgeDir string) (goflow.Flow, error) {
-	elementOutput := filepath.Join(m.binDir, "element.json")
-	elementTask := task.NewElementTask(m.binDir, knowledgeDir, elementOutput)
-
-	ingestTask, err := task.NewIngestTask(elementOutput)
+func (m *Manager) NewIngestFlow(id string, name, knowledge string) (goflow.Flow, error) {
+	ingestTask, err := task.NewIngestTask(name, knowledge)
 	if err != nil {
 		return goflow.Flow{}, err
 	}
-
-	// set task dependency
-	elementTask.Next.OnSucceed = ingestTask.Name
 
 	return goflow.Flow{
 		ID:            id,
 		Describe:      "Ingest knowledge.",
 		Executor:      "local",
 		ControlPolicy: goflow.ControlPolicy{FailedPolicy: goflow.PolicyFastFailed},
-		Tasks:         []goflow.Task{elementTask, ingestTask},
+		Tasks:         []goflow.Task{ingestTask},
 	}, nil
 }
 
-func (m *Manager) Ingest(ctx context.Context, knowledgeDir string) (err error) {
+func (m *Manager) Ingest(ctx context.Context, name, knowledge string) (err error) {
 	// build flow
 	var flow goflow.Flow
 	flowId := uuid.New().String()
-	flow, err = m.NewIngestFlow(flowId, knowledgeDir)
+	flow, err = m.NewIngestFlow(flowId, name, knowledge)
 	if err != nil {
 		return
 	}

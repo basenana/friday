@@ -55,7 +55,10 @@ what is the question?`,
 				Context:  tt.fields.context,
 				Question: tt.fields.question,
 			}
-			got, err := p.String()
+			got, err := p.String(map[string]string{
+				"context":  tt.fields.context,
+				"question": tt.fields.question,
+			})
 			if (err != nil) != tt.wantErr {
 				t.Errorf("String() error = %v, wantErr %v", err, tt.wantErr)
 				return
