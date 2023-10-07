@@ -57,7 +57,9 @@ func (f *Friday) Ingest(elements []models.Element) error {
 		h.Write([]byte(element.Metadata.Source))
 		val := hex.EncodeToString(h.Sum(nil))[:64]
 		id := fmt.Sprintf("%s-%s", val, element.Metadata.Group)
-		if f.vector.Exist(id) {
+		if exist, err := f.vector.Exist(id); err != nil {
+			return err
+		} else if exist {
 			f.log.Debugf("vector %d(th) id(%s) source(%s) exist, skip ...", i, id, element.Metadata.Source)
 			continue
 		}

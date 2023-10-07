@@ -116,12 +116,54 @@ func (p *PostgresClient) Store(id, content string, metadata map[string]interface
 	})
 }
 
-func (p PostgresClient) Search(vectors []float32, k int) ([]models.Doc, error) {
-	//TODO implement me
-	panic("implement me")
+func (p *PostgresClient) Search(vectors []float32, k int) ([]models.Doc, error) {
+	ctx := context.Background()
+	var (
+		vectorModels []db.Vector
+		result       = make([]models.Doc, 0)
+	)
+	if err := p.dEntity.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		query := p.dEntity.DB.WithContext(ctx)
+		res := query.Order(fmt.Sprintf("embedding <-> '%v'", vectors)).Limit(k).Find(vectorModels)
+		if res.Error != nil {
+			return res.Error
+		}
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+
+	for _, v := range vectorModels {
+		metadata := make(map[string]interface{})
+		if err := json.Unmarshal([]byte(v.Metadata), &metadata); err != nil {
+			return nil, err
+		}
+		result = append(result, models.Doc{
+			Id:       v.ID,
+			Metadata: metadata,
+			Content:  v.Context,
+		})
+	}
+	return result, nil
 }
 
-func (p PostgresClient) Exist(id string) bool {
-	//TODO implement me
-	panic("implement me")
+func (p *PostgresClient) Exist(id string) (bool, error) {
+	ctx := context.Background()
+	var exist = false
+	err := p.dEntity.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		vModel := db.Vector{ID: id}
+		res := tx.First(vModel)
+		if res.Error != nil && res.Error != gorm.ErrRecordNotFound {
+			return res.Error
+		}
+
+		if res.Error == gorm.ErrRecordNotFound {
+			exist = false
+			return nil
+		}
+		exist = true
+		return nil
+	})
+
+	return exist, err
 }

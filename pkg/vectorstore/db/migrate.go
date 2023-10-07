@@ -24,7 +24,7 @@ import (
 func buildMigrations() []*gormigrate.Migration {
 	return []*gormigrate.Migration{
 		{
-			ID: "2023040600",
+			ID: "2023100700",
 			Migrate: func(db *gorm.DB) error {
 				return db.AutoMigrate(
 					&Vector{},
