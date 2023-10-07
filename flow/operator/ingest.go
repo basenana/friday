@@ -21,7 +21,8 @@ import (
 
 	"github.com/basenana/go-flow/flow"
 
-	fridayflow "github.com/basenana/friday/flow"
+	"github.com/basenana/friday/pkg/friday"
+	"github.com/basenana/friday/pkg/models"
 )
 
 type ingestOperator struct {
@@ -34,6 +35,11 @@ func NewIngestOperator(task flow.Task, operatorSpec flow.Spec) (flow.Operator, e
 }
 
 func (i *ingestOperator) Do(ctx context.Context, param *flow.Parameter) error {
+	source := i.spec.Parameters["source"]
 	knowledge := i.spec.Parameters["knowledge"]
-	return fridayflow.Fri.IngestFromElementFile(knowledge)
+	doc := models.File{
+		Source:  source,
+		Content: knowledge,
+	}
+	return friday.Fri.IngestFromFile(doc)
 }

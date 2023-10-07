@@ -21,7 +21,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/basenana/friday/config"
 	"github.com/basenana/friday/pkg/friday"
 	fridaysummary "github.com/basenana/friday/pkg/friday/summary"
 )
@@ -35,13 +34,8 @@ var SummaryCmd = &cobra.Command{
 	Short: "Summarize an article in short words",
 	Run: func(cmd *cobra.Command, args []string) {
 		ps := args[0]
-		loader := config.NewConfigLoader()
-		cfg, err := loader.GetConfig()
-		if err != nil {
-			panic(err)
-		}
 
-		if err := summary(&cfg, ps); err != nil {
+		if err := summary(ps); err != nil {
 			panic(err)
 		}
 	},
@@ -51,12 +45,8 @@ func init() {
 	SummaryCmd.Flags().StringVar(&summaryType, "type", "MapReduce", "type of summary")
 }
 
-func summary(config *config.Config, ps string) error {
-	f, err := friday.NewFriday(config)
-	if err != nil {
-		return err
-	}
-	a, err := f.SummaryFromOriginFile(ps, fridaysummary.SummaryType(summaryType))
+func summary(ps string) error {
+	a, err := friday.Fri.SummaryFromOriginFile(ps, fridaysummary.SummaryType(summaryType))
 	if err != nil {
 		return err
 	}
