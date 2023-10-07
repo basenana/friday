@@ -22,7 +22,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/basenana/friday/config"
 	"github.com/basenana/friday/pkg/friday"
 	"github.com/basenana/friday/pkg/llm/prompts"
 )
@@ -32,25 +31,16 @@ var WeChatCmd = &cobra.Command{
 	Short: "conclusion base on chat",
 	Run: func(cmd *cobra.Command, args []string) {
 		ps := fmt.Sprint(strings.Join(args, " "))
-		loader := config.NewConfigLoader()
-		cfg, err := loader.GetConfig()
-		if err != nil {
-			panic(err)
-		}
 
-		if err := chat(&cfg, ps); err != nil {
+		if err := chat(ps); err != nil {
 			panic(err)
 		}
 	},
 }
 
-func chat(config *config.Config, ps string) error {
-	f, err := friday.NewFriday(config)
-	if err != nil {
-		return err
-	}
+func chat(ps string) error {
 	p := prompts.NewWeChatPrompt()
-	a, err := f.ChatConclusionFromFile(p, ps)
+	a, err := friday.Fri.ChatConclusionFromFile(p, ps)
 	if err != nil {
 		return err
 	}

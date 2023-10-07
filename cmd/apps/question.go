@@ -22,7 +22,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/basenana/friday/config"
 	"github.com/basenana/friday/pkg/friday"
 	"github.com/basenana/friday/pkg/llm/prompts"
 )
@@ -32,25 +31,16 @@ var QuestionCmd = &cobra.Command{
 	Short: "question base on knowledge",
 	Run: func(cmd *cobra.Command, args []string) {
 		question := fmt.Sprint(strings.Join(args, " "))
-		loader := config.NewConfigLoader()
-		cfg, err := loader.GetConfig()
-		if err != nil {
-			panic(err)
-		}
 
-		if err := run(&cfg, question); err != nil {
+		if err := run(question); err != nil {
 			panic(err)
 		}
 	},
 }
 
-func run(config *config.Config, question string) error {
-	f, err := friday.NewFriday(config)
-	if err != nil {
-		return err
-	}
+func run(question string) error {
 	p := prompts.NewQuestionPrompt()
-	a, err := f.Question(p, question)
+	a, err := friday.Fri.Question(p, question)
 	if err != nil {
 		return err
 	}
