@@ -105,7 +105,7 @@ func (r RedisClient) Store(id, content string, metadata map[string]interface{}, 
 		FieldValue("vector", rueidis.VectorString32(vectors)).Build()).Error()
 }
 
-func (r RedisClient) Exist(id string) (exist bool) {
+func (r RedisClient) Exist(id string) (exist bool, err error) {
 	ctx := context.Background()
 	resp := r.client.Do(ctx, r.client.B().Get().Key(fmt.Sprintf("%s:%s", r.prefix, id)).Build())
 	if resp.RedisError() != nil && resp.RedisError().IsNil() {

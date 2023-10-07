@@ -84,6 +84,11 @@ func NewFriday(conf *config.Config) (f *Friday, err error) {
 				return nil, err
 			}
 		}
+	} else if conf.VectorStoreType == config.VectorStorePostgres {
+		vectorStore, err = vectorstore.NewPostgresClient(conf.VectorUrl)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	// init text spliter
