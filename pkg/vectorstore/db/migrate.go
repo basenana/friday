@@ -27,7 +27,7 @@ func buildMigrations() []*gormigrate.Migration {
 			ID: "2023100700",
 			Migrate: func(db *gorm.DB) error {
 				return db.AutoMigrate(
-					&Vector{},
+					&Index{},
 				)
 			},
 			Rollback: func(db *gorm.DB) error {
