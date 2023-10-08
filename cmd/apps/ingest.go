@@ -38,7 +38,7 @@ var IngestCmd = &cobra.Command{
 }
 
 func ingest(ps string) error {
-	err := friday.Fri.IngestFromElementFile(ps)
+	err := friday.Fri.IngestFromOriginFile(ps)
 	if err != nil {
 		return err
 	}

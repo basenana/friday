@@ -25,7 +25,6 @@ import (
 
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
-	gormlogger "gorm.io/gorm/logger"
 
 	"github.com/basenana/friday/pkg/models"
 	"github.com/basenana/friday/pkg/utils/logger"
@@ -40,7 +39,7 @@ type PostgresClient struct {
 var _ VectorStore = &PostgresClient{}
 
 func NewPostgresClient(postgresUrl string) (*PostgresClient, error) {
-	dbObj, err := gorm.Open(postgres.Open(postgresUrl), &gorm.Config{Logger: gormlogger.Default})
+	dbObj, err := gorm.Open(postgres.Open(postgresUrl), &gorm.Config{Logger: logger.NewDbLogger()})
 	if err != nil {
 		panic(err)
 	}
@@ -69,28 +68,35 @@ func NewPostgresClient(postgresUrl string) (*PostgresClient, error) {
 	}, nil
 }
 
-func (p *PostgresClient) Store(id, content string, metadata map[string]interface{}, vectors []float32) error {
+func (p *PostgresClient) Store(id, content string, metadata models.Metadata, extra map[string]interface{}, vectors []float32) error {
 	ctx := context.Background()
-	var m string
-	if metadata != nil {
-		b, err := json.Marshal(metadata)
-		if err != nil {
-			return err
-		}
-		m = string(b)
+
+	if extra == nil {
+		extra = make(map[string]interface{})
 	}
-	v := &db.Vector{
+	extra["category"] = metadata.Category
+	extra["group"] = metadata.Group
+
+	var m string
+	b, err := json.Marshal(metadata)
+	if err != nil {
+		return err
+	}
+	m = string(b)
+
+	vectorJson, _ := json.Marshal(vectors)
+	v := &db.Index{
 		ID:        id,
-		Source:    metadata["source"].(string),
-		ParentDir: metadata["parentDir"].(string),
+		Name:      metadata.Source,
+		ParentDir: metadata.ParentDir,
 		Context:   content,
 		Metadata:  m,
-		Vector:    fmt.Sprintf("%v", vectors),
+		Vector:    string(vectorJson),
 		CreatedAt: time.Now().UnixNano(),
 		ChangedAt: time.Now().UnixNano(),
 	}
 	return p.dEntity.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		vModel := db.Vector{ID: id}
+		vModel := db.Index{ID: id}
 		res := tx.First(vModel)
 		if res.Error != nil && res.Error != gorm.ErrRecordNotFound {
 			return res.Error
@@ -119,12 +125,13 @@ func (p *PostgresClient) Store(id, content string, metadata map[string]interface
 func (p *PostgresClient) Search(vectors []float32, k int) ([]models.Doc, error) {
 	ctx := context.Background()
 	var (
-		vectorModels []db.Vector
+		vectorModels = make([]db.Index, 0)
 		result       = make([]models.Doc, 0)
 	)
 	if err := p.dEntity.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		query := p.dEntity.DB.WithContext(ctx)
-		res := query.Order(fmt.Sprintf("embedding <-> '%v'", vectors)).Limit(k).Find(vectorModels)
+		vectorJson, _ := json.Marshal(vectors)
+		res := query.Order(fmt.Sprintf("vector <-> '%s'", string(vectorJson))).Limit(k).Find(&vectorModels)
 		if res.Error != nil {
 			return res.Error
 		}
@@ -151,7 +158,7 @@ func (p *PostgresClient) Exist(id string) (bool, error) {
 	ctx := context.Background()
 	var exist = false
 	err := p.dEntity.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		vModel := db.Vector{ID: id}
+		vModel := db.Index{ID: id}
 		res := tx.First(vModel)
 		if res.Error != nil && res.Error != gorm.ErrRecordNotFound {
 			return res.Error

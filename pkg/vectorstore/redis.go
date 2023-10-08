@@ -87,17 +87,21 @@ func (r RedisClient) initIndex() error {
 	return nil
 }
 
-func (r RedisClient) Store(id, content string, metadata map[string]interface{}, vectors []float32) error {
+func (r RedisClient) Store(id, content string, metadata models.Metadata, extra map[string]interface{}, vectors []float32) error {
 	ctx := context.Background()
 
-	var m string
-	if metadata != nil {
-		b, err := json.Marshal(metadata)
-		if err != nil {
-			return err
-		}
-		m = string(b)
+	if extra == nil {
+		extra = make(map[string]interface{})
 	}
+	extra["category"] = metadata.Category
+	extra["group"] = metadata.Group
+
+	var m string
+	b, err := json.Marshal(metadata)
+	if err != nil {
+		return err
+	}
+	m = string(b)
 	return r.client.Do(ctx, r.client.B().Hset().Key(fmt.Sprintf("%s:%s", r.prefix, id)).FieldValue().
 		FieldValue("id", id).
 		FieldValue("metadata", m).

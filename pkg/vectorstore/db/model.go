@@ -18,24 +18,24 @@ package db
 
 import "time"
 
-type Vector struct {
-	ID        string `gorm:"column:id;primaryKey"`
-	Source    string `gorm:"column:source;index:source"`
-	ParentDir string `gorm:"column:parent_dir;index:parent_dir"`
+type Index struct {
+	ID        string `gorm:"column:id;type:varchar(256);primaryKey"`
+	Name      string `gorm:"column:name;type:varchar(256);index:source"`
+	ParentDir string `gorm:"column:parent_dir;type:varchar(256);index:parent_dir"`
 	Context   string `gorm:"column:context"`
 	Metadata  string `gorm:"column:metadata"`
-	Vector    string `gorm:"column:vector"`
+	Vector    string `gorm:"column:vector;type:vector(1536)"`
 	CreatedAt int64  `gorm:"column:created_at"`
 	ChangedAt int64  `gorm:"column:changed_at"`
 }
 
-func (v *Vector) TableName() string {
-	return "vector"
+func (v *Index) TableName() string {
+	return "friday_idx"
 }
 
-func (v *Vector) Update(vector *Vector) {
+func (v *Index) Update(vector *Index) {
 	v.ID = vector.ID
-	v.Source = vector.Source
+	v.Name = vector.Name
 	v.ParentDir = vector.ParentDir
 	v.Context = vector.Context
 	v.Metadata = vector.Metadata
