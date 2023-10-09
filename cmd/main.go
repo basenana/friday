@@ -21,6 +21,7 @@ import (
 
 	"github.com/basenana/friday/cmd/apps"
 	"github.com/basenana/friday/config"
+	"github.com/basenana/friday/pkg/build/common"
 	"github.com/basenana/friday/pkg/friday"
 )
 
@@ -40,7 +41,7 @@ func init() {
 		panic(err)
 	}
 
-	friday.Fri, err = friday.NewFriday(&cfg)
+	friday.Fri, err = common.NewFriday(&cfg)
 	if err != nil {
 		panic(err)
 	}
