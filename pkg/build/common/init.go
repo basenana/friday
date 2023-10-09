@@ -21,6 +21,8 @@ import (
 	"github.com/basenana/friday/pkg/build/withvector"
 	"github.com/basenana/friday/pkg/friday"
 	"github.com/basenana/friday/pkg/vectorstore"
+	"github.com/basenana/friday/pkg/vectorstore/postgres"
+	"github.com/basenana/friday/pkg/vectorstore/redis"
 )
 
 func NewFriday(conf *config.Config) (f *friday.Friday, err error) {
@@ -28,18 +30,18 @@ func NewFriday(conf *config.Config) (f *friday.Friday, err error) {
 	// init vector store
 	if conf.VectorStoreType == config.VectorStoreRedis {
 		if conf.EmbeddingDim == 0 {
-			vectorStore, err = vectorstore.NewRedisClient(conf.VectorUrl)
+			vectorStore, err = redis.NewRedisClient(conf.VectorUrl)
 			if err != nil {
 				return nil, err
 			}
 		} else {
-			vectorStore, err = vectorstore.NewRedisClientWithDim(conf.VectorUrl, conf.EmbeddingDim)
+			vectorStore, err = redis.NewRedisClientWithDim(conf.VectorUrl, conf.EmbeddingDim)
 			if err != nil {
 				return nil, err
 			}
 		}
 	} else if conf.VectorStoreType == config.VectorStorePostgres {
-		vectorStore, err = vectorstore.NewPostgresClient(conf.VectorUrl)
+		vectorStore, err = postgres.NewPostgresClient(conf.VectorUrl)
 		if err != nil {
 			return nil, err
 		}

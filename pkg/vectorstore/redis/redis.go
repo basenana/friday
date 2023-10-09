@@ -1,20 +1,20 @@
 /*
- * Copyright 2023 friday
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+ Copyright 2023 Friday Author.
 
-package vectorstore
+ Licensed under the Apache License, Version 2.0 (the "License");
+ you may not use this file except in compliance with the License.
+ You may obtain a copy of the License at
+
+     http://www.apache.org/licenses/LICENSE-2.0
+
+ Unless required by applicable law or agreed to in writing, software
+ distributed under the License is distributed on an "AS IS" BASIS,
+ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ See the License for the specific language governing permissions and
+ limitations under the License.
+*/
+
+package redis
 
 import (
 	"context"
@@ -26,6 +26,7 @@ import (
 
 	"github.com/basenana/friday/pkg/models"
 	"github.com/basenana/friday/pkg/utils/logger"
+	"github.com/basenana/friday/pkg/vectorstore"
 )
 
 const (
@@ -41,17 +42,17 @@ type RedisClient struct {
 	dim    int
 }
 
-var _ VectorStore = &RedisClient{}
+var _ vectorstore.VectorStore = &RedisClient{}
 
-func NewRedisClientWithDim(redisUrl string, dim int) (VectorStore, error) {
+func NewRedisClientWithDim(redisUrl string, dim int) (vectorstore.VectorStore, error) {
 	return newRedisClient(redisUrl, EmbeddingPrefix, EmbeddingIndex, dim)
 }
 
-func NewRedisClient(redisUrl string) (VectorStore, error) {
+func NewRedisClient(redisUrl string) (vectorstore.VectorStore, error) {
 	return newRedisClient(redisUrl, EmbeddingPrefix, EmbeddingIndex, 1536)
 }
 
-func newRedisClient(redisUrl string, prefix, index string, embeddingDim int) (VectorStore, error) {
+func newRedisClient(redisUrl string, prefix, index string, embeddingDim int) (vectorstore.VectorStore, error) {
 	client, err := rueidis.NewClient(rueidis.ClientOption{InitAddress: []string{redisUrl}})
 	if err != nil {
 		return nil, err
