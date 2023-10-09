@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -32,14 +33,16 @@ import (
 // IngestFromFile ingest a whole file providing models.File
 func (f *Friday) IngestFromFile(file models.File) error {
 	elements := []models.Element{}
+	parentDir := filepath.Dir(file.Source)
 	// split doc
 	subDocs := f.spliter.Split(file.Content)
 	for i, subDoc := range subDocs {
 		e := models.Element{
 			Content: subDoc,
 			Metadata: models.Metadata{
-				Source: file.Source,
-				Group:  strconv.Itoa(i),
+				Source:    file.Source,
+				Group:     strconv.Itoa(i),
+				ParentDir: parentDir,
 			},
 		}
 		elements = append(elements, e)
@@ -57,7 +60,9 @@ func (f *Friday) Ingest(elements []models.Element) error {
 		h.Write([]byte(element.Metadata.Source))
 		val := hex.EncodeToString(h.Sum(nil))[:64]
 		id := fmt.Sprintf("%s-%s", val, element.Metadata.Group)
-		if f.vector.Exist(id) {
+		if exist, err := f.vector.Exist(id); err != nil {
+			return err
+		} else if exist {
 			f.log.Debugf("vector %d(th) id(%s) source(%s) exist, skip ...", i, id, element.Metadata.Source)
 			continue
 		}
@@ -69,17 +74,8 @@ func (f *Friday) Ingest(elements []models.Element) error {
 
 		t := strings.TrimSpace(element.Content)
 
-		metadata := make(map[string]interface{})
-		if m != nil {
-			metadata = m
-		}
-		metadata["title"] = element.Metadata.Title
-		metadata["source"] = element.Metadata.Source
-		metadata["category"] = element.Metadata.Category
-		metadata["group"] = element.Metadata.Group
-		v := vectors
 		f.log.Debugf("store %d(th) vector id (%s) source(%s) ...", i, id, element.Metadata.Source)
-		if err := f.vector.Store(id, t, metadata, v); err != nil {
+		if err := f.vector.Store(id, t, element.Metadata, m, vectors); err != nil {
 			return err
 		}
 	}
@@ -109,13 +105,15 @@ func (f *Friday) IngestFromOriginFile(ps string) error {
 
 	elements := []models.Element{}
 	for n, file := range fs {
+		parentDir := filepath.Dir(n)
 		subDocs := f.spliter.Split(file)
 		for i, subDoc := range subDocs {
 			e := models.Element{
 				Content: subDoc,
 				Metadata: models.Metadata{
-					Source: n,
-					Group:  strconv.Itoa(i),
+					Source:    n,
+					Group:     strconv.Itoa(i),
+					ParentDir: parentDir,
 				},
 			}
 			elements = append(elements, e)
