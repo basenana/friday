@@ -1,20 +1,20 @@
 /*
- * Copyright 2023 Friday Author.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+ Copyright 2023 Friday Author.
 
-package vectorstore
+ Licensed under the Apache License, Version 2.0 (the "License");
+ you may not use this file except in compliance with the License.
+ You may obtain a copy of the License at
+
+     http://www.apache.org/licenses/LICENSE-2.0
+
+ Unless required by applicable law or agreed to in writing, software
+ distributed under the License is distributed on an "AS IS" BASIS,
+ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ See the License for the specific language governing permissions and
+ limitations under the License.
+*/
+
+package postgres
 
 import (
 	"context"
@@ -28,6 +28,7 @@ import (
 
 	"github.com/basenana/friday/pkg/models"
 	"github.com/basenana/friday/pkg/utils/logger"
+	"github.com/basenana/friday/pkg/vectorstore"
 	"github.com/basenana/friday/pkg/vectorstore/db"
 )
 
@@ -36,7 +37,7 @@ type PostgresClient struct {
 	dEntity *db.Entity
 }
 
-var _ VectorStore = &PostgresClient{}
+var _ vectorstore.VectorStore = &PostgresClient{}
 
 func NewPostgresClient(postgresUrl string) (*PostgresClient, error) {
 	dbObj, err := gorm.Open(postgres.Open(postgresUrl), &gorm.Config{Logger: logger.NewDbLogger()})
