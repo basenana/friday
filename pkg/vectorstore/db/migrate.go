@@ -1,5 +1,5 @@
 /*
- * Copyright 2023 friday
+ * Copyright 2023 Friday Author.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,33 +14,31 @@
  * limitations under the License.
  */
 
-package apps
+package db
 
 import (
-	"github.com/spf13/cobra"
-
-	"github.com/basenana/friday/pkg/friday"
+	"github.com/go-gormigrate/gormigrate/v2"
+	"gorm.io/gorm"
 )
 
-var IngestCmd = &cobra.Command{
-	Use:   "ingest",
-	Short: "ingest knowledge",
-	Run: func(cmd *cobra.Command, args []string) {
-		if len(args) == 0 {
-			panic("ingest path is needed")
-		}
-		ps := args[0]
-
-		if err := ingest(ps); err != nil {
-			panic(err)
-		}
-	},
+func buildMigrations() []*gormigrate.Migration {
+	return []*gormigrate.Migration{
+		{
+			ID: "2023100700",
+			Migrate: func(db *gorm.DB) error {
+				return db.AutoMigrate(
+					&Index{},
+				)
+			},
+			Rollback: func(db *gorm.DB) error {
+				return nil
+			},
+		},
+	}
 }
 
-func ingest(ps string) error {
-	err := friday.Fri.IngestFromOriginFile(ps)
-	if err != nil {
-		return err
-	}
-	return nil
+func Migrate(db *gorm.DB) error {
+	m := gormigrate.New(db, gormigrate.DefaultOptions, buildMigrations())
+	err := m.Migrate()
+	return err
 }

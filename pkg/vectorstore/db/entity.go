@@ -1,5 +1,5 @@
 /*
- * Copyright 2023 friday
+ * Copyright 2023 Friday Author.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,33 +14,20 @@
  * limitations under the License.
  */
 
-package apps
+package db
 
 import (
-	"github.com/spf13/cobra"
-
-	"github.com/basenana/friday/pkg/friday"
+	"gorm.io/gorm"
 )
 
-var IngestCmd = &cobra.Command{
-	Use:   "ingest",
-	Short: "ingest knowledge",
-	Run: func(cmd *cobra.Command, args []string) {
-		if len(args) == 0 {
-			panic("ingest path is needed")
-		}
-		ps := args[0]
-
-		if err := ingest(ps); err != nil {
-			panic(err)
-		}
-	},
+type Entity struct {
+	*gorm.DB
 }
 
-func ingest(ps string) error {
-	err := friday.Fri.IngestFromOriginFile(ps)
-	if err != nil {
-		return err
+func NewDbEntity(db *gorm.DB) (*Entity, error) {
+	ent := &Entity{DB: db}
+	if err := Migrate(db); err != nil {
+		return nil, err
 	}
-	return nil
+	return ent, nil
 }
