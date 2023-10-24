@@ -21,7 +21,7 @@ import (
 	"github.com/basenana/friday/pkg/build/withvector"
 	"github.com/basenana/friday/pkg/friday"
 	"github.com/basenana/friday/pkg/vectorstore"
-	"github.com/basenana/friday/pkg/vectorstore/postgres"
+	"github.com/basenana/friday/pkg/vectorstore/pgvector"
 	"github.com/basenana/friday/pkg/vectorstore/redis"
 )
 
@@ -41,7 +41,7 @@ func NewFriday(conf *config.Config) (f *friday.Friday, err error) {
 			}
 		}
 	} else if conf.VectorStoreType == config.VectorStorePostgres {
-		vectorStore, err = postgres.NewPostgresClient(conf.VectorUrl)
+		vectorStore, err = pgvector.NewPostgresClient(conf.VectorUrl)
 		if err != nil {
 			return nil, err
 		}

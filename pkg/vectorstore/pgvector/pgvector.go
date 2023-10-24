@@ -14,16 +14,15 @@
  limitations under the License.
 */
 
-package postgres
+package pgvector
 
 import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 
-	"github.com/cdipaolo/goml/base"
-	"github.com/cdipaolo/goml/cluster"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 
@@ -33,12 +32,14 @@ import (
 	"github.com/basenana/friday/pkg/vectorstore/db"
 )
 
-type PostgresClient struct {
+type PgVectorClient struct {
 	log     logger.Logger
 	dEntity *db.Entity
 }
 
-func NewPostgresClient(postgresUrl string) (*PostgresClient, error) {
+var _ vectorstore.VectorStore = &PgVectorClient{}
+
+func NewPgVectorClient(postgresUrl string) (*PgVectorClient, error) {
 	dbObj, err := gorm.Open(postgres.Open(postgresUrl), &gorm.Config{Logger: logger.NewDbLogger()})
 	if err != nil {
 		panic(err)
@@ -62,13 +63,13 @@ func NewPostgresClient(postgresUrl string) (*PostgresClient, error) {
 		return nil, err
 	}
 
-	return &PostgresClient{
+	return &PgVectorClient{
 		log:     logger.NewLogger("postgres"),
 		dEntity: dbEnt,
 	}, nil
 }
 
-func (p *PostgresClient) Store(id, content string, metadata models.Metadata, extra map[string]interface{}, vectors []float32) error {
+func (p *PgVectorClient) Store(id, content string, metadata models.Metadata, extra map[string]interface{}, vectors []float32) error {
 	ctx := context.Background()
 
 	if extra == nil {
@@ -122,28 +123,55 @@ func (p *PostgresClient) Store(id, content string, metadata models.Metadata, ext
 	})
 }
 
-func (p *PostgresClient) Search(vectors []float32, k int) ([]models.Doc, error) {
-	vectors64 := make([]float64, 0)
-	for _, v := range vectors {
-		vectors64 = append(vectors64, float64(v))
-	}
-	// query from db
-	existVectors := [][]float64{}
-
-	model := cluster.NewKNN(k, existVectors, vectors64, base.EuclideanDistance)
-
-	// make predictions like usual
-	_, err := model.Predict([]float64{-10, 1})
-	if err != nil {
+func (p *PgVectorClient) Search(vectors []float32, k int) ([]models.Doc, error) {
+	ctx := context.Background()
+	var (
+		vectorModels = make([]Index, 0)
+		result       = make([]models.Doc, 0)
+	)
+	if err := p.dEntity.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		query := p.dEntity.DB.WithContext(ctx)
+		vectorJson, _ := json.Marshal(vectors)
+		res := query.Order(fmt.Sprintf("vector <-> '%s'", string(vectorJson))).Limit(k).Find(&vectorModels)
+		if res.Error != nil {
+			return res.Error
+		}
+		return nil
+	}); err != nil {
 		return nil, err
 	}
-	// todo
-	return nil, nil
+
+	for _, v := range vectorModels {
+		metadata := make(map[string]interface{})
+		if err := json.Unmarshal([]byte(v.Metadata), &metadata); err != nil {
+			return nil, err
+		}
+		result = append(result, models.Doc{
+			Id:       v.ID,
+			Metadata: metadata,
+			Content:  v.Context,
+		})
+	}
+	return result, nil
 }
 
-func (p *PostgresClient) Exist(id string) (bool, error) {
-	//TODO implement me
-	panic("implement me")
-}
+func (p *PgVectorClient) Exist(id string) (bool, error) {
+	ctx := context.Background()
+	var exist = false
+	err := p.dEntity.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		vModel := Index{ID: id}
+		res := tx.First(vModel)
+		if res.Error != nil && res.Error != gorm.ErrRecordNotFound {
+			return res.Error
+		}
 
-var _ vectorstore.VectorStore = &PostgresClient{}
+		if res.Error == gorm.ErrRecordNotFound {
+			exist = false
+			return nil
+		}
+		exist = true
+		return nil
+	})
+
+	return exist, err
+}
