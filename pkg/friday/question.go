@@ -23,7 +23,8 @@ import (
 	"github.com/basenana/friday/pkg/llm/prompts"
 )
 
-func (f *Friday) Question(prompt prompts.PromptTemplate, q string) (string, error) {
+func (f *Friday) Question(q string) (string, error) {
+	prompt := prompts.NewQuestionPrompt()
 	c, err := f.searchDocs(q)
 	if err != nil {
 		return "", err
