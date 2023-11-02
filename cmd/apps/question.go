@@ -23,7 +23,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/basenana/friday/pkg/friday"
-	"github.com/basenana/friday/pkg/llm/prompts"
 )
 
 var QuestionCmd = &cobra.Command{
@@ -39,8 +38,7 @@ var QuestionCmd = &cobra.Command{
 }
 
 func run(question string) error {
-	p := prompts.NewQuestionPrompt()
-	a, err := friday.Fri.Question(p, question)
+	a, err := friday.Fri.Question(question)
 	if err != nil {
 		return err
 	}

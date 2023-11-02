@@ -14,47 +14,34 @@
  * limitations under the License.
  */
 
-package main
+package apps
 
 import (
+	"fmt"
+
 	"github.com/spf13/cobra"
 
-	"github.com/basenana/friday/cmd/apps"
-	"github.com/basenana/friday/config"
-	"github.com/basenana/friday/pkg/build/common"
 	"github.com/basenana/friday/pkg/friday"
 )
 
-var RootCmd = &cobra.Command{
-	Use:   "friday",
-	Short: "friday",
+var KeywordsCmd = &cobra.Command{
+	Use:   "keywords",
+	Short: "Extract keywords",
 	Run: func(cmd *cobra.Command, args []string) {
-		_ = cmd.Help()
+		ps := args[0]
+
+		if err := keywords(ps); err != nil {
+			panic(err)
+		}
 	},
 }
 
-func init() {
-	// init friday
-	loader := config.NewConfigLoader()
-	cfg, err := loader.GetConfig()
+func keywords(content string) error {
+	a, err := friday.Fri.Keywords(content)
 	if err != nil {
-		panic(err)
+		return err
 	}
-
-	friday.Fri, err = common.NewFriday(&cfg)
-	if err != nil {
-		panic(err)
-	}
-
-	RootCmd.AddCommand(apps.QuestionCmd)
-	RootCmd.AddCommand(apps.IngestCmd)
-	RootCmd.AddCommand(apps.WeChatCmd)
-	RootCmd.AddCommand(apps.SummaryCmd)
-	RootCmd.AddCommand(apps.KeywordsCmd)
-}
-
-func main() {
-	if err := RootCmd.Execute(); err != nil {
-		panic(err)
-	}
+	fmt.Println("Answer: ")
+	fmt.Println(a)
+	return nil
 }
