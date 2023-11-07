@@ -53,5 +53,5 @@ func (f FakeKeyWordsLLM) Completion(prompt prompts.PromptTemplate, parameters ma
 }
 
 func (f FakeKeyWordsLLM) Chat(prompt prompts.PromptTemplate, parameters map[string]string) ([]string, error) {
-	return []string{"a b c"}, nil
+	return []string{"a, b, c"}, nil
 }
