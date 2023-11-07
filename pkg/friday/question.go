@@ -30,7 +30,7 @@ func (f *Friday) Question(q string) (string, error) {
 		return "", err
 	}
 	if f.LLM != nil {
-		ans, err := f.LLM.Completion(prompt, map[string]string{
+		ans, err := f.LLM.Chat(prompt, map[string]string{
 			"context":  c,
 			"question": q,
 		})
