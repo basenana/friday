@@ -37,6 +37,7 @@ func (f *Friday) Question(q string) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("llm completion error: %w", err)
 		}
+		f.Log.Debugf("Question result: %s", c)
 		return ans[0], nil
 	}
 	return c, nil
