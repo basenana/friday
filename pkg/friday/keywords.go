@@ -31,5 +31,12 @@ func (f *Friday) Keywords(content string) (keywords []string, err error) {
 	}
 	answer := answers[0]
 	keywords = strings.Split(answer, " ")
-	return keywords, nil
+	result := []string{}
+	for _, keyword := range keywords {
+		if len(keyword) != 0 {
+			result = append(result, keyword)
+		}
+	}
+	f.Log.Debugf("Keywords result: %v", result)
+	return result, nil
 }

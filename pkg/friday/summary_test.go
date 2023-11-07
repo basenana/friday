@@ -25,6 +25,7 @@ import (
 	"github.com/basenana/friday/pkg/llm/prompts"
 	"github.com/basenana/friday/pkg/models"
 	"github.com/basenana/friday/pkg/spliter"
+	"github.com/basenana/friday/pkg/utils/logger"
 )
 
 var _ = Describe("TestStuffSummary", func() {
@@ -36,6 +37,7 @@ var _ = Describe("TestStuffSummary", func() {
 	)
 
 	BeforeEach(func() {
+		loFriday.Log = logger.NewLogger("test-stuffsummary")
 		loFriday.LLM = FakeSummaryLLM{}
 		loFriday.Spliter = spliter.NewTextSpliter(spliter.DefaultChunkSize, spliter.DefaultChunkOverlap, "\n")
 		elements = []models.Element{{
@@ -80,6 +82,7 @@ var _ = Describe("TestMapReduceSummary", func() {
 	)
 
 	BeforeEach(func() {
+		loFriday.Log = logger.NewLogger("test-mapreduce-summary")
 		loFriday.LLM = FakeSummaryLLM{}
 		loFriday.LimitToken = 4
 		loFriday.Spliter = spliter.NewTextSpliter(spliter.DefaultChunkSize, spliter.DefaultChunkOverlap, "\n")
@@ -125,6 +128,7 @@ var _ = Describe("TestRefineSummary", func() {
 	)
 
 	BeforeEach(func() {
+		loFriday.Log = logger.NewLogger("test-refine-summary")
 		loFriday.LLM = FakeSummaryLLM{}
 		loFriday.Spliter = spliter.NewTextSpliter(spliter.DefaultChunkSize, spliter.DefaultChunkOverlap, "\n")
 		elements = []models.Element{{

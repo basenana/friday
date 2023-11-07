@@ -22,6 +22,7 @@ import (
 
 	"github.com/basenana/friday/pkg/llm"
 	"github.com/basenana/friday/pkg/llm/prompts"
+	"github.com/basenana/friday/pkg/utils/logger"
 )
 
 var _ = Describe("TestKeywords", func() {
@@ -31,6 +32,7 @@ var _ = Describe("TestKeywords", func() {
 
 	BeforeEach(func() {
 		loFriday.LLM = FakeKeyWordsLLM{}
+		loFriday.Log = logger.NewLogger("test-keywords")
 	})
 
 	Context("keywords", func() {

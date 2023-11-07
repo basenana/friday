@@ -36,7 +36,7 @@ var _ = Describe("TestQuestion", func() {
 
 	BeforeEach(func() {
 		loFriday.Vector = FakeStore{}
-		loFriday.Log = logger.NewLogger("test")
+		loFriday.Log = logger.NewLogger("test-question")
 		loFriday.Spliter = spliter.NewTextSpliter(spliter.DefaultChunkSize, spliter.DefaultChunkOverlap, "\n")
 		loFriday.Embedding = FakeQuestionEmbedding{}
 		loFriday.LLM = FakeQuestionLLM{}
