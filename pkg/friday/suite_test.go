@@ -17,26 +17,13 @@
 package friday
 
 import (
-	"github.com/basenana/friday/pkg/embedding"
-	"github.com/basenana/friday/pkg/llm"
-	"github.com/basenana/friday/pkg/spliter"
-	"github.com/basenana/friday/pkg/utils/logger"
-	"github.com/basenana/friday/pkg/vectorstore"
+	"testing"
+
+	. "github.com/onsi/ginkgo"
+	. "github.com/onsi/gomega"
 )
 
-const defaultTopK = 6
-
-var (
-	Fri *Friday
-)
-
-type Friday struct {
-	Log logger.Logger
-
-	LimitToken int
-
-	LLM       llm.LLM
-	Embedding embedding.Embedding
-	Vector    vectorstore.VectorStore
-	Spliter   spliter.Spliter
+func TestFriday(t *testing.T) {
+	RegisterFailHandler(Fail)
+	RunSpecs(t, "Workflow Exec Suite")
 }
