@@ -17,6 +17,7 @@
 package apps
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/spf13/cobra"
@@ -37,7 +38,7 @@ var KeywordsCmd = &cobra.Command{
 }
 
 func keywords(content string) error {
-	a, err := friday.Fri.Keywords(content)
+	a, err := friday.Fri.Keywords(context.TODO(), content)
 	if err != nil {
 		return err
 	}

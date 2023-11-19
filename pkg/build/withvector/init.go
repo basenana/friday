@@ -40,7 +40,7 @@ func NewFridayWithVector(conf *config.Config, vectorClient vectorstore.VectorSto
 		if conf.OpenAIBaseUrl == "" {
 			conf.OpenAIBaseUrl = "https://api.openai.com"
 		}
-		llmClient = openaiv1.NewOpenAIV1(conf.OpenAIBaseUrl, conf.OpenAIKey, conf.LLMRateLimit)
+		llmClient = openaiv1.NewOpenAIV1(conf.OpenAIBaseUrl, conf.OpenAIKey, conf.LLMQueryPerMinute, conf.LLMBurst)
 	}
 	if conf.LLMType == config.LLMGLM6B {
 		llmClient = glm_6b.NewGLM(conf.LLMUrl)
@@ -51,7 +51,7 @@ func NewFridayWithVector(conf *config.Config, vectorClient vectorstore.VectorSto
 		if conf.OpenAIBaseUrl == "" {
 			conf.OpenAIBaseUrl = "https://api.openai.com"
 		}
-		embeddingModel = openaiembedding.NewOpenAIEmbedding(conf.OpenAIBaseUrl, conf.OpenAIKey, conf.LLMRateLimit)
+		embeddingModel = openaiembedding.NewOpenAIEmbedding(conf.OpenAIBaseUrl, conf.OpenAIKey, conf.LLMQueryPerMinute, conf.LLMBurst)
 	}
 	if conf.EmbeddingType == config.EmbeddingHuggingFace {
 		embeddingModel = huggingfaceembedding.NewHuggingFace(conf.EmbeddingUrl, conf.EmbeddingModel)

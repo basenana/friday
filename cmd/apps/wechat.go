@@ -17,6 +17,7 @@
 package apps
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -38,7 +39,7 @@ var WeChatCmd = &cobra.Command{
 }
 
 func chat(ps string) error {
-	a, err := friday.Fri.ChatConclusionFromFile(ps)
+	a, err := friday.Fri.ChatConclusionFromFile(context.TODO(), ps)
 	if err != nil {
 		return err
 	}

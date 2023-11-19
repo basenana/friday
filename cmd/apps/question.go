@@ -17,6 +17,7 @@
 package apps
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -38,7 +39,7 @@ var QuestionCmd = &cobra.Command{
 }
 
 func run(question string) error {
-	a, err := friday.Fri.Question(question)
+	a, err := friday.Fri.Question(context.TODO(), question)
 	if err != nil {
 		return err
 	}
