@@ -17,16 +17,22 @@
 package v1
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 
+	"golang.org/x/time/rate"
+
 	"github.com/basenana/friday/pkg/llm"
 	"github.com/basenana/friday/pkg/utils/logger"
 )
 
-const defaultRateLimit = 60
+const (
+	defaultQueryPerMinute = 3
+	defaultBurst          = 5
+)
 
 type OpenAIV1 struct {
 	log logger.Logger
@@ -34,23 +40,36 @@ type OpenAIV1 struct {
 	baseUri   string
 	key       string
 	rateLimit int
+
+	limiter *rate.Limiter
 }
 
-func NewOpenAIV1(baseUrl, key string, rateLimit int) *OpenAIV1 {
-	if rateLimit <= 0 {
-		rateLimit = defaultRateLimit
+func NewOpenAIV1(baseUrl, key string, qpm, burst int) *OpenAIV1 {
+	if qpm <= 0 {
+		qpm = defaultQueryPerMinute
 	}
+	if burst <= 0 {
+		burst = defaultBurst
+	}
+
+	limiter := rate.NewLimiter(rate.Limit(qpm/60), burst)
+
 	return &OpenAIV1{
-		log:       logger.NewLogger("openai"),
-		baseUri:   baseUrl,
-		key:       key,
-		rateLimit: rateLimit,
+		log:     logger.NewLogger("openai"),
+		baseUri: baseUrl,
+		key:     key,
+		limiter: limiter,
 	}
 }
 
 var _ llm.LLM = &OpenAIV1{}
 
-func (o *OpenAIV1) request(path string, method string, body io.Reader) ([]byte, error) {
+func (o *OpenAIV1) request(ctx context.Context, path string, method string, body io.Reader) ([]byte, error) {
+	err := o.limiter.Wait(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	uri, err := url.JoinPath(o.baseUri, path)
 	if err != nil {
 		return nil, err

@@ -18,6 +18,7 @@ package v1
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"strings"
 	"time"
@@ -40,21 +41,21 @@ type ChatChoice struct {
 	FinishReason string            `json:"finish_reason"`
 }
 
-func (o *OpenAIV1) Chat(prompt prompts.PromptTemplate, parameters map[string]string) ([]string, error) {
-	answer, err := o.chat(prompt, parameters)
+func (o *OpenAIV1) Chat(ctx context.Context, prompt prompts.PromptTemplate, parameters map[string]string) ([]string, error) {
+	answer, err := o.chat(ctx, prompt, parameters)
 	if err != nil {
 		errMsg := err.Error()
 		if strings.Contains(errMsg, "rate_limit_exceeded") {
 			o.log.Warnf("meets rate limit exceeded, sleep %d second and retry", o.rateLimit)
 			time.Sleep(time.Duration(o.rateLimit) * time.Second)
-			return o.chat(prompt, parameters)
+			return o.chat(ctx, prompt, parameters)
 		}
 		return nil, err
 	}
 	return answer, err
 }
 
-func (o *OpenAIV1) chat(prompt prompts.PromptTemplate, parameters map[string]string) ([]string, error) {
+func (o *OpenAIV1) chat(ctx context.Context, prompt prompts.PromptTemplate, parameters map[string]string) ([]string, error) {
 	path := "v1/chat/completions"
 
 	model := "gpt-3.5-turbo"
@@ -67,7 +68,7 @@ func (o *OpenAIV1) chat(prompt prompts.PromptTemplate, parameters map[string]str
 	data := map[string]interface{}{
 		"model":             model,
 		"messages":          []interface{}{map[string]string{"role": "user", "content": p}},
-		"max_tokens":        1024,
+		"max_tokens":        4096,
 		"temperature":       0.7,
 		"top_p":             1,
 		"frequency_penalty": 0,
@@ -76,7 +77,7 @@ func (o *OpenAIV1) chat(prompt prompts.PromptTemplate, parameters map[string]str
 	}
 	postBody, _ := json.Marshal(data)
 
-	respBody, err := o.request(path, "POST", bytes.NewBuffer(postBody))
+	respBody, err := o.request(ctx, path, "POST", bytes.NewBuffer(postBody))
 	if err != nil {
 		return nil, err
 	}
