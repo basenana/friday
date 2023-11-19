@@ -21,6 +21,7 @@ import (
 	"strings"
 
 	"github.com/basenana/friday/pkg/llm/prompts"
+	"github.com/basenana/friday/pkg/utils/files"
 )
 
 func (s *Summary) MapReduce(docs []string) (summary string, err error) {
@@ -68,7 +69,12 @@ func (s *Summary) getLength(p prompts.PromptTemplate, docs []string) (length int
 	if err != nil {
 		return 0, err
 	}
-	return len(res), nil
+
+	ress := strings.Split(res, "\n")
+	for _, r := range ress {
+		length += files.Length(r)
+	}
+	return length, nil
 }
 
 func (s *Summary) mapSummaries(docs []string) ([]string, error) {
