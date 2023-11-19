@@ -46,7 +46,7 @@ func (o *OpenAIV1) Chat(ctx context.Context, prompt prompts.PromptTemplate, para
 	if err != nil {
 		errMsg := err.Error()
 		if strings.Contains(errMsg, "rate_limit_exceeded") || strings.Contains(errMsg, "Rate limit reached") {
-			o.log.Warn("meets rate limit exceeded, sleep 30 second and retry")
+			o.log.Warn("meets rate limit exceeded, sleep 30 seconds and retry")
 			time.Sleep(time.Duration(30) * time.Second)
 			return o.chat(ctx, prompt, parameters)
 		}
