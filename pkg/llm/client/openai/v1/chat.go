@@ -17,7 +17,6 @@
 package v1
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"strings"
@@ -75,9 +74,8 @@ func (o *OpenAIV1) chat(ctx context.Context, prompt prompts.PromptTemplate, para
 		"presence_penalty":  0,
 		"n":                 1,
 	}
-	postBody, _ := json.Marshal(data)
 
-	respBody, err := o.request(ctx, path, "POST", bytes.NewBuffer(postBody))
+	respBody, err := o.request(ctx, path, "POST", data)
 	if err != nil {
 		return nil, err
 	}

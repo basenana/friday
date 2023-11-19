@@ -17,7 +17,6 @@
 package v1
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"strings"
@@ -77,9 +76,8 @@ func (o *OpenAIV1) completion(ctx context.Context, prompt prompts.PromptTemplate
 		"n":                 1,
 		"best_of":           1,
 	}
-	postBody, _ := json.Marshal(data)
 
-	respBody, err := o.request(ctx, path, "POST", bytes.NewBuffer(postBody))
+	respBody, err := o.request(ctx, path, "POST", data)
 	if err != nil {
 		return nil, err
 	}

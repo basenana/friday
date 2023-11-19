@@ -17,7 +17,6 @@
 package v1
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"strings"
@@ -64,13 +63,12 @@ func (o *OpenAIV1) embedding(ctx context.Context, doc string) (*EmbeddingResult,
 	path := "v1/embeddings"
 
 	model := "text-embedding-ada-002"
-	data := map[string]string{
+	data := map[string]interface{}{
 		"model": model,
 		"input": doc,
 	}
-	postBody, _ := json.Marshal(data)
 
-	respBody, err := o.request(ctx, path, "POST", bytes.NewBuffer(postBody))
+	respBody, err := o.request(ctx, path, "POST", data)
 	if err != nil {
 		return nil, err
 	}
