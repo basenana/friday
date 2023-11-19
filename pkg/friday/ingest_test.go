@@ -17,6 +17,8 @@
 package friday
 
 import (
+	"context"
+
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 
@@ -51,7 +53,7 @@ var _ = Describe("TestIngest", func() {
 					},
 				},
 			}
-			err := loFriday.Ingest(elements)
+			err := loFriday.Ingest(context.TODO(), elements)
 			Expect(err).Should(BeNil())
 		})
 	})
@@ -77,10 +79,10 @@ type FakeEmbedding struct{}
 
 var _ embedding.Embedding = FakeEmbedding{}
 
-func (f FakeEmbedding) VectorQuery(doc string) ([]float32, map[string]interface{}, error) {
+func (f FakeEmbedding) VectorQuery(ctx context.Context, doc string) ([]float32, map[string]interface{}, error) {
 	return []float32{}, map[string]interface{}{}, nil
 }
 
-func (f FakeEmbedding) VectorDocs(docs []string) ([][]float32, []map[string]interface{}, error) {
+func (f FakeEmbedding) VectorDocs(ctx context.Context, docs []string) ([][]float32, []map[string]interface{}, error) {
 	return [][]float32{}, []map[string]interface{}{}, nil
 }
