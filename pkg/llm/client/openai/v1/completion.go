@@ -18,6 +18,7 @@ package v1
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"strings"
 	"time"
@@ -41,21 +42,21 @@ type Choice struct {
 	Logprobs     interface{} `json:"logprobs"`
 }
 
-func (o *OpenAIV1) Completion(prompt prompts.PromptTemplate, parameters map[string]string) ([]string, error) {
-	answer, err := o.completion(prompt, parameters)
+func (o *OpenAIV1) Completion(ctx context.Context, prompt prompts.PromptTemplate, parameters map[string]string) ([]string, error) {
+	answer, err := o.completion(ctx, prompt, parameters)
 	if err != nil {
 		errMsg := err.Error()
 		if strings.Contains(errMsg, "rate_limit_exceeded") {
 			o.log.Warnf("meets rate limit exceeded, sleep %d second and retry", o.rateLimit)
 			time.Sleep(time.Duration(o.rateLimit) * time.Second)
-			return o.completion(prompt, parameters)
+			return o.completion(ctx, prompt, parameters)
 		}
 		return nil, err
 	}
 	return answer, err
 }
 
-func (o *OpenAIV1) completion(prompt prompts.PromptTemplate, parameters map[string]string) ([]string, error) {
+func (o *OpenAIV1) completion(ctx context.Context, prompt prompts.PromptTemplate, parameters map[string]string) ([]string, error) {
 	path := "v1/completions"
 
 	model := "text-davinci-003"
@@ -78,7 +79,7 @@ func (o *OpenAIV1) completion(prompt prompts.PromptTemplate, parameters map[stri
 	}
 	postBody, _ := json.Marshal(data)
 
-	respBody, err := o.request(path, "POST", bytes.NewBuffer(postBody))
+	respBody, err := o.request(ctx, path, "POST", bytes.NewBuffer(postBody))
 	if err != nil {
 		return nil, err
 	}

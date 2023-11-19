@@ -17,20 +17,21 @@
 package friday
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
 	"github.com/basenana/friday/pkg/llm/prompts"
 )
 
-func (f *Friday) Question(q string) (string, error) {
+func (f *Friday) Question(ctx context.Context, q string) (string, error) {
 	prompt := prompts.NewQuestionPrompt()
 	c, err := f.searchDocs(q)
 	if err != nil {
 		return "", err
 	}
 	if f.LLM != nil {
-		ans, err := f.LLM.Chat(prompt, map[string]string{
+		ans, err := f.LLM.Chat(ctx, prompt, map[string]string{
 			"context":  c,
 			"question": q,
 		})

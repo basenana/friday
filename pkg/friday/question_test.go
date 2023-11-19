@@ -17,6 +17,8 @@
 package friday
 
 import (
+	"context"
+
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 
@@ -45,7 +47,7 @@ var _ = Describe("TestQuestion", func() {
 
 	Context("question", func() {
 		It("question should be succeed", func() {
-			ans, err := loFriday.Question("I am a question")
+			ans, err := loFriday.Question(context.TODO(), "I am a question")
 			Expect(err).Should(BeNil())
 			Expect(ans).Should(Equal("I am an answer"))
 		})
@@ -93,10 +95,10 @@ type FakeQuestionLLM struct{}
 
 var _ llm.LLM = &FakeQuestionLLM{}
 
-func (f FakeQuestionLLM) Completion(prompt prompts.PromptTemplate, parameters map[string]string) ([]string, error) {
+func (f FakeQuestionLLM) Completion(ctx context.Context, prompt prompts.PromptTemplate, parameters map[string]string) ([]string, error) {
 	return []string{}, nil
 }
 
-func (f FakeQuestionLLM) Chat(prompt prompts.PromptTemplate, parameters map[string]string) ([]string, error) {
+func (f FakeQuestionLLM) Chat(ctx context.Context, prompt prompts.PromptTemplate, parameters map[string]string) ([]string, error) {
 	return []string{"I am an answer"}, nil
 }

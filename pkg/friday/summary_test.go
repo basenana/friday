@@ -17,6 +17,8 @@
 package friday
 
 import (
+	"context"
+
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 
@@ -57,14 +59,14 @@ var _ = Describe("TestStuffSummary", func() {
 
 	Context("summary", func() {
 		It("summary should be succeed", func() {
-			summary, err := loFriday.Summary(elements, summaryType)
+			summary, err := loFriday.Summary(context.TODO(), elements, summaryType)
 			Expect(err).Should(BeNil())
 			Expect(summary).Should(Equal(map[string]string{
 				"test-source": "a b c",
 			}))
 		})
 		It("SummaryFromFile should be succeed", func() {
-			summary, err := loFriday.SummaryFromFile(file, summaryType)
+			summary, err := loFriday.SummaryFromFile(context.TODO(), file, summaryType)
 			Expect(err).Should(BeNil())
 			Expect(summary).Should(Equal(map[string]string{
 				"test-file-source": "a b c",
@@ -84,8 +86,8 @@ var _ = Describe("TestMapReduceSummary", func() {
 	BeforeEach(func() {
 		loFriday.Log = logger.NewLogger("test-mapreduce-summary")
 		loFriday.LLM = FakeSummaryLLM{}
-		loFriday.LimitToken = 4
-		loFriday.Spliter = spliter.NewTextSpliter(spliter.DefaultChunkSize, spliter.DefaultChunkOverlap, "\n")
+		loFriday.LimitToken = 50
+		loFriday.Spliter = spliter.NewTextSpliter(8, 2, "\n")
 		elements = []models.Element{{
 			Content: "test-content",
 			Metadata: models.Metadata{
@@ -97,20 +99,20 @@ var _ = Describe("TestMapReduceSummary", func() {
 		file = models.File{
 			Name:    "test-file",
 			Source:  "test-file-source",
-			Content: "test-file-content",
+			Content: "test file content",
 		}
 	})
 
 	Context("summary", func() {
 		It("summary should be succeed", func() {
-			summary, err := loFriday.Summary(elements, summaryType)
+			summary, err := loFriday.Summary(context.TODO(), elements, summaryType)
 			Expect(err).Should(BeNil())
 			Expect(summary).Should(Equal(map[string]string{
 				"test-source": "a b c",
 			}))
 		})
 		It("SummaryFromFile should be succeed", func() {
-			summary, err := loFriday.SummaryFromFile(file, summaryType)
+			summary, err := loFriday.SummaryFromFile(context.TODO(), file, summaryType)
 			Expect(err).Should(BeNil())
 			Expect(summary).Should(Equal(map[string]string{
 				"test-file-source": "a b c",
@@ -148,11 +150,11 @@ var _ = Describe("TestRefineSummary", func() {
 
 	Context("summary", func() {
 		It("summary should be succeed", func() {
-			_, _ = loFriday.Summary(elements, summaryType)
+			_, _ = loFriday.Summary(context.TODO(), elements, summaryType)
 			// todo
 		})
 		It("SummaryFromFile should be succeed", func() {
-			_, _ = loFriday.SummaryFromFile(file, summaryType)
+			_, _ = loFriday.SummaryFromFile(context.TODO(), file, summaryType)
 			// todo
 		})
 	})
@@ -162,10 +164,10 @@ type FakeSummaryLLM struct{}
 
 var _ llm.LLM = &FakeSummaryLLM{}
 
-func (f FakeSummaryLLM) Completion(prompt prompts.PromptTemplate, parameters map[string]string) ([]string, error) {
+func (f FakeSummaryLLM) Completion(ctx context.Context, prompt prompts.PromptTemplate, parameters map[string]string) ([]string, error) {
 	return []string{}, nil
 }
 
-func (f FakeSummaryLLM) Chat(prompt prompts.PromptTemplate, parameters map[string]string) ([]string, error) {
+func (f FakeSummaryLLM) Chat(ctx context.Context, prompt prompts.PromptTemplate, parameters map[string]string) ([]string, error) {
 	return []string{"a b c"}, nil
 }
