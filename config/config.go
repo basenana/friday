@@ -16,8 +16,13 @@
 
 package config
 
+import (
+	"github.com/basenana/friday/pkg/utils/logger"
+)
+
 type Config struct {
-	Debug bool `json:"debug,omitempty"`
+	Debug  bool `json:"debug,omitempty"`
+	Logger logger.Logger
 
 	// llm limit token
 	LimitToken int `json:"limit_token,omitempty"`
