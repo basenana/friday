@@ -16,14 +16,25 @@
 
 package files
 
-import "strings"
+import (
+	"regexp"
+)
 
 func Length(doc string) int {
 	// todo: it should be more accurate
 	// https://platform.openai.com/docs/guides/text-generation/managing-tokens
-	pured := strings.TrimSpace(doc)
-	if pured == "" {
-		return 0
-	}
-	return len(strings.Split(strings.TrimSpace(pured), " "))
+
+	// Match words and punctuation using regular expressions
+	wordRegex := regexp.MustCompile(`\w+`)
+	punctuationRegex := regexp.MustCompile(`[^\w\s]`)
+
+	// Count the number of words
+	words := wordRegex.FindAllString(doc, -1)
+	wordCount := len(words)
+
+	// Count the number of punctuation marks
+	punctuation := punctuationRegex.FindAllString(doc, -1)
+	punctuationCount := len(punctuation)
+
+	return wordCount + punctuationCount
 }

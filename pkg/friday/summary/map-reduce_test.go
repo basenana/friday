@@ -48,7 +48,7 @@ func TestSummary_getLength(t *testing.T) {
 					"You are a doc too",
 				},
 			},
-			wantLength: 23,
+			wantLength: 30,
 			wantErr:    false,
 		},
 	}
