@@ -52,7 +52,7 @@ var _ = Describe("TestQuestion", func() {
 			Expect(ans).Should(Equal("I am an answer"))
 		})
 		It("searchDocs should be succeed", func() {
-			ans, err := loFriday.searchDocs("I am a question")
+			ans, err := loFriday.searchDocs(context.TODO(), "I am a question")
 			Expect(err).Should(BeNil())
 			Expect(ans).Should(Equal("There are logs of questions"))
 		})
@@ -83,11 +83,11 @@ type FakeQuestionEmbedding struct{}
 
 var _ embedding.Embedding = FakeQuestionEmbedding{}
 
-func (f FakeQuestionEmbedding) VectorQuery(doc string) ([]float32, map[string]interface{}, error) {
+func (f FakeQuestionEmbedding) VectorQuery(ctx context.Context, doc string) ([]float32, map[string]interface{}, error) {
 	return []float32{}, map[string]interface{}{}, nil
 }
 
-func (f FakeQuestionEmbedding) VectorDocs(docs []string) ([][]float32, []map[string]interface{}, error) {
+func (f FakeQuestionEmbedding) VectorDocs(ctx context.Context, docs []string) ([][]float32, []map[string]interface{}, error) {
 	return [][]float32{}, []map[string]interface{}{}, nil
 }
 

@@ -26,7 +26,7 @@ import (
 
 func (f *Friday) Question(ctx context.Context, q string) (string, error) {
 	prompt := prompts.NewQuestionPrompt()
-	c, err := f.searchDocs(q)
+	c, err := f.searchDocs(ctx, q)
 	if err != nil {
 		return "", err
 	}
@@ -44,9 +44,9 @@ func (f *Friday) Question(ctx context.Context, q string) (string, error) {
 	return c, nil
 }
 
-func (f *Friday) searchDocs(q string) (string, error) {
+func (f *Friday) searchDocs(ctx context.Context, q string) (string, error) {
 	f.Log.Debugf("vector query for %s ...", q)
-	qv, _, err := f.Embedding.VectorQuery(q)
+	qv, _, err := f.Embedding.VectorQuery(ctx, q)
 	if err != nil {
 		return "", fmt.Errorf("vector embedding error: %w", err)
 	}

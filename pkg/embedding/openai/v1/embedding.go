@@ -35,8 +35,8 @@ func NewOpenAIEmbedding(baseUrl, key string, qpm, burst int) embedding.Embedding
 	}
 }
 
-func (o *OpenAIEmbedding) VectorQuery(doc string) ([]float32, map[string]interface{}, error) {
-	res, err := o.Embedding(context.TODO(), doc)
+func (o *OpenAIEmbedding) VectorQuery(ctx context.Context, doc string) ([]float32, map[string]interface{}, error) {
+	res, err := o.Embedding(ctx, doc)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -48,12 +48,12 @@ func (o *OpenAIEmbedding) VectorQuery(doc string) ([]float32, map[string]interfa
 	return res.Data[0].Embedding, metadata, nil
 }
 
-func (o *OpenAIEmbedding) VectorDocs(docs []string) ([][]float32, []map[string]interface{}, error) {
+func (o *OpenAIEmbedding) VectorDocs(ctx context.Context, docs []string) ([][]float32, []map[string]interface{}, error) {
 	res := make([][]float32, len(docs))
 	metadata := make([]map[string]interface{}, len(docs))
 
 	for i, doc := range docs {
-		r, err := o.Embedding(context.TODO(), doc)
+		r, err := o.Embedding(ctx, doc)
 		if err != nil {
 			return nil, nil, err
 		}

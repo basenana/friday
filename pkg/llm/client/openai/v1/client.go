@@ -37,9 +37,8 @@ const (
 type OpenAIV1 struct {
 	log logger.Logger
 
-	baseUri   string
-	key       string
-	rateLimit int
+	baseUri string
+	key     string
 
 	limiter *rate.Limiter
 }
@@ -52,7 +51,7 @@ func NewOpenAIV1(baseUrl, key string, qpm, burst int) *OpenAIV1 {
 		burst = defaultBurst
 	}
 
-	limiter := rate.NewLimiter(rate.Limit(qpm/60), burst)
+	limiter := rate.NewLimiter(rate.Limit(qpm), burst*60)
 
 	return &OpenAIV1{
 		log:     logger.NewLogger("openai"),
@@ -65,7 +64,7 @@ func NewOpenAIV1(baseUrl, key string, qpm, burst int) *OpenAIV1 {
 var _ llm.LLM = &OpenAIV1{}
 
 func (o *OpenAIV1) request(ctx context.Context, path string, method string, body io.Reader) ([]byte, error) {
-	err := o.limiter.Wait(ctx)
+	err := o.limiter.WaitN(ctx, 60)
 	if err != nil {
 		return nil, err
 	}
