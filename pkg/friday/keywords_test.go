@@ -17,6 +17,8 @@
 package friday
 
 import (
+	"context"
+
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 
@@ -37,7 +39,7 @@ var _ = Describe("TestKeywords", func() {
 
 	Context("keywords", func() {
 		It("keywords should be succeed", func() {
-			keywords, err := loFriday.Keywords("test")
+			keywords, err := loFriday.Keywords(context.TODO(), "test")
 			Expect(err).Should(BeNil())
 			Expect(keywords).Should(Equal([]string{"a", "b", "c"}))
 		})
@@ -48,10 +50,10 @@ type FakeKeyWordsLLM struct{}
 
 var _ llm.LLM = &FakeKeyWordsLLM{}
 
-func (f FakeKeyWordsLLM) Completion(prompt prompts.PromptTemplate, parameters map[string]string) ([]string, error) {
+func (f FakeKeyWordsLLM) Completion(ctx context.Context, prompt prompts.PromptTemplate, parameters map[string]string) ([]string, error) {
 	return []string{}, nil
 }
 
-func (f FakeKeyWordsLLM) Chat(prompt prompts.PromptTemplate, parameters map[string]string) ([]string, error) {
+func (f FakeKeyWordsLLM) Chat(ctx context.Context, prompt prompts.PromptTemplate, parameters map[string]string) ([]string, error) {
 	return []string{"a, b, c"}, nil
 }

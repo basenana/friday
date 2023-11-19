@@ -18,6 +18,7 @@ package glm_6b
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -71,7 +72,7 @@ type CompletionResult struct {
 	Time     string     `json:"time"`
 }
 
-func (o *GLM) Completion(prompt prompts.PromptTemplate, parameters map[string]string) ([]string, error) {
+func (o *GLM) Completion(ctx context.Context, prompt prompts.PromptTemplate, parameters map[string]string) ([]string, error) {
 	path := ""
 
 	p, err := prompt.String(parameters)
@@ -100,7 +101,7 @@ func (o *GLM) Completion(prompt prompts.PromptTemplate, parameters map[string]st
 	return ans, err
 }
 
-func (o *GLM) Chat(prompt prompts.PromptTemplate, parameters map[string]string) ([]string, error) {
+func (o *GLM) Chat(ctx context.Context, prompt prompts.PromptTemplate, parameters map[string]string) ([]string, error) {
 	path := ""
 
 	p, err := prompt.String(parameters)
