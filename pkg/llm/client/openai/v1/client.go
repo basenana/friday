@@ -17,11 +17,14 @@
 package v1
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"time"
 
 	"golang.org/x/time/rate"
 
@@ -63,34 +66,51 @@ func NewOpenAIV1(baseUrl, key string, qpm, burst int) *OpenAIV1 {
 
 var _ llm.LLM = &OpenAIV1{}
 
-func (o *OpenAIV1) request(ctx context.Context, path string, method string, body io.Reader) ([]byte, error) {
-	err := o.limiter.WaitN(ctx, 60)
-	if err != nil {
-		return nil, err
-	}
+func (o *OpenAIV1) request(ctx context.Context, path string, method string, data map[string]any) ([]byte, error) {
 
-	uri, err := url.JoinPath(o.baseUri, path)
-	if err != nil {
-		return nil, err
-	}
-	req, err := http.NewRequest(method, uri, body)
-	req.Header.Set("Content-Type", "application/json; charset=utf-8")
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", o.key))
+	jsonData, _ := json.Marshal(data)
 
-	o.log.Debugf("request: %s", uri)
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
+	maxRetry := 100
+	for i := 0; i < maxRetry; i++ {
+		body := bytes.NewBuffer(jsonData)
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("openai request context cancelled")
+		default:
+			err := o.limiter.WaitN(ctx, 60)
+			if err != nil {
+				return nil, err
+			}
 
-	// Read Response Body
-	respBody, _ := io.ReadAll(resp.Body)
+			uri, err := url.JoinPath(o.baseUri, path)
+			if err != nil {
+				return nil, err
+			}
+			req, err := http.NewRequest(method, uri, body)
+			req.Header.Set("Content-Type", "application/json; charset=utf-8")
+			req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", o.key))
 
-	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("fail to call openai, status code error: %d, resp body: %s", resp.StatusCode, string(respBody))
+			o.log.Debugf("request: %s", uri)
+			client := &http.Client{}
+			resp, err := client.Do(req)
+			if err != nil {
+				o.log.Errorf("fail to call openai, sleep 30s and retry. err: %v", err)
+				time.Sleep(time.Second * 30)
+				continue
+			}
+
+			// Read Response Body
+			respBody, _ := io.ReadAll(resp.Body)
+			_ = resp.Body.Close()
+
+			if resp.StatusCode != 200 {
+				o.log.Errorf("fail to call openai, sleep 30s and retry. status code error: %d, resp body: %s", resp.StatusCode, string(respBody))
+				time.Sleep(time.Second * 30)
+				continue
+			}
+			//o.log.Debugf("response: %s", respBody)
+			return respBody, nil
+		}
 	}
-	//o.log.Debugf("response: %s", respBody)
-	return respBody, nil
+	return nil, fmt.Errorf("fail to call openai after retry 100 times")
 }
