@@ -45,9 +45,9 @@ func (o *OpenAIV1) Chat(ctx context.Context, prompt prompts.PromptTemplate, para
 	answer, err := o.chat(ctx, prompt, parameters)
 	if err != nil {
 		errMsg := err.Error()
-		if strings.Contains(errMsg, "rate_limit_exceeded") {
-			o.log.Warnf("meets rate limit exceeded, sleep %d second and retry", o.rateLimit)
-			time.Sleep(time.Duration(o.rateLimit) * time.Second)
+		if strings.Contains(errMsg, "rate_limit_exceeded") || strings.Contains(errMsg, "Rate limit reached") {
+			o.log.Warn("meets rate limit exceeded, sleep 30 seconds and retry")
+			time.Sleep(time.Duration(30) * time.Second)
 			return o.chat(ctx, prompt, parameters)
 		}
 		return nil, err
@@ -68,7 +68,7 @@ func (o *OpenAIV1) chat(ctx context.Context, prompt prompts.PromptTemplate, para
 	data := map[string]interface{}{
 		"model":             model,
 		"messages":          []interface{}{map[string]string{"role": "user", "content": p}},
-		"max_tokens":        4096,
+		"max_tokens":        1024,
 		"temperature":       0.7,
 		"top_p":             1,
 		"frequency_penalty": 0,

@@ -17,6 +17,8 @@
 package withvector
 
 import (
+	"context"
+
 	"github.com/basenana/friday/config"
 	"github.com/basenana/friday/pkg/embedding"
 	huggingfaceembedding "github.com/basenana/friday/pkg/embedding/huggingface"
@@ -55,7 +57,7 @@ func NewFridayWithVector(conf *config.Config, vectorClient vectorstore.VectorSto
 	}
 	if conf.EmbeddingType == config.EmbeddingHuggingFace {
 		embeddingModel = huggingfaceembedding.NewHuggingFace(conf.EmbeddingUrl, conf.EmbeddingModel)
-		testEmbed, _, err := embeddingModel.VectorQuery("test")
+		testEmbed, _, err := embeddingModel.VectorQuery(context.TODO(), "test")
 		if err != nil {
 			return nil, err
 		}
