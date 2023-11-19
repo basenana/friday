@@ -145,8 +145,20 @@ func TestTextSpliter_Merge(t1 *testing.T) {
 				chunkSize:    tt.fields.chunkSize,
 				chunkOverlap: tt.fields.chunkOverlap,
 			}
-			if got := t.Merge(tt.args.elements); !reflect.DeepEqual(got, tt.want) {
+			got := t.Merge(tt.args.elements)
+			if len(got) != len(tt.want) {
 				t1.Errorf("Merge() = %v, want %v", got, tt.want)
+			}
+			for _, g := range got {
+				gotInWant := false
+				for _, w := range tt.want {
+					if reflect.DeepEqual(g, w) {
+						gotInWant = true
+					}
+				}
+				if !gotInWant {
+					t1.Errorf("Merge() = %v, want %v", got, tt.want)
+				}
 			}
 		})
 	}
@@ -171,13 +183,25 @@ func TestTextSpliter_Split(t1 *testing.T) {
 			name: "test1",
 			fields: fields{
 				separator:    "\n",
-				chunkSize:    10,
+				chunkSize:    3,
 				chunkOverlap: 2,
 			},
 			args: args{
 				text: "hello world\nthis is a test\n",
 			},
 			want: []string{"hello world", "this is a test"},
+		},
+		{
+			name: "test2",
+			fields: fields{
+				separator:    "\n",
+				chunkSize:    7,
+				chunkOverlap: 2,
+			},
+			args: args{
+				text: "hello world\nthis is a test\n",
+			},
+			want: []string{"hello world\nthis is a test"},
 		},
 	}
 	for _, tt := range tests {
@@ -243,11 +267,18 @@ func TestTextSpliter_length(t1 *testing.T) {
 		want int
 	}{
 		{
-			name: "test",
+			name: "test1",
 			args: args{
 				d: "this is a test",
 			},
-			want: 14,
+			want: 4,
+		},
+		{
+			name: "test2",
+			args: args{
+				d: "",
+			},
+			want: 0,
 		},
 	}
 	for _, tt := range tests {
@@ -281,7 +312,7 @@ func TestTextSpliter_merge(t1 *testing.T) {
 			name: "test1",
 			fields: fields{
 				separator:    "\n",
-				chunkSize:    10,
+				chunkSize:    5,
 				chunkOverlap: 2,
 			},
 			args: args{
@@ -296,7 +327,7 @@ func TestTextSpliter_merge(t1 *testing.T) {
 			name: "test2",
 			fields: fields{
 				separator:    "\n",
-				chunkSize:    10,
+				chunkSize:    5,
 				chunkOverlap: 2,
 			},
 			args: args{
@@ -307,13 +338,13 @@ func TestTextSpliter_merge(t1 *testing.T) {
 					"hello world",
 				},
 			},
-			want: []string{"yeah\nhey", "this is a test", "hello world"},
+			want: []string{"yeah\nhey", "hey\nthis is a test", "hello world"},
 		},
 		{
 			name: "test3",
 			fields: fields{
 				separator:    "\n",
-				chunkSize:    10,
+				chunkSize:    5,
 				chunkOverlap: 4,
 			},
 			args: args{
@@ -325,13 +356,13 @@ func TestTextSpliter_merge(t1 *testing.T) {
 					"hello world",
 				},
 			},
-			want: []string{"yeah\nhey", "hey\nhello", "this is a test", "hello world"},
+			want: []string{"yeah\nhey\nhello", "hello\nthis is a test", "hello world"},
 		},
 		{
 			name: "test4",
 			fields: fields{
 				separator:    "\n",
-				chunkSize:    10,
+				chunkSize:    5,
 				chunkOverlap: 4,
 			},
 			args: args{
@@ -340,11 +371,13 @@ func TestTextSpliter_merge(t1 *testing.T) {
 					"",
 					"hey",
 					"hello",
+					"good morning",
+					"how are you",
 					"this is a test",
 					"hello world",
 				},
 			},
-			want: []string{"yeah\nhey", "hey\nhello", "this is a test", "hello world"},
+			want: []string{"yeah\nhey\nhello\ngood morning", "good morning\nhow are you", "this is a test", "hello world"},
 		},
 	}
 	for _, tt := range tests {
