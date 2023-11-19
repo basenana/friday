@@ -47,8 +47,8 @@ func (o *OpenAIV1) Completion(ctx context.Context, prompt prompts.PromptTemplate
 	if err != nil {
 		errMsg := err.Error()
 		if strings.Contains(errMsg, "rate_limit_exceeded") {
-			o.log.Warnf("meets rate limit exceeded, sleep %d second and retry", o.rateLimit)
-			time.Sleep(time.Duration(o.rateLimit) * time.Second)
+			o.log.Warn("meets rate limit exceeded, sleep 30 seconds and retry")
+			time.Sleep(time.Duration(30) * time.Second)
 			return o.completion(ctx, prompt, parameters)
 		}
 		return nil, err

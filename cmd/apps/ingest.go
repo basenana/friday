@@ -17,6 +17,8 @@
 package apps
 
 import (
+	"context"
+
 	"github.com/spf13/cobra"
 
 	"github.com/basenana/friday/pkg/friday"
@@ -38,7 +40,7 @@ var IngestCmd = &cobra.Command{
 }
 
 func ingest(ps string) error {
-	err := friday.Fri.IngestFromOriginFile(ps)
+	err := friday.Fri.IngestFromOriginFile(context.TODO(), ps)
 	if err != nil {
 		return err
 	}
