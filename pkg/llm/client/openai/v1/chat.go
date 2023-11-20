@@ -19,8 +19,6 @@ package v1
 import (
 	"context"
 	"encoding/json"
-	"strings"
-	"time"
 
 	"github.com/basenana/friday/pkg/llm/prompts"
 )
@@ -41,17 +39,7 @@ type ChatChoice struct {
 }
 
 func (o *OpenAIV1) Chat(ctx context.Context, prompt prompts.PromptTemplate, parameters map[string]string) ([]string, error) {
-	answer, err := o.chat(ctx, prompt, parameters)
-	if err != nil {
-		errMsg := err.Error()
-		if strings.Contains(errMsg, "rate_limit_exceeded") || strings.Contains(errMsg, "Rate limit reached") {
-			o.log.Warn("meets rate limit exceeded, sleep 30 seconds and retry")
-			time.Sleep(time.Duration(30) * time.Second)
-			return o.chat(ctx, prompt, parameters)
-		}
-		return nil, err
-	}
-	return answer, err
+	return o.chat(ctx, prompt, parameters)
 }
 
 func (o *OpenAIV1) chat(ctx context.Context, prompt prompts.PromptTemplate, parameters map[string]string) ([]string, error) {
@@ -62,7 +50,6 @@ func (o *OpenAIV1) chat(ctx context.Context, prompt prompts.PromptTemplate, para
 	if err != nil {
 		return nil, err
 	}
-	o.log.Debugf("final prompt: %s", p)
 
 	data := map[string]interface{}{
 		"model":             model,

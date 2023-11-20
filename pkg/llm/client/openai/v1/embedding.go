@@ -19,8 +19,6 @@ package v1
 import (
 	"context"
 	"encoding/json"
-	"strings"
-	"time"
 )
 
 type EmbeddingResult struct {
@@ -46,17 +44,7 @@ type Usage struct {
 }
 
 func (o *OpenAIV1) Embedding(ctx context.Context, doc string) (*EmbeddingResult, error) {
-	answer, err := o.embedding(ctx, doc)
-	if err != nil {
-		errMsg := err.Error()
-		if strings.Contains(errMsg, "rate_limit_exceeded") {
-			o.log.Warn("meets rate limit exceeded, sleep 30 seconds and retry")
-			time.Sleep(time.Duration(30) * time.Second)
-			return o.embedding(ctx, doc)
-		}
-		return nil, err
-	}
-	return answer, err
+	return o.embedding(ctx, doc)
 }
 
 func (o *OpenAIV1) embedding(ctx context.Context, doc string) (*EmbeddingResult, error) {
