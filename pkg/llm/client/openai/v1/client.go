@@ -90,7 +90,6 @@ func (o *OpenAIV1) request(ctx context.Context, path string, method string, data
 			req.Header.Set("Content-Type", "application/json; charset=utf-8")
 			req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", o.key))
 
-			o.log.Debugf("request: %s", uri)
 			client := &http.Client{}
 			resp, err := client.Do(req)
 			if err != nil {
@@ -108,7 +107,7 @@ func (o *OpenAIV1) request(ctx context.Context, path string, method string, data
 				time.Sleep(time.Second * 30)
 				continue
 			}
-			//o.log.Debugf("response: %s", respBody)
+			o.log.Debugf("openai response: %s", respBody)
 			return respBody, nil
 		}
 	}
