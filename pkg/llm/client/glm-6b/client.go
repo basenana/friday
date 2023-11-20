@@ -27,15 +27,18 @@ import (
 
 	"github.com/basenana/friday/pkg/llm"
 	"github.com/basenana/friday/pkg/llm/prompts"
+	"github.com/basenana/friday/pkg/utils/logger"
 )
 
 type GLM struct {
+	log     logger.Logger
 	baseUri string
 }
 
 func NewGLM(uri string) llm.LLM {
 	return &GLM{
 		baseUri: uri,
+		log:     logger.NewLogger("glm"),
 	}
 }
 
@@ -62,6 +65,7 @@ func (o *GLM) request(path string, method string, body io.Reader) ([]byte, error
 	if resp.StatusCode != 200 {
 		return nil, fmt.Errorf("fail to call glm-6b, status code error: %d", resp.StatusCode)
 	}
+	o.log.Debugf("openai response: %s", respBody)
 	return respBody, nil
 }
 

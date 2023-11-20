@@ -19,8 +19,6 @@ package v1
 import (
 	"context"
 	"encoding/json"
-	"strings"
-	"time"
 
 	"github.com/basenana/friday/pkg/llm/prompts"
 )
@@ -42,17 +40,7 @@ type Choice struct {
 }
 
 func (o *OpenAIV1) Completion(ctx context.Context, prompt prompts.PromptTemplate, parameters map[string]string) ([]string, error) {
-	answer, err := o.completion(ctx, prompt, parameters)
-	if err != nil {
-		errMsg := err.Error()
-		if strings.Contains(errMsg, "rate_limit_exceeded") {
-			o.log.Warn("meets rate limit exceeded, sleep 30 seconds and retry")
-			time.Sleep(time.Duration(30) * time.Second)
-			return o.completion(ctx, prompt, parameters)
-		}
-		return nil, err
-	}
-	return answer, err
+	return o.completion(ctx, prompt, parameters)
 }
 
 func (o *OpenAIV1) completion(ctx context.Context, prompt prompts.PromptTemplate, parameters map[string]string) ([]string, error) {
