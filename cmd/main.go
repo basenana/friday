@@ -50,6 +50,7 @@ func init() {
 	RootCmd.AddCommand(apps.IngestCmd)
 	RootCmd.AddCommand(apps.WeChatCmd)
 	RootCmd.AddCommand(apps.SummaryCmd)
+	RootCmd.AddCommand(apps.KeywordsCmd)
 }
 
 func main() {

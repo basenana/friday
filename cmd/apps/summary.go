@@ -17,6 +17,7 @@
 package apps
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/spf13/cobra"
@@ -46,7 +47,7 @@ func init() {
 }
 
 func summary(ps string) error {
-	a, err := friday.Fri.SummaryFromOriginFile(ps, fridaysummary.SummaryType(summaryType))
+	a, err := friday.Fri.SummaryFromOriginFile(context.TODO(), ps, fridaysummary.SummaryType(summaryType))
 	if err != nil {
 		return err
 	}

@@ -147,3 +147,13 @@ func (p *PostgresClient) Exist(id string) (bool, error) {
 }
 
 var _ vectorstore.VectorStore = &PostgresClient{}
+
+func (p *PostgresClient) Inited(ctx context.Context) (bool, error) {
+	var count int64
+	res := p.dEntity.WithContext(ctx).Model(&BleveKV{}).Count(&count)
+	if res.Error != nil {
+		return false, res.Error
+	}
+
+	return count > 0, nil
+}

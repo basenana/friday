@@ -14,22 +14,35 @@
  * limitations under the License.
  */
 
-package models
+package apps
 
-import "time"
+import (
+	"context"
+	"fmt"
 
-type Document struct {
-	ID          int64     `json:"id"`
-	Title       string    `json:"title"`
-	ParentID    int64     `json:"parent_id"`
-	HtmlContent string    `json:"html_content"`
-	Keywords    string    `json:"keywords"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	"github.com/spf13/cobra"
+
+	"github.com/basenana/friday/pkg/friday"
+)
+
+var KeywordsCmd = &cobra.Command{
+	Use:   "keywords",
+	Short: "Extract keywords",
+	Run: func(cmd *cobra.Command, args []string) {
+		ps := args[0]
+
+		if err := keywords(ps); err != nil {
+			panic(err)
+		}
+	},
 }
 
-type Doc struct {
-	Id       string
-	Metadata map[string]interface{}
-	Content  string
+func keywords(content string) error {
+	a, err := friday.Fri.Keywords(context.TODO(), content)
+	if err != nil {
+		return err
+	}
+	fmt.Println("Answer: ")
+	fmt.Println(a)
+	return nil
 }
