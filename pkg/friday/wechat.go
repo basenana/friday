@@ -17,6 +17,7 @@
 package friday
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -28,9 +29,10 @@ import (
 	"github.com/basenana/friday/pkg/utils/files"
 )
 
-func (f *Friday) ChatConclusion(prompt prompts.PromptTemplate, chat string) (string, error) {
+func (f *Friday) ChatConclusion(ctx context.Context, chat string) (string, error) {
 	if f.LLM != nil {
-		ans, err := f.LLM.Chat(prompt, map[string]string{
+		p := prompts.NewWeChatPrompt()
+		ans, err := f.LLM.Chat(ctx, p, map[string]string{
 			"context": chat,
 		})
 		if err != nil {
@@ -41,7 +43,7 @@ func (f *Friday) ChatConclusion(prompt prompts.PromptTemplate, chat string) (str
 	return "", nil
 }
 
-func (f *Friday) ChatConclusionFromElementFile(prompt prompts.PromptTemplate, chatFile string) (string, error) {
+func (f *Friday) ChatConclusionFromElementFile(ctx context.Context, chatFile string) (string, error) {
 	var ans []string
 	doc, err := os.ReadFile(chatFile)
 	if err != nil {
@@ -53,7 +55,7 @@ func (f *Friday) ChatConclusionFromElementFile(prompt prompts.PromptTemplate, ch
 	}
 	merged := f.Spliter.Merge(elements)
 	for _, m := range merged {
-		a, err := f.ChatConclusion(prompt, m.Content)
+		a, err := f.ChatConclusion(ctx, m.Content)
 		if err != nil {
 			return "", err
 		}
@@ -62,7 +64,7 @@ func (f *Friday) ChatConclusionFromElementFile(prompt prompts.PromptTemplate, ch
 	return strings.Join(ans, "\n=============\n"), nil
 }
 
-func (f *Friday) ChatConclusionFromFile(prompt prompts.PromptTemplate, chatFile string) (string, error) {
+func (f *Friday) ChatConclusionFromFile(ctx context.Context, chatFile string) (string, error) {
 	fs, err := files.ReadFiles(chatFile)
 	if err != nil {
 		return "", err
@@ -85,7 +87,7 @@ func (f *Friday) ChatConclusionFromFile(prompt prompts.PromptTemplate, chatFile 
 
 	var ans []string
 	for _, m := range elements {
-		a, err := f.ChatConclusion(prompt, m.Content)
+		a, err := f.ChatConclusion(ctx, m.Content)
 		if err != nil {
 			return "", err
 		}

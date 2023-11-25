@@ -17,13 +17,13 @@
 package apps
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
 	"github.com/spf13/cobra"
 
 	"github.com/basenana/friday/pkg/friday"
-	"github.com/basenana/friday/pkg/llm/prompts"
 )
 
 var WeChatCmd = &cobra.Command{
@@ -39,8 +39,7 @@ var WeChatCmd = &cobra.Command{
 }
 
 func chat(ps string) error {
-	p := prompts.NewWeChatPrompt()
-	a, err := friday.Fri.ChatConclusionFromFile(p, ps)
+	a, err := friday.Fri.ChatConclusionFromFile(context.TODO(), ps)
 	if err != nil {
 		return err
 	}

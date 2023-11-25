@@ -14,29 +14,27 @@
  limitations under the License.
 */
 
-package friday
+package files
 
 import (
-	"github.com/basenana/friday/pkg/embedding"
-	"github.com/basenana/friday/pkg/llm"
-	"github.com/basenana/friday/pkg/spliter"
-	"github.com/basenana/friday/pkg/utils/logger"
-	"github.com/basenana/friday/pkg/vectorstore"
+	"regexp"
 )
 
-const defaultTopK = 6
+func Length(doc string) int {
+	// todo: it should be more accurate
+	// https://platform.openai.com/docs/guides/text-generation/managing-tokens
 
-var (
-	Fri *Friday
-)
+	// Match words and punctuation using regular expressions
+	wordRegex := regexp.MustCompile(`\w+`)
+	punctuationRegex := regexp.MustCompile(`[^\w\s]`)
 
-type Friday struct {
-	Log logger.Logger
+	// Count the number of words
+	words := wordRegex.FindAllString(doc, -1)
+	wordCount := len(words)
 
-	LimitToken int
+	// Count the number of punctuation marks
+	punctuation := punctuationRegex.FindAllString(doc, -1)
+	punctuationCount := len(punctuation)
 
-	LLM       llm.LLM
-	Embedding embedding.Embedding
-	Vector    vectorstore.VectorStore
-	Spliter   spliter.Spliter
+	return wordCount + punctuationCount
 }
