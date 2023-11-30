@@ -1,16 +1,15 @@
 import json
 import os
 import sys
-import uuid
 from typing import List
 
 import nltk
+from unstructured.documents.elements import Text, ElementMetadata
 from unstructured.file_utils.filetype import FileType, detect_filetype
 from unstructured.partition.auto import partition
 from unstructured.partition.doc import partition_doc
 from unstructured.partition.html import partition_html
 from unstructured.partition.md import partition_md
-from unstructured.documents.elements import Text, ElementMetadata
 
 script_path = os.path.dirname(__file__)
 nltk.data.path = [os.getenv("NLTK_DATA", os.path.join(os.path.dirname(__file__), "nltk_data"))] + nltk.data.path
@@ -56,15 +55,15 @@ def _element(f, elements) -> List:
     for element in elements:
         if hasattr(element, "tag") and element.tag == "h2":
             group += 1
-        metadata = {
-            "source": f,
-            "title": os.path.basename(f),
+        doc = {
+            "name": f,
         }
         if hasattr(element, "metadata"):
-            metadata.update(element.metadata.to_dict())
+            doc.update(element.metadata.to_dict())
         if hasattr(element, "category"):
-            metadata["category"] = element.category
-        res.append({"content": str(element), "metadata": metadata})
+            doc["category"] = element.category
+        doc["content"] = str(element)
+        res.append(doc)
     return res
 
 

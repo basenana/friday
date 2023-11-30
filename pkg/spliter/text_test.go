@@ -49,33 +49,25 @@ func TestTextSpliter_Merge(t1 *testing.T) {
 			args: args{
 				elements: []models.Element{
 					{
-						Content: "this is a test",
-						Metadata: models.Metadata{
-							Source:   "test",
-							Title:    "test",
-							Group:    "0",
-							Category: "context",
-						},
+						ID:       "123",
+						Name:     "test",
+						Group:    0,
+						OID:      0,
+						ParentId: 0,
+						Content:  "this is a test",
 					},
 					{
 						Content: "hello world",
-						Metadata: models.Metadata{
-							Source:   "test",
-							Title:    "test",
-							Group:    "1",
-							Category: "context",
-						},
+						Name:    "test",
+						Group:   1,
 					},
 				},
 			},
 			want: []models.Element{
 				{
 					Content: "this is a test\nhello world",
-					Metadata: models.Metadata{
-						Source: "test",
-						Title:  "test",
-						Group:  "0",
-					},
+					Name:    "test",
+					Group:   0,
 				},
 			},
 		},
@@ -90,49 +82,31 @@ func TestTextSpliter_Merge(t1 *testing.T) {
 				elements: []models.Element{
 					{
 						Content: "this is a test",
-						Metadata: models.Metadata{
-							Source:   "test",
-							Title:    "test",
-							Group:    "0",
-							Category: "context",
-						},
+						Name:    "test",
+						Group:   0,
 					},
 					{
 						Content: "hello world",
-						Metadata: models.Metadata{
-							Source:   "test",
-							Title:    "test",
-							Group:    "1",
-							Category: "context",
-						},
+						Name:    "test",
+						Group:   1,
 					},
 					{
 						Content: "你好",
-						Metadata: models.Metadata{
-							Source:   "hello",
-							Title:    "hello",
-							Group:    "0",
-							Category: "context",
-						},
+						Name:    "hello",
+						Group:   0,
 					},
 				},
 			},
 			want: []models.Element{
 				{
 					Content: "this is a test\nhello world",
-					Metadata: models.Metadata{
-						Source: "test",
-						Title:  "test",
-						Group:  "0",
-					},
+					Name:    "test",
+					Group:   0,
 				},
 				{
 					Content: "你好",
-					Metadata: models.Metadata{
-						Source: "hello",
-						Title:  "hello",
-						Group:  "0",
-					},
+					Name:    "hello",
+					Group:   0,
 				},
 			},
 		},

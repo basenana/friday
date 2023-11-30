@@ -30,10 +30,10 @@ func (f *Friday) Summary(ctx context.Context, elements []models.Element, summary
 
 	docs := make(map[string][]string)
 	for _, element := range elements {
-		if _, ok := docs[element.Metadata.Source]; !ok {
-			docs[element.Metadata.Source] = []string{element.Content}
+		if _, ok := docs[element.Name]; !ok {
+			docs[element.Name] = []string{element.Content}
 		} else {
-			docs[element.Metadata.Source] = append(docs[element.Metadata.Source], element.Content)
+			docs[element.Name] = append(docs[element.Name], element.Content)
 		}
 	}
 	for source, doc := range docs {
@@ -57,7 +57,7 @@ func (f *Friday) SummaryFromFile(ctx context.Context, file models.File, summaryT
 		return nil, err
 	}
 	return map[string]string{
-		file.Source: summaryOfFile,
+		file.Name: summaryOfFile,
 	}, err
 }
 

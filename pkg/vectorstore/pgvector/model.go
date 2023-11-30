@@ -16,15 +16,21 @@
 
 package pgvector
 
-import "time"
+import (
+	"time"
+
+	"github.com/basenana/friday/pkg/models"
+)
 
 type Index struct {
-	ID        string `gorm:"column:id;type:varchar(256);primaryKey"`
-	Name      string `gorm:"column:name;type:varchar(256);index:source"`
-	ParentDir string `gorm:"column:parent_dir;type:varchar(256);index:parent_dir"`
-	Context   string `gorm:"column:context"`
-	Metadata  string `gorm:"column:metadata"`
+	ID        string `gorm:"column:id;primaryKey"`
+	Name      string `gorm:"column:name;type:varchar(256);index:index_name"`
+	OID       int64  `gorm:"column:oid;index:index_oid"`
+	Group     int    `gorm:"column:group;index:index_group"`
+	ParentID  *int64 `gorm:"column:parent_entry_id;index:index_parent_id"`
+	Content   string `gorm:"column:content"`
 	Vector    string `gorm:"column:vector;type:vector(1536)"`
+	Extra     string `gorm:"column:metadata"`
 	CreatedAt int64  `gorm:"column:created_at"`
 	ChangedAt int64  `gorm:"column:changed_at"`
 }
@@ -36,9 +42,46 @@ func (v *Index) TableName() string {
 func (v *Index) Update(vector *Index) {
 	v.ID = vector.ID
 	v.Name = vector.Name
-	v.ParentDir = vector.ParentDir
-	v.Context = vector.Context
-	v.Metadata = vector.Metadata
+	v.OID = vector.OID
+	v.Group = vector.Group
+	v.ParentID = vector.ParentID
+	v.Content = vector.Content
+	v.Extra = vector.Extra
 	v.Vector = vector.Vector
 	v.ChangedAt = time.Now().UnixNano()
+}
+
+func (v *Index) From(element *models.Element) *Index {
+	parentId := element.ParentId
+	i := &Index{
+		ID:      element.ID,
+		Name:    element.Name,
+		OID:     element.OID,
+		Group:   element.Group,
+		Content: element.Content,
+	}
+	if parentId != 0 {
+		i.ParentID = &parentId
+	}
+	return i
+}
+func (v *Index) To() *models.Doc {
+	return &models.Doc{
+		Id:       v.ID,
+		OID:      v.OID,
+		Name:     v.Name,
+		Group:    v.Group,
+		ParentId: *v.ParentID,
+		Content:  v.Content,
+	}
+}
+func (v *Index) ToElement() *models.Element {
+	return &models.Element{
+		ID:       v.ID,
+		OID:      v.OID,
+		Name:     v.Name,
+		Group:    v.Group,
+		ParentId: *v.ParentID,
+		Content:  v.Content,
+	}
 }

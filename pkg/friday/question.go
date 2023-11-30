@@ -50,14 +50,14 @@ func (f *Friday) searchDocs(ctx context.Context, q string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("vector embedding error: %w", err)
 	}
-	contexts, err := f.Vector.Search(qv, defaultTopK)
+	docs, err := f.Vector.Search(ctx, qv, defaultTopK)
 	if err != nil {
 		return "", fmt.Errorf("vector search error: %w", err)
 	}
 
 	cs := []string{}
-	for _, c := range contexts {
-		f.Log.Debugf("searched from [%s] for %s", c.Metadata["source"], c.Content)
+	for _, c := range docs {
+		f.Log.Debugf("searched from [%s] for %s", c.Name, c.Content)
 		cs = append(cs, c.Content)
 	}
 	return strings.Join(cs, "\n"), nil

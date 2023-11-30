@@ -46,11 +46,8 @@ var _ = Describe("TestIngest", func() {
 			elements := []models.Element{
 				{
 					Content: "test-content",
-					Metadata: models.Metadata{
-						Source:    "test-source",
-						Title:     "test-title",
-						ParentDir: "/",
-					},
+					Name:    "test-title",
+					Group:   0,
 				},
 			}
 			err := loFriday.Ingest(context.TODO(), elements)
@@ -63,16 +60,16 @@ type FakeStore struct{}
 
 var _ vectorstore.VectorStore = &FakeStore{}
 
-func (f FakeStore) Store(id, content string, metadata models.Metadata, extra map[string]interface{}, vectors []float32) error {
+func (f FakeStore) Store(ctx context.Context, element *models.Element, extra map[string]any) error {
 	return nil
 }
 
-func (f FakeStore) Search(vectors []float32, k int) ([]models.Doc, error) {
-	return []models.Doc{}, nil
+func (f FakeStore) Search(ctx context.Context, vectors []float32, k int) ([]*models.Doc, error) {
+	return []*models.Doc{}, nil
 }
 
-func (f FakeStore) Exist(id string) (bool, error) {
-	return false, nil
+func (f FakeStore) Get(ctx context.Context, name string, group int) (*models.Element, error) {
+	return &models.Element{}, nil
 }
 
 type FakeEmbedding struct{}

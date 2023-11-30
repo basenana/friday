@@ -69,36 +69,29 @@ func NewPgVectorClient(postgresUrl string) (*PgVectorClient, error) {
 	}, nil
 }
 
-func (p *PgVectorClient) Store(id, content string, metadata models.Metadata, extra map[string]interface{}, vectors []float32) error {
-	ctx := context.Background()
-
-	if extra == nil {
-		extra = make(map[string]interface{})
-	}
-	extra["category"] = metadata.Category
-	extra["group"] = metadata.Group
-
-	var m string
-	b, err := json.Marshal(metadata)
-	if err != nil {
-		return err
-	}
-	m = string(b)
-
-	vectorJson, _ := json.Marshal(vectors)
-	v := &Index{
-		ID:        id,
-		Name:      metadata.Source,
-		ParentDir: metadata.ParentDir,
-		Context:   content,
-		Metadata:  m,
-		Vector:    string(vectorJson),
-		CreatedAt: time.Now().UnixNano(),
-		ChangedAt: time.Now().UnixNano(),
-	}
+func (p *PgVectorClient) Store(ctx context.Context, element *models.Element, extra map[string]any) error {
 	return p.dEntity.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		vModel := Index{ID: id}
-		res := tx.First(vModel)
+		if extra == nil {
+			extra = make(map[string]interface{})
+		}
+		extra["name"] = element.Name
+		extra["group"] = element.Group
+
+		var m string
+		b, err := json.Marshal(extra)
+		if err != nil {
+			return err
+		}
+		m = string(b)
+		vectorJson, _ := json.Marshal(element.Vector)
+
+		var v *Index
+		v = v.From(element)
+		v.Extra = m
+		v.Vector = string(vectorJson)
+
+		vModel := &Index{}
+		res := tx.Where("name = ? AND group = ?", element.Name, element.Group).First(vModel)
 		if res.Error != nil && res.Error != gorm.ErrRecordNotFound {
 			return res.Error
 		}
@@ -112,7 +105,7 @@ func (p *PgVectorClient) Store(id, content string, metadata models.Metadata, ext
 		}
 
 		vModel.Update(v)
-		res = tx.Where("id = ?", id).Updates(vModel)
+		res = tx.Where("name = ? AND group = ?", element.Name, element.Group).Updates(vModel)
 		if res.Error != nil || res.RowsAffected == 0 {
 			if res.RowsAffected == 0 {
 				return errors.New("operation conflict")
@@ -123,11 +116,10 @@ func (p *PgVectorClient) Store(id, content string, metadata models.Metadata, ext
 	})
 }
 
-func (p *PgVectorClient) Search(vectors []float32, k int) ([]models.Doc, error) {
-	ctx := context.Background()
+func (p *PgVectorClient) Search(ctx context.Context, vectors []float32, k int) ([]*models.Doc, error) {
 	var (
 		vectorModels = make([]Index, 0)
-		result       = make([]models.Doc, 0)
+		result       = make([]*models.Doc, 0)
 	)
 	if err := p.dEntity.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		query := p.dEntity.DB.WithContext(ctx)
@@ -142,36 +134,24 @@ func (p *PgVectorClient) Search(vectors []float32, k int) ([]models.Doc, error) 
 	}
 
 	for _, v := range vectorModels {
-		metadata := make(map[string]interface{})
-		if err := json.Unmarshal([]byte(v.Metadata), &metadata); err != nil {
-			return nil, err
-		}
-		result = append(result, models.Doc{
-			Id:       v.ID,
-			Metadata: metadata,
-			Content:  v.Context,
-		})
+		result = append(result, v.To())
 	}
 	return result, nil
 }
 
-func (p *PgVectorClient) Exist(id string) (bool, error) {
-	ctx := context.Background()
-	var exist = false
+func (p *PgVectorClient) Get(ctx context.Context, name string, group int) (*models.Element, error) {
+	vModel := &Index{}
 	err := p.dEntity.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		vModel := Index{ID: id}
-		res := tx.First(vModel)
+		res := tx.Where("name = ? AND group = ?", name, group).First(vModel)
 		if res.Error != nil && res.Error != gorm.ErrRecordNotFound {
 			return res.Error
 		}
 
-		if res.Error == gorm.ErrRecordNotFound {
-			exist = false
-			return nil
-		}
-		exist = true
 		return nil
 	})
 
-	return exist, err
+	if err != nil {
+		return nil, err
+	}
+	return vModel.ToElement(), err
 }

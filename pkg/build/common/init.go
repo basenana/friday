@@ -41,7 +41,7 @@ func NewFriday(conf *config.Config) (f *friday.Friday, err error) {
 			}
 		}
 	} else if conf.VectorStoreType == config.VectorStorePostgres {
-		vectorStore, err = pgvector.NewPostgresClient(conf.VectorUrl)
+		vectorStore, err = pgvector.NewPgVectorClient(conf.VectorUrl)
 		if err != nil {
 			return nil, err
 		}
