@@ -63,20 +63,19 @@ type FakeQuestionStore struct{}
 
 var _ vectorstore.VectorStore = &FakeQuestionStore{}
 
-func (f FakeQuestionStore) Store(id, content string, metadata models.Metadata, extra map[string]interface{}, vectors []float32) error {
+func (f FakeQuestionStore) Store(ctx context.Context, element *models.Element, extra map[string]any) error {
 	return nil
 }
 
-func (f FakeQuestionStore) Search(vectors []float32, k int) ([]models.Doc, error) {
-	return []models.Doc{{
-		Id:       "abc",
-		Metadata: map[string]interface{}{},
-		Content:  "There are logs of questions",
+func (f FakeQuestionStore) Search(ctx context.Context, vectors []float32, k int) ([]*models.Doc, error) {
+	return []*models.Doc{{
+		Id:      "abc",
+		Content: "There are logs of questions",
 	}}, nil
 }
 
-func (f FakeQuestionStore) Exist(id string) (bool, error) {
-	return false, nil
+func (f FakeQuestionStore) Get(ctx context.Context, name string, group int) (*models.Element, error) {
+	return &models.Element{}, nil
 }
 
 type FakeQuestionEmbedding struct{}

@@ -49,7 +49,9 @@ func buildMigrations() []*gormigrate.Migration {
 }
 
 func Migrate(db *gorm.DB) error {
-	m := gormigrate.New(db, gormigrate.DefaultOptions, buildMigrations())
+	options := gormigrate.DefaultOptions
+	options.TableName = "friday_migrations"
+	m := gormigrate.New(db, options, buildMigrations())
 	err := m.Migrate()
 	return err
 }

@@ -20,10 +20,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sort"
 	"time"
 
 	"github.com/cdipaolo/goml/base"
-	"github.com/cdipaolo/goml/cluster"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 
@@ -68,41 +68,36 @@ func NewPostgresClient(postgresUrl string) (*PostgresClient, error) {
 	}, nil
 }
 
-func (p *PostgresClient) Store(id, content string, metadata models.Metadata, extra map[string]interface{}, vectors []float32) error {
-	ctx := context.Background()
-
-	if extra == nil {
-		extra = make(map[string]interface{})
-	}
-	extra["category"] = metadata.Category
-	extra["group"] = metadata.Group
-
-	var m string
-	b, err := json.Marshal(metadata)
-	if err != nil {
-		return err
-	}
-	m = string(b)
-
-	vectorJson, _ := json.Marshal(vectors)
-	v := &Index{
-		ID:        id,
-		Name:      metadata.Source,
-		ParentDir: metadata.ParentDir,
-		Context:   content,
-		Metadata:  m,
-		Vector:    string(vectorJson),
-		CreatedAt: time.Now().UnixNano(),
-		ChangedAt: time.Now().UnixNano(),
-	}
+func (p *PostgresClient) Store(ctx context.Context, element *models.Element, extra map[string]any) error {
 	return p.dEntity.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		vModel := Index{ID: id}
-		res := tx.First(vModel)
+		if extra == nil {
+			extra = make(map[string]interface{})
+		}
+		extra["name"] = element.Name
+		extra["group"] = element.Group
+
+		b, err := json.Marshal(extra)
+		if err != nil {
+			return err
+		}
+
+		var v *Index
+		v, err = v.From(element)
+		if err != nil {
+			return err
+		}
+
+		v.Extra = string(b)
+
+		vModel := &Index{}
+		res := tx.Where("name = ? AND group = ?", element.Name, element.Group).First(vModel)
 		if res.Error != nil && res.Error != gorm.ErrRecordNotFound {
 			return res.Error
 		}
 
 		if res.Error == gorm.ErrRecordNotFound {
+			v.CreatedAt = time.Now().UnixNano()
+			v.ChangedAt = time.Now().UnixNano()
 			res = tx.Create(v)
 			if res.Error != nil {
 				return res.Error
@@ -111,7 +106,7 @@ func (p *PostgresClient) Store(id, content string, metadata models.Metadata, ext
 		}
 
 		vModel.Update(v)
-		res = tx.Where("id = ?", id).Updates(vModel)
+		res = tx.Where("name = ? AND group = ?", element.Name, element.Group).Updates(vModel)
 		if res.Error != nil || res.RowsAffected == 0 {
 			if res.RowsAffected == 0 {
 				return errors.New("operation conflict")
@@ -122,28 +117,54 @@ func (p *PostgresClient) Store(id, content string, metadata models.Metadata, ext
 	})
 }
 
-func (p *PostgresClient) Search(vectors []float32, k int) ([]models.Doc, error) {
+func (p *PostgresClient) Search(ctx context.Context, vectors []float32, k int) ([]*models.Doc, error) {
 	vectors64 := make([]float64, 0)
 	for _, v := range vectors {
 		vectors64 = append(vectors64, float64(v))
 	}
 	// query from db
-	existVectors := [][]float64{}
-
-	model := cluster.NewKNN(k, existVectors, vectors64, base.EuclideanDistance)
-
-	// make predictions like usual
-	_, err := model.Predict([]float64{-10, 1})
-	if err != nil {
-		return nil, err
+	existIndexes := make([]Index, 0)
+	res := p.dEntity.WithContext(ctx).Find(&existIndexes)
+	if res.Error != nil {
+		return nil, res.Error
 	}
-	// todo
-	return nil, nil
+
+	// knn search
+	dists := distances{}
+	for _, index := range existIndexes {
+		var vector []float64
+		err := json.Unmarshal([]byte(index.Vector), &vector)
+		if err != nil {
+			return nil, err
+		}
+
+		dists = append(dists, distance{
+			Index: index,
+			dist:  base.EuclideanDistance(vector, vectors64),
+		})
+	}
+
+	sort.Sort(dists)
+
+	minKIndexes := dists[0:k]
+	results := make([]*models.Doc, k)
+	for _, index := range minKIndexes {
+		results = append(results, index.ToDoc())
+	}
+
+	return results, nil
 }
 
-func (p *PostgresClient) Exist(id string) (bool, error) {
-	//TODO implement me
-	panic("implement me")
+func (p *PostgresClient) Get(ctx context.Context, name string, group int) (*models.Element, error) {
+	vModel := &Index{}
+	res := p.dEntity.WithContext(ctx).Where("name = ? AND group = ?", name, group).First(vModel)
+	if res.Error != nil {
+		if res.Error == gorm.ErrRecordNotFound {
+			return nil, nil
+		}
+		return nil, res.Error
+	}
+	return vModel.To()
 }
 
 var _ vectorstore.VectorStore = &PostgresClient{}
@@ -156,4 +177,23 @@ func (p *PostgresClient) Inited(ctx context.Context) (bool, error) {
 	}
 
 	return count > 0, nil
+}
+
+type distance struct {
+	Index
+	dist float64
+}
+
+type distances []distance
+
+func (d distances) Len() int {
+	return len(d)
+}
+
+func (d distances) Less(i, j int) bool {
+	return d[i].dist < d[j].dist
+}
+
+func (d distances) Swap(i, j int) {
+	d[i], d[j] = d[j], d[i]
 }
