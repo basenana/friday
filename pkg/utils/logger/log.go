@@ -36,11 +36,13 @@ type Logger interface {
 	Infof(string, ...interface{})
 	Debug(interface{})
 	Debugf(string, ...interface{})
+	SetDebug(enable bool)
 	With(string) Logger
 }
 
 type defaultLog struct {
-	name string
+	name  string
+	debug bool
 	*glog.Logger
 }
 
@@ -77,11 +79,15 @@ func (l defaultLog) Infof(format string, v ...interface{}) {
 }
 
 func (l defaultLog) Debug(v interface{}) {
-	l.printLog("DEBUG", v)
+	if l.debug {
+		l.printLog("DEBUG", v)
+	}
 }
 
 func (l defaultLog) Debugf(format string, v ...interface{}) {
-	l.printLogf("DEBUG", format, v...)
+	if l.debug {
+		l.printLogf("DEBUG", format, v...)
+	}
 }
 
 func (l defaultLog) With(name string) Logger {
@@ -92,6 +98,14 @@ func (l defaultLog) With(name string) Logger {
 		name:   name,
 		Logger: glog.New(os.Stdout, name+" - ", glog.LstdFlags),
 	}
+}
+
+func (l defaultLog) SetDebug(enable bool) {
+	if enable {
+		l.debug = true
+		return
+	}
+	l.debug = false
 }
 
 func buildDefaultLogger() defaultLog {

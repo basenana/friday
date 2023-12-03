@@ -28,20 +28,20 @@ import (
 func NewFriday(conf *config.Config) (f *friday.Friday, err error) {
 	var vectorStore vectorstore.VectorStore
 	// init vector store
-	if conf.VectorStoreType == config.VectorStoreRedis {
-		if conf.EmbeddingDim == 0 {
-			vectorStore, err = redis.NewRedisClient(conf.VectorUrl)
+	if conf.VectorStoreConfig.VectorStoreType == config.VectorStoreRedis {
+		if conf.VectorStoreConfig.EmbeddingDim == 0 {
+			vectorStore, err = redis.NewRedisClient(conf.VectorStoreConfig.VectorUrl)
 			if err != nil {
 				return nil, err
 			}
 		} else {
-			vectorStore, err = redis.NewRedisClientWithDim(conf.VectorUrl, conf.EmbeddingDim)
+			vectorStore, err = redis.NewRedisClientWithDim(conf.VectorStoreConfig.VectorUrl, conf.VectorStoreConfig.EmbeddingDim)
 			if err != nil {
 				return nil, err
 			}
 		}
-	} else if conf.VectorStoreType == config.VectorStorePostgres {
-		vectorStore, err = postgres.NewPostgresClient(conf.VectorUrl)
+	} else if conf.VectorStoreConfig.VectorStoreType == config.VectorStorePostgres {
+		vectorStore, err = postgres.NewPostgresClient(conf.VectorStoreConfig.VectorUrl)
 		if err != nil {
 			return nil, err
 		}
