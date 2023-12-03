@@ -43,12 +43,12 @@ const (
 	Refine    SummaryType = "Refine"
 )
 
-func NewSummary(l llm.LLM, limitToken int) *Summary {
+func NewSummary(log logger.Logger, l llm.LLM, limitToken int) *Summary {
 	if limitToken <= 0 {
 		limitToken = DefaultSummaryLimitToken
 	}
 	return &Summary{
-		log:           logger.NewLogger("summary"),
+		log:           log,
 		llm:           l,
 		summaryPrompt: prompts.NewSummaryPrompt(),
 		combinePrompt: prompts.NewCombinePrompt(),
