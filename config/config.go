@@ -32,22 +32,23 @@ type Config struct {
 	OpenAIKey     string `json:"open_ai_key,omitempty"`      // if openai is used for embedding or llm, it is needed
 
 	// embedding config
-	EmbeddingConfig EmbeddingConfig
+	EmbeddingConfig EmbeddingConfig `json:"embedding_config,omitempty"`
 
 	// vector store config
-	VectorStoreConfig VectorStoreConfig
+	VectorStoreConfig VectorStoreConfig `json:"vector_store_config,omitempty"`
 
 	// LLM
-	LLMConfig LLMConfig
+	LLMConfig LLMConfig `json:"llm_config,omitempty"`
 
 	// text spliter
-	TextSpliterConfig TextSpliterConfig
+	TextSpliterConfig TextSpliterConfig `json:"text_spliter_config,omitempty"`
 }
 
 type LLMConfig struct {
-	LLMType LLMType `json:"llm_type"`
-	OpenAI  OpenAIConfig
-	GLM6B   GLM6BConfig
+	LLMType LLMType           `json:"llm_type"`
+	Prompts map[string]string `json:"prompts,omitempty"`
+	OpenAI  OpenAIConfig      `json:"openai,omitempty"`
+	GLM6B   GLM6BConfig       `json:"glm6b,omitempty"`
 }
 
 type GLM6BConfig struct {
