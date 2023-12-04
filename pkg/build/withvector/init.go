@@ -42,6 +42,7 @@ func NewFridayWithVector(conf *config.Config, vectorClient vectorstore.VectorSto
 	var (
 		llmClient      llm.LLM
 		embeddingModel embedding.Embedding
+		prompts        = make(map[string]string)
 	)
 	// init LLM client
 	if conf.LLMConfig.LLMType == config.LLMOpenAI {
@@ -52,6 +53,10 @@ func NewFridayWithVector(conf *config.Config, vectorClient vectorstore.VectorSto
 	}
 	if conf.LLMConfig.LLMType == config.LLMGLM6B {
 		llmClient = glm_6b.NewGLM(log, conf.LLMConfig.GLM6B.Url)
+	}
+
+	if conf.LLMConfig.Prompts != nil {
+		prompts = conf.LLMConfig.Prompts
 	}
 
 	// init embedding client
@@ -89,6 +94,7 @@ func NewFridayWithVector(conf *config.Config, vectorClient vectorstore.VectorSto
 		Log:        log,
 		LimitToken: conf.LimitToken,
 		LLM:        llmClient,
+		Prompts:    prompts,
 		Embedding:  embeddingModel,
 		Vector:     vectorClient,
 		Spliter:    textSpliter,
