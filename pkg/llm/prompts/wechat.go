@@ -41,7 +41,10 @@ const WeChatTemplate = `以下是一段聊天记录。请把这些聊天记录�
 
 var _ PromptTemplate = &WeChatPrompt{}
 
-func NewWeChatPrompt() PromptTemplate {
+func NewWeChatPrompt(t string) PromptTemplate {
+	if t == "" {
+		t = WeChatTemplate
+	}
 	return &WeChatPrompt{template: WeChatTemplate}
 }
 

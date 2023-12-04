@@ -36,7 +36,10 @@ KEYWORDS: `
 
 var _ PromptTemplate = &KeywordsPrompt{}
 
-func NewKeywordsPrompt() PromptTemplate {
+func NewKeywordsPrompt(t string) PromptTemplate {
+	if t == "" {
+		t = KeyWordsTemplate
+	}
 	return &KeywordsPrompt{template: KeyWordsTemplate}
 }
 

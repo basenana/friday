@@ -56,8 +56,8 @@ func TestSummary_getLength(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			s := &Summary{
 				log:           logger.NewLogger("test"),
-				summaryPrompt: prompts.NewSummaryPrompt(),
-				combinePrompt: prompts.NewCombinePrompt(),
+				summaryPrompt: prompts.NewSummaryPrompt(""),
+				combinePrompt: prompts.NewCombinePrompt(""),
 				limitToken:    tt.fields.limitToken,
 			}
 			gotLength, err := s.getLength(s.summaryPrompt, tt.args.docs)
