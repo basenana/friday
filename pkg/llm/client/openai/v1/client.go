@@ -34,11 +34,13 @@ import (
 )
 
 const (
-	defaultQueryPerMinute         = 3
-	defaultBurst                  = 5
-	defaultTemperature    float32 = 0.7
-	defaultMaxReturnToken         = 1024
-	defaultModel                  = "gpt-3.5-turbo"
+	defaultQueryPerMinute           = 3
+	defaultBurst                    = 5
+	defaultTemperature      float32 = 0.7
+	defaultFrequencyPenalty uint    = 0
+	defaultPresencePenalty  uint    = 0
+	defaultMaxReturnToken           = 1024
+	defaultModel                    = "gpt-3.5-turbo"
 )
 
 type OpenAIV1 struct {
@@ -70,6 +72,14 @@ func NewOpenAIV1(log logger.Logger, baseUrl, key string, conf config.OpenAIConfi
 	defaultMl := defaultModel
 	if conf.Model == nil {
 		conf.Model = &defaultMl
+	}
+	defaultFreqPenalty := defaultPresencePenalty
+	if conf.FrequencyPenalty == nil {
+		conf.FrequencyPenalty = &defaultFreqPenalty
+	}
+	defaultPrePenalty := defaultPresencePenalty
+	if conf.PresencePenalty == nil {
+		conf.PresencePenalty = &defaultPrePenalty
 	}
 
 	limiter := rate.NewLimiter(rate.Limit(conf.QueryPerMinute), conf.Burst*60)

@@ -38,7 +38,7 @@ func NewWeChatConclusionPrompt(t string) PromptTemplate {
 	if t == "" {
 		t = WeChatConclusionTemplate
 	}
-	return &WeChatConclusionPrompt{template: WeChatConclusionTemplate}
+	return &WeChatConclusionPrompt{template: t}
 }
 
 func (w *WeChatConclusionPrompt) String(promptContext map[string]string) (string, error) {
