@@ -60,8 +60,8 @@ type OpenAIConfig struct {
 	Burst            int      `json:"burst,omitempty"`            // burst, default is 5
 	Model            *string  `json:"model,omitempty"`            // model of openai, default for llm is "gpt-3.5-turbo"; default for embedding is "text-embedding-ada-002"
 	MaxReturnToken   *int     `json:"max_return_token,omitempty"`
-	FrequencyPenalty *int     `json:"frequency_penalty,omitempty"`
-	PresencePenalty  *int     `json:"presence_penalty,omitempty"`
+	FrequencyPenalty *uint    `json:"frequency_penalty,omitempty"`
+	PresencePenalty  *uint    `json:"presence_penalty,omitempty"`
 	Temperature      *float32 `json:"temperature,omitempty"`
 }
 

@@ -40,7 +40,7 @@ func NewKeywordsPrompt(t string) PromptTemplate {
 	if t == "" {
 		t = KeyWordsTemplate
 	}
-	return &KeywordsPrompt{template: KeyWordsTemplate}
+	return &KeywordsPrompt{template: t}
 }
 
 func (p *KeywordsPrompt) String(promptContext map[string]string) (string, error) {
