@@ -40,7 +40,7 @@ func NewSummaryPrompt(t string) PromptTemplate {
 	if t == "" {
 		t = SummaryTemplate
 	}
-	return &SummaryPrompt{template: SummaryTemplate}
+	return &SummaryPrompt{template: t}
 }
 
 func (p *SummaryPrompt) String(promptContext map[string]string) (string, error) {

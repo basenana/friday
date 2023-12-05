@@ -37,7 +37,7 @@ func NewCombinePrompt(t string) PromptTemplate {
 	if t == "" {
 		t = CombineTemplate
 	}
-	return &CombinePrompt{template: CombineTemplate}
+	return &CombinePrompt{template: t}
 }
 
 func (p *CombinePrompt) String(promptContext map[string]string) (string, error) {
