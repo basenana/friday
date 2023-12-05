@@ -51,7 +51,7 @@ func NewQuestionPrompt(t string) PromptTemplate {
 	if t == "" {
 		t = QuestionTemplate
 	}
-	return &QuestionPrompt{template: QuestionTemplate}
+	return &QuestionPrompt{template: t}
 }
 
 func (p *QuestionPrompt) String(promptContext map[string]string) (string, error) {
