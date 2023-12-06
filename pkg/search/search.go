@@ -2,10 +2,13 @@ package search
 
 import (
 	"context"
-	"github.com/basenana/friday/pkg/vectorstore/postgres"
+	"os"
+
 	"github.com/blevesearch/bleve/v2"
 	"github.com/blevesearch/bleve/v2/index/upsidedown"
-	"os"
+
+	"github.com/basenana/friday/pkg/utils/logger"
+	"github.com/basenana/friday/pkg/vectorstore/postgres"
 )
 
 var singleIndex bleve.Index
@@ -17,7 +20,7 @@ func InitSearchEngine() error {
 		return err
 	}
 
-	pgCli, err := postgres.NewPostgresClient(dsn)
+	pgCli, err := postgres.NewPostgresClient(logger.NewLogger("database"), dsn)
 	if err != nil {
 		return err
 	}

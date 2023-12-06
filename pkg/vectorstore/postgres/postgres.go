@@ -38,8 +38,8 @@ type PostgresClient struct {
 	dEntity *db.Entity
 }
 
-func NewPostgresClient(postgresUrl string) (*PostgresClient, error) {
-	dbObj, err := gorm.Open(postgres.Open(postgresUrl), &gorm.Config{Logger: logger.NewDbLogger()})
+func NewPostgresClient(log logger.Logger, postgresUrl string) (*PostgresClient, error) {
+	dbObj, err := gorm.Open(postgres.Open(postgresUrl), &gorm.Config{Logger: logger.NewDbLogger(log)})
 	if err != nil {
 		panic(err)
 	}
@@ -63,7 +63,7 @@ func NewPostgresClient(postgresUrl string) (*PostgresClient, error) {
 	}
 
 	return &PostgresClient{
-		log:     logger.NewLogger("postgres"),
+		log:     log,
 		dEntity: dbEnt,
 	}, nil
 }
@@ -90,7 +90,7 @@ func (p *PostgresClient) Store(ctx context.Context, element *models.Element, ext
 		v.Extra = string(b)
 
 		vModel := &Index{}
-		res := tx.Where("name = ? AND group = ?", element.Name, element.Group).First(vModel)
+		res := tx.Where("name = ? AND idx_group = ?", element.Name, element.Group).First(vModel)
 		if res.Error != nil && res.Error != gorm.ErrRecordNotFound {
 			return res.Error
 		}
@@ -106,7 +106,7 @@ func (p *PostgresClient) Store(ctx context.Context, element *models.Element, ext
 		}
 
 		vModel.Update(v)
-		res = tx.Where("name = ? AND group = ?", element.Name, element.Group).Updates(vModel)
+		res = tx.Where("name = ? AND idx_group = ?", element.Name, element.Group).Updates(vModel)
 		if res.Error != nil || res.RowsAffected == 0 {
 			if res.RowsAffected == 0 {
 				return errors.New("operation conflict")
@@ -147,7 +147,7 @@ func (p *PostgresClient) Search(ctx context.Context, vectors []float32, k int) (
 	sort.Sort(dists)
 
 	minKIndexes := dists[0:k]
-	results := make([]*models.Doc, k)
+	results := make([]*models.Doc, 0)
 	for _, index := range minKIndexes {
 		results = append(results, index.ToDoc())
 	}
@@ -157,7 +157,7 @@ func (p *PostgresClient) Search(ctx context.Context, vectors []float32, k int) (
 
 func (p *PostgresClient) Get(ctx context.Context, name string, group int) (*models.Element, error) {
 	vModel := &Index{}
-	res := p.dEntity.WithContext(ctx).Where("name = ? AND group = ?", name, group).First(vModel)
+	res := p.dEntity.WithContext(ctx).Where("name = ? AND idx_group = ?", name, group).First(vModel)
 	if res.Error != nil {
 		if res.Error == gorm.ErrRecordNotFound {
 			return nil, nil

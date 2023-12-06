@@ -24,10 +24,10 @@ import (
 )
 
 type Index struct {
-	ID        string `gorm:"column:id;primaryKey"`
-	Name      string `gorm:"column:name;type:varchar(256);index:index_name"`
+	ID        string `gorm:"column:id;type:varchar(256);primaryKey"`
+	Name      string `gorm:"column:name;index:index_name"`
 	OID       int64  `gorm:"column:oid;index:index_oid"`
-	Group     int    `gorm:"column:group;index:index_group"`
+	Group     int    `gorm:"column:idx_group;index:index_group"`
 	ParentID  *int64 `gorm:"column:parent_entry_id;index:index_parent_id"`
 	Content   string `gorm:"column:content"`
 	Vector    string `gorm:"column:vector;type:json"`
