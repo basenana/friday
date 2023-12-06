@@ -37,7 +37,7 @@ var _ = Describe("TestIngest", func() {
 	BeforeEach(func() {
 		loFriday.Vector = FakeStore{}
 		loFriday.Log = logger.NewLogger("test-ingest")
-		loFriday.Spliter = spliter.NewTextSpliter(spliter.DefaultChunkSize, spliter.DefaultChunkOverlap, "\n")
+		loFriday.Spliter = spliter.NewTextSpliter(loFriday.Log, spliter.DefaultChunkSize, spliter.DefaultChunkOverlap, "\n")
 		loFriday.Embedding = FakeEmbedding{}
 	})
 
