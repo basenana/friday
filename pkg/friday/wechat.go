@@ -21,7 +21,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"strconv"
 	"strings"
 
 	"github.com/basenana/friday/pkg/llm/prompts"
@@ -76,10 +75,8 @@ func (f *Friday) ChatConclusionFromFile(ctx context.Context, chatFile string) (s
 		for i, subDoc := range subDocs {
 			e := models.Element{
 				Content: subDoc,
-				Metadata: models.Metadata{
-					Source: n,
-					Group:  strconv.Itoa(i),
-				},
+				Name:    n,
+				Group:   i,
 			}
 			elements = append(elements, e)
 		}
