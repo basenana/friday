@@ -116,7 +116,7 @@ func (p *PgVectorClient) Store(ctx context.Context, element *models.Element, ext
 	})
 }
 
-func (p *PgVectorClient) Search(ctx context.Context, vectors []float32, k int) ([]*models.Doc, error) {
+func (p *PgVectorClient) Search(ctx context.Context, parentId int64, vectors []float32, k int) ([]*models.Doc, error) {
 	var (
 		vectorModels = make([]Index, 0)
 		result       = make([]*models.Doc, 0)
@@ -124,7 +124,12 @@ func (p *PgVectorClient) Search(ctx context.Context, vectors []float32, k int) (
 	if err := p.dEntity.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		query := p.dEntity.DB.WithContext(ctx)
 		vectorJson, _ := json.Marshal(vectors)
-		res := query.Order(fmt.Sprintf("vector <-> '%s'", string(vectorJson))).Limit(k).Find(&vectorModels)
+		var res *gorm.DB
+		if parentId == 0 {
+			res = query.Order(fmt.Sprintf("vector <-> '%s'", string(vectorJson))).Limit(k).Find(&vectorModels)
+		} else {
+			res = query.Where("parent_entry_id = ?", parentId).Order(fmt.Sprintf("vector <-> '%s'", string(vectorJson))).Limit(k).Find(&vectorModels)
+		}
 		if res.Error != nil {
 			return res.Error
 		}
@@ -139,10 +144,15 @@ func (p *PgVectorClient) Search(ctx context.Context, vectors []float32, k int) (
 	return result, nil
 }
 
-func (p *PgVectorClient) Get(ctx context.Context, name string, group int) (*models.Element, error) {
+func (p *PgVectorClient) Get(ctx context.Context, oid int64, name string, group int) (*models.Element, error) {
 	vModel := &Index{}
 	err := p.dEntity.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		res := tx.Where("name = ? AND group = ?", name, group).First(vModel)
+		var res *gorm.DB
+		if oid == 0 {
+			res = tx.Where("name = ? AND group = ?", name, group).First(vModel)
+		} else {
+			res = tx.Where("name = ? AND oid = ? AND group = ?", name, oid, group).First(vModel)
+		}
 		if res.Error != nil && res.Error != gorm.ErrRecordNotFound {
 			return res.Error
 		}

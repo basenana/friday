@@ -116,7 +116,7 @@ func (r RedisClient) Store(ctx context.Context, element *models.Element, extra m
 		FieldValue("vector", rueidis.VectorString32(element.Vector)).Build()).Error()
 }
 
-func (r RedisClient) Get(ctx context.Context, name string, group int) (*models.Element, error) {
+func (r RedisClient) Get(ctx context.Context, oid int64, name string, group int) (*models.Element, error) {
 	resp, err := r.client.Do(ctx, r.client.B().Get().Key(fmt.Sprintf("%s:%s-%d", r.prefix, name, group)).Build()).ToMessage()
 	if err != nil {
 		return nil, err
@@ -126,10 +126,13 @@ func (r RedisClient) Get(ctx context.Context, name string, group int) (*models.E
 		return nil, err
 	}
 
-	oid, err := files.StrToInt64(res["oid"])
-	if err != nil {
-		return nil, err
+	if oid == 0 {
+		oid, err = files.StrToInt64(res["oid"])
+		if err != nil {
+			return nil, err
+		}
 	}
+
 	parentId, err := files.StrToInt64(res["parentid"])
 	if err != nil {
 		return nil, err
@@ -144,7 +147,7 @@ func (r RedisClient) Get(ctx context.Context, name string, group int) (*models.E
 	}, nil
 }
 
-func (r RedisClient) Search(ctx context.Context, vectors []float32, k int) ([]*models.Doc, error) {
+func (r RedisClient) Search(ctx context.Context, parentId int64, vectors []float32, k int) ([]*models.Doc, error) {
 	resp, err := r.client.Do(ctx, r.client.B().FtSearch().Index(r.index).
 		Query("*=>[KNN 10 @vector $B AS vector_score]").
 		Return("4").Identifier("id").Identifier("content").

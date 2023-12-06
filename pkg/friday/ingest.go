@@ -50,7 +50,7 @@ func (f *Friday) IngestFromFile(ctx context.Context, file models.File) error {
 func (f *Friday) Ingest(ctx context.Context, elements []models.Element) error {
 	f.Log.Debugf("Ingesting %d ...", len(elements))
 	for i, element := range elements {
-		exist, err := f.Vector.Get(ctx, element.Name, element.Group)
+		exist, err := f.Vector.Get(ctx, element.OID, element.Name, element.Group)
 		if err != nil {
 			return err
 		}

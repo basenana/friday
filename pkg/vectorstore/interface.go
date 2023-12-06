@@ -24,6 +24,6 @@ import (
 
 type VectorStore interface {
 	Store(ctx context.Context, element *models.Element, extra map[string]any) error
-	Search(ctx context.Context, vectors []float32, k int) ([]*models.Doc, error)
-	Get(ctx context.Context, name string, group int) (*models.Element, error)
+	Search(ctx context.Context, parentId int64, vectors []float32, k int) ([]*models.Doc, error)
+	Get(ctx context.Context, oid int64, name string, group int) (*models.Element, error)
 }
