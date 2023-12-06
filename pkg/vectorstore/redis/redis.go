@@ -25,6 +25,7 @@ import (
 	"github.com/redis/rueidis"
 
 	"github.com/basenana/friday/pkg/models"
+	"github.com/basenana/friday/pkg/utils/files"
 	"github.com/basenana/friday/pkg/utils/logger"
 	"github.com/basenana/friday/pkg/vectorstore"
 )
@@ -79,7 +80,11 @@ func (r RedisClient) initIndex() error {
 		context.Background(),
 		r.client.B().Arbitrary("FT.CREATE", r.index, "ON", "HASH", "PREFIX", "1", r.prefix, "SCHEMA").
 			Args("id", "TEXT").
-			Args("metadata", "TEXT").
+			Args("name", "TEXT").
+			Args("group", "TEXT").
+			Args("extra", "TEXT").
+			Args("oid", "TEXT").
+			Args("parentid", "TEXT").
 			Args("content", "TEXT").
 			Args("vector", "VECTOR", "FLAT", "6", "TYPE", "FLOAT32", "DIM", strconv.Itoa(r.dim), "DISTANCE_METRIC", "L2").
 			Build()).Error(); err != nil {
@@ -88,42 +93,58 @@ func (r RedisClient) initIndex() error {
 	return nil
 }
 
-func (r RedisClient) Store(id, content string, metadata models.Metadata, extra map[string]interface{}, vectors []float32) error {
-	ctx := context.Background()
-
+func (r RedisClient) Store(ctx context.Context, element *models.Element, extra map[string]any) error {
 	if extra == nil {
 		extra = make(map[string]interface{})
 	}
-	extra["category"] = metadata.Category
-	extra["group"] = metadata.Group
+	extra["group"] = element.Group
 
 	var m string
-	b, err := json.Marshal(metadata)
+	b, err := json.Marshal(extra)
 	if err != nil {
 		return err
 	}
 	m = string(b)
-	return r.client.Do(ctx, r.client.B().Hset().Key(fmt.Sprintf("%s:%s", r.prefix, id)).FieldValue().
-		FieldValue("id", id).
-		FieldValue("metadata", m).
-		FieldValue("content", content).
-		FieldValue("vector", rueidis.VectorString32(vectors)).Build()).Error()
+	return r.client.Do(ctx, r.client.B().Hset().Key(fmt.Sprintf("%s:%s-%d", r.prefix, element.Name, element.Group)).FieldValue().
+		FieldValue("id", element.ID).
+		FieldValue("name", element.Name).
+		FieldValue("group", strconv.Itoa(element.Group)).
+		FieldValue("extra", m).
+		FieldValue("oid", files.Int64ToStr(element.OID)).
+		FieldValue("parentid", files.Int64ToStr(element.ParentId)).
+		FieldValue("content", element.Content).
+		FieldValue("vector", rueidis.VectorString32(element.Vector)).Build()).Error()
 }
 
-func (r RedisClient) Exist(id string) (exist bool, err error) {
-	ctx := context.Background()
-	resp := r.client.Do(ctx, r.client.B().Get().Key(fmt.Sprintf("%s:%s", r.prefix, id)).Build())
-	if resp.RedisError() != nil && resp.RedisError().IsNil() {
-		exist = false
-		return
+func (r RedisClient) Get(ctx context.Context, name string, group int) (*models.Element, error) {
+	resp, err := r.client.Do(ctx, r.client.B().Get().Key(fmt.Sprintf("%s:%s-%d", r.prefix, name, group)).Build()).ToMessage()
+	if err != nil {
+		return nil, err
 	}
-	exist = true
-	return
+	res, err := resp.AsStrMap()
+	if err != nil {
+		return nil, err
+	}
+
+	oid, err := files.StrToInt64(res["oid"])
+	if err != nil {
+		return nil, err
+	}
+	parentId, err := files.StrToInt64(res["parentid"])
+	if err != nil {
+		return nil, err
+	}
+	return &models.Element{
+		ID:       res["id"],
+		Name:     res["name"],
+		Group:    group,
+		OID:      oid,
+		ParentId: parentId,
+		Content:  res["content"],
+	}, nil
 }
 
-func (r RedisClient) Search(vectors []float32, k int) ([]models.Doc, error) {
-	ctx := context.Background()
-
+func (r RedisClient) Search(ctx context.Context, vectors []float32, k int) ([]*models.Doc, error) {
 	resp, err := r.client.Do(ctx, r.client.B().FtSearch().Index(r.index).
 		Query("*=>[KNN 10 @vector $B AS vector_score]").
 		Return("4").Identifier("id").Identifier("content").
@@ -135,7 +156,7 @@ func (r RedisClient) Search(vectors []float32, k int) ([]models.Doc, error) {
 	if err != nil {
 		return nil, err
 	}
-	results := make([]models.Doc, 0)
+	results := make([]*models.Doc, 0)
 
 	for i := 1; i < len(resp[1:]); i += 2 {
 		res, err := resp[i+1].AsStrMap()
@@ -146,9 +167,24 @@ func (r RedisClient) Search(vectors []float32, k int) ([]models.Doc, error) {
 		if err := json.Unmarshal([]byte(res["metadata"]), &metadata); err != nil {
 			return nil, err
 		}
-		results = append(results, models.Doc{
+		oid, err := files.StrToInt64(res["oid"])
+		if err != nil {
+			return nil, err
+		}
+		parentId, err := files.StrToInt64(res["parentid"])
+		if err != nil {
+			return nil, err
+		}
+		group, err := strconv.Atoi(res["group"])
+		if err != nil {
+			return nil, err
+		}
+		results = append(results, &models.Doc{
 			Id:       res["id"],
-			Metadata: metadata,
+			OID:      oid,
+			Name:     res["name"],
+			Group:    group,
+			ParentId: parentId,
 			Content:  res["content"],
 		})
 		r.log.Debugf("id: %s, content: %s, score: %s\n", res["id"], res["content"], res["vector_score"])

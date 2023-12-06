@@ -44,15 +44,11 @@ var _ = Describe("TestStuffSummary", func() {
 		loFriday.Spliter = spliter.NewTextSpliter(loFriday.Log, spliter.DefaultChunkSize, spliter.DefaultChunkOverlap, "\n")
 		elements = []models.Element{{
 			Content: "test-content",
-			Metadata: models.Metadata{
-				Source:    "test-source",
-				Title:     "test-title",
-				ParentDir: "/",
-			},
+			Name:    "test-title",
+			Group:   0,
 		}}
 		file = models.File{
 			Name:    "test-file",
-			Source:  "test-file-source",
 			Content: "test-file-content",
 		}
 	})
@@ -62,14 +58,14 @@ var _ = Describe("TestStuffSummary", func() {
 			summary, err := loFriday.Summary(context.TODO(), elements, summaryType)
 			Expect(err).Should(BeNil())
 			Expect(summary).Should(Equal(map[string]string{
-				"test-source": "a b c",
+				"test-title": "a b c",
 			}))
 		})
 		It("SummaryFromFile should be succeed", func() {
 			summary, err := loFriday.SummaryFromFile(context.TODO(), file, summaryType)
 			Expect(err).Should(BeNil())
 			Expect(summary).Should(Equal(map[string]string{
-				"test-file-source": "a b c",
+				"test-file": "a b c",
 			}))
 		})
 	})
@@ -90,15 +86,11 @@ var _ = Describe("TestMapReduceSummary", func() {
 		loFriday.Spliter = spliter.NewTextSpliter(loFriday.Log, 8, 2, "\n")
 		elements = []models.Element{{
 			Content: "test-content",
-			Metadata: models.Metadata{
-				Source:    "test-source",
-				Title:     "test-title",
-				ParentDir: "/",
-			},
+			Name:    "test-title",
+			Group:   0,
 		}}
 		file = models.File{
 			Name:    "test-file",
-			Source:  "test-file-source",
 			Content: "test file content",
 		}
 	})
@@ -108,14 +100,14 @@ var _ = Describe("TestMapReduceSummary", func() {
 			summary, err := loFriday.Summary(context.TODO(), elements, summaryType)
 			Expect(err).Should(BeNil())
 			Expect(summary).Should(Equal(map[string]string{
-				"test-source": "a b c",
+				"test-title": "a b c",
 			}))
 		})
 		It("SummaryFromFile should be succeed", func() {
 			summary, err := loFriday.SummaryFromFile(context.TODO(), file, summaryType)
 			Expect(err).Should(BeNil())
 			Expect(summary).Should(Equal(map[string]string{
-				"test-file-source": "a b c",
+				"test-file": "a b c",
 			}))
 		})
 	})
@@ -135,15 +127,11 @@ var _ = Describe("TestRefineSummary", func() {
 		loFriday.Spliter = spliter.NewTextSpliter(loFriday.Log, spliter.DefaultChunkSize, spliter.DefaultChunkOverlap, "\n")
 		elements = []models.Element{{
 			Content: "test-content",
-			Metadata: models.Metadata{
-				Source:    "test-source",
-				Title:     "test-title",
-				ParentDir: "/",
-			},
+			Name:    "test-title",
+			Group:   0,
 		}}
 		file = models.File{
 			Name:    "test-file",
-			Source:  "test-file-source",
 			Content: "test-file-content",
 		}
 	})

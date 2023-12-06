@@ -38,7 +38,7 @@ func (i *ingestOperator) Do(ctx context.Context, param *flow.Parameter) error {
 	source := i.spec.Parameters["source"]
 	knowledge := i.spec.Parameters["knowledge"]
 	doc := models.File{
-		Source:  source,
+		Name:    source,
 		Content: knowledge,
 	}
 	return friday.Fri.IngestFromFile(context.TODO(), doc)

@@ -18,6 +18,7 @@ require (
 )
 
 require (
+	github.com/cdipaolo/goml v0.0.0-20220715001353-00e0c845ae1c // indirect
 	github.com/RoaringBitmap/roaring v1.2.3 // indirect
 	github.com/bits-and-blooms/bitset v1.2.0 // indirect
 	github.com/blevesearch/bleve_index_api v1.0.6 // indirect
