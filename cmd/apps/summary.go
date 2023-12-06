@@ -47,11 +47,12 @@ func init() {
 }
 
 func summary(ps string) error {
-	a, err := friday.Fri.SummaryFromOriginFile(context.TODO(), ps, fridaysummary.SummaryType(summaryType))
+	a, usage, err := friday.Fri.SummaryFromOriginFile(context.TODO(), ps, fridaysummary.SummaryType(summaryType))
 	if err != nil {
 		return err
 	}
 	fmt.Println("Answer: ")
 	fmt.Println(a)
+	fmt.Printf("Usage: %v", usage)
 	return nil
 }

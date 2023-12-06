@@ -55,14 +55,14 @@ var _ = Describe("TestStuffSummary", func() {
 
 	Context("summary", func() {
 		It("summary should be succeed", func() {
-			summary, err := loFriday.Summary(context.TODO(), elements, summaryType)
+			summary, _, err := loFriday.Summary(context.TODO(), elements, summaryType)
 			Expect(err).Should(BeNil())
 			Expect(summary).Should(Equal(map[string]string{
 				"test-title": "a b c",
 			}))
 		})
 		It("SummaryFromFile should be succeed", func() {
-			summary, err := loFriday.SummaryFromFile(context.TODO(), file, summaryType)
+			summary, _, err := loFriday.SummaryFromFile(context.TODO(), file, summaryType)
 			Expect(err).Should(BeNil())
 			Expect(summary).Should(Equal(map[string]string{
 				"test-file": "a b c",
@@ -97,14 +97,14 @@ var _ = Describe("TestMapReduceSummary", func() {
 
 	Context("summary", func() {
 		It("summary should be succeed", func() {
-			summary, err := loFriday.Summary(context.TODO(), elements, summaryType)
+			summary, _, err := loFriday.Summary(context.TODO(), elements, summaryType)
 			Expect(err).Should(BeNil())
 			Expect(summary).Should(Equal(map[string]string{
 				"test-title": "a b c",
 			}))
 		})
 		It("SummaryFromFile should be succeed", func() {
-			summary, err := loFriday.SummaryFromFile(context.TODO(), file, summaryType)
+			summary, _, err := loFriday.SummaryFromFile(context.TODO(), file, summaryType)
 			Expect(err).Should(BeNil())
 			Expect(summary).Should(Equal(map[string]string{
 				"test-file": "a b c",
@@ -138,11 +138,11 @@ var _ = Describe("TestRefineSummary", func() {
 
 	Context("summary", func() {
 		It("summary should be succeed", func() {
-			_, _ = loFriday.Summary(context.TODO(), elements, summaryType)
+			_, _, _ = loFriday.Summary(context.TODO(), elements, summaryType)
 			// todo
 		})
 		It("SummaryFromFile should be succeed", func() {
-			_, _ = loFriday.SummaryFromFile(context.TODO(), file, summaryType)
+			_, _, _ = loFriday.SummaryFromFile(context.TODO(), file, summaryType)
 			// todo
 		})
 	})
@@ -152,10 +152,10 @@ type FakeSummaryLLM struct{}
 
 var _ llm.LLM = &FakeSummaryLLM{}
 
-func (f FakeSummaryLLM) Completion(ctx context.Context, prompt prompts.PromptTemplate, parameters map[string]string) ([]string, error) {
-	return []string{}, nil
+func (f FakeSummaryLLM) Completion(ctx context.Context, prompt prompts.PromptTemplate, parameters map[string]string) ([]string, map[string]int, error) {
+	return []string{}, nil, nil
 }
 
-func (f FakeSummaryLLM) Chat(ctx context.Context, prompt prompts.PromptTemplate, parameters map[string]string) ([]string, error) {
-	return []string{"a b c"}, nil
+func (f FakeSummaryLLM) Chat(ctx context.Context, prompt prompts.PromptTemplate, parameters map[string]string) ([]string, map[string]int, error) {
+	return []string{"a b c"}, nil, nil
 }
