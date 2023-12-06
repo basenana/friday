@@ -41,7 +41,7 @@ var _ = Describe("TestStuffSummary", func() {
 	BeforeEach(func() {
 		loFriday.Log = logger.NewLogger("test-stuffsummary")
 		loFriday.LLM = FakeSummaryLLM{}
-		loFriday.Spliter = spliter.NewTextSpliter(spliter.DefaultChunkSize, spliter.DefaultChunkOverlap, "\n")
+		loFriday.Spliter = spliter.NewTextSpliter(loFriday.Log, spliter.DefaultChunkSize, spliter.DefaultChunkOverlap, "\n")
 		elements = []models.Element{{
 			Content: "test-content",
 			Name:    "test-title",
@@ -83,7 +83,7 @@ var _ = Describe("TestMapReduceSummary", func() {
 		loFriday.Log = logger.NewLogger("test-mapreduce-summary")
 		loFriday.LLM = FakeSummaryLLM{}
 		loFriday.LimitToken = 50
-		loFriday.Spliter = spliter.NewTextSpliter(8, 2, "\n")
+		loFriday.Spliter = spliter.NewTextSpliter(loFriday.Log, 8, 2, "\n")
 		elements = []models.Element{{
 			Content: "test-content",
 			Name:    "test-title",
@@ -124,7 +124,7 @@ var _ = Describe("TestRefineSummary", func() {
 	BeforeEach(func() {
 		loFriday.Log = logger.NewLogger("test-refine-summary")
 		loFriday.LLM = FakeSummaryLLM{}
-		loFriday.Spliter = spliter.NewTextSpliter(spliter.DefaultChunkSize, spliter.DefaultChunkOverlap, "\n")
+		loFriday.Spliter = spliter.NewTextSpliter(loFriday.Log, spliter.DefaultChunkSize, spliter.DefaultChunkOverlap, "\n")
 		elements = []models.Element{{
 			Content: "test-content",
 			Name:    "test-title",
