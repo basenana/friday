@@ -117,14 +117,19 @@ func (p *PostgresClient) Store(ctx context.Context, element *models.Element, ext
 	})
 }
 
-func (p *PostgresClient) Search(ctx context.Context, vectors []float32, k int) ([]*models.Doc, error) {
+func (p *PostgresClient) Search(ctx context.Context, parentId int64, vectors []float32, k int) ([]*models.Doc, error) {
 	vectors64 := make([]float64, 0)
 	for _, v := range vectors {
 		vectors64 = append(vectors64, float64(v))
 	}
 	// query from db
 	existIndexes := make([]Index, 0)
-	res := p.dEntity.WithContext(ctx).Find(&existIndexes)
+	var res *gorm.DB
+	if parentId == 0 {
+		res = p.dEntity.WithContext(ctx).Find(&existIndexes)
+	} else {
+		res = p.dEntity.WithContext(ctx).Where("parent_entry_id = ?", parentId).Find(&existIndexes)
+	}
 	if res.Error != nil {
 		return nil, res.Error
 	}
@@ -155,9 +160,14 @@ func (p *PostgresClient) Search(ctx context.Context, vectors []float32, k int) (
 	return results, nil
 }
 
-func (p *PostgresClient) Get(ctx context.Context, name string, group int) (*models.Element, error) {
+func (p *PostgresClient) Get(ctx context.Context, oid int64, name string, group int) (*models.Element, error) {
 	vModel := &Index{}
-	res := p.dEntity.WithContext(ctx).Where("name = ? AND idx_group = ?", name, group).First(vModel)
+	var res *gorm.DB
+	if oid == 0 {
+		res = p.dEntity.WithContext(ctx).Where("name = ? AND idx_group = ?", name, group).First(vModel)
+	} else {
+		res = p.dEntity.WithContext(ctx).Where("name = ? AND oid = ? AND idx_group = ?", name, oid, group).First(vModel)
+	}
 	if res.Error != nil {
 		if res.Error == gorm.ErrRecordNotFound {
 			return nil, nil

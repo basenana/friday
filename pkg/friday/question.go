@@ -24,9 +24,9 @@ import (
 	"github.com/basenana/friday/pkg/llm/prompts"
 )
 
-func (f *Friday) Question(ctx context.Context, q string) (string, error) {
+func (f *Friday) Question(ctx context.Context, parentId int64, q string) (string, error) {
 	prompt := prompts.NewQuestionPrompt(f.Prompts[questionPromptKey])
-	c, err := f.searchDocs(ctx, q)
+	c, err := f.searchDocs(ctx, parentId, q)
 	if err != nil {
 		return "", err
 	}
@@ -44,13 +44,13 @@ func (f *Friday) Question(ctx context.Context, q string) (string, error) {
 	return c, nil
 }
 
-func (f *Friday) searchDocs(ctx context.Context, q string) (string, error) {
+func (f *Friday) searchDocs(ctx context.Context, parentId int64, q string) (string, error) {
 	f.Log.Debugf("vector query for %s ...", q)
 	qv, _, err := f.Embedding.VectorQuery(ctx, q)
 	if err != nil {
 		return "", fmt.Errorf("vector embedding error: %w", err)
 	}
-	docs, err := f.Vector.Search(ctx, qv, *f.VectorTopK)
+	docs, err := f.Vector.Search(ctx, parentId, qv, *f.VectorTopK)
 	if err != nil {
 		return "", fmt.Errorf("vector search error: %w", err)
 	}

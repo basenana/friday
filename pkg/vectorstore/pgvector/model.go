@@ -26,8 +26,8 @@ type Index struct {
 	ID        string `gorm:"column:id;primaryKey"`
 	Name      string `gorm:"column:name;type:varchar(256);index:index_name"`
 	OID       int64  `gorm:"column:oid;index:index_oid"`
-	Group     int    `gorm:"column:group;index:index_group"`
-	ParentID  *int64 `gorm:"column:parent_entry_id;index:index_parent_id"`
+	Group     int    `gorm:"column:idx_group;index:index_group"`
+	ParentID  int64  `gorm:"column:parent_entry_id;index:index_parent_id"`
 	Content   string `gorm:"column:content"`
 	Vector    string `gorm:"column:vector;type:vector(1536)"`
 	Extra     string `gorm:"column:metadata"`
@@ -52,16 +52,13 @@ func (v *Index) Update(vector *Index) {
 }
 
 func (v *Index) From(element *models.Element) *Index {
-	parentId := element.ParentId
 	i := &Index{
-		ID:      element.ID,
-		Name:    element.Name,
-		OID:     element.OID,
-		Group:   element.Group,
-		Content: element.Content,
-	}
-	if parentId != 0 {
-		i.ParentID = &parentId
+		ID:       element.ID,
+		Name:     element.Name,
+		OID:      element.OID,
+		Group:    element.Group,
+		Content:  element.Content,
+		ParentID: element.ParentId,
 	}
 	return i
 }
@@ -71,7 +68,7 @@ func (v *Index) To() *models.Doc {
 		OID:      v.OID,
 		Name:     v.Name,
 		Group:    v.Group,
-		ParentId: *v.ParentID,
+		ParentId: v.ParentID,
 		Content:  v.Content,
 	}
 }
@@ -81,7 +78,7 @@ func (v *Index) ToElement() *models.Element {
 		OID:      v.OID,
 		Name:     v.Name,
 		Group:    v.Group,
-		ParentId: *v.ParentID,
+		ParentId: v.ParentID,
 		Content:  v.Content,
 	}
 }
