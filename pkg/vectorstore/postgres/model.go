@@ -28,7 +28,7 @@ type Index struct {
 	Name      string `gorm:"column:name;index:index_name"`
 	OID       int64  `gorm:"column:oid;index:index_oid"`
 	Group     int    `gorm:"column:idx_group;index:index_group"`
-	ParentID  *int64 `gorm:"column:parent_entry_id;index:index_parent_id"`
+	ParentID  int64  `gorm:"column:parent_entry_id;index:index_parent_id"`
 	Content   string `gorm:"column:content"`
 	Vector    string `gorm:"column:vector;type:json"`
 	Extra     string `gorm:"column:extra"`
@@ -53,13 +53,13 @@ func (v *Index) Update(vector *Index) {
 }
 
 func (v *Index) From(element *models.Element) (*Index, error) {
-	parentId := element.ParentId
 	i := &Index{
-		ID:      element.ID,
-		Name:    element.Name,
-		OID:     element.OID,
-		Group:   element.Group,
-		Content: element.Content,
+		ID:       element.ID,
+		Name:     element.Name,
+		OID:      element.OID,
+		Group:    element.Group,
+		ParentID: element.ParentId,
+		Content:  element.Content,
 	}
 	vector, err := json.Marshal(element.Vector)
 	if err != nil {
@@ -67,23 +67,17 @@ func (v *Index) From(element *models.Element) (*Index, error) {
 	}
 	i.Vector = string(vector)
 
-	if parentId != 0 {
-		i.ParentID = &parentId
-	}
 	return i, nil
 }
 
 func (v *Index) To() (*models.Element, error) {
-	parentId := v.ParentID
 	res := &models.Element{
-		ID:      v.ID,
-		Name:    v.Name,
-		Group:   v.Group,
-		OID:     v.OID,
-		Content: v.Content,
-	}
-	if parentId != nil {
-		res.ParentId = *parentId
+		ID:       v.ID,
+		Name:     v.Name,
+		Group:    v.Group,
+		OID:      v.OID,
+		ParentId: v.ParentID,
+		Content:  v.Content,
 	}
 	var vector []float32
 	err := json.Unmarshal([]byte(v.Vector), &vector)
@@ -96,16 +90,13 @@ func (v *Index) To() (*models.Element, error) {
 }
 
 func (v *Index) ToDoc() *models.Doc {
-	parentId := v.ParentID
 	res := &models.Doc{
-		Id:      v.ID,
-		OID:     v.OID,
-		Name:    v.Name,
-		Group:   v.Group,
-		Content: v.Content,
-	}
-	if parentId != nil {
-		res.ParentId = *parentId
+		Id:       v.ID,
+		OID:      v.OID,
+		Name:     v.Name,
+		Group:    v.Group,
+		Content:  v.Content,
+		ParentId: v.ParentID,
 	}
 
 	return res
