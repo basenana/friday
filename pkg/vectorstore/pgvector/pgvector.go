@@ -39,8 +39,8 @@ type PgVectorClient struct {
 
 var _ vectorstore.VectorStore = &PgVectorClient{}
 
-func NewPgVectorClient(postgresUrl string) (*PgVectorClient, error) {
-	dbObj, err := gorm.Open(postgres.Open(postgresUrl), &gorm.Config{Logger: logger.NewDbLogger()})
+func NewPgVectorClient(log logger.Logger, postgresUrl string) (*PgVectorClient, error) {
+	dbObj, err := gorm.Open(postgres.Open(postgresUrl), &gorm.Config{Logger: logger.NewDbLogger(log)})
 	if err != nil {
 		panic(err)
 	}
@@ -64,7 +64,7 @@ func NewPgVectorClient(postgresUrl string) (*PgVectorClient, error) {
 	}
 
 	return &PgVectorClient{
-		log:     logger.NewLogger("postgres"),
+		log:     log,
 		dEntity: dbEnt,
 	}, nil
 }

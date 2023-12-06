@@ -9,6 +9,8 @@ import (
 	"github.com/blevesearch/bleve/v2/registry"
 	"github.com/blevesearch/upsidedown_store_api"
 	"gorm.io/gorm"
+
+	"github.com/basenana/friday/pkg/utils/logger"
 )
 
 const (
@@ -24,7 +26,7 @@ func pgKVStoreConstructor(mo store.MergeOperator, config map[string]interface{})
 	if !ok {
 		return nil, fmt.Errorf("dsn not found")
 	}
-	pgCli, err := NewPostgresClient(dsnStr.(string))
+	pgCli, err := NewPostgresClient(logger.NewLogger("bleve"), dsnStr.(string))
 	if err != nil {
 		return nil, err
 	}
