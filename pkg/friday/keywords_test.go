@@ -39,7 +39,7 @@ var _ = Describe("TestKeywords", func() {
 
 	Context("keywords", func() {
 		It("keywords should be succeed", func() {
-			keywords, err := loFriday.Keywords(context.TODO(), "test")
+			keywords, _, err := loFriday.Keywords(context.TODO(), "test")
 			Expect(err).Should(BeNil())
 			Expect(keywords).Should(Equal([]string{"a", "b", "c"}))
 		})
@@ -50,10 +50,10 @@ type FakeKeyWordsLLM struct{}
 
 var _ llm.LLM = &FakeKeyWordsLLM{}
 
-func (f FakeKeyWordsLLM) Completion(ctx context.Context, prompt prompts.PromptTemplate, parameters map[string]string) ([]string, error) {
-	return []string{}, nil
+func (f FakeKeyWordsLLM) Completion(ctx context.Context, prompt prompts.PromptTemplate, parameters map[string]string) ([]string, map[string]int, error) {
+	return []string{}, nil, nil
 }
 
-func (f FakeKeyWordsLLM) Chat(ctx context.Context, prompt prompts.PromptTemplate, parameters map[string]string) ([]string, error) {
-	return []string{"a, b, c"}, nil
+func (f FakeKeyWordsLLM) Chat(ctx context.Context, prompt prompts.PromptTemplate, parameters map[string]string) ([]string, map[string]int, error) {
+	return []string{"a, b, c"}, nil, nil
 }
