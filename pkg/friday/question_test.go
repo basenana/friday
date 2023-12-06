@@ -49,12 +49,12 @@ var _ = Describe("TestQuestion", func() {
 
 	Context("question", func() {
 		It("question should be succeed", func() {
-			ans, err := loFriday.Question(context.TODO(), "I am a question")
+			ans, err := loFriday.Question(context.TODO(), 0, "I am a question")
 			Expect(err).Should(BeNil())
 			Expect(ans).Should(Equal("I am an answer"))
 		})
 		It("searchDocs should be succeed", func() {
-			ans, err := loFriday.searchDocs(context.TODO(), "I am a question")
+			ans, err := loFriday.searchDocs(context.TODO(), 0, "I am a question")
 			Expect(err).Should(BeNil())
 			Expect(ans).Should(Equal("There are logs of questions"))
 		})
@@ -69,14 +69,14 @@ func (f FakeQuestionStore) Store(ctx context.Context, element *models.Element, e
 	return nil
 }
 
-func (f FakeQuestionStore) Search(ctx context.Context, vectors []float32, k int) ([]*models.Doc, error) {
+func (f FakeQuestionStore) Search(ctx context.Context, parentId int64, vectors []float32, k int) ([]*models.Doc, error) {
 	return []*models.Doc{{
 		Id:      "abc",
 		Content: "There are logs of questions",
 	}}, nil
 }
 
-func (f FakeQuestionStore) Get(ctx context.Context, name string, group int) (*models.Element, error) {
+func (f FakeQuestionStore) Get(ctx context.Context, oid int64, name string, group int) (*models.Element, error) {
 	return &models.Element{}, nil
 }
 

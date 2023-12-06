@@ -39,7 +39,7 @@ var QuestionCmd = &cobra.Command{
 }
 
 func run(question string) error {
-	a, err := friday.Fri.Question(context.TODO(), question)
+	a, err := friday.Fri.Question(context.TODO(), 0, question)
 	if err != nil {
 		return err
 	}
