@@ -39,11 +39,12 @@ var WeChatCmd = &cobra.Command{
 }
 
 func chat(ps string) error {
-	a, err := friday.Fri.ChatConclusionFromFile(context.TODO(), ps)
+	a, usage, err := friday.Fri.ChatConclusionFromFile(context.TODO(), ps)
 	if err != nil {
 		return err
 	}
 	fmt.Println("Answer: ")
 	fmt.Println(a)
+	fmt.Printf("Usage: %v", usage)
 	return nil
 }

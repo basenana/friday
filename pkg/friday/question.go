@@ -24,24 +24,24 @@ import (
 	"github.com/basenana/friday/pkg/llm/prompts"
 )
 
-func (f *Friday) Question(ctx context.Context, parentId int64, q string) (string, error) {
+func (f *Friday) Question(ctx context.Context, parentId int64, q string) (string, map[string]int, error) {
 	prompt := prompts.NewQuestionPrompt(f.Prompts[questionPromptKey])
 	c, err := f.searchDocs(ctx, parentId, q)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	if f.LLM != nil {
-		ans, err := f.LLM.Chat(ctx, prompt, map[string]string{
+		ans, usage, err := f.LLM.Chat(ctx, prompt, map[string]string{
 			"context":  c,
 			"question": q,
 		})
 		if err != nil {
-			return "", fmt.Errorf("llm completion error: %w", err)
+			return "", nil, fmt.Errorf("llm completion error: %w", err)
 		}
 		f.Log.Debugf("Question result: %s", c)
-		return ans[0], nil
+		return ans[0], usage, nil
 	}
-	return c, nil
+	return c, nil, nil
 }
 
 func (f *Friday) searchDocs(ctx context.Context, parentId int64, q string) (string, error) {

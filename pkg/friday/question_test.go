@@ -49,7 +49,7 @@ var _ = Describe("TestQuestion", func() {
 
 	Context("question", func() {
 		It("question should be succeed", func() {
-			ans, err := loFriday.Question(context.TODO(), 0, "I am a question")
+			ans, _, err := loFriday.Question(context.TODO(), 0, "I am a question")
 			Expect(err).Should(BeNil())
 			Expect(ans).Should(Equal("I am an answer"))
 		})
@@ -96,10 +96,10 @@ type FakeQuestionLLM struct{}
 
 var _ llm.LLM = &FakeQuestionLLM{}
 
-func (f FakeQuestionLLM) Completion(ctx context.Context, prompt prompts.PromptTemplate, parameters map[string]string) ([]string, error) {
-	return []string{}, nil
+func (f FakeQuestionLLM) Completion(ctx context.Context, prompt prompts.PromptTemplate, parameters map[string]string) ([]string, map[string]int, error) {
+	return []string{}, nil, nil
 }
 
-func (f FakeQuestionLLM) Chat(ctx context.Context, prompt prompts.PromptTemplate, parameters map[string]string) ([]string, error) {
-	return []string{"I am an answer"}, nil
+func (f FakeQuestionLLM) Chat(ctx context.Context, prompt prompts.PromptTemplate, parameters map[string]string) ([]string, map[string]int, error) {
+	return []string{"I am an answer"}, nil, nil
 }
