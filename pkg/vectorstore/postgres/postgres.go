@@ -39,6 +39,9 @@ type PostgresClient struct {
 }
 
 func NewPostgresClient(log logger.Logger, postgresUrl string) (*PostgresClient, error) {
+	if log == nil {
+		log = logger.NewLogger("database")
+	}
 	dbObj, err := gorm.Open(postgres.Open(postgresUrl), &gorm.Config{Logger: logger.NewDbLogger(log)})
 	if err != nil {
 		panic(err)

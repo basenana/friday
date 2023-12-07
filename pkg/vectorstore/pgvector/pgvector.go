@@ -40,6 +40,9 @@ type PgVectorClient struct {
 var _ vectorstore.VectorStore = &PgVectorClient{}
 
 func NewPgVectorClient(log logger.Logger, postgresUrl string) (*PgVectorClient, error) {
+	if log == nil {
+		log = logger.NewLogger("database")
+	}
 	dbObj, err := gorm.Open(postgres.Open(postgresUrl), &gorm.Config{Logger: logger.NewDbLogger(log)})
 	if err != nil {
 		panic(err)
