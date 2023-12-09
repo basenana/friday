@@ -50,7 +50,7 @@ var _ = Describe("TestIngest", func() {
 					Group:   0,
 				},
 			}
-			err := loFriday.Ingest(context.TODO(), elements)
+			_, err := loFriday.Ingest(context.TODO(), elements)
 			Expect(err).Should(BeNil())
 		})
 	})

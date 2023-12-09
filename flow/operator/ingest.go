@@ -41,5 +41,6 @@ func (i *ingestOperator) Do(ctx context.Context, param *flow.Parameter) error {
 		Name:    source,
 		Content: knowledge,
 	}
-	return friday.Fri.IngestFromFile(context.TODO(), doc)
+	_, err := friday.Fri.IngestFromFile(context.TODO(), doc)
+	return err
 }
