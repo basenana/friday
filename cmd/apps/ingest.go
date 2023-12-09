@@ -18,6 +18,7 @@ package apps
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/spf13/cobra"
 
@@ -40,9 +41,10 @@ var IngestCmd = &cobra.Command{
 }
 
 func ingest(ps string) error {
-	err := friday.Fri.IngestFromOriginFile(context.TODO(), ps)
+	usage, err := friday.Fri.IngestFromOriginFile(context.TODO(), ps)
 	if err != nil {
 		return err
 	}
+	fmt.Printf("Usage: %v", usage)
 	return nil
 }
