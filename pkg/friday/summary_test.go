@@ -153,9 +153,9 @@ type FakeSummaryLLM struct{}
 var _ llm.LLM = &FakeSummaryLLM{}
 
 func (f FakeSummaryLLM) Completion(ctx context.Context, prompt prompts.PromptTemplate, parameters map[string]string) ([]string, map[string]int, error) {
-	return []string{}, nil, nil
+	return []string{"a b c"}, nil, nil
 }
 
-func (f FakeSummaryLLM) Chat(ctx context.Context, prompt prompts.PromptTemplate, parameters map[string]string) ([]string, map[string]int, error) {
+func (f FakeSummaryLLM) Chat(ctx context.Context, history []map[string]string, prompt prompts.PromptTemplate, parameters map[string]string) ([]string, map[string]int, error) {
 	return []string{"a b c"}, nil, nil
 }

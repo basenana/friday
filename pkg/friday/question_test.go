@@ -97,9 +97,9 @@ type FakeQuestionLLM struct{}
 var _ llm.LLM = &FakeQuestionLLM{}
 
 func (f FakeQuestionLLM) Completion(ctx context.Context, prompt prompts.PromptTemplate, parameters map[string]string) ([]string, map[string]int, error) {
-	return []string{}, nil, nil
+	return []string{"I am an answer"}, nil, nil
 }
 
-func (f FakeQuestionLLM) Chat(ctx context.Context, prompt prompts.PromptTemplate, parameters map[string]string) ([]string, map[string]int, error) {
+func (f FakeQuestionLLM) Chat(ctx context.Context, history []map[string]string, prompt prompts.PromptTemplate, parameters map[string]string) ([]string, map[string]int, error) {
 	return []string{"I am an answer"}, nil, nil
 }
