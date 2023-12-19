@@ -51,9 +51,9 @@ type FakeKeyWordsLLM struct{}
 var _ llm.LLM = &FakeKeyWordsLLM{}
 
 func (f FakeKeyWordsLLM) Completion(ctx context.Context, prompt prompts.PromptTemplate, parameters map[string]string) ([]string, map[string]int, error) {
-	return []string{}, nil, nil
+	return []string{"a, b, c"}, nil, nil
 }
 
-func (f FakeKeyWordsLLM) Chat(ctx context.Context, prompt prompts.PromptTemplate, parameters map[string]string) ([]string, map[string]int, error) {
+func (f FakeKeyWordsLLM) Chat(ctx context.Context, history []map[string]string, prompt prompts.PromptTemplate, parameters map[string]string) ([]string, map[string]int, error) {
 	return []string{"a, b, c"}, nil, nil
 }
