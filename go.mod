@@ -6,6 +6,7 @@ require (
 	github.com/basenana/go-flow v0.0.0-20230801131009-d05f1f41b706
 	github.com/blevesearch/bleve/v2 v2.3.10
 	github.com/blevesearch/upsidedown_store_api v1.0.2
+	github.com/cdipaolo/goml v0.0.0-20220715001353-00e0c845ae1c
 	github.com/go-gormigrate/gormigrate/v2 v2.1.1
 	github.com/google/uuid v1.3.0
 	github.com/onsi/ginkgo v1.16.5
@@ -18,7 +19,6 @@ require (
 )
 
 require (
-	github.com/cdipaolo/goml v0.0.0-20220715001353-00e0c845ae1c // indirect
 	github.com/RoaringBitmap/roaring v1.2.3 // indirect
 	github.com/bits-and-blooms/bitset v1.2.0 // indirect
 	github.com/blevesearch/bleve_index_api v1.0.6 // indirect
