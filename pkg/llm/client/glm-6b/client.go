@@ -106,15 +106,11 @@ func (o *GLM) Completion(ctx context.Context, prompt prompts.PromptTemplate, par
 }
 
 // todo: not supported
-func (o *GLM) Chat(ctx context.Context, history []map[string]string, prompt prompts.PromptTemplate, parameters map[string]string) ([]string, map[string]int, error) {
+func (o *GLM) Chat(ctx context.Context, history []map[string]string) (map[string]string, map[string]int, error) {
 	path := ""
 
-	p, err := prompt.String(parameters)
-	if err != nil {
-		return nil, nil, err
-	}
 	data := map[string]interface{}{
-		"prompt":      p,
+		"prompt":      history,
 		"max_length":  10240,
 		"temperature": 0.7,
 		"top_p":       1,
@@ -131,6 +127,5 @@ func (o *GLM) Chat(ctx context.Context, history []map[string]string, prompt prom
 	if err != nil {
 		return nil, nil, err
 	}
-	ans := []string{res.Response}
-	return ans, nil, err
+	return map[string]string{"content": res.Response}, nil, err
 }

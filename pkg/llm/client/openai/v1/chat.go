@@ -19,8 +19,6 @@ package v1
 import (
 	"context"
 	"encoding/json"
-
-	"github.com/basenana/friday/pkg/llm/prompts"
 )
 
 type ChatResult struct {
@@ -38,37 +36,16 @@ type ChatChoice struct {
 	FinishReason string            `json:"finish_reason"`
 }
 
-func (o *OpenAIV1) Chat(ctx context.Context, history []map[string]string, prompt prompts.PromptTemplate, parameters map[string]string) ([]string, map[string]int, error) {
-	return o.chat(ctx, history, prompt, parameters)
+func (o *OpenAIV1) Chat(ctx context.Context, history []map[string]string) (map[string]string, map[string]int, error) {
+	return o.chat(ctx, history)
 }
 
-func (o *OpenAIV1) chat(ctx context.Context, history []map[string]string, prompt prompts.PromptTemplate, parameters map[string]string) ([]string, map[string]int, error) {
+func (o *OpenAIV1) chat(ctx context.Context, history []map[string]string) (map[string]string, map[string]int, error) {
 	path := "v1/chat/completions"
-
-	p, err := prompt.String(parameters)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	histories := make([]map[string]string, 0)
-	for _, hs := range history {
-		for user, content := range hs {
-			histories = append(histories, map[string]string{
-				"role":    user,
-				"content": content,
-			})
-		}
-	}
-	histories = append(histories,
-		map[string]string{
-			"role":    "user",
-			"content": p,
-		},
-	)
 
 	data := map[string]interface{}{
 		"model":             *o.conf.Model,
-		"messages":          []interface{}{histories},
+		"messages":          []interface{}{history},
 		"max_tokens":        *o.conf.MaxReturnToken,
 		"temperature":       *o.conf.Temperature,
 		"top_p":             1,
@@ -87,9 +64,5 @@ func (o *OpenAIV1) chat(ctx context.Context, history []map[string]string, prompt
 	if err != nil {
 		return nil, nil, err
 	}
-	ans := make([]string, len(res.Choices))
-	for i, c := range res.Choices {
-		ans[i] = c.Message["content"]
-	}
-	return ans, res.Usage, err
+	return res.Choices[0].Message, res.Usage, err
 }
