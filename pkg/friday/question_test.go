@@ -49,12 +49,12 @@ var _ = Describe("TestQuestion", func() {
 
 	Context("question", func() {
 		It("question should be succeed", func() {
-			ans, _, err := loFriday.Question(context.TODO(), 0, "I am a question")
+			ans, _, err := loFriday.Question(context.TODO(), models.DocQuery{}, "I am a question")
 			Expect(err).Should(BeNil())
 			Expect(ans).Should(Equal("I am an answer"))
 		})
 		It("searchDocs should be succeed", func() {
-			ans, err := loFriday.searchDocs(context.TODO(), 0, "I am a question")
+			ans, err := loFriday.searchDocs(context.TODO(), models.DocQuery{}, "I am a question")
 			Expect(err).Should(BeNil())
 			Expect(ans).Should(Equal("There are logs of questions"))
 		})
@@ -69,7 +69,7 @@ func (f FakeQuestionStore) Store(ctx context.Context, element *models.Element, e
 	return nil
 }
 
-func (f FakeQuestionStore) Search(ctx context.Context, parentId int64, vectors []float32, k int) ([]*models.Doc, error) {
+func (f FakeQuestionStore) Search(ctx context.Context, query models.DocQuery, vectors []float32, k int) ([]*models.Doc, error) {
 	return []*models.Doc{{
 		Id:      "abc",
 		Content: "There are logs of questions",
@@ -100,6 +100,6 @@ func (f FakeQuestionLLM) Completion(ctx context.Context, prompt prompts.PromptTe
 	return []string{"I am an answer"}, nil, nil
 }
 
-func (f FakeQuestionLLM) Chat(ctx context.Context, history []map[string]string, prompt prompts.PromptTemplate, parameters map[string]string) ([]string, map[string]int, error) {
-	return []string{"I am an answer"}, nil, nil
+func (f FakeQuestionLLM) Chat(ctx context.Context, history []map[string]string) (answers map[string]string, tokens map[string]int, err error) {
+	return map[string]string{"content": "I am an answer"}, nil, nil
 }

@@ -20,33 +20,20 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-
-	"github.com/basenana/friday/pkg/llm/prompts"
 )
 
-func (g *Gemini) Chat(ctx context.Context, history []map[string]string, prompt prompts.PromptTemplate, parameters map[string]string) ([]string, map[string]int, error) {
+func (g *Gemini) Chat(ctx context.Context, history []map[string]string) (map[string]string, map[string]int, error) {
 	path := fmt.Sprintf("v1beta/models/%s:generateContent", *g.conf.Model)
-
-	p, err := prompt.String(parameters)
-	if err != nil {
-		return nil, nil, err
-	}
 
 	contents := make([]map[string]any, 0)
 	for _, hs := range history {
-		for user, content := range hs {
-			contents = append(contents, map[string]any{
-				"role": user,
-				"parts": []map[string]string{{
-					"text": content,
-				}},
-			})
-		}
+		contents = append(contents, map[string]any{
+			"role": hs["role"],
+			"parts": []map[string]string{{
+				"text": hs["content"],
+			}},
+		})
 	}
-	contents = append(contents, map[string]any{
-		"role":  "user",
-		"parts": map[string]string{"text": p},
-	})
 
 	respBody, err := g.request(ctx, path, "POST", map[string]any{"contents": contents})
 	if err != nil {
@@ -62,10 +49,10 @@ func (g *Gemini) Chat(ctx context.Context, history []map[string]string, prompt p
 		g.log.Errorf("gemini response: %s ", string(respBody))
 		return nil, nil, fmt.Errorf("gemini api block because of %s", res.PromptFeedback.BlockReason)
 	}
-	ans := make([]string, 0)
+	ans := make(map[string]string)
 	for _, c := range res.Candidates {
 		for _, t := range c.Content.Parts {
-			ans = append(ans, t.Text)
+			ans[c.Content.Role] = t.Text
 		}
 	}
 	return ans, nil, err

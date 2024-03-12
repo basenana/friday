@@ -24,6 +24,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/basenana/friday/pkg/friday"
+	"github.com/basenana/friday/pkg/models"
 )
 
 var QuestionCmd = &cobra.Command{
@@ -39,7 +40,7 @@ var QuestionCmd = &cobra.Command{
 }
 
 func run(question string) error {
-	a, usage, err := friday.Fri.Question(context.TODO(), 0, question)
+	a, usage, err := friday.Fri.Question(context.TODO(), models.DocQuery{}, question)
 	if err != nil {
 		return err
 	}

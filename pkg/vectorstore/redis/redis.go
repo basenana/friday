@@ -147,7 +147,7 @@ func (r RedisClient) Get(ctx context.Context, oid int64, name string, group int)
 	}, nil
 }
 
-func (r RedisClient) Search(ctx context.Context, parentId int64, vectors []float32, k int) ([]*models.Doc, error) {
+func (r RedisClient) Search(ctx context.Context, query models.DocQuery, vectors []float32, k int) ([]*models.Doc, error) {
 	resp, err := r.client.Do(ctx, r.client.B().FtSearch().Index(r.index).
 		Query("*=>[KNN 10 @vector $B AS vector_score]").
 		Return("4").Identifier("id").Identifier("content").

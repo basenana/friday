@@ -156,6 +156,6 @@ func (f FakeSummaryLLM) Completion(ctx context.Context, prompt prompts.PromptTem
 	return []string{"a b c"}, nil, nil
 }
 
-func (f FakeSummaryLLM) Chat(ctx context.Context, history []map[string]string, prompt prompts.PromptTemplate, parameters map[string]string) ([]string, map[string]int, error) {
-	return []string{"a b c"}, nil, nil
+func (f FakeSummaryLLM) Chat(ctx context.Context, history []map[string]string) (answers map[string]string, tokens map[string]int, err error) {
+	return map[string]string{"content": "a b c"}, nil, nil
 }

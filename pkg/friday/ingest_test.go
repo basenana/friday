@@ -64,7 +64,7 @@ func (f FakeStore) Store(ctx context.Context, element *models.Element, extra map
 	return nil
 }
 
-func (f FakeStore) Search(ctx context.Context, parentId int64, vectors []float32, k int) ([]*models.Doc, error) {
+func (f FakeStore) Search(ctx context.Context, query models.DocQuery, vectors []float32, k int) ([]*models.Doc, error) {
 	return []*models.Doc{}, nil
 }
 

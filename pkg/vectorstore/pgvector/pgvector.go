@@ -119,20 +119,22 @@ func (p *PgVectorClient) Store(ctx context.Context, element *models.Element, ext
 	})
 }
 
-func (p *PgVectorClient) Search(ctx context.Context, parentId int64, vectors []float32, k int) ([]*models.Doc, error) {
+func (p *PgVectorClient) Search(ctx context.Context, query models.DocQuery, vectors []float32, k int) ([]*models.Doc, error) {
 	var (
 		vectorModels = make([]Index, 0)
 		result       = make([]*models.Doc, 0)
 	)
 	if err := p.dEntity.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		query := p.dEntity.DB.WithContext(ctx)
 		vectorJson, _ := json.Marshal(vectors)
 		var res *gorm.DB
-		if parentId == 0 {
-			res = query.Order(fmt.Sprintf("vector <-> '%s'", string(vectorJson))).Limit(k).Find(&vectorModels)
-		} else {
-			res = query.Where("parent_entry_id = ?", parentId).Order(fmt.Sprintf("vector <-> '%s'", string(vectorJson))).Limit(k).Find(&vectorModels)
+		res = p.dEntity.DB.WithContext(ctx)
+		if query.ParentId != 0 {
+			res = res.Where("parent_entry_id = ?", query.ParentId)
 		}
+		if query.Oid != 0 {
+			res = res.Where("oid = ?", query.ParentId)
+		}
+		res = res.Order(fmt.Sprintf("vector <-> '%s'", string(vectorJson))).Limit(k).Find(&vectorModels)
 		if res.Error != nil {
 			return res.Error
 		}
