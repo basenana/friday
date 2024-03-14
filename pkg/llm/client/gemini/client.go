@@ -41,12 +41,15 @@ const (
 type Gemini struct {
 	log     logger.Logger
 	baseUri string
+	key     string
 	conf    config.GeminiConfig
 	limiter *rate.Limiter
 }
 
-func NewGemini(log logger.Logger, conf config.GeminiConfig) *Gemini {
-	baseUrl := "https://generativelanguage.googleapis.com"
+func NewGemini(log logger.Logger, baseUrl, key string, conf config.GeminiConfig) *Gemini {
+	if baseUrl == "" {
+		baseUrl = "https://generativelanguage.googleapis.com"
+	}
 	defaultMl := defaultModel
 	if conf.Model == nil {
 		conf.Model = &defaultMl
@@ -61,6 +64,7 @@ func NewGemini(log logger.Logger, conf config.GeminiConfig) *Gemini {
 	return &Gemini{
 		log:     log,
 		baseUri: baseUrl,
+		key:     key,
 		conf:    conf,
 		limiter: limiter,
 	}
@@ -85,7 +89,7 @@ func (g *Gemini) request(ctx context.Context, path string, method string, data m
 			if err != nil {
 				return nil, err
 			}
-			url := fmt.Sprintf("%s?key=%s", uri, g.conf.Key)
+			url := fmt.Sprintf("%s?key=%s", uri, g.key)
 			req, err := http.NewRequest(method, url, body)
 			req.Header.Set("Content-Type", "application/json; charset=utf-8")
 

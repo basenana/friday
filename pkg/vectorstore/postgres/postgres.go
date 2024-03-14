@@ -130,10 +130,10 @@ func (p *PostgresClient) Search(ctx context.Context, query models.DocQuery, vect
 	var res *gorm.DB
 
 	res = p.dEntity.WithContext(ctx)
-	if query.ParentId == 0 {
+	if query.ParentId != 0 {
 		res = res.Where("parent_entry_id = ?", query.ParentId)
 	}
-	if query.Oid == 0 {
+	if query.Oid != 0 {
 		res = res.Where("oid = ?", query.Oid)
 	}
 	res = res.Find(&existIndexes)
