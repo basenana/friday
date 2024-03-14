@@ -17,7 +17,7 @@
 package friday
 
 import (
-	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -25,127 +25,161 @@ import (
 	"github.com/basenana/friday/pkg/models"
 )
 
-func (f *Friday) ChatWithDir(
-	ctx context.Context,
-	dirId int64,
-	history []map[string]string,
-) (dialogues []map[string]string, tokens map[string]int, err error) {
-	// search for docs
-	questions := ""
-	for _, d := range history {
-		if d["role"] == "user" {
-			questions = fmt.Sprintf("%s\n%s", questions, d["content"])
+func (f *Friday) History(history []map[string]string) *Friday {
+	f.statement.history = history
+	return f
+}
+
+func (f *Friday) SearchIn(query *models.DocQuery) *Friday {
+	f.statement.query = query
+	return f
+}
+
+func (f *Friday) Question(q string) *Friday {
+	f.statement.question = q
+	return f
+}
+
+func (f *Friday) Chat(res *ChatState) *Friday {
+	if len(f.statement.history) == 0 {
+		f.Error = errors.New("history can not be nil")
+		return f
+	}
+	if f.LLM == nil {
+		f.Error = errors.New("llm client of friday is not set")
+		return f
+	}
+
+	if f.statement.query != nil {
+		// search for docs
+		questions := ""
+		for _, d := range f.statement.history {
+			if d["role"] == "user" {
+				questions = fmt.Sprintf("%s\n%s", questions, d["content"])
+			}
+		}
+		f.searchDocs(questions)
+		if f.Error != nil {
+			return f
 		}
 	}
-	c, err := f.searchDocs(ctx, models.DocQuery{ParentId: dirId}, questions)
-	if err != nil {
-		return nil, nil, err
+	if (f.statement.history)[0]["role"] == "system" {
+		f.statement.history = f.statement.history[1:]
 	}
+	f.statement.history = append([]map[string]string{
+		{
+			"role":    "system",
+			"content": fmt.Sprintf("基于以下已知信息，简洁和专业的来回答用户的问题。答案请使用中文。 \n\n已知内容: %s", f.statement.info),
+		},
+	}, f.statement.history...)
 
-	return f.chatWithInfo(ctx, history, c)
+	return f.chat(res)
 }
 
-func (f *Friday) ChatWithDoc(
-	ctx context.Context,
-	oid int64,
-	history []map[string]string,
-) (dialogues []map[string]string, tokens map[string]int, err error) {
-	// search for docs
-	questions := ""
-	for _, d := range history {
-		if d["role"] == "user" {
-			questions = fmt.Sprintf("%s\n%s", questions, d["content"])
-		}
+func (f *Friday) chat(res *ChatState) *Friday {
+	if res == nil {
+		f.Error = errors.New("result can not be nil")
+		return f
 	}
-	c, err := f.searchDocs(ctx, models.DocQuery{ParentId: oid}, questions)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	return f.chatWithInfo(ctx, history, c)
-}
-
-func (f *Friday) chatWithInfo(ctx context.Context, history []map[string]string, info string) (dialogues []map[string]string, tokens map[string]int, err error) {
-	if history[0]["role"] == "system" {
-		history = history[1:]
-	}
-	history = append([]map[string]string{{
-		"role":    "system",
-		"content": fmt.Sprintf("基于以下已知信息，简洁和专业的来回答用户的问题。答案请使用中文。 \n\n已知内容: %s", info),
-	}}, history...)
-
-	dialogues, tokens, err = f.chat(ctx, history)
-	return
-}
-
-func (f *Friday) chat(ctx context.Context, history []map[string]string) (dialogues []map[string]string, tokens map[string]int, err error) {
-	tokens = make(map[string]int)
-	dialogues = make([]map[string]string, 0, len(history)+1)
-	copy(dialogues, history)
+	var (
+		tokens    = map[string]int{}
+		dialogues = []map[string]string{}
+	)
 
 	// If the number of dialogue rounds exceeds 2 rounds, should conclude it.
-	if len(history) >= 4 {
-		sumDialogue := make([]map[string]string, 0, len(history))
-		copy(sumDialogue, history)
+	if len(f.statement.history) >= 5 {
+		sumDialogue := make([]map[string]string, 0, len(f.statement.history))
+		copy(sumDialogue, f.statement.history)
 		sumDialogue = append(sumDialogue, map[string]string{
 			"role":    "system",
 			"content": "简要总结一下对话内容，用作后续的上下文提示 prompt，控制在 200 字以内",
 		})
-		sum, usage, e := f.LLM.Chat(ctx, sumDialogue)
+		sum, usage, e := f.LLM.Chat(f.statement.context, sumDialogue)
 		if e != nil {
-			err = e
-			return
+			f.Error = e
+			return f
 		}
 		tokens = mergeTokens(usage, tokens)
 
 		// add context prompt for dialogue
-		dialogues[0] = map[string]string{
-			"role":    "system",
-			"content": fmt.Sprintf("这是历史聊天总结作为前情提要：%s", sum["content"]),
-		}
-		dialogues = append(dialogues, history[len(history)-5:len(history)-1]...)
+		dialogues = append(dialogues, []map[string]string{
+			f.statement.history[0],
+			{
+				"role":    "system",
+				"content": fmt.Sprintf("这是历史聊天总结作为前情提要：%s", sum["content"]),
+			},
+		}...)
+		dialogues = append(dialogues, f.statement.history[len(f.statement.history)-5:len(f.statement.history)]...)
+	} else {
+		dialogues = make([]map[string]string, len(f.statement.history))
+		copy(dialogues, f.statement.history)
 	}
 
 	// go for llm
-	ans, usage, err := f.LLM.Chat(ctx, dialogues)
+	ans, usage, err := f.LLM.Chat(f.statement.context, dialogues)
 	if err != nil {
-		return
+		f.Error = err
+		return f
 	}
 	f.Log.Debugf("Chat result: %s", ans)
 	dialogues = append(dialogues, ans)
 	tokens = mergeTokens(tokens, usage)
-	return
+
+	res.Dialogues = dialogues
+	res.Tokens = tokens
+	return f
 }
 
-func (f *Friday) Question(ctx context.Context, query models.DocQuery, q string) (string, map[string]int, error) {
+func (f *Friday) Complete(res *ChatState) *Friday {
+	if res == nil {
+		f.Error = errors.New("result can not be nil")
+		return f
+	}
+	if len(f.statement.question) == 0 {
+		f.Error = errors.New("question can not be nil")
+		return f
+	}
+	if f.LLM == nil {
+		f.Error = errors.New("llm client of friday is not set")
+		return f
+	}
+
 	prompt := prompts.NewQuestionPrompt(f.Prompts[questionPromptKey])
-	c, err := f.searchDocs(ctx, query, q)
-	if err != nil {
-		return "", nil, err
-	}
-	if f.LLM != nil {
-		ans, usage, err := f.LLM.Completion(ctx, prompt, map[string]string{
-			"context":  c,
-			"question": q,
-		})
-		if err != nil {
-			return "", nil, fmt.Errorf("llm completion error: %w", err)
+	if f.statement.query != nil {
+		f.searchDocs(f.statement.question)
+		if f.Error != nil {
+			return f
 		}
-		f.Log.Debugf("Question result: %s", ans[0])
-		return ans[0], usage, nil
 	}
-	return c, nil, nil
+	ans, usage, err := f.LLM.Completion(f.statement.context, prompt, map[string]string{
+		"context":  f.statement.info,
+		"question": f.statement.question,
+	})
+	if err != nil {
+		f.Error = fmt.Errorf("llm completion error: %w", err)
+		return f
+	}
+	f.Log.Debugf("Question result: %s", ans[0])
+	res.Answer = ans[0]
+	res.Tokens = usage
+	return f
 }
 
-func (f *Friday) searchDocs(ctx context.Context, query models.DocQuery, q string) (string, error) {
+func (f *Friday) searchDocs(q string) {
 	f.Log.Debugf("vector query for %s ...", q)
-	qv, _, err := f.Embedding.VectorQuery(ctx, q)
+	qv, _, err := f.Embedding.VectorQuery(f.statement.context, q)
 	if err != nil {
-		return "", fmt.Errorf("vector embedding error: %w", err)
+		f.Error = fmt.Errorf("vector embedding error: %w", err)
+		return
 	}
-	docs, err := f.Vector.Search(ctx, query, qv, *f.VectorTopK)
+	var dq models.DocQuery
+	if f.statement.query != nil {
+		dq = *f.statement.query
+	}
+	docs, err := f.Vector.Search(f.statement.context, dq, qv, *f.VectorTopK)
 	if err != nil {
-		return "", fmt.Errorf("vector search error: %w", err)
+		f.Error = fmt.Errorf("vector search error: %w", err)
+		return
 	}
 
 	cs := []string{}
@@ -153,7 +187,8 @@ func (f *Friday) searchDocs(ctx context.Context, query models.DocQuery, q string
 		f.Log.Debugf("searched from [%s] for %s", c.Name, c.Content)
 		cs = append(cs, c.Content)
 	}
-	return strings.Join(cs, "\n"), nil
+	f.statement.info = strings.Join(cs, "\n")
+	return
 }
 
 func mergeTokens(tokens, merged map[string]int) map[string]int {

@@ -49,14 +49,165 @@ var _ = Describe("TestQuestion", func() {
 
 	Context("question", func() {
 		It("question should be succeed", func() {
-			ans, _, err := loFriday.Question(context.TODO(), models.DocQuery{}, "I am a question")
-			Expect(err).Should(BeNil())
-			Expect(ans).Should(Equal("I am an answer"))
+			res := ChatState{}
+			f := loFriday.WithContext(context.TODO()).SearchIn(&models.DocQuery{}).Question("I am a question").Complete(&res)
+			Expect(f.Error).Should(BeNil())
+			Expect(res.Answer).Should(Equal("I am an answer"))
 		})
 		It("searchDocs should be succeed", func() {
-			ans, err := loFriday.searchDocs(context.TODO(), models.DocQuery{}, "I am a question")
-			Expect(err).Should(BeNil())
-			Expect(ans).Should(Equal("There are logs of questions"))
+			f := loFriday.WithContext(context.TODO())
+			f.searchDocs("I am a question")
+			Expect(f.Error).Should(BeNil())
+			Expect(f.statement.info).Should(Equal("There are logs of questions"))
+		})
+	})
+
+	Context("chat", func() {
+		It("chat for first time", func() {
+			history := []map[string]string{{
+				"role":    "user",
+				"content": "Who are you?",
+			}}
+			res := ChatState{}
+			f := loFriday.WithContext(context.TODO()).SearchIn(&models.DocQuery{ParentId: 1}).History(history).Chat(&res)
+			Expect(f.Error).Should(BeNil())
+			Expect(len(res.Dialogues)).Should(Equal(3))
+			Expect(res.Dialogues[0]["role"]).Should(Equal("system"))
+			Expect(res.Dialogues[0]["content"]).Should(Equal("基于以下已知信息，简洁和专业的来回答用户的问题。答案请使用中文。 \n\n已知内容: There are logs of questions"))
+			Expect(res.Dialogues[1]["role"]).Should(Equal("user"))
+			Expect(res.Dialogues[2]["role"]).Should(Equal("assistant"))
+		})
+		It("chat for second time", func() {
+			history := []map[string]string{
+				{
+					"role":    "system",
+					"content": "基于以下已知信息，简洁和专业的来回答用户的问题。答案请使用中文。",
+				},
+				{
+					"role":    "user",
+					"content": "Who are you?",
+				},
+				{
+					"role":    "assistant",
+					"content": "I am an answer",
+				},
+				{
+					"role":    "user",
+					"content": "abc",
+				},
+			}
+			res := ChatState{}
+			f := loFriday.WithContext(context.TODO()).SearchIn(&models.DocQuery{ParentId: 1}).History(history).Chat(&res)
+			Expect(f.Error).Should(BeNil())
+			Expect(len(res.Dialogues)).Should(Equal(5))
+			Expect(res.Dialogues[0]["role"]).Should(Equal("system"))
+			Expect(res.Dialogues[0]["content"]).Should(Equal("基于以下已知信息，简洁和专业的来回答用户的问题。答案请使用中文。 \n\n已知内容: There are logs of questions"))
+			Expect(res.Dialogues[1]["role"]).Should(Equal("user"))
+			Expect(res.Dialogues[2]["role"]).Should(Equal("assistant"))
+			Expect(res.Dialogues[3]["role"]).Should(Equal("user"))
+			Expect(res.Dialogues[4]["role"]).Should(Equal("assistant"))
+		})
+		It("chat for three times", func() {
+			history := []map[string]string{
+				{
+					"role":    "system",
+					"content": "基于以下已知信息，简洁和专业的来回答用户的问题。答案请使用中文。",
+				},
+				{
+					"role":    "user",
+					"content": "one",
+				},
+				{
+					"role":    "assistant",
+					"content": "I am an answer",
+				},
+				{
+					"role":    "user",
+					"content": "two",
+				},
+				{
+					"role":    "assistant",
+					"content": "I am an answer",
+				},
+				{
+					"role":    "user",
+					"content": "three",
+				},
+			}
+			res := ChatState{}
+			f := loFriday.WithContext(context.TODO()).SearchIn(&models.DocQuery{ParentId: 1}).History(history).Chat(&res)
+			Expect(f.Error).Should(BeNil())
+			Expect(len(res.Dialogues)).Should(Equal(8))
+			Expect(res.Dialogues[0]["role"]).Should(Equal("system"))
+			Expect(res.Dialogues[0]["content"]).Should(Equal("基于以下已知信息，简洁和专业的来回答用户的问题。答案请使用中文。 \n\n已知内容: There are logs of questions"))
+			Expect(res.Dialogues[1]["role"]).Should(Equal("system"))
+			Expect(res.Dialogues[1]["content"]).Should(Equal("这是历史聊天总结作为前情提要：I am an answer"))
+			Expect(res.Dialogues[2]["role"]).Should(Equal("user"))
+			Expect(res.Dialogues[2]["content"]).Should(Equal("one"))
+			Expect(res.Dialogues[3]["role"]).Should(Equal("assistant"))
+			Expect(res.Dialogues[4]["role"]).Should(Equal("user"))
+			Expect(res.Dialogues[4]["content"]).Should(Equal("two"))
+			Expect(res.Dialogues[5]["role"]).Should(Equal("assistant"))
+			Expect(res.Dialogues[6]["role"]).Should(Equal("user"))
+			Expect(res.Dialogues[6]["content"]).Should(Equal("three"))
+			Expect(res.Dialogues[7]["role"]).Should(Equal("assistant"))
+		})
+		It("chat for four times", func() {
+			history := []map[string]string{
+				{
+					"role":    "system",
+					"content": "基于以下已知信息，简洁和专业的来回答用户的问题。答案请使用中文。",
+				},
+				{
+					"role":    "system",
+					"content": "这是历史聊天总结作为前情提要：I am an answer",
+				},
+				{
+					"role":    "user",
+					"content": "one",
+				},
+				{
+					"role":    "assistant",
+					"content": "I am an answer",
+				},
+				{
+					"role":    "user",
+					"content": "two",
+				},
+				{
+					"role":    "assistant",
+					"content": "I am an answer",
+				},
+				{
+					"role":    "user",
+					"content": "three",
+				},
+				{
+					"role":    "assistant",
+					"content": "I am an answer",
+				},
+				{
+					"role":    "user",
+					"content": "four",
+				},
+			}
+			res := ChatState{}
+			f := loFriday.WithContext(context.TODO()).SearchIn(&models.DocQuery{ParentId: 1}).History(history).Chat(&res)
+			Expect(f.Error).Should(BeNil())
+			Expect(len(res.Dialogues)).Should(Equal(8))
+			Expect(res.Dialogues[0]["role"]).Should(Equal("system"))
+			Expect(res.Dialogues[0]["content"]).Should(Equal("基于以下已知信息，简洁和专业的来回答用户的问题。答案请使用中文。 \n\n已知内容: There are logs of questions"))
+			Expect(res.Dialogues[1]["role"]).Should(Equal("system"))
+			Expect(res.Dialogues[1]["content"]).Should(Equal("这是历史聊天总结作为前情提要：I am an answer"))
+			Expect(res.Dialogues[2]["role"]).Should(Equal("user"))
+			Expect(res.Dialogues[2]["content"]).Should(Equal("two"))
+			Expect(res.Dialogues[3]["role"]).Should(Equal("assistant"))
+			Expect(res.Dialogues[4]["role"]).Should(Equal("user"))
+			Expect(res.Dialogues[4]["content"]).Should(Equal("three"))
+			Expect(res.Dialogues[5]["role"]).Should(Equal("assistant"))
+			Expect(res.Dialogues[6]["role"]).Should(Equal("user"))
+			Expect(res.Dialogues[6]["content"]).Should(Equal("four"))
+			Expect(res.Dialogues[7]["role"]).Should(Equal("assistant"))
 		})
 	})
 })
@@ -101,5 +252,5 @@ func (f FakeQuestionLLM) Completion(ctx context.Context, prompt prompts.PromptTe
 }
 
 func (f FakeQuestionLLM) Chat(ctx context.Context, history []map[string]string) (answers map[string]string, tokens map[string]int, err error) {
-	return map[string]string{"content": "I am an answer"}, nil, nil
+	return map[string]string{"role": "assistant", "content": "I am an answer"}, nil, nil
 }

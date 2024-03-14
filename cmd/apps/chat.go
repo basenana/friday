@@ -18,36 +18,57 @@ package apps
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
 
 	"github.com/basenana/friday/pkg/friday"
+	"github.com/basenana/friday/pkg/models"
 )
 
-var QuestionCmd = &cobra.Command{
-	Use:   "question",
-	Short: "question base on knowledge",
+var ChatCmd = &cobra.Command{
+	Use:   "chat",
+	Short: "chat with llm base on knowledge",
 	Run: func(cmd *cobra.Command, args []string) {
-		question := fmt.Sprint(strings.Join(args, " "))
+		if len(args) <= 1 {
+			panic("dirId and history is needed.")
+		}
+		dirIdStr := args[0]
+		dirId, err := strconv.Atoi(dirIdStr)
+		if err != nil {
+			panic(err)
+		}
 
-		if err := run(question); err != nil {
+		historyStr := fmt.Sprint(strings.Join(args[1:], " "))
+
+		history := make([]map[string]string, 0)
+		err = json.Unmarshal([]byte(historyStr), &history)
+		if err != nil {
+			panic(err)
+		}
+
+		if err := chat(int64(dirId), history); err != nil {
 			panic(err)
 		}
 	},
 }
 
-func run(question string) error {
-	f := friday.Fri.WithContext(context.TODO()).Question(question)
+func chat(dirId int64, history []map[string]string) error {
+	f := friday.Fri.WithContext(context.TODO()).History(history).SearchIn(&models.DocQuery{
+		ParentId: dirId,
+	})
 	res := &friday.ChatState{}
-	f = f.Complete(res)
+	f = f.Chat(res)
 	if f.Error != nil {
 		return f.Error
 	}
 
-	fmt.Println("Answer: ")
-	fmt.Println(res.Answer)
+	fmt.Println("Dialogues: ")
+	d, _ := json.Marshal(res.Dialogues)
+	fmt.Println(string(d))
 	fmt.Printf("Usage: %v", res.Tokens)
 	return nil
 }

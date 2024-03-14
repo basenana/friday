@@ -32,13 +32,13 @@ var WeChatCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		ps := fmt.Sprint(strings.Join(args, " "))
 
-		if err := chat(ps); err != nil {
+		if err := wechat(ps); err != nil {
 			panic(err)
 		}
 	},
 }
 
-func chat(ps string) error {
+func wechat(ps string) error {
 	a, usage, err := friday.Fri.ChatConclusionFromFile(context.TODO(), ps)
 	if err != nil {
 		return err

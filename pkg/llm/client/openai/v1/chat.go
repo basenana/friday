@@ -45,7 +45,7 @@ func (o *OpenAIV1) chat(ctx context.Context, history []map[string]string) (map[s
 
 	data := map[string]interface{}{
 		"model":             *o.conf.Model,
-		"messages":          []interface{}{history},
+		"messages":          history,
 		"max_tokens":        *o.conf.MaxReturnToken,
 		"temperature":       *o.conf.Temperature,
 		"top_p":             1,
