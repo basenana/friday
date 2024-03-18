@@ -54,6 +54,7 @@ func (f FakeKeyWordsLLM) Completion(ctx context.Context, prompt prompts.PromptTe
 	return []string{"a, b, c"}, nil, nil
 }
 
-func (f FakeKeyWordsLLM) Chat(ctx context.Context, history []map[string]string) (answers map[string]string, tokens map[string]int, err error) {
-	return map[string]string{"content": "a, b, c"}, nil, nil
+func (f FakeKeyWordsLLM) Chat(ctx context.Context, stream bool, history []map[string]string, answers chan<- map[string]string) (tokens map[string]int, err error) {
+	answers <- map[string]string{"content": "a, b, c"}
+	return nil, nil
 }

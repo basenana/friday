@@ -34,5 +34,5 @@ type LLM interface {
 			  {"role": "assistant", "content": "Today is Monday"}
 		 ]
 	*/
-	Chat(ctx context.Context, history []map[string]string) (answers map[string]string, tokens map[string]int, err error)
+	Chat(ctx context.Context, stream bool, history []map[string]string, answers chan<- map[string]string) (tokens map[string]int, err error)
 }

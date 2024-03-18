@@ -22,8 +22,8 @@ import (
 	"fmt"
 )
 
-func (g *Gemini) Chat(ctx context.Context, history []map[string]string) (map[string]string, map[string]int, error) {
-	path := fmt.Sprintf("v1beta/models/%s:generateContent", *g.conf.Model)
+func (g *Gemini) Chat(ctx context.Context, stream bool, history []map[string]string, answers chan<- map[string]string) (tokens map[string]int, err error) {
+	path := fmt.Sprintf("v1beta/models/%s:streamGenerateContent", *g.conf.Model)
 
 	contents := make([]map[string]any, 0)
 	for _, hs := range history {
@@ -35,25 +35,38 @@ func (g *Gemini) Chat(ctx context.Context, history []map[string]string) (map[str
 		})
 	}
 
-	respBody, err := g.request(ctx, path, "POST", map[string]any{"contents": contents})
+	buf := make(chan []byte)
+	go func() {
+		defer close(buf)
+		err = g.request(ctx, stream, path, "POST", map[string]any{"contents": contents}, buf)
+	}()
 	if err != nil {
-		return nil, nil, err
+		return
 	}
 
-	var res ChatResult
-	err = json.Unmarshal(respBody, &res)
-	if err != nil {
-		return nil, nil, err
-	}
-	if len(res.Candidates) == 0 && res.PromptFeedback.BlockReason != "" {
-		g.log.Errorf("gemini response: %s ", string(respBody))
-		return nil, nil, fmt.Errorf("gemini api block because of %s", res.PromptFeedback.BlockReason)
-	}
-	ans := make(map[string]string)
-	for _, c := range res.Candidates {
-		for _, t := range c.Content.Parts {
-			ans[c.Content.Role] = t.Text
+	for line := range buf {
+		var res ChatResult
+		err = json.Unmarshal(line, &res)
+		if err != nil {
+			return nil, err
+		}
+		if len(res.Candidates) == 0 && res.PromptFeedback.BlockReason != "" {
+			g.log.Errorf("gemini response: %s ", string(line))
+			return nil, fmt.Errorf("gemini api block because of %s", res.PromptFeedback.BlockReason)
+		}
+		ans := make(map[string]string)
+		for _, c := range res.Candidates {
+			for _, t := range c.Content.Parts {
+				ans[c.Content.Role] = t.Text
+			}
+		}
+		select {
+		case <-ctx.Done():
+			err = fmt.Errorf("context timeout in gemini chat")
+			return
+		case answers <- ans:
+			continue
 		}
 	}
-	return ans, nil, err
+	return nil, err
 }
