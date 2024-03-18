@@ -94,38 +94,48 @@ func (f *Friday) chat(res *ChatState) *Friday {
 			"role":    "system",
 			"content": "简要总结一下对话内容，用作后续的上下文提示 prompt，控制在 200 字以内",
 		})
-		sum, usage, e := f.LLM.Chat(f.statement.context, sumDialogue)
-		if e != nil {
-			f.Error = e
+		var (
+			sumBuf = make(chan map[string]string)
+			sum    = make(map[string]string)
+			usage  = make(map[string]int)
+			err    error
+		)
+		defer close(sumBuf)
+		go func() {
+			usage, err = f.LLM.Chat(f.statement.context, false, sumDialogue, sumBuf)
+		}()
+		if err != nil {
+			f.Error = err
 			return f
 		}
 		tokens = mergeTokens(usage, tokens)
-
-		// add context prompt for dialogue
-		dialogues = append(dialogues, []map[string]string{
-			f.statement.history[0],
-			{
-				"role":    "system",
-				"content": fmt.Sprintf("这是历史聊天总结作为前情提要：%s", sum["content"]),
-			},
-		}...)
-		dialogues = append(dialogues, f.statement.history[len(f.statement.history)-5:len(f.statement.history)]...)
+		select {
+		case <-f.statement.context.Done():
+			return f
+		case sum = <-sumBuf:
+			// add context prompt for dialogue
+			dialogues = append(dialogues, []map[string]string{
+				f.statement.history[0],
+				{
+					"role":    "system",
+					"content": fmt.Sprintf("这是历史聊天总结作为前情提要：%s", sum["content"]),
+				},
+			}...)
+			dialogues = append(dialogues, f.statement.history[len(f.statement.history)-5:len(f.statement.history)]...)
+		}
 	} else {
 		dialogues = make([]map[string]string, len(f.statement.history))
 		copy(dialogues, f.statement.history)
 	}
 
 	// go for llm
-	ans, usage, err := f.LLM.Chat(f.statement.context, dialogues)
+	usage, err := f.LLM.Chat(f.statement.context, true, dialogues, res.Response)
 	if err != nil {
 		f.Error = err
 		return f
 	}
-	f.Log.Debugf("Chat result: %s", ans)
-	dialogues = append(dialogues, ans)
 	tokens = mergeTokens(tokens, usage)
 
-	res.Dialogues = dialogues
 	res.Tokens = tokens
 	return f
 }
@@ -184,7 +194,7 @@ func (f *Friday) searchDocs(q string) {
 
 	cs := []string{}
 	for _, c := range docs {
-		f.Log.Debugf("searched from [%s] for %s", c.Name, c.Content)
+		//f.Log.Debugf("searched from [%s] for %s", c.Name, c.Content)
 		cs = append(cs, c.Content)
 	}
 	f.statement.info = strings.Join(cs, "\n")

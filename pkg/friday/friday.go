@@ -74,9 +74,9 @@ type Statement struct {
 }
 
 type ChatState struct {
-	Dialogues []map[string]string // dialogue result for chat
-	Answer    string              // answer result for question
-	Tokens    map[string]int
+	Response chan map[string]string // dialogue result for chat
+	Answer   string                 // answer result for question
+	Tokens   map[string]int
 }
 
 type IngestState struct {

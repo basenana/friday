@@ -106,7 +106,7 @@ func (o *GLM) Completion(ctx context.Context, prompt prompts.PromptTemplate, par
 }
 
 // todo: not supported
-func (o *GLM) Chat(ctx context.Context, history []map[string]string) (map[string]string, map[string]int, error) {
+func (o *GLM) Chat(ctx context.Context, stream bool, history []map[string]string, answers chan<- map[string]string) (map[string]int, error) {
 	path := ""
 
 	data := map[string]interface{}{
@@ -119,13 +119,13 @@ func (o *GLM) Chat(ctx context.Context, history []map[string]string) (map[string
 
 	respBody, err := o.request(path, "POST", bytes.NewBuffer(postBody))
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	var res CompletionResult
 	err = json.Unmarshal(respBody, &res)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	return map[string]string{"content": res.Response}, nil, err
+	return nil, err
 }

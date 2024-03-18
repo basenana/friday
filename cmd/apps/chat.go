@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -60,15 +61,21 @@ func chat(dirId int64, history []map[string]string) error {
 	f := friday.Fri.WithContext(context.TODO()).History(history).SearchIn(&models.DocQuery{
 		ParentId: dirId,
 	})
-	res := &friday.ChatState{}
-	f = f.Chat(res)
+	resp := make(chan map[string]string)
+	res := &friday.ChatState{
+		Response: resp,
+	}
+	go func() {
+		f = f.Chat(res)
+		close(resp)
+	}()
 	if f.Error != nil {
 		return f.Error
 	}
 
 	fmt.Println("Dialogues: ")
-	d, _ := json.Marshal(res.Dialogues)
-	fmt.Println(string(d))
-	fmt.Printf("Usage: %v", res.Tokens)
+	for line := range res.Response {
+		fmt.Printf("%v: %v\n", time.Now().Format("15:04:05"), line)
+	}
 	return nil
 }
