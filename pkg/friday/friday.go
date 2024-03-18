@@ -17,8 +17,11 @@
 package friday
 
 import (
+	"context"
+
 	"github.com/basenana/friday/pkg/embedding"
 	"github.com/basenana/friday/pkg/llm"
+	"github.com/basenana/friday/pkg/models"
 	"github.com/basenana/friday/pkg/spliter"
 	"github.com/basenana/friday/pkg/utils/logger"
 	"github.com/basenana/friday/pkg/vectorstore"
@@ -37,7 +40,9 @@ var (
 )
 
 type Friday struct {
-	Log logger.Logger
+	Log       logger.Logger
+	Error     error
+	statement Statement
 
 	LimitToken int
 
@@ -50,4 +55,45 @@ type Friday struct {
 	VectorTopK *int
 
 	Spliter spliter.Spliter
+}
+
+type Statement struct {
+	context context.Context
+
+	// for chat
+	history  []map[string]string
+	question string
+	query    *models.DocQuery
+	info     string
+
+	// for ingest
+	file        *models.File // a whole file providing models.File
+	elementFile *string      // a whole file given an element-style origin file
+	originFile  *string      // a whole file given an origin file
+	elements    []models.Element
+}
+
+type ChatState struct {
+	Response chan map[string]string // dialogue result for chat
+	Answer   string                 // answer result for question
+	Tokens   map[string]int
+}
+
+type IngestState struct {
+	Tokens map[string]int
+}
+
+func (f *Friday) WithContext(ctx context.Context) *Friday {
+	t := &Friday{
+		Log:        f.Log,
+		statement:  Statement{context: ctx},
+		LimitToken: f.LimitToken,
+		LLM:        f.LLM,
+		Prompts:    f.Prompts,
+		Embedding:  f.Embedding,
+		Vector:     f.Vector,
+		VectorTopK: f.VectorTopK,
+		Spliter:    f.Spliter,
+	}
+	return t
 }

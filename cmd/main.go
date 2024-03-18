@@ -47,6 +47,7 @@ func init() {
 	}
 
 	RootCmd.AddCommand(apps.QuestionCmd)
+	RootCmd.AddCommand(apps.ChatCmd)
 	RootCmd.AddCommand(apps.IngestCmd)
 	RootCmd.AddCommand(apps.WeChatCmd)
 	RootCmd.AddCommand(apps.SummaryCmd)

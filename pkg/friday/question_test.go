@@ -49,14 +49,154 @@ var _ = Describe("TestQuestion", func() {
 
 	Context("question", func() {
 		It("question should be succeed", func() {
-			ans, _, err := loFriday.Question(context.TODO(), 0, "I am a question")
-			Expect(err).Should(BeNil())
-			Expect(ans).Should(Equal("I am an answer"))
+			res := ChatState{}
+			f := loFriday.WithContext(context.TODO()).SearchIn(&models.DocQuery{}).Question("I am a question").Complete(&res)
+			Expect(f.Error).Should(BeNil())
+			Expect(res.Answer).Should(Equal("I am an answer"))
 		})
 		It("searchDocs should be succeed", func() {
-			ans, err := loFriday.searchDocs(context.TODO(), 0, "I am a question")
-			Expect(err).Should(BeNil())
-			Expect(ans).Should(Equal("There are logs of questions"))
+			f := loFriday.WithContext(context.TODO())
+			f.searchDocs("I am a question")
+			Expect(f.Error).Should(BeNil())
+			Expect(f.statement.info).Should(Equal("There are logs of questions"))
+		})
+	})
+
+	Context("chat", func() {
+		It("chat for first time", func() {
+			history := []map[string]string{{
+				"role":    "user",
+				"content": "Who are you?",
+			}}
+			var (
+				res = ChatState{
+					Response: make(chan map[string]string),
+				}
+				f *Friday
+			)
+			go func() {
+				f = loFriday.WithContext(context.TODO()).SearchIn(&models.DocQuery{ParentId: 1}).History(history).Chat(&res)
+				close(res.Response)
+			}()
+			resp := <-res.Response
+			Expect(f.Error).Should(BeNil())
+			Expect(len(resp)).Should(Equal(2))
+			Expect(resp["role"]).Should(Equal("assistant"))
+		})
+		It("chat for second time", func() {
+			history := []map[string]string{
+				{
+					"role":    "user",
+					"content": "Who are you?",
+				},
+				{
+					"role":    "assistant",
+					"content": "I am an answer",
+				},
+				{
+					"role":    "user",
+					"content": "abc",
+				},
+			}
+			var (
+				res = ChatState{
+					Response: make(chan map[string]string),
+				}
+				f *Friday
+			)
+			go func() {
+				f = loFriday.WithContext(context.TODO()).SearchIn(&models.DocQuery{ParentId: 1}).History(history).Chat(&res)
+				close(res.Response)
+			}()
+			resp := <-res.Response
+			Expect(f.Error).Should(BeNil())
+			Expect(len(resp)).Should(Equal(2))
+			Expect(resp["role"]).Should(Equal("assistant"))
+		})
+		It("chat for three times", func() {
+			history := []map[string]string{
+				{
+					"role":    "user",
+					"content": "one",
+				},
+				{
+					"role":    "assistant",
+					"content": "I am an answer",
+				},
+				{
+					"role":    "user",
+					"content": "two",
+				},
+				{
+					"role":    "assistant",
+					"content": "I am an answer",
+				},
+				{
+					"role":    "user",
+					"content": "three",
+				},
+			}
+			var (
+				res = ChatState{
+					Response: make(chan map[string]string),
+				}
+				f *Friday
+			)
+			go func() {
+				f = loFriday.WithContext(context.TODO()).SearchIn(&models.DocQuery{ParentId: 1}).History(history).Chat(&res)
+				close(res.Response)
+			}()
+			resp := <-res.Response
+
+			Expect(f.Error).Should(BeNil())
+			Expect(len(resp)).Should(Equal(2))
+			Expect(resp["role"]).Should(Equal("assistant"))
+		})
+		It("chat for four times", func() {
+			history := []map[string]string{
+				{
+					"role":    "user",
+					"content": "one",
+				},
+				{
+					"role":    "assistant",
+					"content": "I am an answer",
+				},
+				{
+					"role":    "user",
+					"content": "two",
+				},
+				{
+					"role":    "assistant",
+					"content": "I am an answer",
+				},
+				{
+					"role":    "user",
+					"content": "three",
+				},
+				{
+					"role":    "assistant",
+					"content": "I am an answer",
+				},
+				{
+					"role":    "user",
+					"content": "four",
+				},
+			}
+			var (
+				res = ChatState{
+					Response: make(chan map[string]string),
+				}
+				f *Friday
+			)
+			go func() {
+				f = loFriday.WithContext(context.TODO()).SearchIn(&models.DocQuery{ParentId: 1}).History(history).Chat(&res)
+				close(res.Response)
+			}()
+			resp := <-res.Response
+			Expect(f.Error).Should(BeNil())
+			Expect(len(resp)).Should(Equal(2))
+			Expect(resp["role"]).Should(Equal("assistant"))
 		})
 	})
 })
@@ -69,7 +209,7 @@ func (f FakeQuestionStore) Store(ctx context.Context, element *models.Element, e
 	return nil
 }
 
-func (f FakeQuestionStore) Search(ctx context.Context, parentId int64, vectors []float32, k int) ([]*models.Doc, error) {
+func (f FakeQuestionStore) Search(ctx context.Context, query models.DocQuery, vectors []float32, k int) ([]*models.Doc, error) {
 	return []*models.Doc{{
 		Id:      "abc",
 		Content: "There are logs of questions",
@@ -100,6 +240,7 @@ func (f FakeQuestionLLM) Completion(ctx context.Context, prompt prompts.PromptTe
 	return []string{"I am an answer"}, nil, nil
 }
 
-func (f FakeQuestionLLM) Chat(ctx context.Context, history []map[string]string, prompt prompts.PromptTemplate, parameters map[string]string) ([]string, map[string]int, error) {
-	return []string{"I am an answer"}, nil, nil
+func (f FakeQuestionLLM) Chat(ctx context.Context, stream bool, history []map[string]string, answers chan<- map[string]string) (tokens map[string]int, err error) {
+	answers <- map[string]string{"role": "assistant", "content": "I am an answer"}
+	return nil, nil
 }
