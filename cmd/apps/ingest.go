@@ -41,10 +41,12 @@ var IngestCmd = &cobra.Command{
 }
 
 func ingest(ps string) error {
-	usage, err := friday.Fri.IngestFromOriginFile(context.TODO(), ps)
-	if err != nil {
-		return err
+	f := friday.Fri.WithContext(context.TODO()).OriginFile(&ps)
+	res := &friday.IngestState{}
+	f = f.Ingest(res)
+	if f.Error != nil {
+		return f.Error
 	}
-	fmt.Printf("Usage: %v", usage)
+	fmt.Printf("Usage: %v", res.Tokens)
 	return nil
 }

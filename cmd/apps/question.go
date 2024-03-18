@@ -39,12 +39,15 @@ var QuestionCmd = &cobra.Command{
 }
 
 func run(question string) error {
-	a, usage, err := friday.Fri.Question(context.TODO(), 0, question)
-	if err != nil {
-		return err
+	f := friday.Fri.WithContext(context.TODO()).Question(question)
+	res := &friday.ChatState{}
+	f = f.Complete(res)
+	if f.Error != nil {
+		return f.Error
 	}
+
 	fmt.Println("Answer: ")
-	fmt.Println(a)
-	fmt.Printf("Usage: %v", usage)
+	fmt.Println(res.Answer)
+	fmt.Printf("Usage: %v", res.Tokens)
 	return nil
 }
