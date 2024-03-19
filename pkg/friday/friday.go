@@ -20,6 +20,7 @@ import (
 	"context"
 
 	"github.com/basenana/friday/pkg/embedding"
+	"github.com/basenana/friday/pkg/friday/summary"
 	"github.com/basenana/friday/pkg/llm"
 	"github.com/basenana/friday/pkg/models"
 	"github.com/basenana/friday/pkg/spliter"
@@ -66,17 +67,33 @@ type Statement struct {
 	query    *models.DocQuery
 	info     string
 
-	// for ingest
+	// for ingest or summary
 	file        *models.File // a whole file providing models.File
 	elementFile *string      // a whole file given an element-style origin file
 	originFile  *string      // a whole file given an origin file
 	elements    []models.Element
+
+	// for keywords
+	content string
+
+	// for summary
+	summaryType summary.SummaryType
 }
 
 type ChatState struct {
 	Response chan map[string]string // dialogue result for chat
 	Answer   string                 // answer result for question
 	Tokens   map[string]int
+}
+
+type KeywordsState struct {
+	Keywords []string
+	Tokens   map[string]int
+}
+
+type SummaryState struct {
+	Summary map[string]string
+	Tokens  map[string]int
 }
 
 type IngestState struct {
