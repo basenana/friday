@@ -47,12 +47,13 @@ func init() {
 }
 
 func summary(ps string) error {
-	a, usage, err := friday.Fri.SummaryFromOriginFile(context.TODO(), ps, fridaysummary.SummaryType(summaryType))
-	if err != nil {
-		return err
+	res := friday.SummaryState{}
+	f := friday.Fri.WithContext(context.TODO()).OriginFile(&ps).OfType(fridaysummary.SummaryType(summaryType)).Summary(&res)
+	if f.Error != nil {
+		return f.Error
 	}
 	fmt.Println("Answer: ")
-	fmt.Println(a)
-	fmt.Printf("Usage: %v", usage)
+	fmt.Println(res.Summary)
+	fmt.Printf("Usage: %v", res.Tokens)
 	return nil
 }

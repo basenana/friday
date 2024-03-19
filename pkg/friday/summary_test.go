@@ -55,16 +55,18 @@ var _ = Describe("TestStuffSummary", func() {
 
 	Context("summary", func() {
 		It("summary should be succeed", func() {
-			summary, _, err := loFriday.Summary(context.TODO(), elements, summaryType)
-			Expect(err).Should(BeNil())
-			Expect(summary).Should(Equal(map[string]string{
+			res := SummaryState{}
+			f := loFriday.WithContext(context.TODO()).Element(elements).OfType(summaryType).Summary(&res)
+			Expect(f.Error).Should(BeNil())
+			Expect(res.Summary).Should(Equal(map[string]string{
 				"test-title": "a b c",
 			}))
 		})
 		It("SummaryFromFile should be succeed", func() {
-			summary, _, err := loFriday.SummaryFromFile(context.TODO(), file, summaryType)
-			Expect(err).Should(BeNil())
-			Expect(summary).Should(Equal(map[string]string{
+			res := SummaryState{}
+			f := loFriday.WithContext(context.TODO()).File(&file).OfType(summaryType).Summary(&res)
+			Expect(f.Error).Should(BeNil())
+			Expect(res.Summary).Should(Equal(map[string]string{
 				"test-file": "a b c",
 			}))
 		})
@@ -97,16 +99,18 @@ var _ = Describe("TestMapReduceSummary", func() {
 
 	Context("summary", func() {
 		It("summary should be succeed", func() {
-			summary, _, err := loFriday.Summary(context.TODO(), elements, summaryType)
-			Expect(err).Should(BeNil())
-			Expect(summary).Should(Equal(map[string]string{
+			res := SummaryState{}
+			f := loFriday.WithContext(context.TODO()).Element(elements).OfType(summaryType).Summary(&res)
+			Expect(f.Error).Should(BeNil())
+			Expect(res.Summary).Should(Equal(map[string]string{
 				"test-title": "a b c",
 			}))
 		})
 		It("SummaryFromFile should be succeed", func() {
-			summary, _, err := loFriday.SummaryFromFile(context.TODO(), file, summaryType)
-			Expect(err).Should(BeNil())
-			Expect(summary).Should(Equal(map[string]string{
+			res := SummaryState{}
+			f := loFriday.WithContext(context.TODO()).File(&file).OfType(summaryType).Summary(&res)
+			Expect(f.Error).Should(BeNil())
+			Expect(res.Summary).Should(Equal(map[string]string{
 				"test-file": "a b c",
 			}))
 		})
@@ -138,11 +142,13 @@ var _ = Describe("TestRefineSummary", func() {
 
 	Context("summary", func() {
 		It("summary should be succeed", func() {
-			_, _, _ = loFriday.Summary(context.TODO(), elements, summaryType)
+			res := SummaryState{}
+			_ = loFriday.WithContext(context.TODO()).Element(elements).OfType(summaryType).Summary(&res)
 			// todo
 		})
 		It("SummaryFromFile should be succeed", func() {
-			_, _, _ = loFriday.SummaryFromFile(context.TODO(), file, summaryType)
+			res := SummaryState{}
+			_ = loFriday.WithContext(context.TODO()).File(&file).OfType(summaryType).Summary(&res)
 			// todo
 		})
 	})
