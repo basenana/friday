@@ -38,12 +38,13 @@ var KeywordsCmd = &cobra.Command{
 }
 
 func keywords(content string) error {
-	a, usage, err := friday.Fri.Keywords(context.TODO(), content)
-	if err != nil {
-		return err
+	res := friday.KeywordsState{}
+	f := friday.Fri.WithContext(context.TODO()).Content(content).Keywords(&res)
+	if f.Error != nil {
+		return f.Error
 	}
 	fmt.Println("Answer: ")
-	fmt.Println(a)
-	fmt.Printf("Usage: %v", usage)
+	fmt.Println(res.Keywords)
+	fmt.Printf("Usage: %v", res.Tokens)
 	return nil
 }

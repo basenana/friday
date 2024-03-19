@@ -39,9 +39,10 @@ var _ = Describe("TestKeywords", func() {
 
 	Context("keywords", func() {
 		It("keywords should be succeed", func() {
-			keywords, _, err := loFriday.Keywords(context.TODO(), "test")
-			Expect(err).Should(BeNil())
-			Expect(keywords).Should(Equal([]string{"a", "b", "c"}))
+			res := KeywordsState{}
+			f := loFriday.WithContext(context.TODO()).Content("test").Keywords(&res)
+			Expect(f.Error).Should(BeNil())
+			Expect(res.Keywords).Should(Equal([]string{"a", "b", "c"}))
 		})
 	})
 })
