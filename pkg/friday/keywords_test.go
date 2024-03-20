@@ -51,6 +51,18 @@ type FakeKeyWordsLLM struct{}
 
 var _ llm.LLM = &FakeKeyWordsLLM{}
 
+func (f FakeKeyWordsLLM) GetUserModel() string {
+	return "user"
+}
+
+func (f FakeKeyWordsLLM) GetSystemModel() string {
+	return "system"
+}
+
+func (f FakeKeyWordsLLM) GetAssistantModel() string {
+	return "assistant"
+}
+
 func (f FakeKeyWordsLLM) Completion(ctx context.Context, prompt prompts.PromptTemplate, parameters map[string]string) ([]string, map[string]int, error) {
 	return []string{"a, b, c"}, nil, nil
 }

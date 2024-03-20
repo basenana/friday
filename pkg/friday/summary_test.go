@@ -158,6 +158,18 @@ type FakeSummaryLLM struct{}
 
 var _ llm.LLM = &FakeSummaryLLM{}
 
+func (f FakeSummaryLLM) GetUserModel() string {
+	return "user"
+}
+
+func (f FakeSummaryLLM) GetSystemModel() string {
+	return "system"
+}
+
+func (f FakeSummaryLLM) GetAssistantModel() string {
+	return "assistant"
+}
+
 func (f FakeSummaryLLM) Completion(ctx context.Context, prompt prompts.PromptTemplate, parameters map[string]string) ([]string, map[string]int, error) {
 	return []string{"a b c"}, nil, nil
 }
