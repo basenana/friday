@@ -236,6 +236,18 @@ type FakeQuestionLLM struct{}
 
 var _ llm.LLM = &FakeQuestionLLM{}
 
+func (f FakeQuestionLLM) GetUserModel() string {
+	return "user"
+}
+
+func (f FakeQuestionLLM) GetSystemModel() string {
+	return "system"
+}
+
+func (f FakeQuestionLLM) GetAssistantModel() string {
+	return "assistant"
+}
+
 func (f FakeQuestionLLM) Completion(ctx context.Context, prompt prompts.PromptTemplate, parameters map[string]string) ([]string, map[string]int, error) {
 	return []string{"I am an answer"}, nil, nil
 }
