@@ -105,7 +105,6 @@ func (f *Friday) chat(res *ChatState) *Friday {
 			err    error
 		)
 		go func() {
-			defer close(sumBuf)
 			_, err = f.LLM.Chat(f.statement.context, false, sumDialogue, sumBuf)
 			if err != nil {
 				f.Error = err
@@ -114,6 +113,7 @@ func (f *Friday) chat(res *ChatState) *Friday {
 		}()
 		select {
 		case <-f.statement.context.Done():
+			f.Error = errors.New("context canceled")
 			return f
 		case sum = <-sumBuf:
 			// add context prompt for dialogue
