@@ -42,6 +42,10 @@ func (f *Friday) Question(q string) *Friday {
 	return f
 }
 
+func (f *Friday) GetRealHistory() []map[string]string {
+	return f.statement.history
+}
+
 func (f *Friday) Chat(res *ChatState) *Friday {
 	if len(f.statement.history) == 0 {
 		f.Error = errors.New("history can not be nil")
@@ -156,6 +160,7 @@ func (f *Friday) chat(res *ChatState) *Friday {
 	}
 
 	// go for llm
+	f.statement.history = dialogues // return realHistory
 	_, err := f.LLM.Chat(f.statement.context, true, dialogues, res.Response)
 	if err != nil {
 		f.Error = err
