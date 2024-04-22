@@ -67,7 +67,6 @@ func chat(dirId int64, history []map[string]string) error {
 	}
 	go func() {
 		f = f.Chat(res)
-		close(resp)
 	}()
 	if f.Error != nil {
 		return f.Error
