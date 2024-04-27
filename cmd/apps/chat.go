@@ -61,20 +61,31 @@ func chat(dirId int64, history []map[string]string) error {
 	f := friday.Fri.WithContext(context.TODO()).History(history).SearchIn(&models.DocQuery{
 		ParentId: dirId,
 	})
-	resp := make(chan map[string]string)
+	var (
+		resp  = make(chan map[string]string)
+		errCh = make(chan error)
+	)
 	res := &friday.ChatState{
 		Response: resp,
 	}
 	go func() {
 		f = f.Chat(res)
+		if f.Error != nil {
+			errCh <- f.Error
+		}
 	}()
 	if f.Error != nil {
 		return f.Error
 	}
 
 	fmt.Println("Dialogues: ")
-	for line := range res.Response {
-		fmt.Printf("%v: %v\n", time.Now().Format("15:04:05"), line)
+
+	for {
+		select {
+		case err := <-errCh:
+			return err
+		case line := <-res.Response:
+			fmt.Printf("%v: %v\n", time.Now().Format("15:04:05"), line)
+		}
 	}
-	return nil
 }
