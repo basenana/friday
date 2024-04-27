@@ -64,9 +64,6 @@ func (g *Gemini) Chat(ctx context.Context, stream bool, history []map[string]str
 
 	for {
 		select {
-		case <-ctx.Done():
-			err = fmt.Errorf("context timeout in gemini chat")
-			return
 		case err = <-errCh:
 			return nil, err
 		case line, ok := <-buf:
