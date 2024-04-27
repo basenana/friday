@@ -91,9 +91,6 @@ func (o *OpenAIV1) Chat(ctx context.Context, stream bool, history []map[string]s
 
 	for {
 		select {
-		case <-ctx.Done():
-			err = fmt.Errorf("context timeout in openai chat")
-			return
 		case err = <-errCh:
 			if err != nil {
 				return nil, err
