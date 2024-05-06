@@ -76,7 +76,6 @@ var _ = Describe("TestQuestion", func() {
 			)
 			go func() {
 				f = loFriday.WithContext(context.TODO()).SearchIn(&models.DocQuery{ParentId: 1}).History(history).Chat(&res)
-				close(res.Response)
 			}()
 			resp := <-res.Response
 			Expect(f.Error).Should(BeNil())
@@ -106,7 +105,6 @@ var _ = Describe("TestQuestion", func() {
 			)
 			go func() {
 				f = loFriday.WithContext(context.TODO()).SearchIn(&models.DocQuery{ParentId: 1}).History(history).Chat(&res)
-				close(res.Response)
 			}()
 			resp := <-res.Response
 			Expect(f.Error).Should(BeNil())
@@ -144,7 +142,6 @@ var _ = Describe("TestQuestion", func() {
 			)
 			go func() {
 				f = loFriday.WithContext(context.TODO()).SearchIn(&models.DocQuery{ParentId: 1}).History(history).Chat(&res)
-				close(res.Response)
 			}()
 			resp := <-res.Response
 
@@ -191,7 +188,6 @@ var _ = Describe("TestQuestion", func() {
 			)
 			go func() {
 				f = loFriday.WithContext(context.TODO()).SearchIn(&models.DocQuery{ParentId: 1}).History(history).Chat(&res)
-				close(res.Response)
 			}()
 			resp := <-res.Response
 			Expect(f.Error).Should(BeNil())
