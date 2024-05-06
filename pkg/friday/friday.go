@@ -62,10 +62,12 @@ type Statement struct {
 	context context.Context
 
 	// for chat
-	history  []map[string]string
-	question string
-	query    *models.DocQuery
-	info     string
+	summary        string              // summary of doc
+	history        []map[string]string // real chat history
+	question       string              // question for chat
+	query          *models.DocQuery    // search in doc or dir
+	historySummary string              // summary of chat history
+	info           string              // info of embedding
 
 	// for ingest or summary
 	file        *models.File // a whole file providing models.File
