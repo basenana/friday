@@ -53,8 +53,8 @@ var _ = Describe("TestStuffSummary", func() {
 		}
 	})
 
-	Context("summary", func() {
-		It("summary should be succeed", func() {
+	Context("Summary", func() {
+		It("Summary should be succeed", func() {
 			res := SummaryState{}
 			f := loFriday.WithContext(context.TODO()).Element(elements).OfType(summaryType).Summary(&res)
 			Expect(f.Error).Should(BeNil())
@@ -82,7 +82,7 @@ var _ = Describe("TestMapReduceSummary", func() {
 	)
 
 	BeforeEach(func() {
-		loFriday.Log = logger.NewLogger("test-mapreduce-summary")
+		loFriday.Log = logger.NewLogger("test-mapreduce-Summary")
 		loFriday.LLM = FakeSummaryLLM{}
 		loFriday.LimitToken = 50
 		loFriday.Spliter = spliter.NewTextSpliter(loFriday.Log, 8, 2, "\n")
@@ -97,8 +97,8 @@ var _ = Describe("TestMapReduceSummary", func() {
 		}
 	})
 
-	Context("summary", func() {
-		It("summary should be succeed", func() {
+	Context("Summary", func() {
+		It("Summary should be succeed", func() {
 			res := SummaryState{}
 			f := loFriday.WithContext(context.TODO()).Element(elements).OfType(summaryType).Summary(&res)
 			Expect(f.Error).Should(BeNil())
@@ -126,7 +126,7 @@ var _ = Describe("TestRefineSummary", func() {
 	)
 
 	BeforeEach(func() {
-		loFriday.Log = logger.NewLogger("test-refine-summary")
+		loFriday.Log = logger.NewLogger("test-refine-Summary")
 		loFriday.LLM = FakeSummaryLLM{}
 		loFriday.Spliter = spliter.NewTextSpliter(loFriday.Log, spliter.DefaultChunkSize, spliter.DefaultChunkOverlap, "\n")
 		elements = []models.Element{{
@@ -140,8 +140,8 @@ var _ = Describe("TestRefineSummary", func() {
 		}
 	})
 
-	Context("summary", func() {
-		It("summary should be succeed", func() {
+	Context("Summary", func() {
+		It("Summary should be succeed", func() {
 			res := SummaryState{}
 			_ = loFriday.WithContext(context.TODO()).Element(elements).OfType(summaryType).Summary(&res)
 			// todo

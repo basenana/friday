@@ -58,7 +58,7 @@ var _ = Describe("TestQuestion", func() {
 			f := loFriday.WithContext(context.TODO())
 			f.searchDocs("I am a question")
 			Expect(f.Error).Should(BeNil())
-			Expect(f.statement.info).Should(Equal("There are logs of questions"))
+			Expect(f.statement.Info).Should(Equal("There are logs of questions"))
 		})
 	})
 
@@ -81,6 +81,7 @@ var _ = Describe("TestQuestion", func() {
 			Expect(f.Error).Should(BeNil())
 			Expect(len(resp)).Should(Equal(2))
 			Expect(resp["role"]).Should(Equal("assistant"))
+			Expect(len(f.statement.history)).Should(Equal(3))
 		})
 		It("chat for second time", func() {
 			history := []map[string]string{
@@ -110,6 +111,7 @@ var _ = Describe("TestQuestion", func() {
 			Expect(f.Error).Should(BeNil())
 			Expect(len(resp)).Should(Equal(2))
 			Expect(resp["role"]).Should(Equal("assistant"))
+			Expect(len(f.statement.history)).Should(Equal(5))
 		})
 		It("chat for three times", func() {
 			history := []map[string]string{
@@ -148,6 +150,7 @@ var _ = Describe("TestQuestion", func() {
 			Expect(f.Error).Should(BeNil())
 			Expect(len(resp)).Should(Equal(2))
 			Expect(resp["role"]).Should(Equal("assistant"))
+			Expect(len(f.statement.history)).Should(Equal(7))
 		})
 		It("chat for four times", func() {
 			history := []map[string]string{
@@ -193,6 +196,7 @@ var _ = Describe("TestQuestion", func() {
 			Expect(f.Error).Should(BeNil())
 			Expect(len(resp)).Should(Equal(2))
 			Expect(resp["role"]).Should(Equal("assistant"))
+			Expect(len(f.statement.history)).Should(Equal(7))
 		})
 	})
 })
