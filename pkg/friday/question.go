@@ -45,7 +45,7 @@ func (f *Friday) Question(q string) *Friday {
 }
 
 func (f *Friday) OfSummary(summary string) *Friday {
-	f.statement.summary = summary
+	f.statement.Summary = summary
 	return f
 }
 
@@ -92,29 +92,28 @@ func (f *Friday) Chat(res *ChatState) *Friday {
 
 	// If the number of dialogue rounds exceeds some rounds, should conclude it.
 	if len(f.statement.history) >= remainHistoryNum {
-		f.statement.historySummary = f.summaryHistory().statement.historySummary
+		f.statement.HistorySummary = f.summaryHistory().statement.HistorySummary
 		if f.Error != nil {
 			return f
 		}
 	}
 
-	// if it already has system info, rewrite it
+	// if it already has system Info, rewrite it
 	if (f.statement.history)[0]["role"] == "system" {
 		f.statement.history = f.statement.history[1:]
 	}
 
-	// regenerate system info
+	// regenerate system Info
 	systemInfo = f.generateSystemInfo()
+	dialogues = []map[string]string{
+		{"role": f.LLM.GetSystemModel(), "content": systemInfo},
+		{"role": f.LLM.GetAssistantModel(), "content": ""},
+	}
 
 	if len(f.statement.history) >= remainHistoryNum {
-		dialogues = []map[string]string{
-			{"role": f.LLM.GetSystemModel(), "content": systemInfo},
-			{"role": f.LLM.GetAssistantModel(), "content": ""},
-		}
 		dialogues = append(dialogues, f.statement.history[len(f.statement.history)-remainHistoryNum:len(f.statement.history)]...)
 	} else {
-		dialogues = make([]map[string]string, len(f.statement.history))
-		copy(dialogues, f.statement.history)
+		dialogues = append(dialogues, f.statement.history...)
 	}
 
 	// go for llm
@@ -125,13 +124,13 @@ func (f *Friday) Chat(res *ChatState) *Friday {
 
 func (f *Friday) generateSystemInfo() string {
 	systemTemplate := "基于以下内容，简洁和专业的来回答用户的问题。答案请使用中文。\n"
-	if f.statement.summary != "" {
+	if f.statement.Summary != "" {
 		systemTemplate += "\n这是文章简介: {{ .Summary }}\n"
 	}
-	if f.statement.info != "" {
+	if f.statement.Info != "" {
 		systemTemplate += "\n这是已知内容: {{ .Info }}\n"
 	}
-	if f.statement.historySummary != "" {
+	if f.statement.HistorySummary != "" {
 		systemTemplate += "\n这是历史聊天总结作为前情提要: {{ .HistorySummary }}\n"
 	}
 
@@ -167,7 +166,7 @@ func (f *Friday) summaryHistory() *Friday {
 			f.Error = err
 		}
 	case sum = <-sumBuf:
-		f.statement.historySummary = sum["content"]
+		f.statement.HistorySummary = sum["content"]
 	}
 	return f
 }
@@ -194,7 +193,7 @@ func (f *Friday) Complete(res *ChatState) *Friday {
 		}
 	}
 	ans, usage, err := f.LLM.Completion(f.statement.context, prompt, map[string]string{
-		"context":  f.statement.info,
+		"context":  f.statement.Info,
 		"question": f.statement.question,
 	})
 	if err != nil {
@@ -229,7 +228,7 @@ func (f *Friday) searchDocs(q string) {
 		//f.Log.Debugf("searched from [%s] for %s", c.Name, c.Content)
 		cs = append(cs, c.Content)
 	}
-	f.statement.info = strings.Join(cs, "\n")
+	f.statement.Info = strings.Join(cs, "\n")
 	return
 }
 
