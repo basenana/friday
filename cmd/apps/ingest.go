@@ -41,7 +41,7 @@ var IngestCmd = &cobra.Command{
 }
 
 func ingest(ps string) error {
-	f := friday.Fri.WithContext(context.TODO()).OriginFile(&ps)
+	f := friday.Fri.WithContext(context.TODO()).Namespace("test").OriginFile(&ps)
 	res := &friday.IngestState{}
 	f = f.Ingest(res)
 	if f.Error != nil {
