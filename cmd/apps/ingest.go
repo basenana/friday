@@ -23,6 +23,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/basenana/friday/pkg/friday"
+	"github.com/basenana/friday/pkg/models"
 )
 
 var IngestCmd = &cobra.Command{
@@ -41,7 +42,7 @@ var IngestCmd = &cobra.Command{
 }
 
 func ingest(ps string) error {
-	f := friday.Fri.WithContext(context.TODO()).Namespace("test").OriginFile(&ps)
+	f := friday.Fri.WithContext(context.TODO()).Namespace(models.NewNamespace("test")).OriginFile(&ps)
 	res := &friday.IngestState{}
 	f = f.Ingest(res)
 	if f.Error != nil {
