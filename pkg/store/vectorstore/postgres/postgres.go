@@ -28,9 +28,10 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/basenana/friday/pkg/models"
+	"github.com/basenana/friday/pkg/models/vector"
+	"github.com/basenana/friday/pkg/store/vectorstore"
+	"github.com/basenana/friday/pkg/store/vectorstore/db"
 	"github.com/basenana/friday/pkg/utils/logger"
-	"github.com/basenana/friday/pkg/vectorstore"
-	"github.com/basenana/friday/pkg/vectorstore/db"
 )
 
 const defaultNamespace = "global"
@@ -73,7 +74,7 @@ func NewPostgresClient(log logger.Logger, postgresUrl string) (*PostgresClient, 
 	}, nil
 }
 
-func (p *PostgresClient) Store(ctx context.Context, element *models.Element, extra map[string]any) error {
+func (p *PostgresClient) Store(ctx context.Context, element *vector.Element, extra map[string]any) error {
 	namespace := ctx.Value("namespace")
 	if namespace == nil {
 		namespace = defaultNamespace
@@ -127,7 +128,7 @@ func (p *PostgresClient) Store(ctx context.Context, element *models.Element, ext
 	})
 }
 
-func (p *PostgresClient) Search(ctx context.Context, query models.DocQuery, vectors []float32, k int) ([]*models.Doc, error) {
+func (p *PostgresClient) Search(ctx context.Context, query vector.VectorDocQuery, vectors []float32, k int) ([]*vector.Doc, error) {
 	vectors64 := make([]float64, 0)
 	for _, v := range vectors {
 		vectors64 = append(vectors64, float64(v))
@@ -168,7 +169,7 @@ func (p *PostgresClient) Search(ctx context.Context, query models.DocQuery, vect
 	if k < len(dists) {
 		minKIndexes = dists[0:k]
 	}
-	results := make([]*models.Doc, 0)
+	results := make([]*vector.Doc, 0)
 	for _, index := range minKIndexes {
 		results = append(results, index.ToDoc())
 	}
@@ -176,7 +177,7 @@ func (p *PostgresClient) Search(ctx context.Context, query models.DocQuery, vect
 	return results, nil
 }
 
-func (p *PostgresClient) Get(ctx context.Context, oid int64, name string, group int) (*models.Element, error) {
+func (p *PostgresClient) Get(ctx context.Context, oid int64, name string, group int) (*vector.Element, error) {
 	vModel := &Index{}
 	tx := p.dEntity.WithNamespace(ctx).Where("name = ? AND idx_group = ?", name, group)
 	if oid != 0 {

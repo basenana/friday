@@ -25,10 +25,10 @@ import (
 	"github.com/basenana/friday/pkg/embedding"
 	"github.com/basenana/friday/pkg/llm"
 	"github.com/basenana/friday/pkg/llm/prompts"
-	"github.com/basenana/friday/pkg/models"
+	"github.com/basenana/friday/pkg/models/vector"
 	"github.com/basenana/friday/pkg/spliter"
+	"github.com/basenana/friday/pkg/store/vectorstore"
 	"github.com/basenana/friday/pkg/utils/logger"
-	"github.com/basenana/friday/pkg/vectorstore"
 )
 
 var _ = Describe("TestQuestion", func() {
@@ -50,7 +50,7 @@ var _ = Describe("TestQuestion", func() {
 	Context("question", func() {
 		It("question should be succeed", func() {
 			res := ChatState{}
-			f := loFriday.WithContext(context.TODO()).SearchIn(&models.DocQuery{}).Question("I am a question").Complete(&res)
+			f := loFriday.WithContext(context.TODO()).SearchIn(&vector.VectorDocQuery{}).Question("I am a question").Complete(&res)
 			Expect(f.Error).Should(BeNil())
 			Expect(res.Answer).Should(Equal("I am an answer"))
 		})
@@ -75,7 +75,7 @@ var _ = Describe("TestQuestion", func() {
 				f *Friday
 			)
 			go func() {
-				f = loFriday.WithContext(context.TODO()).SearchIn(&models.DocQuery{ParentId: 1}).History(history).Chat(&res)
+				f = loFriday.WithContext(context.TODO()).SearchIn(&vector.VectorDocQuery{ParentId: 1}).History(history).Chat(&res)
 			}()
 			resp := <-res.Response
 			Expect(f.Error).Should(BeNil())
@@ -105,7 +105,7 @@ var _ = Describe("TestQuestion", func() {
 				f *Friday
 			)
 			go func() {
-				f = loFriday.WithContext(context.TODO()).SearchIn(&models.DocQuery{ParentId: 1}).History(history).Chat(&res)
+				f = loFriday.WithContext(context.TODO()).SearchIn(&vector.VectorDocQuery{ParentId: 1}).History(history).Chat(&res)
 			}()
 			resp := <-res.Response
 			Expect(f.Error).Should(BeNil())
@@ -143,7 +143,7 @@ var _ = Describe("TestQuestion", func() {
 				f *Friday
 			)
 			go func() {
-				f = loFriday.WithContext(context.TODO()).SearchIn(&models.DocQuery{ParentId: 1}).History(history).Chat(&res)
+				f = loFriday.WithContext(context.TODO()).SearchIn(&vector.VectorDocQuery{ParentId: 1}).History(history).Chat(&res)
 			}()
 			resp := <-res.Response
 
@@ -190,7 +190,7 @@ var _ = Describe("TestQuestion", func() {
 				f *Friday
 			)
 			go func() {
-				f = loFriday.WithContext(context.TODO()).SearchIn(&models.DocQuery{ParentId: 1}).History(history).Chat(&res)
+				f = loFriday.WithContext(context.TODO()).SearchIn(&vector.VectorDocQuery{ParentId: 1}).History(history).Chat(&res)
 			}()
 			resp := <-res.Response
 			Expect(f.Error).Should(BeNil())
@@ -205,19 +205,19 @@ type FakeQuestionStore struct{}
 
 var _ vectorstore.VectorStore = &FakeQuestionStore{}
 
-func (f FakeQuestionStore) Store(ctx context.Context, element *models.Element, extra map[string]any) error {
+func (f FakeQuestionStore) Store(ctx context.Context, element *vector.Element, extra map[string]any) error {
 	return nil
 }
 
-func (f FakeQuestionStore) Search(ctx context.Context, query models.DocQuery, vectors []float32, k int) ([]*models.Doc, error) {
-	return []*models.Doc{{
+func (f FakeQuestionStore) Search(ctx context.Context, query vector.VectorDocQuery, vectors []float32, k int) ([]*vector.Doc, error) {
+	return []*vector.Doc{{
 		Id:      "abc",
 		Content: "There are logs of questions",
 	}}, nil
 }
 
-func (f FakeQuestionStore) Get(ctx context.Context, oid int64, name string, group int) (*models.Element, error) {
-	return &models.Element{}, nil
+func (f FakeQuestionStore) Get(ctx context.Context, oid int64, name string, group int) (*vector.Element, error) {
+	return &vector.Element{}, nil
 }
 
 type FakeQuestionEmbedding struct{}

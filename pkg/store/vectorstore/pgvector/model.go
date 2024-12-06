@@ -19,7 +19,7 @@ package pgvector
 import (
 	"time"
 
-	"github.com/basenana/friday/pkg/models"
+	"github.com/basenana/friday/pkg/models/vector"
 )
 
 type Index struct {
@@ -51,7 +51,7 @@ func (v *Index) Update(vector *Index) {
 	v.ChangedAt = time.Now().UnixNano()
 }
 
-func (v *Index) From(element *models.Element) *Index {
+func (v *Index) From(element *vector.Element) *Index {
 	i := &Index{
 		ID:       element.ID,
 		Name:     element.Name,
@@ -62,8 +62,8 @@ func (v *Index) From(element *models.Element) *Index {
 	}
 	return i
 }
-func (v *Index) To() *models.Doc {
-	return &models.Doc{
+func (v *Index) To() *vector.Doc {
+	return &vector.Doc{
 		Id:       v.ID,
 		OID:      v.OID,
 		Name:     v.Name,
@@ -72,8 +72,8 @@ func (v *Index) To() *models.Doc {
 		Content:  v.Content,
 	}
 }
-func (v *Index) ToElement() *models.Element {
-	return &models.Element{
+func (v *Index) ToElement() *vector.Element {
+	return &vector.Element{
 		ID:       v.ID,
 		OID:      v.OID,
 		Name:     v.Name,

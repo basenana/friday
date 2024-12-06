@@ -27,11 +27,11 @@ import (
 	"github.com/basenana/friday/pkg/friday"
 	"github.com/basenana/friday/pkg/llm"
 	"github.com/basenana/friday/pkg/llm/client/gemini"
-	glm_6b "github.com/basenana/friday/pkg/llm/client/glm-6b"
+	"github.com/basenana/friday/pkg/llm/client/glm-6b"
 	openaiv1 "github.com/basenana/friday/pkg/llm/client/openai/v1"
 	"github.com/basenana/friday/pkg/spliter"
+	"github.com/basenana/friday/pkg/store/vectorstore"
 	"github.com/basenana/friday/pkg/utils/logger"
-	"github.com/basenana/friday/pkg/vectorstore"
 )
 
 func NewFridayWithVector(conf *config.Config, vectorClient vectorstore.VectorStore) (f *friday.Friday, err error) {

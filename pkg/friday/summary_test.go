@@ -25,7 +25,7 @@ import (
 	"github.com/basenana/friday/pkg/friday/summary"
 	"github.com/basenana/friday/pkg/llm"
 	"github.com/basenana/friday/pkg/llm/prompts"
-	"github.com/basenana/friday/pkg/models"
+	"github.com/basenana/friday/pkg/models/vector"
 	"github.com/basenana/friday/pkg/spliter"
 	"github.com/basenana/friday/pkg/utils/logger"
 )
@@ -34,20 +34,20 @@ var _ = Describe("TestStuffSummary", func() {
 	var (
 		loFriday    = &Friday{}
 		summaryType = summary.Stuff
-		elements    = []models.Element{}
-		file        = models.File{}
+		elements    = []vector.Element{}
+		file        = vector.File{}
 	)
 
 	BeforeEach(func() {
 		loFriday.Log = logger.NewLogger("test-stuffsummary")
 		loFriday.LLM = FakeSummaryLLM{}
 		loFriday.Spliter = spliter.NewTextSpliter(loFriday.Log, spliter.DefaultChunkSize, spliter.DefaultChunkOverlap, "\n")
-		elements = []models.Element{{
+		elements = []vector.Element{{
 			Content: "test-content",
 			Name:    "test-title",
 			Group:   0,
 		}}
-		file = models.File{
+		file = vector.File{
 			Name:    "test-file",
 			Content: "test-file-content",
 		}
@@ -77,8 +77,8 @@ var _ = Describe("TestMapReduceSummary", func() {
 	var (
 		loFriday    = &Friday{}
 		summaryType = summary.MapReduce
-		elements    = []models.Element{}
-		file        = models.File{}
+		elements    = []vector.Element{}
+		file        = vector.File{}
 	)
 
 	BeforeEach(func() {
@@ -86,12 +86,12 @@ var _ = Describe("TestMapReduceSummary", func() {
 		loFriday.LLM = FakeSummaryLLM{}
 		loFriday.LimitToken = 50
 		loFriday.Spliter = spliter.NewTextSpliter(loFriday.Log, 8, 2, "\n")
-		elements = []models.Element{{
+		elements = []vector.Element{{
 			Content: "test-content",
 			Name:    "test-title",
 			Group:   0,
 		}}
-		file = models.File{
+		file = vector.File{
 			Name:    "test-file",
 			Content: "test file content",
 		}
@@ -121,20 +121,20 @@ var _ = Describe("TestRefineSummary", func() {
 	var (
 		loFriday    = &Friday{}
 		summaryType = summary.Refine
-		elements    = []models.Element{}
-		file        = models.File{}
+		elements    = []vector.Element{}
+		file        = vector.File{}
 	)
 
 	BeforeEach(func() {
 		loFriday.Log = logger.NewLogger("test-refine-Summary")
 		loFriday.LLM = FakeSummaryLLM{}
 		loFriday.Spliter = spliter.NewTextSpliter(loFriday.Log, spliter.DefaultChunkSize, spliter.DefaultChunkOverlap, "\n")
-		elements = []models.Element{{
+		elements = []vector.Element{{
 			Content: "test-content",
 			Name:    "test-title",
 			Group:   0,
 		}}
-		file = models.File{
+		file = vector.File{
 			Name:    "test-file",
 			Content: "test-file-content",
 		}
