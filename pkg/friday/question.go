@@ -24,7 +24,7 @@ import (
 	"strings"
 
 	"github.com/basenana/friday/pkg/llm/prompts"
-	"github.com/basenana/friday/pkg/models"
+	"github.com/basenana/friday/pkg/models/vector"
 )
 
 const remainHistoryNum = 5 // must be odd
@@ -34,7 +34,7 @@ func (f *Friday) History(history []map[string]string) *Friday {
 	return f
 }
 
-func (f *Friday) SearchIn(query *models.DocQuery) *Friday {
+func (f *Friday) SearchIn(query *vector.VectorDocQuery) *Friday {
 	f.statement.query = query
 	return f
 }
@@ -213,7 +213,7 @@ func (f *Friday) searchDocs(q string) {
 		f.Error = fmt.Errorf("vector embedding error: %w", err)
 		return
 	}
-	var dq models.DocQuery
+	var dq vector.VectorDocQuery
 	if f.statement.query != nil {
 		dq = *f.statement.query
 	}

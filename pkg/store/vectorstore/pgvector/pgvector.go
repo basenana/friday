@@ -26,10 +26,10 @@ import (
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 
-	"github.com/basenana/friday/pkg/models"
+	"github.com/basenana/friday/pkg/models/vector"
+	"github.com/basenana/friday/pkg/store/vectorstore"
+	"github.com/basenana/friday/pkg/store/vectorstore/db"
 	"github.com/basenana/friday/pkg/utils/logger"
-	"github.com/basenana/friday/pkg/vectorstore"
-	"github.com/basenana/friday/pkg/vectorstore/db"
 )
 
 type PgVectorClient struct {
@@ -72,7 +72,7 @@ func NewPgVectorClient(log logger.Logger, postgresUrl string) (*PgVectorClient, 
 	}, nil
 }
 
-func (p *PgVectorClient) Store(ctx context.Context, element *models.Element, extra map[string]any) error {
+func (p *PgVectorClient) Store(ctx context.Context, element *vector.Element, extra map[string]any) error {
 	return p.dEntity.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if extra == nil {
 			extra = make(map[string]interface{})
@@ -119,10 +119,10 @@ func (p *PgVectorClient) Store(ctx context.Context, element *models.Element, ext
 	})
 }
 
-func (p *PgVectorClient) Search(ctx context.Context, query models.DocQuery, vectors []float32, k int) ([]*models.Doc, error) {
+func (p *PgVectorClient) Search(ctx context.Context, query vector.VectorDocQuery, vectors []float32, k int) ([]*vector.Doc, error) {
 	var (
 		vectorModels = make([]Index, 0)
-		result       = make([]*models.Doc, 0)
+		result       = make([]*vector.Doc, 0)
 	)
 	if err := p.dEntity.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		vectorJson, _ := json.Marshal(vectors)
@@ -149,7 +149,7 @@ func (p *PgVectorClient) Search(ctx context.Context, query models.DocQuery, vect
 	return result, nil
 }
 
-func (p *PgVectorClient) Get(ctx context.Context, oid int64, name string, group int) (*models.Element, error) {
+func (p *PgVectorClient) Get(ctx context.Context, oid int64, name string, group int) (*vector.Element, error) {
 	vModel := &Index{}
 	err := p.dEntity.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var res *gorm.DB

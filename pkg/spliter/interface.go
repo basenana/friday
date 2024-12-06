@@ -16,9 +16,11 @@
 
 package spliter
 
-import "github.com/basenana/friday/pkg/models"
+import (
+	"github.com/basenana/friday/pkg/models/vector"
+)
 
 type Spliter interface {
 	Split(text string) []string
-	Merge(elements []models.Element) []models.Element
+	Merge(elements []vector.Element) []vector.Element
 }

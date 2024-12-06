@@ -19,7 +19,7 @@ package spliter
 import (
 	"strings"
 
-	"github.com/basenana/friday/pkg/models"
+	"github.com/basenana/friday/pkg/models/vector"
 	"github.com/basenana/friday/pkg/utils/files"
 	"github.com/basenana/friday/pkg/utils/logger"
 )
@@ -59,18 +59,18 @@ func (t *TextSpliter) Split(text string) []string {
 	return t.merge(splits)
 }
 
-func (t *TextSpliter) Merge(elements []models.Element) []models.Element {
-	elementGroups := map[string][]models.Element{}
+func (t *TextSpliter) Merge(elements []vector.Element) []vector.Element {
+	elementGroups := map[string][]vector.Element{}
 	for _, element := range elements {
 		source := element.Name
 		if _, ok := elementGroups[source]; !ok {
-			elementGroups[source] = []models.Element{element}
+			elementGroups[source] = []vector.Element{element}
 			continue
 		}
 		elementGroups[source] = append(elementGroups[source], element)
 	}
 
-	mergedElements := []models.Element{}
+	mergedElements := []vector.Element{}
 	for source, subElements := range elementGroups {
 		splits := []string{}
 		for _, element := range subElements {
@@ -78,7 +78,7 @@ func (t *TextSpliter) Merge(elements []models.Element) []models.Element {
 		}
 		merged := t.merge(splits)
 		for i, content := range merged {
-			mergedElements = append(mergedElements, models.Element{
+			mergedElements = append(mergedElements, vector.Element{
 				Name:    source,
 				Group:   i,
 				Content: content,

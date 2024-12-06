@@ -20,9 +20,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/basenana/friday/cmd/apps"
-	"github.com/basenana/friday/config"
-	"github.com/basenana/friday/pkg/build/common"
-	"github.com/basenana/friday/pkg/friday"
+	"github.com/basenana/friday/pkg/utils/logger"
 )
 
 var RootCmd = &cobra.Command{
@@ -34,24 +32,10 @@ var RootCmd = &cobra.Command{
 }
 
 func init() {
-	// init friday
-	loader := config.NewConfigLoader()
-	cfg, err := loader.GetConfig()
-	if err != nil {
-		panic(err)
-	}
+	logger.InitLog()
 
-	friday.Fri, err = common.NewFriday(&cfg)
-	if err != nil {
-		panic(err)
-	}
-
-	RootCmd.AddCommand(apps.QuestionCmd)
-	RootCmd.AddCommand(apps.ChatCmd)
-	RootCmd.AddCommand(apps.IngestCmd)
-	RootCmd.AddCommand(apps.WeChatCmd)
-	RootCmd.AddCommand(apps.SummaryCmd)
-	RootCmd.AddCommand(apps.KeywordsCmd)
+	RootCmd.AddCommand(apps.ServeCmd)
+	RootCmd.AddCommand(apps.AgentCmd)
 }
 
 func main() {

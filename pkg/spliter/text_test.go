@@ -20,7 +20,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/basenana/friday/pkg/models"
+	"github.com/basenana/friday/pkg/models/vector"
 	"github.com/basenana/friday/pkg/utils/logger"
 )
 
@@ -31,13 +31,13 @@ func TestTextSpliter_Merge(t1 *testing.T) {
 		chunkOverlap int
 	}
 	type args struct {
-		elements []models.Element
+		elements []vector.Element
 	}
 	tests := []struct {
 		name   string
 		fields fields
 		args   args
-		want   []models.Element
+		want   []vector.Element
 	}{
 		{
 			name: "test1",
@@ -47,7 +47,7 @@ func TestTextSpliter_Merge(t1 *testing.T) {
 				chunkOverlap: 2,
 			},
 			args: args{
-				elements: []models.Element{
+				elements: []vector.Element{
 					{
 						ID:       "123",
 						Name:     "test",
@@ -63,7 +63,7 @@ func TestTextSpliter_Merge(t1 *testing.T) {
 					},
 				},
 			},
-			want: []models.Element{
+			want: []vector.Element{
 				{
 					Content: "this is a test\nhello world",
 					Name:    "test",
@@ -79,7 +79,7 @@ func TestTextSpliter_Merge(t1 *testing.T) {
 				chunkOverlap: 2,
 			},
 			args: args{
-				elements: []models.Element{
+				elements: []vector.Element{
 					{
 						Content: "this is a test",
 						Name:    "test",
@@ -97,7 +97,7 @@ func TestTextSpliter_Merge(t1 *testing.T) {
 					},
 				},
 			},
-			want: []models.Element{
+			want: []vector.Element{
 				{
 					Content: "this is a test\nhello world",
 					Name:    "test",

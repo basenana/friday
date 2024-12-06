@@ -23,7 +23,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/basenana/friday/pkg/models"
+	"github.com/basenana/friday/pkg/models/vector"
 	"github.com/basenana/friday/pkg/utils/files"
 )
 
@@ -32,7 +32,7 @@ func (f *Friday) ElementFile(ps *string) *Friday {
 	return f
 }
 
-func (f *Friday) Element(elements []models.Element) *Friday {
+func (f *Friday) Element(elements []vector.Element) *Friday {
 	f.statement.elements = elements
 	return f
 }
@@ -42,19 +42,19 @@ func (f *Friday) OriginFile(ps *string) *Friday {
 	return f
 }
 
-func (f *Friday) File(file *models.File) *Friday {
+func (f *Friday) File(file *vector.File) *Friday {
 	f.statement.file = file
 	return f
 }
 
 func (f *Friday) Ingest(res *IngestState) *Friday {
-	elements := []models.Element{}
+	elements := []vector.Element{}
 
 	if f.statement.file != nil {
 		// split doc
 		subDocs := f.Spliter.Split(f.statement.file.Content)
 		for i, subDoc := range subDocs {
-			e := models.Element{
+			e := vector.Element{
 				Name:     f.statement.file.Name,
 				Group:    i,
 				OID:      f.statement.file.OID,
@@ -91,7 +91,7 @@ func (f *Friday) Ingest(res *IngestState) *Friday {
 		for n, file := range fs {
 			subDocs := f.Spliter.Split(file)
 			for i, subDoc := range subDocs {
-				e := models.Element{
+				e := vector.Element{
 					Content: subDoc,
 					Name:    n,
 					Group:   i,

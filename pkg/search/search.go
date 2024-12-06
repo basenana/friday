@@ -7,8 +7,8 @@ import (
 	"github.com/blevesearch/bleve/v2"
 	"github.com/blevesearch/bleve/v2/index/upsidedown"
 
+	postgres2 "github.com/basenana/friday/pkg/store/vectorstore/postgres"
 	"github.com/basenana/friday/pkg/utils/logger"
-	"github.com/basenana/friday/pkg/vectorstore/postgres"
 )
 
 var singleIndex bleve.Index
@@ -20,7 +20,7 @@ func InitSearchEngine() error {
 		return err
 	}
 
-	pgCli, err := postgres.NewPostgresClient(logger.NewLogger("database"), dsn)
+	pgCli, err := postgres2.NewPostgresClient(logger.NewLogger("database"), dsn)
 	if err != nil {
 		return err
 	}
@@ -53,7 +53,7 @@ func InitSearchEngine() error {
 	mapping.AddDocumentMapping("document", documentMapping)
 
 	pgConfig := map[string]interface{}{"dsn": dsn}
-	index, err := bleve.NewUsing(fpath, mapping, upsidedown.Name, postgres.PgKVStoreName, pgConfig)
+	index, err := bleve.NewUsing(fpath, mapping, upsidedown.Name, postgres2.PgKVStoreName, pgConfig)
 	if err != nil {
 		return err
 	}

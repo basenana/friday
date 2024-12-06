@@ -23,10 +23,10 @@ import (
 	. "github.com/onsi/gomega"
 
 	"github.com/basenana/friday/pkg/embedding"
-	"github.com/basenana/friday/pkg/models"
+	"github.com/basenana/friday/pkg/models/vector"
 	"github.com/basenana/friday/pkg/spliter"
+	"github.com/basenana/friday/pkg/store/vectorstore"
 	"github.com/basenana/friday/pkg/utils/logger"
-	"github.com/basenana/friday/pkg/vectorstore"
 )
 
 var _ = Describe("TestIngest", func() {
@@ -43,7 +43,7 @@ var _ = Describe("TestIngest", func() {
 
 	Context("ingest", func() {
 		It("ingest should be succeed", func() {
-			elements := []models.Element{
+			elements := []vector.Element{
 				{
 					Content: "test-content",
 					Name:    "test-title",
@@ -61,16 +61,16 @@ type FakeStore struct{}
 
 var _ vectorstore.VectorStore = &FakeStore{}
 
-func (f FakeStore) Store(ctx context.Context, element *models.Element, extra map[string]any) error {
+func (f FakeStore) Store(ctx context.Context, element *vector.Element, extra map[string]any) error {
 	return nil
 }
 
-func (f FakeStore) Search(ctx context.Context, query models.DocQuery, vectors []float32, k int) ([]*models.Doc, error) {
-	return []*models.Doc{}, nil
+func (f FakeStore) Search(ctx context.Context, query vector.VectorDocQuery, vectors []float32, k int) ([]*vector.Doc, error) {
+	return []*vector.Doc{}, nil
 }
 
-func (f FakeStore) Get(ctx context.Context, oid int64, name string, group int) (*models.Element, error) {
-	return &models.Element{}, nil
+func (f FakeStore) Get(ctx context.Context, oid int64, name string, group int) (*vector.Element, error) {
+	return &vector.Element{}, nil
 }
 
 type FakeEmbedding struct{}
