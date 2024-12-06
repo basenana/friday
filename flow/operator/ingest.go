@@ -22,7 +22,7 @@ import (
 	"github.com/basenana/go-flow/flow"
 
 	"github.com/basenana/friday/pkg/friday"
-	"github.com/basenana/friday/pkg/models"
+	"github.com/basenana/friday/pkg/models/vector"
 )
 
 type ingestOperator struct {
@@ -37,7 +37,7 @@ func NewIngestOperator(task flow.Task, operatorSpec flow.Spec) (flow.Operator, e
 func (i *ingestOperator) Do(ctx context.Context, param *flow.Parameter) error {
 	source := i.spec.Parameters["source"]
 	knowledge := i.spec.Parameters["knowledge"]
-	doc := models.File{
+	doc := vector.File{
 		Name:    source,
 		Content: knowledge,
 	}

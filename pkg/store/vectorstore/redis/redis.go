@@ -24,10 +24,10 @@ import (
 
 	"github.com/redis/rueidis"
 
-	"github.com/basenana/friday/pkg/models"
+	"github.com/basenana/friday/pkg/models/vector"
+	"github.com/basenana/friday/pkg/store/vectorstore"
 	"github.com/basenana/friday/pkg/utils/files"
 	"github.com/basenana/friday/pkg/utils/logger"
-	"github.com/basenana/friday/pkg/vectorstore"
 )
 
 const (
@@ -93,7 +93,7 @@ func (r RedisClient) initIndex() error {
 	return nil
 }
 
-func (r RedisClient) Store(ctx context.Context, element *models.Element, extra map[string]any) error {
+func (r RedisClient) Store(ctx context.Context, element *vector.Element, extra map[string]any) error {
 	if extra == nil {
 		extra = make(map[string]interface{})
 	}
@@ -116,7 +116,7 @@ func (r RedisClient) Store(ctx context.Context, element *models.Element, extra m
 		FieldValue("vector", rueidis.VectorString32(element.Vector)).Build()).Error()
 }
 
-func (r RedisClient) Get(ctx context.Context, oid int64, name string, group int) (*models.Element, error) {
+func (r RedisClient) Get(ctx context.Context, oid int64, name string, group int) (*vector.Element, error) {
 	resp, err := r.client.Do(ctx, r.client.B().Get().Key(fmt.Sprintf("%s:%s-%d", r.prefix, name, group)).Build()).ToMessage()
 	if err != nil {
 		return nil, err
@@ -137,7 +137,7 @@ func (r RedisClient) Get(ctx context.Context, oid int64, name string, group int)
 	if err != nil {
 		return nil, err
 	}
-	return &models.Element{
+	return &vector.Element{
 		ID:       res["id"],
 		Name:     res["name"],
 		Group:    group,
@@ -147,7 +147,7 @@ func (r RedisClient) Get(ctx context.Context, oid int64, name string, group int)
 	}, nil
 }
 
-func (r RedisClient) Search(ctx context.Context, query models.DocQuery, vectors []float32, k int) ([]*models.Doc, error) {
+func (r RedisClient) Search(ctx context.Context, query vector.VectorDocQuery, vectors []float32, k int) ([]*vector.Doc, error) {
 	resp, err := r.client.Do(ctx, r.client.B().FtSearch().Index(r.index).
 		Query("*=>[KNN 10 @vector $B AS vector_score]").
 		Return("4").Identifier("id").Identifier("content").
@@ -159,7 +159,7 @@ func (r RedisClient) Search(ctx context.Context, query models.DocQuery, vectors 
 	if err != nil {
 		return nil, err
 	}
-	results := make([]*models.Doc, 0)
+	results := make([]*vector.Doc, 0)
 
 	for i := 1; i < len(resp[1:]); i += 2 {
 		res, err := resp[i+1].AsStrMap()
@@ -182,7 +182,7 @@ func (r RedisClient) Search(ctx context.Context, query models.DocQuery, vectors 
 		if err != nil {
 			return nil, err
 		}
-		results = append(results, &models.Doc{
+		results = append(results, &vector.Doc{
 			Id:       res["id"],
 			OID:      oid,
 			Name:     res["name"],

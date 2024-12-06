@@ -2,10 +2,12 @@ package search
 
 import (
 	"encoding/json"
-	"github.com/basenana/friday/pkg/vectorstore/postgres"
-	"github.com/blevesearch/bleve/v2/index/upsidedown"
 	"os"
 	"path"
+
+	"github.com/blevesearch/bleve/v2/index/upsidedown"
+
+	"github.com/basenana/friday/pkg/store/vectorstore/postgres"
 )
 
 func initConfigFile(dsn string) (string, error) {

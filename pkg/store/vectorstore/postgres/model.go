@@ -20,7 +20,7 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/basenana/friday/pkg/models"
+	"github.com/basenana/friday/pkg/models/vector"
 )
 
 type Index struct {
@@ -53,7 +53,7 @@ func (v *Index) Update(vector *Index) {
 	v.ChangedAt = time.Now().UnixNano()
 }
 
-func (v *Index) From(element *models.Element) (*Index, error) {
+func (v *Index) From(element *vector.Element) (*Index, error) {
 	i := &Index{
 		ID:       element.ID,
 		Name:     element.Name,
@@ -71,8 +71,8 @@ func (v *Index) From(element *models.Element) (*Index, error) {
 	return i, nil
 }
 
-func (v *Index) To() (*models.Element, error) {
-	res := &models.Element{
+func (v *Index) To() (*vector.Element, error) {
+	res := &vector.Element{
 		ID:       v.ID,
 		Name:     v.Name,
 		Group:    v.Group,
@@ -90,8 +90,8 @@ func (v *Index) To() (*models.Element, error) {
 	return res, nil
 }
 
-func (v *Index) ToDoc() *models.Doc {
-	res := &models.Doc{
+func (v *Index) ToDoc() *vector.Doc {
+	res := &vector.Doc{
 		Id:       v.ID,
 		OID:      v.OID,
 		Name:     v.Name,

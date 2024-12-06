@@ -23,9 +23,10 @@ import (
 	"github.com/basenana/friday/pkg/friday/summary"
 	"github.com/basenana/friday/pkg/llm"
 	"github.com/basenana/friday/pkg/models"
+	"github.com/basenana/friday/pkg/models/vector"
 	"github.com/basenana/friday/pkg/spliter"
+	"github.com/basenana/friday/pkg/store/vectorstore"
 	"github.com/basenana/friday/pkg/utils/logger"
-	"github.com/basenana/friday/pkg/vectorstore"
 )
 
 const (
@@ -62,18 +63,18 @@ type Statement struct {
 	context context.Context
 
 	// for chat
-	Summary        string              // Summary of doc
-	HistorySummary string              // Summary of chat history
-	Info           string              // Info of embedding
-	history        []map[string]string // real chat history
-	question       string              // question for chat
-	query          *models.DocQuery    // search in doc or dir
+	Summary        string                 // Summary of doc
+	HistorySummary string                 // Summary of chat history
+	Info           string                 // Info of embedding
+	history        []map[string]string    // real chat history
+	question       string                 // question for chat
+	query          *vector.VectorDocQuery // search in doc or dir
 
 	// for ingest or Summary
-	file        *models.File // a whole file providing models.File
+	file        *vector.File // a whole file providing models.File
 	elementFile *string      // a whole file given an element-style origin file
 	originFile  *string      // a whole file given an origin file
-	elements    []models.Element
+	elements    []vector.Element
 
 	// for keywords
 	content string

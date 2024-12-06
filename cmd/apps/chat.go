@@ -27,7 +27,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/basenana/friday/pkg/friday"
-	"github.com/basenana/friday/pkg/models"
+	"github.com/basenana/friday/pkg/models/vector"
 )
 
 var ChatCmd = &cobra.Command{
@@ -58,7 +58,7 @@ var ChatCmd = &cobra.Command{
 }
 
 func chat(dirId int64, history []map[string]string) error {
-	f := friday.Fri.WithContext(context.TODO()).History(history).SearchIn(&models.DocQuery{
+	f := friday.Fri.WithContext(context.TODO()).History(history).SearchIn(&vector.VectorDocQuery{
 		ParentId: dirId,
 	})
 	var (
