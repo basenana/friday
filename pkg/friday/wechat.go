@@ -24,7 +24,7 @@ import (
 	"strings"
 
 	"github.com/basenana/friday/pkg/llm/prompts"
-	"github.com/basenana/friday/pkg/models"
+	"github.com/basenana/friday/pkg/models/vector"
 	"github.com/basenana/friday/pkg/utils/files"
 )
 
@@ -48,7 +48,7 @@ func (f *Friday) ChatConclusionFromElementFile(ctx context.Context, chatFile str
 	if err != nil {
 		return "", nil, err
 	}
-	elements := []models.Element{}
+	elements := []vector.Element{}
 	if err = json.Unmarshal(doc, &elements); err != nil {
 		return "", nil, err
 	}
@@ -73,11 +73,11 @@ func (f *Friday) ChatConclusionFromFile(ctx context.Context, chatFile string) (s
 		return "", nil, err
 	}
 
-	elements := []models.Element{}
+	elements := []vector.Element{}
 	for n, file := range fs {
 		subDocs := f.Spliter.Split(file)
 		for i, subDoc := range subDocs {
-			e := models.Element{
+			e := vector.Element{
 				Content: subDoc,
 				Name:    n,
 				Group:   i,

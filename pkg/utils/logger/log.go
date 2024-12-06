@@ -1,126 +1,69 @@
 /*
- * Copyright 2023 friday
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+ Copyright 2023 NanaFS Authors.
+
+ Licensed under the Apache License, Version 2.0 (the "License");
+ you may not use this file except in compliance with the License.
+ You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+ Unless required by applicable law or agreed to in writing, software
+ distributed under the License is distributed on an "AS IS" BASIS,
+ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ See the License for the specific language governing permissions and
+ limitations under the License.
+*/
 
 package logger
 
 import (
-	"fmt"
-	glog "log"
 	"os"
+	"time"
+
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
-const (
-	defaultLogName = ""
-	defaultLogFmt  = " [%s] %v\n"
+var (
+	logger *zap.Logger
+	root   *zap.SugaredLogger
+	atom   zap.AtomicLevel
 )
 
-type Logger interface {
-	Error(interface{})
-	Errorf(string, ...interface{})
-	Warn(interface{})
-	Warnf(string, ...interface{})
-	Info(interface{})
-	Infof(string, ...interface{})
-	Debug(interface{})
-	Debugf(string, ...interface{})
-	SetDebug(enable bool)
-	With(string) Logger
+func InitLog() {
+	atom = zap.NewAtomicLevel()
+	encoderCfg := zap.NewProductionEncoderConfig()
+	encoderCfg.TimeKey = "timestamp"
+	encoderCfg.EncodeTime = zapcore.RFC3339TimeEncoder
+
+	logger = zap.New(zapcore.NewCore(
+		zapcore.NewJSONEncoder(encoderCfg),
+		zapcore.Lock(os.Stdout),
+		atom,
+	))
+	root = logger.Sugar()
 }
 
-type defaultLog struct {
-	name  string
-	debug bool
-	*glog.Logger
+func Sync() {
+	_ = logger.Sync()
 }
 
-func (l *defaultLog) printLogf(level string, format string, v ...interface{}) {
-	l.Print(fmt.Sprintf(defaultLogFmt, level, fmt.Sprintf(format, v...)))
+func NewLog(name string) *zap.SugaredLogger {
+	return root.Named(name)
 }
 
-func (l *defaultLog) printLog(level string, v interface{}) {
-	l.Print(fmt.Sprintf(defaultLogFmt, level, v))
-}
-
-func (l *defaultLog) Error(v interface{}) {
-	l.printLog("ERROR", v)
-}
-
-func (l *defaultLog) Errorf(format string, v ...interface{}) {
-	l.printLogf("ERROR", format, v...)
-}
-
-func (l *defaultLog) Warn(v interface{}) {
-	l.printLog("WARN", v)
-}
-
-func (l *defaultLog) Warnf(format string, v ...interface{}) {
-	l.printLogf("WARN", format, v...)
-}
-
-func (l *defaultLog) Info(v interface{}) {
-	l.printLog("INFO", v)
-}
-
-func (l *defaultLog) Infof(format string, v ...interface{}) {
-	l.printLogf("INFO", format, v...)
-}
-
-func (l *defaultLog) Debug(v interface{}) {
-	if l.debug {
-		l.printLog("DEBUG", v)
-	}
-}
-
-func (l *defaultLog) Debugf(format string, v ...interface{}) {
-	if l.debug {
-		l.printLogf("DEBUG", format, v...)
-	}
-}
-
-func (l *defaultLog) With(name string) Logger {
-	if l.name != "" {
-		name = fmt.Sprintf("%s.%s", l.name, name)
-	}
-	return &defaultLog{
-		name:   name,
-		Logger: glog.New(os.Stdout, name+" - ", glog.LstdFlags),
-	}
-}
-
-func (l *defaultLog) SetDebug(enable bool) {
+func SetDebug(enable bool) {
 	if enable {
-		l.debug = true
+		atom.SetLevel(zap.DebugLevel)
 		return
 	}
-	l.debug = false
+	atom.SetLevel(zap.InfoLevel)
 }
 
-func buildDefaultLogger() *defaultLog {
-	return &defaultLog{
-		name:   defaultLogName,
-		Logger: glog.New(os.Stdout, defaultLogName, glog.LstdFlags),
+func CostLog(logger *zap.SugaredLogger, msg string) func() {
+	startAt := time.Now()
+	logger.Infof("%s start", msg)
+	return func() {
+		logger.With(zap.String("cost", time.Since(startAt).String())).Infof("%s finish", msg)
 	}
-}
-
-var root Logger = buildDefaultLogger()
-
-func NewLogger(name string) Logger {
-	return root.With(name)
-}
-
-func SetLogger(logger Logger) {
-	root = logger
 }

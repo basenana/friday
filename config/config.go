@@ -24,6 +24,16 @@ type Config struct {
 	Debug  bool `json:"debug,omitempty"`
 	Logger logger.Logger
 
+	HttpAddr string `json:"httpAddr,omitempty"`
+
+	PoolNum int `json:"poolNum,omitempty"`
+
+	// plugins
+	Plugins []string `json:"plugins,omitempty"`
+
+	// meilisearch
+	MeiliConfig MeiliConfig `json:"meili_config,omitempty"`
+
 	// llm limit token
 	LimitToken int `json:"limit_token,omitempty"` // used by summary, split input into mutil sub-docs summaried by llm separately.
 
@@ -46,6 +56,14 @@ type Config struct {
 
 	// text spliter
 	TextSpliterConfig TextSpliterConfig `json:"text_spliter_config,omitempty"`
+}
+
+type MeiliConfig struct {
+	MeiliUrl     string `json:"meiliUrl,omitempty"`
+	MasterKey    string `json:"masterKey,omitempty"`
+	AdminApiKey  string `json:"adminApiKey,omitempty"`
+	SearchApiKey string `json:"searchApiKey,omitempty"`
+	Index        string `json:"index,omitempty"`
 }
 
 type LLMConfig struct {

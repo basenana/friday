@@ -20,11 +20,11 @@ import (
 	"github.com/basenana/friday/config"
 	"github.com/basenana/friday/pkg/build/withvector"
 	"github.com/basenana/friday/pkg/friday"
+	"github.com/basenana/friday/pkg/store/vectorstore"
+	"github.com/basenana/friday/pkg/store/vectorstore/pgvector"
+	"github.com/basenana/friday/pkg/store/vectorstore/postgres"
+	"github.com/basenana/friday/pkg/store/vectorstore/redis"
 	"github.com/basenana/friday/pkg/utils/logger"
-	"github.com/basenana/friday/pkg/vectorstore"
-	"github.com/basenana/friday/pkg/vectorstore/pgvector"
-	"github.com/basenana/friday/pkg/vectorstore/postgres"
-	"github.com/basenana/friday/pkg/vectorstore/redis"
 )
 
 func NewFriday(conf *config.Config) (f *friday.Friday, err error) {

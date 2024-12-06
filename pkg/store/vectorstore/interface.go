@@ -14,25 +14,16 @@
  * limitations under the License.
  */
 
-package models
+package vectorstore
 
-import "time"
+import (
+	"context"
 
-type Document struct {
-	ID          int64     `json:"id"`
-	Title       string    `json:"title"`
-	ParentID    int64     `json:"parent_id"`
-	HtmlContent string    `json:"html_content"`
-	Keywords    string    `json:"keywords"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
-}
+	"github.com/basenana/friday/pkg/models/vector"
+)
 
-type Doc struct {
-	Id       string
-	OID      int64
-	Name     string
-	Group    int
-	ParentId int64
-	Content  string
+type VectorStore interface {
+	Store(ctx context.Context, element *vector.Element, extra map[string]any) error
+	Search(ctx context.Context, query vector.VectorDocQuery, vectors []float32, k int) ([]*vector.Doc, error)
+	Get(ctx context.Context, oid int64, name string, group int) (*vector.Element, error)
 }
