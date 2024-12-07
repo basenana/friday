@@ -76,6 +76,13 @@ func (m *MockClient) FilterAttr(ctx context.Context, query *doc.DocumentAttrQuer
 					matched = false
 				}
 			}
+			if q.Attr == "kind" {
+				all -= 1
+				if !match(q, attr.Kind) {
+					matched = false
+					continue
+				}
+			}
 		}
 		if matched && all == 0 {
 			result = append(result, attr)
@@ -108,6 +115,13 @@ func (m *MockClient) Search(ctx context.Context, query *doc.DocumentQuery) ([]do
 			if q.Attr == "id" {
 				all -= 1
 				if !match(q, d.Id) {
+					matched = false
+					continue
+				}
+			}
+			if q.Attr == "kind" {
+				all -= 1
+				if !match(q, d.Kind) {
 					matched = false
 					continue
 				}
@@ -154,6 +168,13 @@ func (m *MockClient) DeleteByFilter(ctx context.Context, aqs []doc.AttrQuery) er
 					continue
 				}
 			}
+			if q.Attr == "kind" {
+				all -= 1
+				if !match(q, d.Kind) {
+					matched = false
+					continue
+				}
+			}
 		}
 		if matched && all == 0 {
 			delete(docs, d.Id)
@@ -169,6 +190,14 @@ func (m *MockClient) DeleteByFilter(ctx context.Context, aqs []doc.AttrQuery) er
 					matched = false
 				}
 			}
+			if aq.Attr == "kind" {
+				all -= 1
+				if !match(aq, attr.Kind) {
+					matched = false
+					continue
+				}
+			}
+
 		}
 		if matched && all == 0 {
 			delete(attrs, attr.Id)

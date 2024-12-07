@@ -85,9 +85,95 @@ func (c *Chain) StoreAttr(ctx context.Context, docAttr *doc.DocumentAttr) error 
 	})
 }
 
+func (c *Chain) GetDocument(ctx context.Context, namespace, entryId string) (doc.Document, error) {
+	docs, err := c.MeiliClient.Search(ctx, &doc.DocumentQuery{
+		AttrQueries: []doc.AttrQuery{
+			{
+				Attr:   "namespace",
+				Option: "=",
+				Value:  namespace,
+			},
+			{
+				Attr:   "entryId",
+				Option: "=",
+				Value:  entryId,
+			},
+			{
+				Attr:   "kind",
+				Option: "=",
+				Value:  "document",
+			},
+		},
+	})
+	if err != nil {
+		return doc.Document{}, err
+	}
+	if len(docs) == 0 {
+		return doc.Document{}, nil
+	}
+	return docs[0], nil
+}
+
+func (c *Chain) ListDocumentAttrs(ctx context.Context, namespace string, entryIds []string) ([]doc.DocumentAttr, error) {
+	attrs, err := c.MeiliClient.FilterAttr(ctx, &doc.DocumentAttrQuery{
+		AttrQueries: []doc.AttrQuery{
+			{
+				Attr:   "namespace",
+				Option: "=",
+				Value:  namespace,
+			},
+			{
+				Attr:   "entryId",
+				Option: "IN",
+				Value:  entryIds,
+			},
+			{
+				Attr:   "kind",
+				Option: "=",
+				Value:  "attr",
+			},
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	return attrs, nil
+}
+
+func (c *Chain) GetDocumentAttrs(ctx context.Context, namespace, entryId string) ([]doc.DocumentAttr, error) {
+	attrs, err := c.MeiliClient.FilterAttr(ctx, &doc.DocumentAttrQuery{
+		AttrQueries: []doc.AttrQuery{
+			{
+				Attr:   "namespace",
+				Option: "=",
+				Value:  namespace,
+			},
+			{
+				Attr:   "entryId",
+				Option: "=",
+				Value:  entryId,
+			},
+			{
+				Attr:   "kind",
+				Option: "=",
+				Value:  "attr",
+			},
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	return attrs, nil
+}
+
 func (c *Chain) Search(ctx context.Context, query *doc.DocumentQuery, attrQueries []*doc.DocumentAttrQuery) ([]doc.Document, error) {
 	attrs := []doc.DocumentAttr{}
 	for _, attrQuery := range attrQueries {
+		attrQuery.AttrQueries = append(attrQuery.AttrQueries, doc.AttrQuery{
+			Attr:   "kind",
+			Option: "=",
+			Value:  "attr",
+		})
 		attr, err := c.MeiliClient.FilterAttr(ctx, attrQuery)
 		if err != nil {
 			return nil, err
@@ -101,6 +187,12 @@ func (c *Chain) Search(ctx context.Context, query *doc.DocumentQuery, attrQuerie
 	if len(ids) == 0 && len(attrQueries) != 0 {
 		return []doc.Document{}, nil
 	}
+
+	query.AttrQueries = append(query.AttrQueries, doc.AttrQuery{
+		Attr:   "kind",
+		Option: "=",
+		Value:  "document",
+	})
 	if len(ids) != 0 {
 		query.AttrQueries = append(query.AttrQueries, doc.AttrQuery{
 			Attr:   "entryId",
