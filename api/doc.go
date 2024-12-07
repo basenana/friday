@@ -69,7 +69,43 @@ func (s *HttpServer) update() gin.HandlerFunc {
 	}
 }
 
-func (s *HttpServer) search() gin.HandlerFunc {
+func (s *HttpServer) get() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		namespace := c.Param("namespace")
+		entryId := c.Param("entryId")
+		document, err := s.chain.GetDocument(c, namespace, entryId)
+		if err != nil {
+			c.String(500, fmt.Sprintf("get document error: %s", err))
+			return
+		}
+		docWithAttr := &DocumentWithAttr{
+			Document: document,
+		}
+
+		attrs, err := s.chain.GetDocumentAttrs(c, namespace, entryId)
+		if err != nil {
+			c.String(500, fmt.Sprintf("get document attrs error: %s", err))
+			return
+		}
+		for _, attr := range attrs {
+			if attr.Key == "parentId" {
+				docWithAttr.ParentID = attr.Value.(string)
+			}
+			if attr.Key == "mark" {
+				marked := attr.Value.(bool)
+				docWithAttr.Mark = &marked
+			}
+			if attr.Key == "unRead" {
+				unRead := attr.Value.(bool)
+				docWithAttr.UnRead = &unRead
+			}
+		}
+
+		c.JSON(200, attrs)
+	}
+}
+
+func (s *HttpServer) filter() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		namespace := c.Param("namespace")
 		page, err := strconv.Atoi(c.DefaultQuery("page", "0"))
@@ -114,7 +150,45 @@ func (s *HttpServer) search() gin.HandlerFunc {
 			c.String(500, fmt.Sprintf("search document error: %s", err))
 			return
 		}
-		c.JSON(200, docs)
+		ids := []string{}
+		for _, doc := range docs {
+			ids = append(ids, doc.EntryId)
+		}
+
+		allAttrs, err := s.chain.ListDocumentAttrs(c, namespace, ids)
+		if err != nil {
+			c.String(500, fmt.Sprintf("list document attrs error: %s", err))
+			return
+		}
+		attrsMap := map[string][]doc.DocumentAttr{}
+		for _, attr := range allAttrs {
+			if attrsMap[attr.EntryId] == nil {
+				attrsMap[attr.EntryId] = []doc.DocumentAttr{}
+			}
+			attrsMap[attr.EntryId] = append(attrsMap[attr.EntryId], attr)
+		}
+
+		var docWithAttrs []DocumentWithAttr
+		for _, document := range docs {
+			docWithAttr := DocumentWithAttr{Document: document}
+			attrs := attrsMap[document.EntryId]
+			for _, attr := range attrs {
+				if attr.Key == "parentId" {
+					docWithAttr.ParentID = attr.Value.(string)
+				}
+				if attr.Key == "mark" {
+					marked := attr.Value.(bool)
+					docWithAttr.Mark = &marked
+				}
+				if attr.Key == "unRead" {
+					unRead := attr.Value.(bool)
+					docWithAttr.UnRead = &unRead
+				}
+			}
+			docWithAttrs = append(docWithAttrs, docWithAttr)
+		}
+
+		c.JSON(200, docWithAttrs)
 	}
 }
 

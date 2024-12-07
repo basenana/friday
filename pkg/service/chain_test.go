@@ -18,7 +18,6 @@ package service_test
 
 import (
 	"context"
-	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -61,31 +60,35 @@ var _ = Describe("Chain", func() {
 			Namespace: "test-ns",
 			EntryId:   entryId11,
 			Name:      "test-name-11",
+			Kind:      "document",
 			Content:   "<p>test</p><img src=\"http://abc1\"/>",
-			CreatedAt: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
-			UpdatedAt: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
+			CreatedAt: 1733584543,
+			UpdatedAt: 1733584543,
 		}
 		doc12 = &doc.Document{
 			Id:        "2",
 			Namespace: "test-ns",
 			EntryId:   entryId12,
 			Name:      "test-name-12",
+			Kind:      "document",
 			Content:   "<p>test</p><img src=\"http://abc2\"/>",
-			CreatedAt: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
-			UpdatedAt: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
+			CreatedAt: 1733584543,
+			UpdatedAt: 1733584543,
 		}
 		doc21 = &doc.Document{
 			Id:        "3",
 			Namespace: "test-ns",
 			EntryId:   entryId21,
 			Name:      "test-name-21",
+			Kind:      "document",
 			Content:   "<p>test</p><img src=\"http://abc2\"/>",
-			CreatedAt: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
-			UpdatedAt: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
+			CreatedAt: 1733584543,
+			UpdatedAt: 1733584543,
 		}
 		attr11 = &doc.DocumentAttr{
 			Id:        "4",
 			Namespace: "test-ns",
+			Kind:      "attr",
 			EntryId:   entryId11,
 			Key:       "parentId",
 			Value:     parentId1,
@@ -93,6 +96,7 @@ var _ = Describe("Chain", func() {
 		attr12 = &doc.DocumentAttr{
 			Id:        "5",
 			Namespace: "test-ns",
+			Kind:      "attr",
 			EntryId:   entryId12,
 			Key:       "parentId",
 			Value:     parentId1,
@@ -100,6 +104,7 @@ var _ = Describe("Chain", func() {
 		attr21 = &doc.DocumentAttr{
 			Id:        "6",
 			Namespace: "test-ns",
+			Kind:      "attr",
 			EntryId:   entryId21,
 			Key:       "parentId",
 			Value:     parentId2,
@@ -178,8 +183,8 @@ var _ = Describe("Chain", func() {
 					EntryId:   "100",
 					Name:      "test-name-100",
 					Content:   "<p>test</p><img src=\"http://abc\"/>",
-					CreatedAt: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
-					UpdatedAt: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
+					CreatedAt: 1733584543,
+					UpdatedAt: 1733584543,
 				}
 				err := Chain.Store(context.TODO(), doc3)
 				Expect(err).Should(BeNil())

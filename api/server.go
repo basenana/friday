@@ -87,5 +87,6 @@ func (s *HttpServer) handle(group *gin.RouterGroup) {
 	docGroup.POST("/entry/:entryId", s.store())
 	docGroup.DELETE("/entry/:entryId", s.delete())
 	docGroup.PUT("/entry/:entryId", s.update())
-	docGroup.GET("/search", s.search())
+	docGroup.GET("/entry/:entryId", s.get())
+	docGroup.GET("/filter", s.filter())
 }
