@@ -19,14 +19,13 @@ package doc
 import (
 	"encoding/json"
 	"fmt"
-	"time"
 
 	"github.com/meilisearch/meilisearch-go"
 )
 
 var (
-	DocFilterableAttrs     = []string{"namespace", "id", "entryId", "name", "source", "webUrl", "createdAt", "updatedAt"}
-	DocAttrFilterableAttrs = []string{"namespace", "entryId", "key", "id", "value"}
+	DocFilterableAttrs     = []string{"namespace", "id", "entryId", "kind", "name", "source", "webUrl", "createdAt", "updatedAt"}
+	DocAttrFilterableAttrs = []string{"namespace", "entryId", "key", "id", "kind", "value"}
 	DocSortAttrs           = []string{"createdAt", "updatedAt"}
 )
 
@@ -38,6 +37,7 @@ type DocPtrInterface interface {
 
 type Document struct {
 	Id        string `json:"id"`
+	Kind      string `json:"kind"`
 	Namespace string `json:"namespace"`
 	EntryId   string `json:"entryId"`
 	Name      string `json:"name"`
@@ -49,8 +49,8 @@ type Document struct {
 	HeaderImage string `json:"headerImage,omitempty"`
 	SubContent  string `json:"subContent,omitempty"`
 
-	CreatedAt time.Time `json:"createdAt,omitempty"`
-	UpdatedAt time.Time `json:"updatedAt,omitempty"`
+	CreatedAt int64 `json:"createdAt,omitempty"`
+	UpdatedAt int64 `json:"updatedAt,omitempty"`
 }
 
 func (d *Document) ID() string {
@@ -67,6 +67,7 @@ func (d *Document) Type() string {
 
 type DocumentAttr struct {
 	Id        string      `json:"id"`
+	Kind      string      `json:"kind"`
 	Namespace string      `json:"namespace"`
 	EntryId   string      `json:"entryId"`
 	Key       string      `json:"key"`
