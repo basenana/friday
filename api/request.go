@@ -17,22 +17,20 @@
 package api
 
 import (
-	"time"
-
 	"github.com/google/uuid"
 
 	"github.com/basenana/friday/pkg/models/doc"
 )
 
 type DocRequest struct {
-	EntryId   string    `json:"entryId,omitempty"`
-	Name      string    `json:"name"`
-	Namespace string    `json:"namespace"`
-	Source    string    `json:"source,omitempty"`
-	WebUrl    string    `json:"webUrl,omitempty"`
-	Content   string    `json:"content"`
-	CreatedAt time.Time `json:"createdAt,omitempty"`
-	ChangedAt time.Time `json:"changedAt,omitempty"`
+	EntryId   string `json:"entryId,omitempty"`
+	Name      string `json:"name"`
+	Namespace string `json:"namespace"`
+	Source    string `json:"source,omitempty"`
+	WebUrl    string `json:"webUrl,omitempty"`
+	Content   string `json:"content"`
+	CreatedAt int64  `json:"createdAt,omitempty"`
+	ChangedAt int64  `json:"changedAt,omitempty"`
 }
 
 func (r *DocRequest) ToDocument() *doc.Document {
@@ -91,13 +89,18 @@ func (r *DocAttrRequest) ToDocAttr() []*doc.DocumentAttr {
 }
 
 type DocQuery struct {
-	IDs       []string `json:"ids"`
-	Namespace string   `json:"namespace"`
-	Source    string   `json:"source,omitempty"`
-	WebUrl    string   `json:"webUrl,omitempty"`
-	ParentID  string   `json:"parentId,omitempty"`
-	UnRead    *bool    `json:"unRead,omitempty"`
-	Mark      *bool    `json:"mark,omitempty"`
+	IDs            []string `json:"ids"`
+	Namespace      string   `json:"namespace"`
+	Source         string   `json:"source,omitempty"`
+	WebUrl         string   `json:"webUrl,omitempty"`
+	ParentID       string   `json:"parentId,omitempty"`
+	UnRead         *bool    `json:"unRead,omitempty"`
+	Mark           *bool    `json:"mark,omitempty"`
+	CreatedAtStart *int64   `json:"createdAtStart,omitempty"`
+	CreatedAtEnd   *int64   `json:"createdAtEnd,omitempty"`
+	ChangedAtStart *int64   `json:"changedAtStart,omitempty"`
+	ChangedAtEnd   *int64   `json:"changedAtEnd,omitempty"`
+	FuzzyName      *string  `json:"fuzzyName,omitempty"`
 
 	Search string `json:"search"`
 
@@ -135,6 +138,41 @@ func (q *DocQuery) ToQuery() *doc.DocumentQuery {
 			Attr:   "webUrl",
 			Option: "=",
 			Value:  q.WebUrl,
+		})
+	}
+	if q.CreatedAtStart != nil {
+		attrQueries = append(attrQueries, doc.AttrQuery{
+			Attr:   "createdAt",
+			Option: ">=",
+			Value:  *q.CreatedAtStart,
+		})
+	}
+	if q.ChangedAtStart != nil {
+		attrQueries = append(attrQueries, doc.AttrQuery{
+			Attr:   "updatedAt",
+			Option: ">=",
+			Value:  *q.ChangedAtStart,
+		})
+	}
+	if q.CreatedAtEnd != nil {
+		attrQueries = append(attrQueries, doc.AttrQuery{
+			Attr:   "createdAt",
+			Option: "<=",
+			Value:  *q.CreatedAtEnd,
+		})
+	}
+	if q.ChangedAtEnd != nil {
+		attrQueries = append(attrQueries, doc.AttrQuery{
+			Attr:   "updatedAt",
+			Option: "<=",
+			Value:  *q.ChangedAtEnd,
+		})
+	}
+	if q.FuzzyName != nil {
+		attrQueries = append(attrQueries, doc.AttrQuery{
+			Attr:   "name",
+			Option: "CONTAINS",
+			Value:  *q.FuzzyName,
 		})
 	}
 
@@ -208,4 +246,12 @@ func (q *DocQuery) GetAttrQueries() []*doc.DocumentAttrQuery {
 		})
 	}
 	return attrQueries
+}
+
+type DocumentWithAttr struct {
+	doc.Document
+
+	ParentID string `json:"parentId,omitempty"`
+	UnRead   *bool  `json:"unRead,omitempty"`
+	Mark     *bool  `json:"mark,omitempty"`
 }
