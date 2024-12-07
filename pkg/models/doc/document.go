@@ -26,7 +26,7 @@ import (
 
 var (
 	DocFilterableAttrs     = []string{"namespace", "id", "entryId", "name", "source", "webUrl", "createdAt", "updatedAt"}
-	DocAttrFilterableAttrs = []string{"namespace", "entryId", "key", "id"}
+	DocAttrFilterableAttrs = []string{"namespace", "entryId", "key", "id", "value"}
 	DocSortAttrs           = []string{"createdAt", "updatedAt"}
 )
 
@@ -47,6 +47,7 @@ type Document struct {
 	Content     string `json:"content"`
 	Summary     string `json:"summary,omitempty"`
 	HeaderImage string `json:"headerImage,omitempty"`
+	SubContent  string `json:"subContent,omitempty"`
 
 	CreatedAt time.Time `json:"createdAt,omitempty"`
 	UpdatedAt time.Time `json:"updatedAt,omitempty"`
