@@ -20,6 +20,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"net/url"
 
 	"github.com/PuerkitoBio/goquery"
 
@@ -68,6 +69,15 @@ func (h *HeaderImgPlugin) Run(ctx context.Context, doc *doc.Document) error {
 		}
 		return true
 	})
+	hurl, err := url.Parse(headerImgUrl)
+	if err != nil {
+		return nil
+	}
+	// relative address
+	if hurl.Host == "" {
+		websiteUrl, _ := url.Parse(doc.WebUrl)
+		headerImgUrl = websiteUrl.ResolveReference(&url.URL{Path: headerImgUrl}).String()
+	}
 	doc.HeaderImage = headerImgUrl
 	return nil
 }

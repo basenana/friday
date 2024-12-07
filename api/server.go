@@ -86,6 +86,6 @@ func (s *HttpServer) handle(group *gin.RouterGroup) {
 	docGroup := group.Group("/namespace/:namespace/docs")
 	docGroup.POST("/entry/:entryId", s.store())
 	docGroup.DELETE("/entry/:entryId", s.delete())
-	docGroup.PUT("/entry/:entryId/", s.update())
+	docGroup.PUT("/entry/:entryId", s.update())
 	docGroup.GET("/search", s.search())
 }
