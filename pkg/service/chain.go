@@ -98,6 +98,9 @@ func (c *Chain) Search(ctx context.Context, query *doc.DocumentQuery, attrQuerie
 	for _, attr := range attrs {
 		ids = append(ids, attr.EntryId)
 	}
+	if len(ids) == 0 && len(attrQueries) != 0 {
+		return []doc.Document{}, nil
+	}
 	if len(ids) != 0 {
 		query.AttrQueries = append(query.AttrQueries, doc.AttrQuery{
 			Attr:   "entryId",

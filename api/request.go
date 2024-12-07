@@ -137,20 +137,6 @@ func (q *DocQuery) ToQuery() *doc.DocumentQuery {
 			Value:  q.WebUrl,
 		})
 	}
-	if q.ParentID != "" {
-		attrQueries = append(attrQueries, doc.AttrQuery{
-			Attr:   "parentId",
-			Option: "=",
-			Value:  q.ParentID,
-		})
-	}
-	if q.UnRead != nil {
-		attrQueries = append(attrQueries, doc.AttrQuery{
-			Attr:   "unRead",
-			Option: "=",
-			Value:  true,
-		})
-	}
 
 	query.AttrQueries = attrQueries
 	return query
