@@ -26,7 +26,7 @@ import (
 var (
 	DocFilterableAttrs     = []string{"namespace", "id", "entryId", "kind", "name", "source", "webUrl", "createdAt", "updatedAt"}
 	DocAttrFilterableAttrs = []string{"namespace", "entryId", "key", "id", "kind", "value"}
-	DocSortAttrs           = []string{"createdAt", "updatedAt"}
+	DocSortAttrs           = []string{"createdAt", "updatedAt", "name"}
 )
 
 type DocPtrInterface interface {

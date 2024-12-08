@@ -23,6 +23,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/basenana/friday/pkg/models/doc"
+	"github.com/basenana/friday/pkg/utils"
 )
 
 func (s *HttpServer) store() gin.HandlerFunc {
@@ -118,32 +119,62 @@ func (s *HttpServer) filter() gin.HandlerFunc {
 			c.String(400, fmt.Sprintf("invalid pagesize: %s", c.Query("page")))
 			return
 		}
-		sort := c.DefaultQuery("sort", "createdAt")
-		desc := c.DefaultQuery("desc", "true") == "true"
-		var (
-			unread *bool
-			mark   *bool
-		)
-		if c.Query("unread") != "" {
-			b := c.Query("unread") == "true"
-			unread = &b
-		}
-		if c.Query("mark") != "" {
-			b := c.Query("mark") == "true"
-			mark = &b
-		}
 		docQuery := DocQuery{
 			Namespace:   namespace,
 			Source:      c.Query("source"),
 			WebUrl:      c.Query("webUrl"),
 			ParentID:    c.Query("parentID"),
-			UnRead:      unread,
-			Mark:        mark,
 			Search:      c.Query("search"),
 			HitsPerPage: int64(pageSize),
 			Page:        int64(page),
-			Sort:        sort,
-			Desc:        desc,
+			Sort:        c.DefaultQuery("sort", "createdAt"),
+			Desc:        c.DefaultQuery("desc", "false") == "true",
+		}
+		createAtStart := c.Query("createAtStart")
+		if createAtStart != "" {
+			createAtStartTimestamp, err := strconv.Atoi(createAtStart)
+			if err != nil {
+				c.String(400, fmt.Sprintf("invalid createAtStart: %s", c.Query("page")))
+				return
+			}
+			docQuery.CreatedAtStart = utils.ToPtr(int64(createAtStartTimestamp))
+		}
+		createAtEnd := c.Query("createAtEnd")
+		if createAtEnd != "" {
+			createAtEndTimestamp, err := strconv.Atoi(createAtEnd)
+			if err != nil {
+				c.String(400, fmt.Sprintf("invalid createAtEnd: %s", c.Query("page")))
+				return
+			}
+			docQuery.ChangedAtEnd = utils.ToPtr(int64(createAtEndTimestamp))
+		}
+		updatedAtStart := c.Query("updatedAtStart")
+		if updatedAtStart != "" {
+			updatedAtStartTimestamp, err := strconv.Atoi(updatedAtStart)
+			if err != nil {
+				c.String(400, fmt.Sprintf("invalid updatedAtStart: %s", c.Query("page")))
+				return
+			}
+			docQuery.ChangedAtStart = utils.ToPtr(int64(updatedAtStartTimestamp))
+		}
+		updatedAtEnd := c.Query("updatedAtEnd")
+		if updatedAtEnd != "" {
+			updatedAtEndTimestamp, err := strconv.Atoi(updatedAtEnd)
+			if err != nil {
+				c.String(400, fmt.Sprintf("invalid updatedAtEnd: %s", c.Query("page")))
+				return
+			}
+			docQuery.ChangedAtEnd = utils.ToPtr(int64(updatedAtEndTimestamp))
+		}
+		fuzzyName := c.Query("fuzzyName")
+		if fuzzyName != "" {
+			docQuery.FuzzyName = &fuzzyName
+		}
+		if c.Query("unread") != "" {
+			docQuery.UnRead = utils.ToPtr(c.Query("unread") == "true")
+		}
+		if c.Query("mark") != "" {
+			docQuery.Mark = utils.ToPtr(c.Query("mark") == "true")
 		}
 		docs, err := s.chain.Search(c, docQuery.ToQuery(), docQuery.GetAttrQueries())
 		if err != nil {
