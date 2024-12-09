@@ -34,6 +34,10 @@ func (s *HttpServer) store() gin.HandlerFunc {
 			c.JSON(400, gin.H{"error": err.Error()})
 			return
 		}
+		if err := body.Valid(); err != nil {
+			c.JSON(400, gin.H{"error": err.Error()})
+			return
+		}
 		body.Namespace = namespace
 		body.EntryId = entryId
 		// store the document
@@ -78,6 +82,10 @@ func (s *HttpServer) get() gin.HandlerFunc {
 			c.String(500, fmt.Sprintf("get document error: %s", err))
 			return
 		}
+		if document == nil {
+			c.String(404, fmt.Sprintf("document not found: %s", entryId))
+			return
+		}
 		docWithAttr := &DocumentWithAttr{
 			Document: document,
 		}
@@ -101,7 +109,7 @@ func (s *HttpServer) get() gin.HandlerFunc {
 			}
 		}
 
-		c.JSON(200, attrs)
+		c.JSON(200, docWithAttr)
 	}
 }
 
@@ -124,8 +132,8 @@ func (s *HttpServer) filter() gin.HandlerFunc {
 			unread *bool
 			mark   *bool
 		)
-		if c.Query("unread") != "" {
-			b := c.Query("unread") == "true"
+		if c.Query("unRead") != "" {
+			b := c.Query("unRead") == "true"
 			unread = &b
 		}
 		if c.Query("mark") != "" {
@@ -160,10 +168,10 @@ func (s *HttpServer) filter() gin.HandlerFunc {
 			c.String(500, fmt.Sprintf("list document attrs error: %s", err))
 			return
 		}
-		attrsMap := map[string][]doc.DocumentAttr{}
+		attrsMap := map[string][]*doc.DocumentAttr{}
 		for _, attr := range allAttrs {
 			if attrsMap[attr.EntryId] == nil {
-				attrsMap[attr.EntryId] = []doc.DocumentAttr{}
+				attrsMap[attr.EntryId] = []*doc.DocumentAttr{}
 			}
 			attrsMap[attr.EntryId] = append(attrsMap[attr.EntryId], attr)
 		}
@@ -195,21 +203,21 @@ func (s *HttpServer) filter() gin.HandlerFunc {
 func (s *HttpServer) delete() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		namespace := c.Param("namespace")
-		queries := []doc.AttrQuery{}
+		queries := []*doc.AttrQuery{}
 		entryId := c.Param("entryId")
 		queries = append(queries,
-			doc.AttrQuery{
+			&doc.AttrQuery{
 				Attr:   "entryId",
 				Option: "=",
 				Value:  entryId,
 			},
-			doc.AttrQuery{
+			&doc.AttrQuery{
 				Attr:   "namespace",
 				Option: "=",
 				Value:  namespace,
 			},
 		)
-		if err := s.chain.DeleteByFilter(c, queries); err != nil {
+		if err := s.chain.DeleteByFilter(c, doc.DocumentAttrQuery{AttrQueries: queries}); err != nil {
 			c.String(500, fmt.Sprintf("delete document error: %s", err))
 			return
 		}

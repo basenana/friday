@@ -24,7 +24,7 @@ import (
 
 type DocStoreInterface interface {
 	Store(ctx context.Context, docPtr doc.DocPtrInterface) error
-	FilterAttr(ctx context.Context, query *doc.DocumentAttrQuery) ([]doc.DocumentAttr, error)
-	Search(ctx context.Context, query *doc.DocumentQuery) ([]doc.Document, error)
-	DeleteByFilter(ctx context.Context, aqs []doc.AttrQuery) error
+	FilterAttr(ctx context.Context, query *doc.DocumentAttrQuery) (doc.DocumentAttrList, error)
+	Search(ctx context.Context, query *doc.DocumentQuery) (doc.DocumentList, error)
+	DeleteByFilter(ctx context.Context, aqs doc.DocumentAttrQuery) error
 }

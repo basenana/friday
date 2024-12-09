@@ -25,8 +25,8 @@ import (
 )
 
 type MockClient struct {
-	docs  []doc.Document
-	attrs []doc.DocumentAttr
+	docs  []*doc.Document
+	attrs []*doc.DocumentAttr
 }
 
 var _ DocStoreInterface = &MockClient{}
@@ -35,23 +35,23 @@ func (m *MockClient) Store(ctx context.Context, docPtr doc.DocPtrInterface) erro
 	if docPtr.Type() == "document" {
 		d := docPtr.(*doc.Document)
 		if m.docs == nil {
-			m.docs = []doc.Document{}
+			m.docs = []*doc.Document{}
 		}
-		m.docs = append(m.docs, *d)
+		m.docs = append(m.docs, d)
 	}
 	if docPtr.Type() == "attr" {
 		d := docPtr.(*doc.DocumentAttr)
 		if m.attrs == nil {
-			m.attrs = []doc.DocumentAttr{}
+			m.attrs = []*doc.DocumentAttr{}
 		}
-		m.attrs = append(m.attrs, *d)
+		m.attrs = append(m.attrs, d)
 	}
 	return nil
 }
 
-func (m *MockClient) FilterAttr(ctx context.Context, query *doc.DocumentAttrQuery) ([]doc.DocumentAttr, error) {
+func (m *MockClient) FilterAttr(ctx context.Context, query *doc.DocumentAttrQuery) (doc.DocumentAttrList, error) {
 	aq := query.AttrQueries
-	result := []doc.DocumentAttr{}
+	result := []*doc.DocumentAttr{}
 	for _, attr := range m.attrs {
 		matched := true
 		all := len(aq)
@@ -91,9 +91,9 @@ func (m *MockClient) FilterAttr(ctx context.Context, query *doc.DocumentAttrQuer
 	return result, nil
 }
 
-func (m *MockClient) Search(ctx context.Context, query *doc.DocumentQuery) ([]doc.Document, error) {
+func (m *MockClient) Search(ctx context.Context, query *doc.DocumentQuery) (doc.DocumentList, error) {
 	aq := query.AttrQueries
-	result := []doc.Document{}
+	result := []*doc.Document{}
 	for _, d := range m.docs {
 		matched := true
 		all := len(aq)
@@ -134,19 +134,19 @@ func (m *MockClient) Search(ctx context.Context, query *doc.DocumentQuery) ([]do
 	return result, nil
 }
 
-func (m *MockClient) DeleteByFilter(ctx context.Context, aqs []doc.AttrQuery) error {
-	attrs := make(map[string]doc.DocumentAttr)
+func (m *MockClient) DeleteByFilter(ctx context.Context, aqs doc.DocumentAttrQuery) error {
+	attrs := make(map[string]*doc.DocumentAttr)
 	for _, attr := range m.attrs {
 		attrs[attr.Id] = attr
 	}
-	docs := make(map[string]doc.Document)
+	docs := make(map[string]*doc.Document)
 	for _, d := range m.docs {
 		docs[d.Id] = d
 	}
 	for _, d := range m.docs {
 		matched := true
-		all := len(aqs)
-		for _, q := range aqs {
+		all := len(aqs.AttrQueries)
+		for _, q := range aqs.AttrQueries {
 			if q.Attr == "entryId" {
 				all -= 1
 				if !match(q, d.EntryId) {
@@ -182,8 +182,8 @@ func (m *MockClient) DeleteByFilter(ctx context.Context, aqs []doc.AttrQuery) er
 	}
 	for _, attr := range m.attrs {
 		matched := true
-		all := len(aqs)
-		for _, aq := range aqs {
+		all := len(aqs.AttrQueries)
+		for _, aq := range aqs.AttrQueries {
 			if attr.Key == aq.Attr {
 				all -= 1
 				if !match(aq, attr.Value) {
@@ -203,12 +203,12 @@ func (m *MockClient) DeleteByFilter(ctx context.Context, aqs []doc.AttrQuery) er
 			delete(attrs, attr.Id)
 		}
 	}
-	var attrsSlice []doc.DocumentAttr
+	var attrsSlice []*doc.DocumentAttr
 	for _, v := range attrs {
 		attrsSlice = append(attrsSlice, v)
 	}
 	m.attrs = attrsSlice
-	var docsSlice []doc.Document
+	var docsSlice []*doc.Document
 	for _, v := range docs {
 		docsSlice = append(docsSlice, v)
 	}
@@ -216,7 +216,7 @@ func (m *MockClient) DeleteByFilter(ctx context.Context, aqs []doc.AttrQuery) er
 	return nil
 }
 
-func match[T string | interface{}](aq doc.AttrQuery, t T) bool {
+func match[T string | interface{}](aq *doc.AttrQuery, t T) bool {
 	if aq.Option == "=" && reflect.DeepEqual(t, aq.Value.(T)) {
 		return true
 	}
