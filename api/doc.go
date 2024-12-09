@@ -127,20 +127,6 @@ func (s *HttpServer) filter() gin.HandlerFunc {
 			c.String(400, fmt.Sprintf("invalid pagesize: %s", c.Query("page")))
 			return
 		}
-		sort := c.DefaultQuery("sort", "createdAt")
-		desc := c.DefaultQuery("desc", "true") == "true"
-		var (
-			unread *bool
-			mark   *bool
-		)
-		if c.Query("unRead") != "" {
-			b := c.Query("unRead") == "true"
-			unread = &b
-		}
-		if c.Query("mark") != "" {
-			b := c.Query("mark") == "true"
-			mark = &b
-		}
 		docQuery := DocQuery{
 			Namespace:   namespace,
 			Source:      c.Query("source"),
@@ -192,8 +178,8 @@ func (s *HttpServer) filter() gin.HandlerFunc {
 		if fuzzyName != "" {
 			docQuery.FuzzyName = &fuzzyName
 		}
-		if c.Query("unread") != "" {
-			docQuery.UnRead = utils.ToPtr(c.Query("unread") == "true")
+		if c.Query("unRead") != "" {
+			docQuery.UnRead = utils.ToPtr(c.Query("unRead") == "true")
 		}
 		if c.Query("mark") != "" {
 			docQuery.Mark = utils.ToPtr(c.Query("mark") == "true")
