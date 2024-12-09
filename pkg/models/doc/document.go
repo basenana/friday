@@ -17,10 +17,7 @@
 package doc
 
 import (
-	"encoding/json"
 	"fmt"
-
-	"github.com/meilisearch/meilisearch-go"
 )
 
 var (
@@ -65,99 +62,18 @@ func (d *Document) Type() string {
 	return "document"
 }
 
-type DocumentAttr struct {
-	Id        string      `json:"id"`
-	Kind      string      `json:"kind"`
-	Namespace string      `json:"namespace"`
-	EntryId   string      `json:"entryId"`
-	Key       string      `json:"key"`
-	Value     interface{} `json:"value"`
+func (d *Document) String() string {
+	return fmt.Sprintf("EntryId(%s) %s", d.EntryId, d.Name)
 }
 
-func (d *DocumentAttr) ID() string {
-	return d.Id
-}
+type DocumentList []*Document
 
-func (d *DocumentAttr) EntryID() string {
-	return d.EntryId
-}
-
-func (d *DocumentAttr) Type() string {
-	return "attr"
+func (d DocumentList) String() string {
+	result := ""
+	for _, doc := range d {
+		result += fmt.Sprintf("EntryId(%s) %s\n", doc.EntryId, doc.Name)
+	}
+	return result
 }
 
 var _ DocPtrInterface = &Document{}
-var _ DocPtrInterface = &DocumentAttr{}
-
-type DocumentQuery struct {
-	AttrQueries []AttrQuery
-
-	Search      string
-	HitsPerPage int64
-	Page        int64
-	Offset      int64
-	Limit       int64
-	Sort        []Sort
-}
-
-type Sort struct {
-	Attr string
-	Asc  bool
-}
-
-func (s *Sort) String() string {
-	if s.Asc {
-		return fmt.Sprintf("%s:asc", s.Attr)
-	}
-	return fmt.Sprintf("%s:desc", s.Attr)
-}
-
-type DocumentAttrQuery struct {
-	AttrQueries []AttrQuery
-}
-
-type AttrQuery struct {
-	Attr   string
-	Option string
-	Value  interface{}
-}
-
-func (aq *AttrQuery) ToFilter() interface{} {
-	vs, _ := json.Marshal(aq.Value)
-	return fmt.Sprintf("%s %s %s", aq.Attr, aq.Option, vs)
-}
-
-func (q *DocumentQuery) ToRequest() *meilisearch.SearchRequest {
-	// build filter
-	filter := []interface{}{}
-	for _, aq := range q.AttrQueries {
-		filter = append(filter, aq.ToFilter())
-	}
-	sorts := []string{}
-	for _, s := range q.Sort {
-		sorts = append(sorts, s.String())
-	}
-
-	return &meilisearch.SearchRequest{
-		Offset:      q.Offset,
-		Limit:       q.Limit,
-		Sort:        sorts,
-		HitsPerPage: q.HitsPerPage,
-		Page:        q.Page,
-		Query:       q.Search,
-		Filter:      filter,
-	}
-}
-
-func (q *DocumentAttrQuery) ToRequest() *meilisearch.SearchRequest {
-	filter := []interface{}{}
-	for _, aq := range q.AttrQueries {
-		filter = append(filter, aq.ToFilter())
-	}
-	return &meilisearch.SearchRequest{
-		Filter:      filter,
-		Limit:       10000,
-		HitsPerPage: 10000,
-		Query:       "",
-	}
-}

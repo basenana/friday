@@ -85,15 +85,15 @@ func (c *MeiliClient) Store(ctx context.Context, docPtr doc.DocPtrInterface) err
 	return nil
 }
 
-func (c *MeiliClient) FilterAttr(ctx context.Context, query *doc.DocumentAttrQuery) ([]doc.DocumentAttr, error) {
+func (c *MeiliClient) FilterAttr(ctx context.Context, query *doc.DocumentAttrQuery) (doc.DocumentAttrList, error) {
 	rep, err := c.index.Search("", query.ToRequest())
 	if err != nil {
 		return nil, err
 	}
-	var attrs []doc.DocumentAttr
+	attrs := doc.DocumentAttrList{}
 	for _, hit := range rep.Hits {
 		b, _ := json.Marshal(hit)
-		var attr doc.DocumentAttr
+		attr := &doc.DocumentAttr{}
 		err = json.Unmarshal(b, &attr)
 		if err != nil {
 			c.log.Errorf("unmarshal document attr error: %s", err)
@@ -104,15 +104,15 @@ func (c *MeiliClient) FilterAttr(ctx context.Context, query *doc.DocumentAttrQue
 	return attrs, nil
 }
 
-func (c *MeiliClient) Search(ctx context.Context, query *doc.DocumentQuery) ([]doc.Document, error) {
+func (c *MeiliClient) Search(ctx context.Context, query *doc.DocumentQuery) (doc.DocumentList, error) {
 	rep, err := c.index.Search(query.Search, query.ToRequest())
 	if err != nil {
 		return nil, err
 	}
-	var documents []doc.Document
+	documents := doc.DocumentList{}
 	for _, hit := range rep.Hits {
 		b, _ := json.Marshal(hit)
-		var document doc.Document
+		document := &doc.Document{}
 		err = json.Unmarshal(b, &document)
 		if err != nil {
 			c.log.Errorf("unmarshal document error: %s", err)
@@ -149,9 +149,9 @@ func (c *MeiliClient) Delete(ctx context.Context, docId string) error {
 	return nil
 }
 
-func (c *MeiliClient) DeleteByFilter(ctx context.Context, aqs []doc.AttrQuery) error {
+func (c *MeiliClient) DeleteByFilter(ctx context.Context, aqs doc.DocumentAttrQuery) error {
 	filter := []interface{}{}
-	for _, aq := range aqs {
+	for _, aq := range aqs.AttrQueries {
 		filter = append(filter, aq.ToFilter())
 	}
 

@@ -17,6 +17,8 @@
 package api
 
 import (
+	"fmt"
+
 	"github.com/google/uuid"
 
 	"github.com/basenana/friday/pkg/models/doc"
@@ -38,6 +40,7 @@ func (r *DocRequest) ToDocument() *doc.Document {
 		Id:        uuid.New().String(),
 		EntryId:   r.EntryId,
 		Name:      r.Name,
+		Kind:      "document",
 		Namespace: r.Namespace,
 		Source:    r.Source,
 		WebUrl:    r.WebUrl,
@@ -45,6 +48,16 @@ func (r *DocRequest) ToDocument() *doc.Document {
 		CreatedAt: r.CreatedAt,
 		UpdatedAt: r.ChangedAt,
 	}
+}
+
+func (r *DocRequest) Valid() error {
+	if r.EntryId == "" || r.EntryId == "0" {
+		return fmt.Errorf("entryId is required")
+	}
+	if r.Namespace == "" {
+		return fmt.Errorf("namespace is required")
+	}
+	return nil
 }
 
 type DocAttrRequest struct {
@@ -121,55 +134,55 @@ func (q *DocQuery) ToQuery() *doc.DocumentQuery {
 			Asc:  !q.Desc,
 		}},
 	}
-	attrQueries := []doc.AttrQuery{{
+	attrQueries := []*doc.AttrQuery{{
 		Attr:   "namespace",
 		Option: "=",
 		Value:  q.Namespace,
 	}}
 	if q.Source != "" {
-		attrQueries = append(attrQueries, doc.AttrQuery{
+		attrQueries = append(attrQueries, &doc.AttrQuery{
 			Attr:   "source",
 			Option: "=",
 			Value:  q.Source,
 		})
 	}
 	if q.WebUrl != "" {
-		attrQueries = append(attrQueries, doc.AttrQuery{
+		attrQueries = append(attrQueries, &doc.AttrQuery{
 			Attr:   "webUrl",
 			Option: "=",
 			Value:  q.WebUrl,
 		})
 	}
 	if q.CreatedAtStart != nil {
-		attrQueries = append(attrQueries, doc.AttrQuery{
+		attrQueries = append(attrQueries, &doc.AttrQuery{
 			Attr:   "createdAt",
 			Option: ">=",
 			Value:  *q.CreatedAtStart,
 		})
 	}
 	if q.ChangedAtStart != nil {
-		attrQueries = append(attrQueries, doc.AttrQuery{
+		attrQueries = append(attrQueries, &doc.AttrQuery{
 			Attr:   "updatedAt",
 			Option: ">=",
 			Value:  *q.ChangedAtStart,
 		})
 	}
 	if q.CreatedAtEnd != nil {
-		attrQueries = append(attrQueries, doc.AttrQuery{
+		attrQueries = append(attrQueries, &doc.AttrQuery{
 			Attr:   "createdAt",
 			Option: "<=",
 			Value:  *q.CreatedAtEnd,
 		})
 	}
 	if q.ChangedAtEnd != nil {
-		attrQueries = append(attrQueries, doc.AttrQuery{
+		attrQueries = append(attrQueries, &doc.AttrQuery{
 			Attr:   "updatedAt",
 			Option: "<=",
 			Value:  *q.ChangedAtEnd,
 		})
 	}
 	if q.FuzzyName != nil {
-		attrQueries = append(attrQueries, doc.AttrQuery{
+		attrQueries = append(attrQueries, &doc.AttrQuery{
 			Attr:   "name",
 			Option: "CONTAINS",
 			Value:  *q.FuzzyName,
@@ -184,7 +197,7 @@ func (q *DocQuery) GetAttrQueries() []*doc.DocumentAttrQuery {
 	attrQueries := []*doc.DocumentAttrQuery{}
 	if q.UnRead != nil {
 		attrQueries = append(attrQueries, &doc.DocumentAttrQuery{
-			AttrQueries: []doc.AttrQuery{
+			AttrQueries: []*doc.AttrQuery{
 				{
 					Attr:   "namespace",
 					Option: "=",
@@ -205,7 +218,7 @@ func (q *DocQuery) GetAttrQueries() []*doc.DocumentAttrQuery {
 	}
 	if q.Mark != nil {
 		attrQueries = append(attrQueries, &doc.DocumentAttrQuery{
-			AttrQueries: []doc.AttrQuery{
+			AttrQueries: []*doc.AttrQuery{
 				{
 					Attr:   "namespace",
 					Option: "=",
@@ -226,7 +239,7 @@ func (q *DocQuery) GetAttrQueries() []*doc.DocumentAttrQuery {
 	}
 	if q.ParentID != "" {
 		attrQueries = append(attrQueries, &doc.DocumentAttrQuery{
-			AttrQueries: []doc.AttrQuery{
+			AttrQueries: []*doc.AttrQuery{
 				{
 					Attr:   "namespace",
 					Option: "=",
@@ -249,7 +262,7 @@ func (q *DocQuery) GetAttrQueries() []*doc.DocumentAttrQuery {
 }
 
 type DocumentWithAttr struct {
-	doc.Document
+	*doc.Document
 
 	ParentID string `json:"parentId,omitempty"`
 	UnRead   *bool  `json:"unRead,omitempty"`
