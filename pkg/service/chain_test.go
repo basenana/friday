@@ -28,6 +28,7 @@ import (
 	"github.com/basenana/friday/pkg/models/doc"
 	"github.com/basenana/friday/pkg/service"
 	"github.com/basenana/friday/pkg/store/docstore"
+	"github.com/basenana/friday/pkg/utils/logger"
 )
 
 var _ = Describe("Chain", func() {
@@ -48,9 +49,11 @@ var _ = Describe("Chain", func() {
 
 	BeforeEach(func() {
 		service.ChainPool = dispatch.NewPool(10)
+		logger.InitLog()
 		Chain = &service.Chain{
 			MeiliClient: &docstore.MockClient{},
 			Plugins:     []plugin.ChainPlugin{},
+			Log:         logger.NewLog("test"),
 		}
 		for _, p := range plugin.DefaultRegisterer.Chains {
 			Chain.Plugins = append(Chain.Plugins, p)
@@ -137,7 +140,7 @@ var _ = Describe("Chain", func() {
 		Context("search document", func() {
 			It("search document should be successful", func() {
 				docs, err := Chain.Search(context.TODO(), &doc.DocumentQuery{
-					AttrQueries: []doc.AttrQuery{{
+					AttrQueries: []*doc.AttrQuery{{
 						Attr:   "namespace",
 						Option: "=",
 						Value:  "test-ns",
@@ -149,7 +152,7 @@ var _ = Describe("Chain", func() {
 			})
 			It("search document with attr should be successful", func() {
 				docs, err := Chain.Search(context.TODO(), &doc.DocumentQuery{
-					AttrQueries: []doc.AttrQuery{{
+					AttrQueries: []*doc.AttrQuery{{
 						Attr:   "namespace",
 						Option: "=",
 						Value:  "test-ns",
@@ -157,7 +160,7 @@ var _ = Describe("Chain", func() {
 					Search: "test",
 				}, []*doc.DocumentAttrQuery{
 					{
-						AttrQueries: []doc.AttrQuery{
+						AttrQueries: []*doc.AttrQuery{
 							{
 								Attr:   "parentId",
 								Option: "=",
@@ -206,21 +209,23 @@ var _ = Describe("Chain", func() {
 					EntryId:   "10",
 				})
 				Expect(err).Should(BeNil())
-				err = Chain.DeleteByFilter(context.TODO(), []doc.AttrQuery{
-					{
-						Attr:   "namespace",
-						Option: "=",
-						Value:  "test-ns",
-					},
-					{
-						Attr:   "entryId",
-						Option: "=",
-						Value:  "10",
-					},
-				})
+				err = Chain.DeleteByFilter(context.TODO(), doc.DocumentAttrQuery{
+					AttrQueries: []*doc.AttrQuery{
+						{
+							Attr:   "namespace",
+							Option: "=",
+							Value:  "test-ns",
+						},
+						{
+							Attr:   "entryId",
+							Option: "=",
+							Value:  "10",
+						},
+					}},
+				)
 				Expect(err).Should(BeNil())
 				docs, err := Chain.Search(context.TODO(), &doc.DocumentQuery{
-					AttrQueries: []doc.AttrQuery{{
+					AttrQueries: []*doc.AttrQuery{{
 						Attr:   "entryId",
 						Option: "=",
 						Value:  "10",
