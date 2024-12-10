@@ -31,6 +31,9 @@ type DocRequest struct {
 	Source    string `json:"source,omitempty"`
 	WebUrl    string `json:"webUrl,omitempty"`
 	Content   string `json:"content"`
+	UnRead    *bool  `json:"unRead,omitempty"`
+	Mark      *bool  `json:"mark,omitempty"`
+	ParentID  string `json:"parentId,omitempty"`
 	CreatedAt int64  `json:"createdAt,omitempty"`
 	ChangedAt int64  `json:"changedAt,omitempty"`
 }
@@ -48,6 +51,38 @@ func (r *DocRequest) ToDocument() *doc.Document {
 		CreatedAt: r.CreatedAt,
 		UpdatedAt: r.ChangedAt,
 	}
+}
+
+func (r *DocRequest) ToAttr() doc.DocumentAttrList {
+	attrs := doc.DocumentAttrList{}
+	if r.ParentID != "" {
+		attrs = append(attrs, &doc.DocumentAttr{
+			Id:        uuid.New().String(),
+			Namespace: r.Namespace,
+			EntryId:   r.EntryId,
+			Key:       "parentId",
+			Value:     r.ParentID,
+		})
+	}
+	if r.Mark != nil {
+		attrs = append(attrs, &doc.DocumentAttr{
+			Id:        uuid.New().String(),
+			Namespace: r.Namespace,
+			EntryId:   r.EntryId,
+			Key:       "mark",
+			Value:     *r.Mark,
+		})
+	}
+	if r.UnRead != nil {
+		attrs = append(attrs, &doc.DocumentAttr{
+			Id:        uuid.New().String(),
+			Namespace: r.Namespace,
+			EntryId:   r.EntryId,
+			Key:       "unRead",
+			Value:     *r.UnRead,
+		})
+	}
+	return attrs
 }
 
 func (r *DocRequest) Valid() error {
