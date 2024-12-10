@@ -47,6 +47,13 @@ func (s *HttpServer) store() gin.HandlerFunc {
 			c.String(500, fmt.Sprintf("store document error: %s", err))
 			return
 		}
+		attrs := body.ToAttr()
+		for _, attr := range attrs {
+			if err := s.chain.StoreAttr(c, attr); err != nil {
+				c.String(500, fmt.Sprintf("create document attr error: %s", err))
+				return
+			}
+		}
 		c.JSON(200, doc)
 	}
 }
