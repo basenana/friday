@@ -30,6 +30,7 @@ type DocPtrInterface interface {
 	ID() string
 	EntryID() string
 	Type() string
+	String() string
 }
 
 type Document struct {

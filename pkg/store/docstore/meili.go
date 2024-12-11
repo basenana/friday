@@ -73,19 +73,22 @@ func NewMeiliClient(conf config.Config) (DocStoreInterface, error) {
 }
 
 func (c *MeiliClient) Store(ctx context.Context, docPtr doc.DocPtrInterface) error {
+	c.log.Debugf("store entryId %s %s: %s", docPtr.EntryID(), docPtr.Type(), docPtr.String())
 	task, err := c.index.AddDocuments(docPtr, "id")
 	if err != nil {
 		c.log.Error(err)
 		return err
 	}
-	if err := c.wait(ctx, task.TaskUID); err != nil {
-		c.log.Errorf("store document with entryId %s error: %s", docPtr.EntryID(), err)
-		return err
-	}
+	go func() {
+		if err := c.wait(ctx, task.TaskUID); err != nil {
+			c.log.Errorf("store document with entryId %s error: %s", docPtr.EntryID(), err)
+		}
+	}()
 	return nil
 }
 
 func (c *MeiliClient) FilterAttr(ctx context.Context, query *doc.DocumentAttrQuery) (doc.DocumentAttrList, error) {
+	c.log.Debugf("query document attr : [%s]", query.String())
 	rep, err := c.index.Search("", query.ToRequest())
 	if err != nil {
 		return nil, err
@@ -105,6 +108,7 @@ func (c *MeiliClient) FilterAttr(ctx context.Context, query *doc.DocumentAttrQue
 }
 
 func (c *MeiliClient) Search(ctx context.Context, query *doc.DocumentQuery) (doc.DocumentList, error) {
+	c.log.Debugf("search document: [%s] query: [%s]", query.Search, query.String())
 	rep, err := c.index.Search(query.Search, query.ToRequest())
 	if err != nil {
 		return nil, err
@@ -124,32 +128,37 @@ func (c *MeiliClient) Search(ctx context.Context, query *doc.DocumentQuery) (doc
 }
 
 func (c *MeiliClient) Update(ctx context.Context, document *doc.Document) error {
+	c.log.Debugf("update document: %s", document.ID())
 	t, err := c.index.UpdateDocuments(document)
 	if err != nil {
 		c.log.Error(err)
 		return err
 	}
-	if err := c.wait(ctx, t.TaskUID); err != nil {
-		c.log.Errorf("update document %s error: %s", document.ID, err)
-		return err
-	}
+	go func() {
+		if err := c.wait(ctx, t.TaskUID); err != nil {
+			c.log.Errorf("update document %s error: %s", document.ID, err)
+		}
+	}()
 	return nil
 }
 
 func (c *MeiliClient) Delete(ctx context.Context, docId string) error {
+	c.log.Debugf("delete document: %s", docId)
 	t, err := c.index.DeleteDocument(docId)
 	if err != nil {
 		c.log.Error(err)
 		return err
 	}
-	if err := c.wait(ctx, t.TaskUID); err != nil {
-		c.log.Errorf("delete document %s error: %s", docId, err)
-		return err
-	}
+	go func() {
+		if err := c.wait(ctx, t.TaskUID); err != nil {
+			c.log.Errorf("delete document %s error: %s", docId, err)
+		}
+	}()
 	return nil
 }
 
 func (c *MeiliClient) DeleteByFilter(ctx context.Context, aqs doc.DocumentAttrQuery) error {
+	c.log.Debugf("delete by filter: %+v", aqs.String())
 	filter := []interface{}{}
 	for _, aq := range aqs.AttrQueries {
 		filter = append(filter, aq.ToFilter())
@@ -160,15 +169,16 @@ func (c *MeiliClient) DeleteByFilter(ctx context.Context, aqs doc.DocumentAttrQu
 		c.log.Error(err)
 		return err
 	}
-	if err := c.wait(ctx, t.TaskUID); err != nil {
-		c.log.Errorf("delete document by filter error: %s", err)
-		return err
-	}
+	go func() {
+		if err := c.wait(ctx, t.TaskUID); err != nil {
+			c.log.Errorf("delete document by filter error: %s", err)
+		}
+	}()
 	return nil
 }
 
 func (c *MeiliClient) wait(ctx context.Context, taskUID int64) error {
-	t := time.NewTicker(1 * time.Second)
+	t := time.NewTicker(100 * time.Millisecond)
 	defer t.Stop()
 	for {
 		select {
