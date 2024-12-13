@@ -18,6 +18,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 
 	"go.uber.org/zap"
 
@@ -64,7 +65,7 @@ func (c *Chain) Store(ctx context.Context, document *doc.Document) error {
 			return err
 		} else if d != nil {
 			c.Log.Debugf("document already exists: %+v", d.String())
-			return nil
+			return fmt.Errorf("document already exists: %+v", d.String())
 		}
 		for _, plugin := range c.Plugins {
 			err := plugin.Run(ctx, document)

@@ -27,6 +27,7 @@ import (
 
 	"github.com/basenana/friday/config"
 	"github.com/basenana/friday/pkg/models/doc"
+	"github.com/basenana/friday/pkg/utils"
 	"github.com/basenana/friday/pkg/utils/logger"
 )
 
@@ -56,20 +57,41 @@ func NewMeiliClient(conf config.Config) (DocStoreInterface, error) {
 		index:        index,
 		client:       client,
 	}
+	return meiliClient, meiliClient.init()
+}
+
+func (c *MeiliClient) init() error {
 	filterableAttrs := append(doc.DocFilterableAttrs, doc.DocAttrFilterableAttrs...)
-	t, err := client.Index(conf.MeiliConfig.Index).UpdateFilterableAttributes(&filterableAttrs)
+
+	attrs, err := c.index.GetFilterableAttributes()
 	if err != nil {
-		return nil, err
+		return err
 	}
-	if err = meiliClient.wait(context.TODO(), t.TaskUID); err != nil {
-		return nil, err
+	if !utils.Equal(filterableAttrs, attrs) {
+		t, err := c.index.UpdateFilterableAttributes(&filterableAttrs)
+		if err != nil {
+			return err
+		}
+		if err = c.wait(context.TODO(), t.TaskUID); err != nil {
+			return err
+		}
 	}
+
 	sortAttrs := doc.DocSortAttrs
-	t, err = client.Index(conf.MeiliConfig.Index).UpdateSortableAttributes(&sortAttrs)
+	crtSortAttrs, err := c.index.GetSortableAttributes()
 	if err != nil {
-		return nil, err
+		return err
 	}
-	return meiliClient, meiliClient.wait(context.TODO(), t.TaskUID)
+	if !utils.Equal(sortAttrs, crtSortAttrs) {
+		t, err := c.index.UpdateSortableAttributes(&sortAttrs)
+		if err != nil {
+			return err
+		}
+		if err = c.wait(context.TODO(), t.TaskUID); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (c *MeiliClient) Store(ctx context.Context, docPtr doc.DocPtrInterface) error {
@@ -79,11 +101,9 @@ func (c *MeiliClient) Store(ctx context.Context, docPtr doc.DocPtrInterface) err
 		c.log.Error(err)
 		return err
 	}
-	go func() {
-		if err := c.wait(ctx, task.TaskUID); err != nil {
-			c.log.Errorf("store document with entryId %s error: %s", docPtr.EntryID(), err)
-		}
-	}()
+	if err := c.wait(ctx, task.TaskUID); err != nil {
+		c.log.Errorf("store document with entryId %s error: %s", docPtr.EntryID(), err)
+	}
 	return nil
 }
 
@@ -134,11 +154,9 @@ func (c *MeiliClient) Update(ctx context.Context, document *doc.Document) error 
 		c.log.Error(err)
 		return err
 	}
-	go func() {
-		if err := c.wait(ctx, t.TaskUID); err != nil {
-			c.log.Errorf("update document %s error: %s", document.ID, err)
-		}
-	}()
+	if err := c.wait(ctx, t.TaskUID); err != nil {
+		c.log.Errorf("update document %s error: %s", document.ID, err)
+	}
 	return nil
 }
 
@@ -149,11 +167,9 @@ func (c *MeiliClient) Delete(ctx context.Context, docId string) error {
 		c.log.Error(err)
 		return err
 	}
-	go func() {
-		if err := c.wait(ctx, t.TaskUID); err != nil {
-			c.log.Errorf("delete document %s error: %s", docId, err)
-		}
-	}()
+	if err := c.wait(ctx, t.TaskUID); err != nil {
+		c.log.Errorf("delete document %s error: %s", docId, err)
+	}
 	return nil
 }
 
@@ -169,11 +185,9 @@ func (c *MeiliClient) DeleteByFilter(ctx context.Context, aqs doc.DocumentAttrQu
 		c.log.Error(err)
 		return err
 	}
-	go func() {
-		if err := c.wait(ctx, t.TaskUID); err != nil {
-			c.log.Errorf("delete document by filter error: %s", err)
-		}
-	}()
+	if err := c.wait(ctx, t.TaskUID); err != nil {
+		c.log.Errorf("delete document by filter error: %s", err)
+	}
 	return nil
 }
 

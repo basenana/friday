@@ -16,6 +16,35 @@
 
 package utils
 
+import (
+	"reflect"
+	"sort"
+)
+
 func ToPtr[T any](t T) *T {
 	return &t
+}
+
+func Equal(a []string, b *[]string) bool {
+	if b == nil {
+		return false
+	}
+	aa := deDup(a)
+	bb := deDup(*b)
+	sort.Sort(sort.StringSlice(aa))
+	sort.Sort(sort.StringSlice(bb))
+	return reflect.DeepEqual(aa, bb)
+}
+
+func deDup(res []string) []string {
+	uniqueMap := make(map[string]bool)
+	result := []string{}
+
+	for _, str := range res {
+		if _, exists := uniqueMap[str]; !exists {
+			uniqueMap[str] = true
+			result = append(result, str)
+		}
+	}
+	return result
 }
