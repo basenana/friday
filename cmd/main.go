@@ -17,9 +17,12 @@
 package main
 
 import (
+	"path"
+
 	"github.com/spf13/cobra"
 
 	"github.com/basenana/friday/cmd/apps"
+	"github.com/basenana/friday/config"
 	"github.com/basenana/friday/pkg/utils/logger"
 )
 
@@ -36,6 +39,7 @@ func init() {
 
 	RootCmd.AddCommand(apps.ServeCmd)
 	RootCmd.AddCommand(apps.AgentCmd)
+	RootCmd.PersistentFlags().StringVar(&config.FilePath, "config", path.Join(config.LocalUserPath(), config.DefaultConfigBase), "friday config file")
 }
 
 func main() {
