@@ -27,6 +27,11 @@ type DocumentAttr struct {
 	Value     interface{} `json:"value"`
 }
 
+var (
+	DocAttrFilterableAttrs = []string{"namespace", "entryId", "key", "id", "kind", "value"}
+	DocAttrSortAttrs       = []string{"createdAt", "updatedAt"}
+)
+
 var _ DocPtrInterface = &DocumentAttr{}
 
 func (d *DocumentAttr) ID() string {
