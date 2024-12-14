@@ -63,7 +63,8 @@ type MeiliConfig struct {
 	MasterKey    string `json:"masterKey,omitempty"`
 	AdminApiKey  string `json:"adminApiKey,omitempty"`
 	SearchApiKey string `json:"searchApiKey,omitempty"`
-	Index        string `json:"index,omitempty"`
+	DocIndex     string `json:"docIndex,omitempty"`
+	AttrIndex    string `json:"attrIndex,omitempty"`
 }
 
 type LLMConfig struct {
