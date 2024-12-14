@@ -37,7 +37,8 @@ type MeiliClient struct {
 	masterKey    string
 	adminApiKey  string
 	searchApiKey string
-	index        meilisearch.IndexManager
+	docIndex     meilisearch.IndexManager
+	attrIndex    meilisearch.IndexManager
 	client       meilisearch.ServiceManager
 }
 
@@ -45,7 +46,8 @@ var _ DocStoreInterface = &MeiliClient{}
 
 func NewMeiliClient(conf config.Config) (DocStoreInterface, error) {
 	client := meilisearch.New(conf.MeiliConfig.MeiliUrl, meilisearch.WithAPIKey(conf.MeiliConfig.MasterKey))
-	index := client.Index(conf.MeiliConfig.Index)
+	docIndex := client.Index(conf.MeiliConfig.DocIndex)
+	attrIndex := client.Index(conf.MeiliConfig.AttrIndex)
 
 	log := logger.NewLog("meilisearch")
 	meiliClient := &MeiliClient{
@@ -54,54 +56,89 @@ func NewMeiliClient(conf config.Config) (DocStoreInterface, error) {
 		masterKey:    conf.MeiliConfig.MasterKey,
 		adminApiKey:  conf.MeiliConfig.AdminApiKey,
 		searchApiKey: conf.MeiliConfig.SearchApiKey,
-		index:        index,
+		docIndex:     docIndex,
+		attrIndex:    attrIndex,
 		client:       client,
 	}
 	return meiliClient, meiliClient.init()
 }
 
 func (c *MeiliClient) init() error {
-	filterableAttrs := append(doc.DocFilterableAttrs, doc.DocAttrFilterableAttrs...)
-
-	attrs, err := c.index.GetFilterableAttributes()
+	attrs, err := c.docIndex.GetFilterableAttributes()
 	if err != nil {
 		return err
 	}
-	if !utils.Equal(filterableAttrs, attrs) {
-		t, err := c.index.UpdateFilterableAttributes(&filterableAttrs)
+	if !utils.Equal(doc.DocFilterableAttrs, attrs) {
+		t, err := c.docIndex.UpdateFilterableAttributes(&doc.DocFilterableAttrs)
 		if err != nil {
 			return err
 		}
-		if err = c.wait(context.TODO(), t.TaskUID); err != nil {
+		if err = c.wait(context.TODO(), "document", t.TaskUID); err != nil {
 			return err
 		}
 	}
 
 	sortAttrs := doc.DocSortAttrs
-	crtSortAttrs, err := c.index.GetSortableAttributes()
+	crtSortAttrs, err := c.docIndex.GetSortableAttributes()
 	if err != nil {
 		return err
 	}
 	if !utils.Equal(sortAttrs, crtSortAttrs) {
-		t, err := c.index.UpdateSortableAttributes(&sortAttrs)
+		t, err := c.docIndex.UpdateSortableAttributes(&sortAttrs)
 		if err != nil {
 			return err
 		}
-		if err = c.wait(context.TODO(), t.TaskUID); err != nil {
+		if err = c.wait(context.TODO(), "document", t.TaskUID); err != nil {
+			return err
+		}
+	}
+
+	// attr index
+	attrAttrs, err := c.attrIndex.GetFilterableAttributes()
+	if err != nil {
+		return err
+	}
+	if !utils.Equal(doc.DocAttrFilterableAttrs, attrAttrs) {
+		t, err := c.docIndex.UpdateFilterableAttributes(&doc.DocAttrFilterableAttrs)
+		if err != nil {
+			return err
+		}
+		if err = c.wait(context.TODO(), "attr", t.TaskUID); err != nil {
+			return err
+		}
+	}
+	attrSortAttrs := doc.DocAttrSortAttrs
+	crtAttrSortAttrs, err := c.docIndex.GetSortableAttributes()
+	if err != nil {
+		return err
+	}
+	if !utils.Equal(attrSortAttrs, crtAttrSortAttrs) {
+		t, err := c.docIndex.UpdateSortableAttributes(&attrSortAttrs)
+		if err != nil {
+			return err
+		}
+		if err = c.wait(context.TODO(), "attr", t.TaskUID); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
+func (c *MeiliClient) index(kind string) meilisearch.IndexManager {
+	if kind == "attr" {
+		return c.attrIndex
+	}
+	return c.docIndex
+}
+
 func (c *MeiliClient) Store(ctx context.Context, docPtr doc.DocPtrInterface) error {
 	c.log.Debugf("store entryId %s %s: %s", docPtr.EntryID(), docPtr.Type(), docPtr.String())
-	task, err := c.index.AddDocuments(docPtr, "id")
+	task, err := c.index(docPtr.Type()).AddDocuments(docPtr, "id")
 	if err != nil {
 		c.log.Error(err)
 		return err
 	}
-	if err := c.wait(ctx, task.TaskUID); err != nil {
+	if err := c.wait(ctx, docPtr.Type(), task.TaskUID); err != nil {
 		c.log.Errorf("store document with entryId %s error: %s", docPtr.EntryID(), err)
 	}
 	return nil
@@ -109,7 +146,7 @@ func (c *MeiliClient) Store(ctx context.Context, docPtr doc.DocPtrInterface) err
 
 func (c *MeiliClient) FilterAttr(ctx context.Context, query *doc.DocumentAttrQuery) (doc.DocumentAttrList, error) {
 	c.log.Debugf("query document attr : [%s]", query.String())
-	rep, err := c.index.Search("", query.ToRequest())
+	rep, err := c.index("attr").Search("", query.ToRequest())
 	if err != nil {
 		return nil, err
 	}
@@ -129,7 +166,7 @@ func (c *MeiliClient) FilterAttr(ctx context.Context, query *doc.DocumentAttrQue
 
 func (c *MeiliClient) Search(ctx context.Context, query *doc.DocumentQuery) (doc.DocumentList, error) {
 	c.log.Debugf("search document: [%s] query: [%s]", query.Search, query.String())
-	rep, err := c.index.Search(query.Search, query.ToRequest())
+	rep, err := c.index("document").Search(query.Search, query.ToRequest())
 	if err != nil {
 		return nil, err
 	}
@@ -149,12 +186,12 @@ func (c *MeiliClient) Search(ctx context.Context, query *doc.DocumentQuery) (doc
 
 func (c *MeiliClient) Update(ctx context.Context, document *doc.Document) error {
 	c.log.Debugf("update document: %s", document.ID())
-	t, err := c.index.UpdateDocuments(document)
+	t, err := c.index(document.Type()).UpdateDocuments(document)
 	if err != nil {
 		c.log.Error(err)
 		return err
 	}
-	if err := c.wait(ctx, t.TaskUID); err != nil {
+	if err := c.wait(ctx, document.Type(), t.TaskUID); err != nil {
 		c.log.Errorf("update document %s error: %s", document.ID, err)
 	}
 	return nil
@@ -162,12 +199,12 @@ func (c *MeiliClient) Update(ctx context.Context, document *doc.Document) error 
 
 func (c *MeiliClient) Delete(ctx context.Context, docId string) error {
 	c.log.Debugf("delete document: %s", docId)
-	t, err := c.index.DeleteDocument(docId)
+	t, err := c.index("document").DeleteDocument(docId)
 	if err != nil {
 		c.log.Error(err)
 		return err
 	}
-	if err := c.wait(ctx, t.TaskUID); err != nil {
+	if err := c.wait(ctx, "document", t.TaskUID); err != nil {
 		c.log.Errorf("delete document %s error: %s", docId, err)
 	}
 	return nil
@@ -180,18 +217,18 @@ func (c *MeiliClient) DeleteByFilter(ctx context.Context, aqs doc.DocumentAttrQu
 		filter = append(filter, aq.ToFilter())
 	}
 
-	t, err := c.index.DeleteDocumentsByFilter(filter)
+	t, err := c.index("attr").DeleteDocumentsByFilter(filter)
 	if err != nil {
 		c.log.Error(err)
 		return err
 	}
-	if err := c.wait(ctx, t.TaskUID); err != nil {
+	if err := c.wait(ctx, "attr", t.TaskUID); err != nil {
 		c.log.Errorf("delete document by filter error: %s", err)
 	}
 	return nil
 }
 
-func (c *MeiliClient) wait(ctx context.Context, taskUID int64) error {
+func (c *MeiliClient) wait(ctx context.Context, kind string, taskUID int64) error {
 	t := time.NewTicker(100 * time.Millisecond)
 	defer t.Stop()
 	for {
@@ -199,7 +236,7 @@ func (c *MeiliClient) wait(ctx context.Context, taskUID int64) error {
 		case <-ctx.Done():
 			return fmt.Errorf("context timeout")
 		case <-t.C:
-			t, err := c.index.GetTask(taskUID)
+			t, err := c.index(kind).GetTask(taskUID)
 			if err != nil {
 				c.log.Error(err)
 				return err
