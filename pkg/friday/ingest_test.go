@@ -25,7 +25,7 @@ import (
 	"github.com/basenana/friday/pkg/embedding"
 	"github.com/basenana/friday/pkg/models/vector"
 	"github.com/basenana/friday/pkg/spliter"
-	"github.com/basenana/friday/pkg/store/vectorstore"
+	"github.com/basenana/friday/pkg/store"
 	"github.com/basenana/friday/pkg/utils/logger"
 )
 
@@ -59,7 +59,7 @@ var _ = Describe("TestIngest", func() {
 
 type FakeStore struct{}
 
-var _ vectorstore.VectorStore = &FakeStore{}
+var _ store.VectorStore = &FakeStore{}
 
 func (f FakeStore) Store(ctx context.Context, element *vector.Element, extra map[string]any) error {
 	return nil

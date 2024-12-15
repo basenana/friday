@@ -18,6 +18,7 @@ package service_test
 
 import (
 	"context"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -27,152 +28,95 @@ import (
 	_ "github.com/basenana/friday/pkg/dispatch/plugin"
 	"github.com/basenana/friday/pkg/models/doc"
 	"github.com/basenana/friday/pkg/service"
-	"github.com/basenana/friday/pkg/store/docstore"
+	"github.com/basenana/friday/pkg/store/meili"
 	"github.com/basenana/friday/pkg/utils/logger"
 )
 
 var _ = Describe("Chain", func() {
 	var (
 		Chain     *service.Chain
-		parentId1 = "1"
-		parentId2 = "2"
-		entryId11 = "11"
-		entryId12 = "12"
-		entryId21 = "21"
+		parentId1 = int64(1)
+		parentId2 = int64(2)
+		entryId11 = int64(11)
+		entryId12 = int64(12)
+		entryId21 = int64(21)
 		doc11     *doc.Document
 		doc12     *doc.Document
 		doc21     *doc.Document
-		attr11    *doc.DocumentAttr
-		attr12    *doc.DocumentAttr
-		attr21    *doc.DocumentAttr
+		t         = time.Date(2024, time.January, 1, 0, 0, 0, 0, time.UTC)
 	)
 
 	BeforeEach(func() {
 		service.ChainPool = dispatch.NewPool(10)
 		logger.InitLog()
 		Chain = &service.Chain{
-			MeiliClient: &docstore.MockClient{},
-			Plugins:     []plugin.ChainPlugin{},
-			Log:         logger.NewLog("test"),
+			DocClient: &meili.MockClient{},
+			Plugins:   []plugin.ChainPlugin{},
+			Log:       logger.NewLog("test"),
 		}
 		for _, p := range plugin.DefaultRegisterer.Chains {
 			Chain.Plugins = append(Chain.Plugins, p)
 		}
 		doc11 = &doc.Document{
-			Id:        "1",
-			Namespace: "test-ns",
-			EntryId:   entryId11,
-			Name:      "test-name-11",
-			Kind:      "document",
-			Content:   "<p>test</p><img src=\"http://abc1\"/>",
-			CreatedAt: 1733584543,
-			UpdatedAt: 1733584543,
+			Namespace:     "test-ns",
+			EntryId:       entryId11,
+			ParentEntryID: &parentId1,
+			Name:          "test-name-11",
+			Content:       "<p>test</p><img src=\"http://abc1\"/>",
+			CreatedAt:     t,
+			ChangedAt:     t,
 		}
 		doc12 = &doc.Document{
-			Id:        "2",
-			Namespace: "test-ns",
-			EntryId:   entryId12,
-			Name:      "test-name-12",
-			Kind:      "document",
-			Content:   "<p>test</p><img src=\"http://abc2\"/>",
-			CreatedAt: 1733584543,
-			UpdatedAt: 1733584543,
+			Namespace:     "test-ns",
+			EntryId:       entryId12,
+			ParentEntryID: &parentId1,
+			Name:          "test-name-12",
+			Content:       "<p>test</p><img src=\"http://abc2\"/>",
+			CreatedAt:     t,
+			ChangedAt:     t,
 		}
 		doc21 = &doc.Document{
-			Id:        "3",
-			Namespace: "test-ns",
-			EntryId:   entryId21,
-			Name:      "test-name-21",
-			Kind:      "document",
-			Content:   "<p>test</p><img src=\"http://abc2\"/>",
-			CreatedAt: 1733584543,
-			UpdatedAt: 1733584543,
+			Namespace:     "test-ns",
+			EntryId:       entryId21,
+			ParentEntryID: &parentId2,
+			Name:          "test-name-21",
+			Content:       "<p>test</p><img src=\"http://abc2\"/>",
+			CreatedAt:     t,
+			ChangedAt:     t,
 		}
-		attr11 = &doc.DocumentAttr{
-			Id:        "4",
-			Namespace: "test-ns",
-			Kind:      "attr",
-			EntryId:   entryId11,
-			Key:       "parentId",
-			Value:     parentId1,
-		}
-		attr12 = &doc.DocumentAttr{
-			Id:        "5",
-			Namespace: "test-ns",
-			Kind:      "attr",
-			EntryId:   entryId12,
-			Key:       "parentId",
-			Value:     parentId1,
-		}
-		attr21 = &doc.DocumentAttr{
-			Id:        "6",
-			Namespace: "test-ns",
-			Kind:      "attr",
-			EntryId:   entryId21,
-			Key:       "parentId",
-			Value:     parentId2,
-		}
-		err := Chain.Store(context.TODO(), doc11)
+		err := Chain.CreateDocument(context.TODO(), doc11)
 		Expect(err).Should(BeNil())
-		err = Chain.Store(context.TODO(), doc12)
+		err = Chain.CreateDocument(context.TODO(), doc12)
 		Expect(err).Should(BeNil())
-		err = Chain.Store(context.TODO(), doc21)
-		Expect(err).Should(BeNil())
-		err = Chain.StoreAttr(context.TODO(), attr11)
-		Expect(err).Should(BeNil())
-		err = Chain.StoreAttr(context.TODO(), attr12)
-		Expect(err).Should(BeNil())
-		err = Chain.StoreAttr(context.TODO(), attr21)
+		err = Chain.CreateDocument(context.TODO(), doc21)
 		Expect(err).Should(BeNil())
 	})
 
 	Describe("documents", func() {
 		Context("store document ", func() {
 			It("store document should be successful", func() {
-				err := Chain.Store(context.TODO(), &doc.Document{Id: "10"})
+				err := Chain.CreateDocument(context.TODO(), &doc.Document{EntryId: int64(30)})
 				Expect(err).Should(BeNil())
 			})
 			It("store document attr should be successful", func() {
-				err := Chain.StoreAttr(context.TODO(), &doc.DocumentAttr{Id: "11"})
+				err := Chain.CreateDocument(context.TODO(), &doc.Document{EntryId: int64(31)})
 				Expect(err).Should(BeNil())
 			})
 		})
 		Context("search document", func() {
 			It("search document should be successful", func() {
-				docs, err := Chain.Search(context.TODO(), &doc.DocumentQuery{
-					AttrQueries: []*doc.AttrQuery{{
-						Attr:   "namespace",
-						Option: "=",
-						Value:  "test-ns",
-					}},
-					Search: "test",
-				}, []*doc.DocumentAttrQuery{})
+				docs, err := Chain.Search(context.TODO(), &doc.DocumentFilter{
+					Search:    "test",
+					Namespace: "test-ns",
+				})
 				Expect(err).Should(BeNil())
 				Expect(docs).Should(HaveLen(3))
 			})
 			It("search document with attr should be successful", func() {
-				docs, err := Chain.Search(context.TODO(), &doc.DocumentQuery{
-					AttrQueries: []*doc.AttrQuery{{
-						Attr:   "namespace",
-						Option: "=",
-						Value:  "test-ns",
-					}},
-					Search: "test",
-				}, []*doc.DocumentAttrQuery{
-					{
-						AttrQueries: []*doc.AttrQuery{
-							{
-								Attr:   "parentId",
-								Option: "=",
-								Value:  parentId1,
-							},
-							{
-								Attr:   "namespace",
-								Option: "=",
-								Value:  "test-ns",
-							},
-						},
-					},
+				docs, err := Chain.Search(context.TODO(), &doc.DocumentFilter{
+					Search:    "test",
+					Namespace: "test-ns",
+					ParentID:  &parentId1,
 				})
 				Expect(err).Should(BeNil())
 				Expect(docs).Should(HaveLen(2))
@@ -181,59 +125,31 @@ var _ = Describe("Chain", func() {
 		Context("plugin should work", func() {
 			It("header plugin should work", func() {
 				doc3 := &doc.Document{
-					Id:        "100",
 					Namespace: "test-ns",
-					EntryId:   "100",
+					EntryId:   int64(100),
 					Name:      "test-name-100",
 					Content:   "<p>test</p><img src=\"http://abc\"/>",
-					CreatedAt: 1733584543,
-					UpdatedAt: 1733584543,
+					CreatedAt: t,
+					ChangedAt: t,
 				}
-				err := Chain.Store(context.TODO(), doc3)
+				err := Chain.CreateDocument(context.TODO(), doc3)
 				Expect(err).Should(BeNil())
 				Expect(doc3.HeaderImage).Should(Equal("http://abc"))
 			})
 		})
 		Context("delete document", func() {
 			It("delete document by filter should be successful", func() {
-				err := Chain.Store(context.TODO(), &doc.Document{
-					Id:        "12",
+				err := Chain.CreateDocument(context.TODO(), &doc.Document{
 					Namespace: "test-ns",
-					EntryId:   "10",
-					Name:      "test-name-10",
+					EntryId:   int64(40),
+					Name:      "test-name-40",
 				})
 				Expect(err).Should(BeNil())
-				err = Chain.StoreAttr(context.TODO(), &doc.DocumentAttr{
-					Id:        "13",
-					Namespace: "test-ns",
-					EntryId:   "10",
-				})
+				err = Chain.Delete(context.TODO(), "test-ns", int64(40))
 				Expect(err).Should(BeNil())
-				err = Chain.DeleteByFilter(context.TODO(), doc.DocumentAttrQuery{
-					AttrQueries: []*doc.AttrQuery{
-						{
-							Attr:   "namespace",
-							Option: "=",
-							Value:  "test-ns",
-						},
-						{
-							Attr:   "entryId",
-							Option: "=",
-							Value:  "10",
-						},
-					}},
-				)
+				docs, err := Chain.GetDocument(context.TODO(), "test-ns", int64(40))
 				Expect(err).Should(BeNil())
-				docs, err := Chain.Search(context.TODO(), &doc.DocumentQuery{
-					AttrQueries: []*doc.AttrQuery{{
-						Attr:   "entryId",
-						Option: "=",
-						Value:  "10",
-					}},
-					Search: "test",
-				}, []*doc.DocumentAttrQuery{})
-				Expect(err).Should(BeNil())
-				Expect(docs).Should(HaveLen(0))
+				Expect(docs).Should(BeNil())
 			})
 		})
 	})

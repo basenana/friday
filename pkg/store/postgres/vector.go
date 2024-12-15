@@ -1,5 +1,5 @@
 /*
- Copyright 2023 Friday Author.
+ Copyright 2024 Friday Author.
 
  Licensed under the Apache License, Version 2.0 (the "License");
  you may not use this file except in compliance with the License.
@@ -24,55 +24,12 @@ import (
 	"time"
 
 	"github.com/cdipaolo/goml/base"
-	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 
-	"github.com/basenana/friday/pkg/models"
 	"github.com/basenana/friday/pkg/models/vector"
-	"github.com/basenana/friday/pkg/store/vectorstore"
-	"github.com/basenana/friday/pkg/store/vectorstore/db"
-	"github.com/basenana/friday/pkg/utils/logger"
+	"github.com/basenana/friday/pkg/store"
+	"github.com/basenana/friday/pkg/utils"
 )
-
-const defaultNamespace = "global"
-
-type PostgresClient struct {
-	log     logger.Logger
-	dEntity *db.Entity
-}
-
-func NewPostgresClient(log logger.Logger, postgresUrl string) (*PostgresClient, error) {
-	if log == nil {
-		log = logger.NewLogger("database")
-	}
-	dbObj, err := gorm.Open(postgres.Open(postgresUrl), &gorm.Config{Logger: logger.NewDbLogger(log)})
-	if err != nil {
-		panic(err)
-	}
-
-	dbConn, err := dbObj.DB()
-	if err != nil {
-		return nil, err
-	}
-
-	dbConn.SetMaxIdleConns(5)
-	dbConn.SetMaxOpenConns(50)
-	dbConn.SetConnMaxLifetime(time.Hour)
-
-	if err = dbConn.Ping(); err != nil {
-		return nil, err
-	}
-
-	dbEnt, err := db.NewDbEntity(dbObj, Migrate)
-	if err != nil {
-		return nil, err
-	}
-
-	return &PostgresClient{
-		log:     log,
-		dEntity: dbEnt,
-	}, nil
-}
 
 func (p *PostgresClient) Store(ctx context.Context, element *vector.Element, extra map[string]any) error {
 	namespace := ctx.Value("namespace")
@@ -149,7 +106,7 @@ func (p *PostgresClient) Search(ctx context.Context, query vector.VectorDocQuery
 	}
 
 	// knn search
-	dists := distances{}
+	dists := utils.Distances{}
 	for _, index := range existIndexes {
 		var vector []float64
 		err := json.Unmarshal([]byte(index.Vector), &vector)
@@ -157,9 +114,9 @@ func (p *PostgresClient) Search(ctx context.Context, query vector.VectorDocQuery
 			return nil, err
 		}
 
-		dists = append(dists, distance{
-			Index: index,
-			dist:  base.EuclideanDistance(vector, vectors64),
+		dists = append(dists, utils.Distance{
+			Object: index,
+			Dist:   base.EuclideanDistance(vector, vectors64),
 		})
 	}
 
@@ -171,7 +128,8 @@ func (p *PostgresClient) Search(ctx context.Context, query vector.VectorDocQuery
 	}
 	results := make([]*vector.Doc, 0)
 	for _, index := range minKIndexes {
-		results = append(results, index.ToDoc())
+		i := index.Object.(Index)
+		results = append(results, i.ToDoc())
 	}
 
 	return results, nil
@@ -193,7 +151,7 @@ func (p *PostgresClient) Get(ctx context.Context, oid int64, name string, group 
 	return vModel.To()
 }
 
-var _ vectorstore.VectorStore = &PostgresClient{}
+var _ store.VectorStore = &PostgresClient{}
 
 func (p *PostgresClient) Inited(ctx context.Context) (bool, error) {
 	var count int64
@@ -203,31 +161,4 @@ func (p *PostgresClient) Inited(ctx context.Context) (bool, error) {
 	}
 
 	return count > 0, nil
-}
-
-type distance struct {
-	Index
-	dist float64
-}
-
-type distances []distance
-
-func (d distances) Len() int {
-	return len(d)
-}
-
-func (d distances) Less(i, j int) bool {
-	return d[i].dist < d[j].dist
-}
-
-func (d distances) Swap(i, j int) {
-	d[i], d[j] = d[j], d[i]
-}
-
-func namespaceQuery(ctx context.Context, tx *gorm.DB) *gorm.DB {
-	ns := models.GetNamespace(ctx)
-	if ns.String() == models.DefaultNamespaceValue {
-		return tx
-	}
-	return tx.Where("namespace = ?", ns.String())
 }

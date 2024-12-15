@@ -7,7 +7,7 @@ import (
 
 	"github.com/blevesearch/bleve/v2/index/upsidedown"
 
-	"github.com/basenana/friday/pkg/store/vectorstore/postgres"
+	"github.com/basenana/friday/pkg/store/postgres"
 )
 
 func initConfigFile(dsn string) (string, error) {
