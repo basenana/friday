@@ -25,7 +25,7 @@ import (
 	"github.com/redis/rueidis"
 
 	"github.com/basenana/friday/pkg/models/vector"
-	"github.com/basenana/friday/pkg/store/vectorstore"
+	"github.com/basenana/friday/pkg/store"
 	"github.com/basenana/friday/pkg/utils/files"
 	"github.com/basenana/friday/pkg/utils/logger"
 )
@@ -43,17 +43,17 @@ type RedisClient struct {
 	dim    int
 }
 
-var _ vectorstore.VectorStore = &RedisClient{}
+var _ store.VectorStore = &RedisClient{}
 
-func NewRedisClientWithDim(redisUrl string, dim int) (vectorstore.VectorStore, error) {
+func NewRedisClientWithDim(redisUrl string, dim int) (store.VectorStore, error) {
 	return newRedisClient(redisUrl, EmbeddingPrefix, EmbeddingIndex, dim)
 }
 
-func NewRedisClient(redisUrl string) (vectorstore.VectorStore, error) {
+func NewRedisClient(redisUrl string) (store.VectorStore, error) {
 	return newRedisClient(redisUrl, EmbeddingPrefix, EmbeddingIndex, 1536)
 }
 
-func newRedisClient(redisUrl string, prefix, index string, embeddingDim int) (vectorstore.VectorStore, error) {
+func newRedisClient(redisUrl string, prefix, index string, embeddingDim int) (store.VectorStore, error) {
 	client, err := rueidis.NewClient(rueidis.ClientOption{InitAddress: []string{redisUrl}})
 	if err != nil {
 		return nil, err

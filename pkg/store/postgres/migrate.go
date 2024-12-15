@@ -50,6 +50,23 @@ func buildMigrations() []*gormigrate.Migration {
 			},
 			Rollback: func(db *gorm.DB) error { return nil },
 		},
+		{
+			ID: "2024121501",
+			Migrate: func(db *gorm.DB) error {
+				err := db.AutoMigrate(
+					&Document{},
+				)
+				if err != nil {
+					return err
+				}
+				//_ = db.Exec(`CREATE INDEX name ON table USING gist(content);`)
+				//_ = db.Exec("CREATE INDEX idx_doc_content ON document USING GIN (content gin_trgm_ops);")
+				return nil
+			},
+			Rollback: func(db *gorm.DB) error {
+				return nil
+			},
+		},
 	}
 }
 

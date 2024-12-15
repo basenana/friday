@@ -30,11 +30,11 @@ import (
 	"github.com/basenana/friday/pkg/llm/client/glm-6b"
 	openaiv1 "github.com/basenana/friday/pkg/llm/client/openai/v1"
 	"github.com/basenana/friday/pkg/spliter"
-	"github.com/basenana/friday/pkg/store/vectorstore"
+	"github.com/basenana/friday/pkg/store"
 	"github.com/basenana/friday/pkg/utils/logger"
 )
 
-func NewFridayWithVector(conf *config.Config, vectorClient vectorstore.VectorStore) (f *friday.Friday, err error) {
+func NewFridayWithVector(conf *config.Config, vectorClient store.VectorStore) (f *friday.Friday, err error) {
 	log := conf.Logger
 	if conf.Logger == nil {
 		log = logger.NewLogger("friday")
