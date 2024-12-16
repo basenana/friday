@@ -142,8 +142,6 @@ func getFilterQuery(c *gin.Context) *doc.DocumentFilter {
 		Search:    c.Query("search"),
 		FuzzyName: c.Query("fuzzyName"),
 		Source:    c.Query("source"),
-		Marked:    utils.ToPtr(c.Query("mark") == "true"),
-		Unread:    utils.ToPtr(c.Query("unRead") == "true"),
 		Page:      int64(page),
 		PageSize:  int64(pageSize),
 		Order: doc.DocumentOrder{
@@ -152,6 +150,12 @@ func getFilterQuery(c *gin.Context) *doc.DocumentFilter {
 		},
 	}
 
+	if c.Query("mark") != "" {
+		docQuery.Marked = utils.ToPtr(c.Query("mark") == "true")
+	}
+	if c.Query("unRead") != "" {
+		docQuery.Unread = utils.ToPtr(c.Query("unRead") == "true")
+	}
 	parentId := c.Query("parentId")
 	if parentId != "" {
 		pId, err := strconv.Atoi(c.Query("parentId"))
