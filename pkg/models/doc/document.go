@@ -18,62 +18,110 @@ package doc
 
 import (
 	"fmt"
+	"time"
 )
-
-var (
-	DocFilterableAttrs = []string{"namespace", "id", "entryId", "kind", "name", "source", "webUrl", "createdAt", "updatedAt"}
-	DocSortAttrs       = []string{"createdAt", "updatedAt", "name"}
-)
-
-type DocPtrInterface interface {
-	ID() string
-	EntryID() string
-	Type() string
-	String() string
-}
 
 type Document struct {
-	Id        string `json:"id"`
-	Kind      string `json:"kind"`
-	Namespace string `json:"namespace"`
-	EntryId   string `json:"entryId"`
-	Name      string `json:"name"`
-	Source    string `json:"source,omitempty"`
-	WebUrl    string `json:"webUrl,omitempty"`
-
-	Content     string `json:"content"`
-	Summary     string `json:"summary,omitempty"`
-	HeaderImage string `json:"headerImage,omitempty"`
-	SubContent  string `json:"subContent,omitempty"`
-
-	CreatedAt int64 `json:"createdAt,omitempty"`
-	UpdatedAt int64 `json:"updatedAt,omitempty"`
+	EntryId       int64     `json:"entry_id"`
+	Name          string    `json:"name"`
+	Namespace     string    `json:"namespace"`
+	ParentEntryID *int64    `json:"parent_entry_id"`
+	Source        string    `json:"source"`
+	Content       string    `json:"content,omitempty"`
+	Summary       string    `json:"summary,omitempty"`
+	WebUrl        string    `json:"web_url,omitempty"`
+	HeaderImage   string    `json:"header_image,omitempty"`
+	SubContent    string    `json:"sub_content,omitempty"`
+	Marked        *bool     `json:"marked,omitempty"`
+	Unread        *bool     `json:"unread,omitempty"`
+	CreatedAt     time.Time `json:"created_at"`
+	ChangedAt     time.Time `json:"changed_at"`
 }
 
-func (d *Document) ID() string {
-	return d.Id
+type DocumentFilter struct {
+	Namespace      string
+	Search         string
+	FuzzyName      string
+	ParentID       *int64
+	Source         string
+	Marked         *bool
+	Unread         *bool
+	CreatedAtStart *time.Time
+	CreatedAtEnd   *time.Time
+	ChangedAtStart *time.Time
+	ChangedAtEnd   *time.Time
+
+	// Pagination
+	Page     int64
+	PageSize int64
+	Order    DocumentOrder
 }
 
-func (d *Document) EntryID() string {
-	return d.EntryId
-}
-
-func (d *Document) Type() string {
-	return "document"
-}
-
-func (d *Document) String() string {
-	return fmt.Sprintf("EntryId(%s) %s", d.EntryId, d.Name)
-}
-
-type DocumentList []*Document
-
-func (d DocumentList) String() string {
-	result := ""
-	for _, doc := range d {
-		result += fmt.Sprintf("EntryId(%s) %s\n", doc.EntryId, doc.Name)
+func (f *DocumentFilter) String() string {
+	s := fmt.Sprintf("namespace: %s", f.Namespace)
+	if f.Search != "" {
+		s += fmt.Sprintf(", search: %s", f.Search)
 	}
-	return result
+	if f.FuzzyName != "" {
+		s += fmt.Sprintf(", fuzzyName: %s", f.FuzzyName)
+	}
+	if f.ParentID != nil {
+		s += fmt.Sprintf(", parentID: %d", *f.ParentID)
+	}
+	if f.Source != "" {
+		s += fmt.Sprintf(", source: %s", f.Source)
+	}
+	if f.Marked != nil {
+		s += fmt.Sprintf(", marked: %v", *f.Marked)
+	}
+	if f.Unread != nil {
+		s += fmt.Sprintf(", unread: %v", *f.Unread)
+	}
+	if f.CreatedAtStart != nil {
+		s += fmt.Sprintf(", createdAtStart: %s", f.CreatedAtStart)
+	}
+	if f.CreatedAtEnd != nil {
+		s += fmt.Sprintf(", createdAtEnd: %s", f.CreatedAtEnd)
+	}
+	if f.ChangedAtStart != nil {
+		s += fmt.Sprintf(", changedAtStart: %s", f.ChangedAtStart)
+	}
+	if f.ChangedAtEnd != nil {
+		s += fmt.Sprintf(", changedAtEnd: %s", f.ChangedAtEnd)
+	}
+	s += fmt.Sprintf(", page: %d, pageSize: %d, sort: %s", f.Page, f.PageSize, f.Order.String())
+	return s
 }
 
-var _ DocPtrInterface = &Document{}
+type DocumentOrder struct {
+	Order DocOrder
+	Desc  bool
+}
+
+func (o DocumentOrder) String() string {
+	return fmt.Sprintf("order: %s, desc: %v", o.Order.String(), o.Desc)
+}
+
+type DocOrder int
+
+const (
+	Name DocOrder = iota
+	Source
+	Marked
+	Unread
+	CreatedAt
+)
+
+func (d DocOrder) String() string {
+	names := []string{
+		"name",
+		"source",
+		"marked",
+		"unread",
+		"created_at",
+	}
+	if d < Name || d > CreatedAt {
+		return ""
+	}
+	return names[d]
+}

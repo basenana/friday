@@ -25,7 +25,7 @@ import (
 	"github.com/basenana/friday/pkg/models"
 	"github.com/basenana/friday/pkg/models/vector"
 	"github.com/basenana/friday/pkg/spliter"
-	"github.com/basenana/friday/pkg/store/vectorstore"
+	"github.com/basenana/friday/pkg/store"
 	"github.com/basenana/friday/pkg/utils/logger"
 )
 
@@ -53,7 +53,7 @@ type Friday struct {
 
 	Embedding embedding.Embedding
 
-	Vector     vectorstore.VectorStore
+	Vector     store.VectorStore
 	VectorTopK *int
 
 	Spliter spliter.Spliter

@@ -25,15 +25,18 @@ import (
 	"github.com/basenana/friday/config"
 	"github.com/basenana/friday/pkg/dispatch"
 	"github.com/basenana/friday/pkg/dispatch/plugin"
+	"github.com/basenana/friday/pkg/models"
 	"github.com/basenana/friday/pkg/models/doc"
-	"github.com/basenana/friday/pkg/store/docstore"
+	"github.com/basenana/friday/pkg/store"
+	"github.com/basenana/friday/pkg/store/meili"
+	"github.com/basenana/friday/pkg/store/postgres"
 	"github.com/basenana/friday/pkg/utils/logger"
 )
 
 type Chain struct {
-	MeiliClient docstore.DocStoreInterface
-	Plugins     []plugin.ChainPlugin
-	Log         *zap.SugaredLogger
+	DocClient store.DocStoreInterface
+	Plugins   []plugin.ChainPlugin
+	Log       *zap.SugaredLogger
 }
 
 var ChainPool *dispatch.Pool
@@ -44,28 +47,43 @@ func NewChain(conf config.Config) (*Chain, error) {
 		plugins = append(plugins, plugin.DefaultRegisterer.Get(p))
 	}
 	log := logger.NewLog("chain")
-	client, err := docstore.NewMeiliClient(conf)
-	if err != nil {
-		log.Errorf("new meili client error: %s", err)
-		return nil, err
+	var (
+		client store.DocStoreInterface
+		err    error
+	)
+	switch conf.DocStore.Type {
+	case "meili":
+		client, err = meili.NewMeiliClient(conf)
+		if err != nil {
+			log.Errorf("new meili client error: %s", err)
+			return nil, err
+		}
+	case "postgres":
+		client, err = postgres.NewPostgresClient(conf.DocStore.PostgresConfig.DSN)
+		if err != nil {
+			log.Errorf("new postgres client error: %s", err)
+			return nil, err
+		}
+	default:
+		return nil, fmt.Errorf("unsupported docstore type: %s", conf.DocStore.Type)
 	}
 	return &Chain{
-		MeiliClient: client,
-		Plugins:     plugins,
-		Log:         log,
+		DocClient: client,
+		Plugins:   plugins,
+		Log:       log,
 	}, nil
 }
 
-func (c *Chain) Store(ctx context.Context, document *doc.Document) error {
-	document.Kind = "document"
+func (c *Chain) CreateDocument(ctx context.Context, document *doc.Document) error {
 	return ChainPool.Run(ctx, func(ctx context.Context) error {
-		c.Log.Debugf("store document: %+v", document.String())
-		if d, err := c.GetDocument(ctx, document.Namespace, document.EntryId); err != nil {
+		ctx = c.WithNamespace(ctx, document.Namespace)
+		c.Log.Debugf("create document od entryId: %d", document.EntryId)
+		if d, err := c.GetDocument(ctx, document.Namespace, document.EntryId); err != nil && err != models.ErrNotFound {
 			c.Log.Errorf("get document error: %s", err)
 			return err
 		} else if d != nil {
-			c.Log.Debugf("document already exists: %+v", d.String())
-			return fmt.Errorf("document already exists: %+v", d.String())
+			c.Log.Debugf("document already exists: %s", d.Name)
+			return fmt.Errorf("document already exists: %s", d.Name)
 		}
 		for _, plugin := range c.Plugins {
 			err := plugin.Run(ctx, document)
@@ -74,195 +92,50 @@ func (c *Chain) Store(ctx context.Context, document *doc.Document) error {
 				return err
 			}
 		}
-		c.Log.Debugf("store document: %+v", document.String())
-		return c.MeiliClient.Store(ctx, document)
+		c.Log.Debugf("create document: %+v", document.Name)
+		return c.DocClient.CreateDocument(ctx, document)
 	})
 }
 
-func (c *Chain) StoreAttr(ctx context.Context, docAttr *doc.DocumentAttr) error {
+func (c *Chain) UpdateDocument(ctx context.Context, document *doc.Document) error {
 	return ChainPool.Run(ctx, func(ctx context.Context) error {
-		if err := c.MeiliClient.DeleteByFilter(ctx, doc.DocumentAttrQuery{
-			AttrQueries: []*doc.AttrQuery{
-				{
-					Attr:   "namespace",
-					Option: "=",
-					Value:  docAttr.Namespace,
-				},
-				{
-					Attr:   "key",
-					Option: "=",
-					Value:  docAttr.Key,
-				},
-				{
-					Attr:   "entryId",
-					Option: "=",
-					Value:  docAttr.EntryId,
-				},
-				{
-					Attr:   "kind",
-					Option: "=",
-					Value:  "attr",
-				}},
-		}); err != nil {
-			c.Log.Errorf("delete document attr error: %s", err)
-			return err
-		}
-		docAttr.Kind = "attr"
-		c.Log.Debugf("store attr: %+v", docAttr.String())
-		return c.MeiliClient.Store(ctx, docAttr)
+		ctx = c.WithNamespace(ctx, document.Namespace)
+		c.Log.Debugf("update document of entryId: %d", document.EntryId)
+		return c.DocClient.UpdateDocument(ctx, document)
 	})
 }
 
-func (c *Chain) GetDocument(ctx context.Context, namespace, entryId string) (*doc.Document, error) {
-	c.Log.Debugf("get document: namespace=%s, entryId=%s", namespace, entryId)
-	docs, err := c.MeiliClient.Search(ctx, &doc.DocumentQuery{
-		AttrQueries: []*doc.AttrQuery{
-			{
-				Attr:   "namespace",
-				Option: "=",
-				Value:  namespace,
-			},
-			{
-				Attr:   "entryId",
-				Option: "=",
-				Value:  entryId,
-			},
-			{
-				Attr:   "kind",
-				Option: "=",
-				Value:  "document",
-			},
-		},
-		Search:      "",
-		HitsPerPage: 1,
-		Page:        1,
-	})
+func (c *Chain) GetDocument(ctx context.Context, namespace string, entryId int64) (*doc.Document, error) {
+	c.Log.Debugf("get document: namespace=%s, entryId=%d", namespace, entryId)
+	ctx = c.WithNamespace(ctx, namespace)
+	doc, err := c.DocClient.GetDocument(ctx, entryId)
 	if err != nil {
 		c.Log.Errorf("get document error: %s", err)
 		return nil, err
 	}
-	if len(docs) == 0 {
-		c.Log.Debugf("document not found: namespace=%s, entryId=%s", namespace, entryId)
-		return nil, nil
-	}
-	c.Log.Debugf("get document: %+v", docs[0].String())
-	return docs[0], nil
+	c.Log.Debugf("get document of entryId: %d", entryId)
+	return doc, nil
 }
 
-func (c *Chain) ListDocumentAttrs(ctx context.Context, namespace string, entryIds []string) (doc.DocumentAttrList, error) {
-	docAttrQuery := &doc.DocumentAttrQuery{
-		AttrQueries: []*doc.AttrQuery{
-			{
-				Attr:   "namespace",
-				Option: "=",
-				Value:  namespace,
-			},
-			{
-				Attr:   "entryId",
-				Option: "IN",
-				Value:  entryIds,
-			},
-			{
-				Attr:   "kind",
-				Option: "=",
-				Value:  "attr",
-			},
-		},
-	}
-	c.Log.Debugf("list document attrs: %+v", docAttrQuery.String())
-	attrs, err := c.MeiliClient.FilterAttr(ctx, docAttrQuery)
-	if err != nil {
-		c.Log.Errorf("list document attrs error: %s", err)
-		return nil, err
-	}
-	c.Log.Debugf("list %d document attrs: %s", len(attrs), attrs.String())
-	return attrs, nil
+func (c *Chain) Search(ctx context.Context, filter *doc.DocumentFilter) ([]*doc.Document, error) {
+	ctx = c.WithNamespace(ctx, filter.Namespace)
+	c.Log.Debugf("search document: %+v", filter.String())
+	return c.DocClient.FilterDocuments(ctx, filter)
 }
 
-func (c *Chain) GetDocumentAttrs(ctx context.Context, namespace, entryId string) ([]*doc.DocumentAttr, error) {
-	docAttrQuery := &doc.DocumentAttrQuery{
-		AttrQueries: []*doc.AttrQuery{
-			{
-				Attr:   "namespace",
-				Option: "=",
-				Value:  namespace,
-			},
-			{
-				Attr:   "entryId",
-				Option: "=",
-				Value:  entryId,
-			},
-			{
-				Attr:   "kind",
-				Option: "=",
-				Value:  "attr",
-			},
-		},
-	}
-	c.Log.Debugf("get document attrs: %+v", docAttrQuery.String())
-	attrs, err := c.MeiliClient.FilterAttr(ctx, docAttrQuery)
-	if err != nil {
-		c.Log.Errorf("get document attrs error: %s", err)
-		return nil, err
-	}
-	c.Log.Debugf("get %d document attrs: %s", len(attrs), attrs.String())
-	return attrs, nil
-}
-
-func (c *Chain) Search(ctx context.Context, query *doc.DocumentQuery, attrQueries []*doc.DocumentAttrQuery) ([]*doc.Document, error) {
-	attrs := doc.DocumentAttrList{}
-	for _, attrQuery := range attrQueries {
-		attrQuery.AttrQueries = append(attrQuery.AttrQueries, &doc.AttrQuery{
-			Attr:   "kind",
-			Option: "=",
-			Value:  "attr",
-		})
-		c.Log.Debugf("filter attr query: %+v", attrQuery.String())
-		attr, err := c.MeiliClient.FilterAttr(ctx, attrQuery)
-		if err != nil {
-			return nil, err
-		}
-		attrs = append(attrs, attr...)
-	}
-	c.Log.Debugf("filter %d attrs: %s", len(attrs), attrs.String())
-	ids := []string{}
-	for _, attr := range attrs {
-		ids = append(ids, attr.EntryId)
-	}
-	if len(ids) == 0 && len(attrQueries) != 0 {
-		return nil, nil
-	}
-
-	query.AttrQueries = append(query.AttrQueries, &doc.AttrQuery{
-		Attr:   "kind",
-		Option: "=",
-		Value:  "document",
-	})
-	if len(ids) != 0 {
-		query.AttrQueries = append(query.AttrQueries, &doc.AttrQuery{
-			Attr:   "entryId",
-			Option: "IN",
-			Value:  ids,
-		})
-	}
-	c.Log.Debugf("search document query: %+v", query.String())
-	docs, err := c.MeiliClient.Search(ctx, query)
-	if err != nil {
-		c.Log.Errorf("search document error: %s", err)
-		return nil, err
-	}
-	c.Log.Debugf("search %d documents: %s", len(docs), docs.String())
-	return docs, nil
-}
-
-func (c *Chain) DeleteByFilter(ctx context.Context, queries doc.DocumentAttrQuery) error {
+func (c *Chain) Delete(ctx context.Context, namespace string, entryId int64) error {
+	ctx = c.WithNamespace(ctx, namespace)
 	return ChainPool.Run(ctx, func(ctx context.Context) error {
-		c.Log.Debugf("delete by filter: %+v", queries.String())
-		err := c.MeiliClient.DeleteByFilter(ctx, queries)
+		c.Log.Debugf("delete document of entryId: %d", entryId)
+		err := c.DocClient.DeleteDocument(ctx, entryId)
 		if err != nil {
-			c.Log.Errorf("delete by filter error: %s", err)
+			c.Log.Errorf("delete document of entryId %d error: %s", entryId, err)
 			return err
 		}
 		return nil
 	})
+}
+
+func (c *Chain) WithNamespace(ctx context.Context, namespace string) context.Context {
+	return models.WithNamespace(ctx, models.NewNamespace(namespace))
 }

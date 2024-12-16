@@ -20,9 +20,11 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/basenana/friday/pkg/models"
 	"github.com/basenana/friday/pkg/models/doc"
 	"github.com/basenana/friday/pkg/utils"
 )
@@ -36,29 +38,22 @@ func (s *HttpServer) store() gin.HandlerFunc {
 			c.JSON(400, gin.H{"error": err.Error()})
 			return
 		}
+		body.Namespace = namespace
+		enId, _ := strconv.Atoi(entryId)
+		body.EntryId = int64(enId)
 		if err := body.Valid(); err != nil {
 			c.JSON(400, gin.H{"error": err.Error()})
 			return
 		}
-		body.Namespace = namespace
-		body.EntryId = entryId
 		// store the document
-		doc := body.ToDocument()
-		if err := s.chain.Store(c, doc); err != nil {
+		if err := s.chain.CreateDocument(c, &body.Document); err != nil {
 			if strings.Contains(err.Error(), "already exists") {
 				return
 			}
 			c.String(500, fmt.Sprintf("store document error: %s", err))
 			return
 		}
-		attrs := body.ToAttr()
-		for _, attr := range attrs {
-			if err := s.chain.StoreAttr(c, attr); err != nil {
-				c.String(500, fmt.Sprintf("create document attr error: %s", err))
-				return
-			}
-		}
-		c.JSON(200, doc)
+		c.JSON(200, body.Document)
 	}
 }
 
@@ -66,20 +61,18 @@ func (s *HttpServer) update() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		entryId := c.Param("entryId")
 		namespace := c.Param("namespace")
-		body := &DocAttrRequest{}
+		body := &DocUpdateRequest{}
 		if err := c.ShouldBindJSON(&body); err != nil {
 			c.JSON(400, gin.H{"error": err.Error()})
 			return
 		}
 		body.Namespace = namespace
-		body.EntryId = entryId
+		enId, _ := strconv.Atoi(entryId)
+		body.EntryId = int64(enId)
 		// update the document
-		attrs := body.ToDocAttr()
-		for _, attr := range attrs {
-			if err := s.chain.StoreAttr(c, attr); err != nil {
-				c.String(500, fmt.Sprintf("update document error: %s", err))
-				return
-			}
+		if err := s.chain.UpdateDocument(c, body.ToModel()); err != nil {
+			c.String(500, fmt.Sprintf("update document error: %s", err))
+			return
 		}
 		c.JSON(200, body)
 	}
@@ -89,8 +82,13 @@ func (s *HttpServer) get() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		namespace := c.Param("namespace")
 		entryId := c.Param("entryId")
-		document, err := s.chain.GetDocument(c, namespace, entryId)
+		enId, _ := strconv.Atoi(entryId)
+		document, err := s.chain.GetDocument(c, namespace, int64(enId))
 		if err != nil {
+			if err == models.ErrNotFound {
+				c.String(404, fmt.Sprintf("document not found: %s", entryId))
+				return
+			}
 			c.String(500, fmt.Sprintf("get document error: %s", err))
 			return
 		}
@@ -98,30 +96,7 @@ func (s *HttpServer) get() gin.HandlerFunc {
 			c.String(404, fmt.Sprintf("document not found: %s", entryId))
 			return
 		}
-		docWithAttr := &DocumentWithAttr{
-			Document: document,
-		}
-
-		attrs, err := s.chain.GetDocumentAttrs(c, namespace, entryId)
-		if err != nil {
-			c.String(500, fmt.Sprintf("get document attrs error: %s", err))
-			return
-		}
-		for _, attr := range attrs {
-			if attr.Key == "parentId" {
-				docWithAttr.ParentID = attr.Value.(string)
-			}
-			if attr.Key == "mark" {
-				marked := attr.Value.(bool)
-				docWithAttr.Mark = &marked
-			}
-			if attr.Key == "unRead" {
-				unRead := attr.Value.(bool)
-				docWithAttr.UnRead = &unRead
-			}
-		}
-
-		c.JSON(200, docWithAttr)
+		c.JSON(200, document)
 	}
 }
 
@@ -131,55 +106,22 @@ func (s *HttpServer) filter() gin.HandlerFunc {
 		if docQuery == nil {
 			return
 		}
-		docs, err := s.chain.Search(c, docQuery.ToQuery(), docQuery.GetAttrQueries())
+
+		ctx := models.WithPagination(c, models.NewPagination(docQuery.Page, docQuery.PageSize))
+
+		docs, err := s.chain.Search(ctx, docQuery)
 		if err != nil {
 			c.String(500, fmt.Sprintf("search document error: %s", err))
 			return
 		}
 
-		var docWithAttrs []DocumentWithAttr
-		ids := []string{}
-		for _, doc := range docs {
-			ids = append(ids, doc.EntryId)
-		}
-		allAttrs, err := s.chain.ListDocumentAttrs(c, docQuery.Namespace, ids)
-		if err != nil {
-			c.String(500, fmt.Sprintf("list document attrs error: %s", err))
-			return
-		}
-		attrsMap := map[string][]*doc.DocumentAttr{}
-		for _, attr := range allAttrs {
-			if attrsMap[attr.EntryId] == nil {
-				attrsMap[attr.EntryId] = []*doc.DocumentAttr{}
-			}
-			attrsMap[attr.EntryId] = append(attrsMap[attr.EntryId], attr)
-		}
-
-		for _, document := range docs {
-			docWithAttr := DocumentWithAttr{Document: document}
-			attrs := attrsMap[document.EntryId]
-			for _, attr := range attrs {
-				if attr.Key == "parentId" {
-					docWithAttr.ParentID = attr.Value.(string)
-				}
-				if attr.Key == "mark" {
-					marked := attr.Value.(bool)
-					docWithAttr.Mark = &marked
-				}
-				if attr.Key == "unRead" {
-					unRead := attr.Value.(bool)
-					docWithAttr.UnRead = &unRead
-				}
-			}
-			docWithAttrs = append(docWithAttrs, docWithAttr)
-		}
-		c.JSON(200, docWithAttrs)
+		c.JSON(200, docs)
 	}
 }
 
-func getFilterQuery(c *gin.Context) *DocQuery {
+func getFilterQuery(c *gin.Context) *doc.DocumentFilter {
 	namespace := c.Param("namespace")
-	page, err := strconv.Atoi(c.DefaultQuery("page", "0"))
+	page, err := strconv.Atoi(c.DefaultQuery("page", "1"))
 	if err != nil {
 		c.String(400, fmt.Sprintf("invalid page number: %s", c.Query("page")))
 		return nil
@@ -190,18 +132,35 @@ func getFilterQuery(c *gin.Context) *DocQuery {
 		return nil
 	}
 
-	docQuery := DocQuery{
-		Namespace:   namespace,
-		Source:      c.Query("source"),
-		WebUrl:      c.Query("webUrl"),
-		ParentID:    c.Query("parentID"),
-		Search:      c.Query("search"),
-		HitsPerPage: int64(pageSize),
-		Page:        int64(page),
-		Sort:        c.DefaultQuery("sort", "createdAt"),
-		Desc:        c.DefaultQuery("desc", "false") == "true",
+	sort, err := strconv.Atoi(c.DefaultQuery("sort", "4"))
+	if err != nil {
+		c.String(400, fmt.Sprintf("invalid sort: %s", c.Query("page")))
+		return nil
+	}
+	docQuery := &doc.DocumentFilter{
+		Namespace: namespace,
+		Search:    c.Query("search"),
+		FuzzyName: c.Query("fuzzyName"),
+		Source:    c.Query("source"),
+		Marked:    utils.ToPtr(c.Query("mark") == "true"),
+		Unread:    utils.ToPtr(c.Query("unRead") == "true"),
+		Page:      int64(page),
+		PageSize:  int64(pageSize),
+		Order: doc.DocumentOrder{
+			Order: doc.DocOrder(sort),
+			Desc:  c.Query("desc") == "true",
+		},
 	}
 
+	parentId := c.Query("parentId")
+	if parentId != "" {
+		pId, err := strconv.Atoi(c.Query("parentId"))
+		if err != nil {
+			c.String(400, fmt.Sprintf("invalid parentId: %s", c.Query("page")))
+			return nil
+		}
+		docQuery.ParentID = utils.ToPtr(int64(pId))
+	}
 	createAtStart := c.Query("createAtStart")
 	if createAtStart != "" {
 		createAtStartTimestamp, err := strconv.Atoi(createAtStart)
@@ -209,7 +168,7 @@ func getFilterQuery(c *gin.Context) *DocQuery {
 			c.String(400, fmt.Sprintf("invalid createAtStart: %s", c.Query("page")))
 			return nil
 		}
-		docQuery.CreatedAtStart = utils.ToPtr(int64(createAtStartTimestamp))
+		docQuery.CreatedAtStart = utils.ToPtr(time.Unix(int64(createAtStartTimestamp), 0))
 	}
 	createAtEnd := c.Query("createAtEnd")
 	if createAtEnd != "" {
@@ -218,7 +177,7 @@ func getFilterQuery(c *gin.Context) *DocQuery {
 			c.String(400, fmt.Sprintf("invalid createAtEnd: %s", c.Query("page")))
 			return nil
 		}
-		docQuery.ChangedAtEnd = utils.ToPtr(int64(createAtEndTimestamp))
+		docQuery.ChangedAtEnd = utils.ToPtr(time.Unix(int64(createAtEndTimestamp), 0))
 	}
 	updatedAtStart := c.Query("updatedAtStart")
 	if updatedAtStart != "" {
@@ -227,7 +186,7 @@ func getFilterQuery(c *gin.Context) *DocQuery {
 			c.String(400, fmt.Sprintf("invalid updatedAtStart: %s", c.Query("page")))
 			return nil
 		}
-		docQuery.ChangedAtStart = utils.ToPtr(int64(updatedAtStartTimestamp))
+		docQuery.ChangedAtStart = utils.ToPtr(time.Unix(int64(updatedAtStartTimestamp), 0))
 	}
 	updatedAtEnd := c.Query("updatedAtEnd")
 	if updatedAtEnd != "" {
@@ -236,39 +195,18 @@ func getFilterQuery(c *gin.Context) *DocQuery {
 			c.String(400, fmt.Sprintf("invalid updatedAtEnd: %s", c.Query("page")))
 			return nil
 		}
-		docQuery.ChangedAtEnd = utils.ToPtr(int64(updatedAtEndTimestamp))
+		docQuery.ChangedAtEnd = utils.ToPtr(time.Unix(int64(updatedAtEndTimestamp), 0))
 	}
-	fuzzyName := c.Query("fuzzyName")
-	if fuzzyName != "" {
-		docQuery.FuzzyName = &fuzzyName
-	}
-	if c.Query("unRead") != "" {
-		docQuery.UnRead = utils.ToPtr(c.Query("unRead") == "true")
-	}
-	if c.Query("mark") != "" {
-		docQuery.Mark = utils.ToPtr(c.Query("mark") == "true")
-	}
-	return &docQuery
+	return docQuery
 }
 
 func (s *HttpServer) delete() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		namespace := c.Param("namespace")
-		queries := []*doc.AttrQuery{}
 		entryId := c.Param("entryId")
-		queries = append(queries,
-			&doc.AttrQuery{
-				Attr:   "entryId",
-				Option: "=",
-				Value:  entryId,
-			},
-			&doc.AttrQuery{
-				Attr:   "namespace",
-				Option: "=",
-				Value:  namespace,
-			},
-		)
-		if err := s.chain.DeleteByFilter(c, doc.DocumentAttrQuery{AttrQueries: queries}); err != nil {
+
+		enId, _ := strconv.Atoi(entryId)
+		if err := s.chain.Delete(c, namespace, int64(enId)); err != nil {
 			c.String(500, fmt.Sprintf("delete document error: %s", err))
 			return
 		}

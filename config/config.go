@@ -31,8 +31,8 @@ type Config struct {
 	// plugins
 	Plugins []string `json:"plugins,omitempty"`
 
-	// meilisearch
-	MeiliConfig MeiliConfig `json:"meiliConfig,omitempty"`
+	// docStore
+	DocStore DocStoreConfig `json:"docStore,omitempty"`
 
 	// llm limit token
 	LimitToken int `json:"limitToken,omitempty"` // used by summary, split input into mutil sub-docs summaried by llm separately.
@@ -65,6 +65,16 @@ type MeiliConfig struct {
 	SearchApiKey string `json:"searchApiKey,omitempty"`
 	DocIndex     string `json:"docIndex,omitempty"`
 	AttrIndex    string `json:"attrIndex,omitempty"`
+}
+
+type DocStoreConfig struct {
+	Type           string         `json:"type"`
+	MeiliConfig    MeiliConfig    `json:"meiliConfig,omitempty"`
+	PostgresConfig PostgresConfig `json:"postgresConfig,omitempty"`
+}
+
+type PostgresConfig struct {
+	DSN string `json:"dsn,omitempty"`
 }
 
 type LLMConfig struct {

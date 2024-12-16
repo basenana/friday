@@ -14,17 +14,20 @@
  limitations under the License.
 */
 
-package docstore
+package models
 
-import (
-	"context"
+import "errors"
 
-	"github.com/basenana/friday/pkg/models/doc"
+var (
+	ErrNotFound    = errors.New("no record")
+	ErrNameTooLong = errors.New("name too long")
+	ErrIsExist     = errors.New("record existed")
+	ErrNotEmpty    = errors.New("group not empty")
+	ErrNoGroup     = errors.New("not group")
+	ErrIsGroup     = errors.New("this object is a group")
+	ErrNoAccess    = errors.New("no access")
+	ErrNoPerm      = errors.New("no permission")
+	ErrConflict    = errors.New("operation conflict")
+	ErrUnsupported = errors.New("unsupported operation")
+	ErrNotEnable   = errors.New("not enable")
 )
-
-type DocStoreInterface interface {
-	Store(ctx context.Context, docPtr doc.DocPtrInterface) error
-	FilterAttr(ctx context.Context, query *doc.DocumentAttrQuery) (doc.DocumentAttrList, error)
-	Search(ctx context.Context, query *doc.DocumentQuery) (doc.DocumentList, error)
-	DeleteByFilter(ctx context.Context, aqs doc.DocumentAttrQuery) error
-}

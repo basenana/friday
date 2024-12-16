@@ -20,10 +20,10 @@ import (
 	"github.com/basenana/friday/config"
 	"github.com/basenana/friday/pkg/build/withvector"
 	"github.com/basenana/friday/pkg/friday"
-	"github.com/basenana/friday/pkg/store/vectorstore"
-	"github.com/basenana/friday/pkg/store/vectorstore/pgvector"
-	"github.com/basenana/friday/pkg/store/vectorstore/postgres"
-	"github.com/basenana/friday/pkg/store/vectorstore/redis"
+	"github.com/basenana/friday/pkg/store"
+	"github.com/basenana/friday/pkg/store/pgvector"
+	"github.com/basenana/friday/pkg/store/postgres"
+	"github.com/basenana/friday/pkg/store/redis"
 	"github.com/basenana/friday/pkg/utils/logger"
 )
 
@@ -35,7 +35,7 @@ func NewFriday(conf *config.Config) (f *friday.Friday, err error) {
 	log.SetDebug(conf.Debug)
 	conf.Logger = log
 
-	var vectorStore vectorstore.VectorStore
+	var vectorStore store.VectorStore
 	// init vector store
 	if conf.VectorStoreConfig.VectorStoreType == config.VectorStoreRedis {
 		if conf.VectorStoreConfig.EmbeddingDim == 0 {
@@ -55,7 +55,7 @@ func NewFriday(conf *config.Config) (f *friday.Friday, err error) {
 			return nil, err
 		}
 	} else if conf.VectorStoreConfig.VectorStoreType == config.VectorStorePostgres {
-		vectorStore, err = postgres.NewPostgresClient(conf.Logger, conf.VectorStoreConfig.VectorUrl)
+		vectorStore, err = postgres.NewPostgresClient(conf.VectorStoreConfig.VectorUrl)
 		if err != nil {
 			return nil, err
 		}
