@@ -27,7 +27,7 @@ import (
 	"github.com/basenana/friday/pkg/llm/prompts"
 	"github.com/basenana/friday/pkg/models/vector"
 	"github.com/basenana/friday/pkg/spliter"
-	"github.com/basenana/friday/pkg/store/vectorstore"
+	"github.com/basenana/friday/pkg/store"
 	"github.com/basenana/friday/pkg/utils/logger"
 )
 
@@ -203,7 +203,7 @@ var _ = Describe("TestQuestion", func() {
 
 type FakeQuestionStore struct{}
 
-var _ vectorstore.VectorStore = &FakeQuestionStore{}
+var _ store.VectorStore = &FakeQuestionStore{}
 
 func (f FakeQuestionStore) Store(ctx context.Context, element *vector.Element, extra map[string]any) error {
 	return nil

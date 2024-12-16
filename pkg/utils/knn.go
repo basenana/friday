@@ -14,4 +14,23 @@
  limitations under the License.
 */
 
-package doc
+package utils
+
+type Distance struct {
+	Object interface{}
+	Dist   float64
+}
+
+type Distances []Distance
+
+func (d Distances) Len() int {
+	return len(d)
+}
+
+func (d Distances) Less(i, j int) bool {
+	return d[i].Dist < d[j].Dist
+}
+
+func (d Distances) Swap(i, j int) {
+	d[i], d[j] = d[j], d[i]
+}

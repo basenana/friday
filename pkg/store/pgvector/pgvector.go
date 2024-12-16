@@ -27,8 +27,9 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/basenana/friday/pkg/models/vector"
-	"github.com/basenana/friday/pkg/store/vectorstore"
-	"github.com/basenana/friday/pkg/store/vectorstore/db"
+	"github.com/basenana/friday/pkg/store"
+	"github.com/basenana/friday/pkg/store/db"
+	"github.com/basenana/friday/pkg/store/utils"
 	"github.com/basenana/friday/pkg/utils/logger"
 )
 
@@ -37,13 +38,13 @@ type PgVectorClient struct {
 	dEntity *db.Entity
 }
 
-var _ vectorstore.VectorStore = &PgVectorClient{}
+var _ store.VectorStore = &PgVectorClient{}
 
 func NewPgVectorClient(log logger.Logger, postgresUrl string) (*PgVectorClient, error) {
 	if log == nil {
 		log = logger.NewLogger("database")
 	}
-	dbObj, err := gorm.Open(postgres.Open(postgresUrl), &gorm.Config{Logger: logger.NewDbLogger(log)})
+	dbObj, err := gorm.Open(postgres.Open(postgresUrl), &gorm.Config{Logger: utils.NewDbLogger()})
 	if err != nil {
 		panic(err)
 	}

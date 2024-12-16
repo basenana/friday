@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/basenana/friday/pkg/models/doc"
 	"github.com/basenana/friday/pkg/models/vector"
 )
 
@@ -111,4 +112,80 @@ type BleveKV struct {
 
 func (v *BleveKV) TableName() string {
 	return "friday_blevekv"
+}
+
+type Document struct {
+	ID            int64     `gorm:"column:id;primaryKey"`
+	OID           int64     `gorm:"column:oid;index:doc_oid"`
+	Name          string    `gorm:"column:name;index:doc_name"`
+	Namespace     string    `gorm:"column:namespace;index:doc_ns"`
+	Source        string    `gorm:"column:source;index:doc_source"`
+	ParentEntryID *int64    `gorm:"column:parent_entry_id;index:doc_parent_entry_id"`
+	Keywords      string    `gorm:"column:keywords"`
+	Content       string    `gorm:"column:content"`
+	Summary       string    `gorm:"column:summary"`
+	HeaderImage   string    `gorm:"column:header_image"`
+	SubContent    string    `gorm:"column:sub_content"`
+	Marked        bool      `gorm:"column:marked;index:doc_is_marked"`
+	Unread        bool      `gorm:"column:unread;index:doc_is_unread"`
+	CreatedAt     time.Time `gorm:"column:created_at"`
+	ChangedAt     time.Time `gorm:"column:changed_at"`
+}
+
+func (d *Document) TableName() string {
+	return "document"
+}
+
+func (d *Document) From(document *doc.Document) *Document {
+	d.ID = document.EntryId
+	d.OID = document.EntryId
+	d.Name = document.Name
+	d.Namespace = document.Namespace
+	d.ParentEntryID = document.ParentEntryID
+	d.Source = document.Source
+	d.Content = document.Content
+	d.Summary = document.Summary
+	d.CreatedAt = document.CreatedAt
+	d.ChangedAt = document.ChangedAt
+	if document.Marked != nil {
+		d.Marked = *document.Marked
+	}
+	if document.Unread != nil {
+		d.Unread = *document.Unread
+	}
+	d.HeaderImage = document.HeaderImage
+	d.SubContent = document.SubContent
+	return d
+}
+
+func (d *Document) UpdateFrom(document *doc.Document) *Document {
+	if document.Unread != nil {
+		d.Unread = *document.Unread
+	}
+	if document.Marked != nil {
+		d.Marked = *document.Marked
+	}
+	if document.ParentEntryID != nil {
+		d.ParentEntryID = document.ParentEntryID
+	}
+	return d
+}
+
+func (d *Document) To() *doc.Document {
+	result := &doc.Document{
+		EntryId:       d.OID,
+		Name:          d.Name,
+		Namespace:     d.Namespace,
+		ParentEntryID: d.ParentEntryID,
+		Source:        d.Source,
+		Content:       d.Content,
+		Summary:       d.Summary,
+		SubContent:    d.SubContent,
+		HeaderImage:   d.HeaderImage,
+		Marked:        &d.Marked,
+		Unread:        &d.Unread,
+		CreatedAt:     d.CreatedAt,
+		ChangedAt:     d.ChangedAt,
+	}
+	return result
 }
