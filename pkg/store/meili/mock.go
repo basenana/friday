@@ -113,39 +113,31 @@ func (m *MockClient) FilterDocuments(ctx context.Context, filter *doc.DocumentFi
 				all := len(aq.AttrQueries)
 				matched := true
 				for _, q := range aq.AttrQueries {
-					if q.Attr == "entryId" {
+					switch q.Attr {
+					case "entryId":
 						all -= 1
 						if !match(q, attr.EntryId) {
 							matched = false
-							continue
 						}
-					}
-					if q.Attr == "namespace" {
+					case "namespace":
 						all -= 1
 						if !match(q, attr.Namespace) {
 							matched = false
-							continue
 						}
-					}
-					if q.Attr == "key" {
+					case "key":
 						all -= 1
 						if !match(q, attr.Key) {
 							matched = false
-							continue
 						}
-					}
-					if q.Attr == "value" {
+					case "value":
 						all -= 1
 						if !match(q, attr.Value) {
 							matched = false
-							continue
 						}
-					}
-					if q.Attr == "kind" {
+					case "kind":
 						all -= 1
 						if !match(q, attr.Kind) {
 							matched = false
-							continue
 						}
 					}
 				}
@@ -160,6 +152,8 @@ func (m *MockClient) FilterDocuments(ctx context.Context, filter *doc.DocumentFi
 				Option: "IN",
 				Value:  entryId,
 			})
+		} else {
+			return nil, nil
 		}
 	}
 
@@ -168,32 +162,26 @@ func (m *MockClient) FilterDocuments(ctx context.Context, filter *doc.DocumentFi
 		matched := true
 		all := len(query.AttrQueries)
 		for _, q := range query.AttrQueries {
-			if q.Attr == "entryId" {
+			switch q.Attr {
+			case "entryId":
 				all -= 1
 				if !match(q, d.EntryId) {
 					matched = false
-					continue
 				}
-			}
-			if q.Attr == "namespace" {
+			case "namespace":
 				all -= 1
 				if !match(q, d.Namespace) {
 					matched = false
-					continue
 				}
-			}
-			if q.Attr == "id" {
+			case "id":
 				all -= 1
 				if !match(q, d.Id) {
 					matched = false
-					continue
 				}
-			}
-			if q.Attr == "kind" {
+			case "kind":
 				all -= 1
 				if !match(q, d.Kind) {
 					matched = false
-					continue
 				}
 			}
 		}

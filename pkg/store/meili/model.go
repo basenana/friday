@@ -197,7 +197,7 @@ func (d *DocumentAttrList) FromModel(doc *doc.Document) *DocumentAttrList {
 			Namespace: doc.Namespace,
 			EntryId:   fmt.Sprintf("%d", doc.EntryId),
 			Key:       "parentId",
-			Value:     fmt.Sprintf("%d", *doc.ParentEntryID),
+			Value:     *doc.ParentEntryID,
 		})
 	}
 	mark := false
