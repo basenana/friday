@@ -26,6 +26,7 @@ import (
 	"github.com/meilisearch/meilisearch-go"
 
 	"github.com/basenana/friday/pkg/models/doc"
+	"github.com/basenana/friday/pkg/utils"
 )
 
 var (
@@ -119,9 +120,9 @@ func (d *Document) ToModel(attrs []*DocumentAttr) *doc.Document {
 			pId := int64(parentID)
 			m.ParentEntryID = &pId
 		case "mark":
-			m.Marked = attr.Value.(*bool)
+			m.Marked = utils.ToPtr(attr.Value.(bool))
 		case "unRead":
-			m.Unread = attr.Value.(*bool)
+			m.Unread = utils.ToPtr(attr.Value.(bool))
 		}
 	}
 	return m
@@ -166,6 +167,17 @@ func (d *DocumentAttr) String() string {
 	return fmt.Sprintf("EntryId(%s) %s: %v", d.EntryId, d.Key, d.Value)
 }
 
+func (d *DocumentAttr) NewTest() *DocumentAttr {
+	return &DocumentAttr{
+		Id:        "1",
+		Kind:      "test",
+		Namespace: "test",
+		EntryId:   "1",
+		Key:       "test",
+		Value:     "test",
+	}
+}
+
 type DocumentAttrList []*DocumentAttr
 
 func (d *DocumentAttrList) String() string {
@@ -185,29 +197,33 @@ func (d *DocumentAttrList) FromModel(doc *doc.Document) *DocumentAttrList {
 			Namespace: doc.Namespace,
 			EntryId:   fmt.Sprintf("%d", doc.EntryId),
 			Key:       "parentId",
-			Value:     doc.ParentEntryID,
+			Value:     *doc.ParentEntryID,
 		})
 	}
+	mark := false
 	if doc.Marked != nil {
-		attrs = append(attrs, &DocumentAttr{
-			Id:        uuid.New().String(),
-			Kind:      "attr",
-			Namespace: doc.Namespace,
-			EntryId:   fmt.Sprintf("%d", doc.EntryId),
-			Key:       "mark",
-			Value:     doc.Marked,
-		})
+		mark = *doc.Marked
 	}
+	attrs = append(attrs, &DocumentAttr{
+		Id:        uuid.New().String(),
+		Kind:      "attr",
+		Namespace: doc.Namespace,
+		EntryId:   fmt.Sprintf("%d", doc.EntryId),
+		Key:       "mark",
+		Value:     mark,
+	})
+	unread := true
 	if doc.Unread != nil {
-		attrs = append(attrs, &DocumentAttr{
-			Id:        uuid.New().String(),
-			Kind:      "attr",
-			Namespace: doc.Namespace,
-			EntryId:   fmt.Sprintf("%d", doc.EntryId),
-			Key:       "unRead",
-			Value:     doc.Unread,
-		})
+		unread = *doc.Unread
 	}
+	attrs = append(attrs, &DocumentAttr{
+		Id:        uuid.New().String(),
+		Kind:      "attr",
+		Namespace: doc.Namespace,
+		EntryId:   fmt.Sprintf("%d", doc.EntryId),
+		Key:       "unRead",
+		Value:     unread,
+	})
 	return (*DocumentAttrList)(&attrs)
 }
 
@@ -413,6 +429,14 @@ func (q *DocumentAttrQuery) ToRequest() *meilisearch.SearchRequest {
 	}
 }
 
+func (q *DocumentAttrQuery) ToFilter() interface{} {
+	filter := []interface{}{}
+	for _, aq := range q.AttrQueries {
+		filter = append(filter, aq.ToFilter())
+	}
+	return filter
+}
+
 type DocumentAttrQueries []*DocumentAttrQuery
 
 func (q *DocumentAttrQueries) FromFilter(query *doc.DocumentFilter) *DocumentAttrQueries {
@@ -438,7 +462,7 @@ func (q *DocumentAttrQueries) FromFilter(query *doc.DocumentFilter) *DocumentAtt
 				{
 					Attr:   "value",
 					Option: "=",
-					Value:  query.ParentID,
+					Value:  *query.ParentID,
 				},
 			},
 		})
@@ -464,7 +488,7 @@ func (q *DocumentAttrQueries) FromFilter(query *doc.DocumentFilter) *DocumentAtt
 				{
 					Attr:   "value",
 					Option: "=",
-					Value:  query.Marked,
+					Value:  *query.Marked,
 				},
 			},
 		})
@@ -490,7 +514,7 @@ func (q *DocumentAttrQueries) FromFilter(query *doc.DocumentFilter) *DocumentAtt
 				{
 					Attr:   "value",
 					Option: "=",
-					Value:  query.Unread,
+					Value:  *query.Unread,
 				},
 			},
 		})
@@ -527,6 +551,14 @@ func (q *DocumentQuery) String() string {
 		filters += aq.String() + " "
 	}
 	return fmt.Sprintf("search: [%s], attr query: [%s]", q.Search, filters)
+}
+
+func (q *DocumentQuery) ToFilter() interface{} {
+	filter := []interface{}{}
+	for _, aq := range q.AttrQueries {
+		filter = append(filter, aq.ToFilter())
+	}
+	return filter
 }
 
 func (q *DocumentQuery) ToRequest() *meilisearch.SearchRequest {

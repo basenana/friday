@@ -19,6 +19,9 @@ package doc
 import (
 	"fmt"
 	"time"
+
+	"github.com/basenana/friday/pkg/models"
+	"github.com/basenana/friday/pkg/utils"
 )
 
 type Document struct {
@@ -36,6 +39,25 @@ type Document struct {
 	Unread        *bool     `json:"unread,omitempty"`
 	CreatedAt     time.Time `json:"created_at"`
 	ChangedAt     time.Time `json:"changed_at"`
+}
+
+func (d *Document) NewTest() *Document {
+	return &Document{
+		EntryId:       1,
+		Name:          "test",
+		Namespace:     models.DefaultNamespaceValue,
+		ParentEntryID: utils.ToPtr(int64(1)),
+		Source:        "test",
+		Content:       "test",
+		Summary:       "test",
+		WebUrl:        "test",
+		HeaderImage:   "test",
+		SubContent:    "test",
+		Marked:        utils.ToPtr(true),
+		Unread:        utils.ToPtr(true),
+		CreatedAt:     time.Now(),
+		ChangedAt:     time.Now(),
+	}
 }
 
 type DocumentFilter struct {
