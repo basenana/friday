@@ -40,6 +40,14 @@ func (p *PostgresClient) CreateDocument(ctx context.Context, doc *doc.Document) 
 			if errors.Is(res.Error, gorm.ErrRecordNotFound) {
 				docMod = docMod.From(doc)
 				res = tx.Create(docMod)
+				if res.Error != nil {
+					return res.Error
+				}
+
+				// update tokens
+				docMod = docMod.Tokens(doc)
+				p.log.Info("update token", docMod.Token)
+				res = tx.Model(&Document{}).Where("id = ?", docMod.ID).Update("token", gorm.Expr(string(docMod.Token)))
 				return res.Error
 			}
 			return res.Error
@@ -144,7 +152,9 @@ func docQueryFilter(tx *gorm.DB, filter *doc.DocumentFilter) *gorm.DB {
 		tx = tx.Where("document.name LIKE ?", "%"+filter.FuzzyName+"%")
 	}
 	if filter.Search != "" {
-		tx = tx.Where("document.content LIKE ?", "%"+filter.Search+"%")
+		tx = tx.Where("document.token @@ to_tsquery('simple', ?)", filter.Search).
+			Select("*, ts_rank(document.token, to_tsquery('simple', ?)) as rank", filter.Search).
+			Order("rank DESC")
 	}
 	return tx
 }
