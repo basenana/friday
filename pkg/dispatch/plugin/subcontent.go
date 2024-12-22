@@ -19,7 +19,6 @@ package plugin
 import (
 	"bytes"
 	"context"
-	"regexp"
 	"strings"
 
 	"github.com/PuerkitoBio/goquery"
@@ -40,22 +39,6 @@ func (s *SubContentPlugin) Run(ctx context.Context, doc *doc.Document) error {
 }
 
 var _ ChainPlugin = &SubContentPlugin{}
-
-var repeatSpace = regexp.MustCompile(`\s+`)
-var htmlCharFilterRegexp = regexp.MustCompile(`</?[!\w:]+((\s+[\w-]+(\s*=\s*(?:\\*".*?"|'.*?'|[^'">\s]+))?)+\s*|\s*)/?>`)
-
-func ContentTrim(contentType, content string) string {
-	switch contentType {
-	case "html", "htm", "webarchive", ".webarchive":
-		content = strings.ReplaceAll(content, "</p>", "</p>\n")
-		content = strings.ReplaceAll(content, "</P>", "</P>\n")
-		content = strings.ReplaceAll(content, "</div>", "</div>\n")
-		content = strings.ReplaceAll(content, "</DIV>", "</DIV>\n")
-		content = htmlCharFilterRegexp.ReplaceAllString(content, "")
-	}
-	content = repeatSpace.ReplaceAllString(content, " ")
-	return content
-}
 
 func GenerateContentSubContent(content string) string {
 	if subContent, err := slowPathContentSubContent([]byte(content)); err == nil {

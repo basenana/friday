@@ -17,7 +17,10 @@
 package postgres
 
 import (
+	"database/sql/driver"
 	"encoding/json"
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/basenana/friday/pkg/models/doc"
@@ -114,6 +117,28 @@ func (v *BleveKV) TableName() string {
 	return "friday_blevekv"
 }
 
+type TsVector string
+
+func (t *TsVector) Scan(value interface{}) error {
+	if value == nil {
+		*t = ""
+		return nil
+	}
+	switch v := value.(type) {
+	case []byte:
+		*t = TsVector(v)
+	case string:
+		*t = TsVector(v)
+	default:
+		return fmt.Errorf("cannot scan type %T into TsVector", value)
+	}
+	return nil
+}
+
+func (t *TsVector) Value() (driver.Value, error) {
+	return string(*t), nil
+}
+
 type Document struct {
 	ID            int64     `gorm:"column:id;primaryKey"`
 	OID           int64     `gorm:"column:oid;index:doc_oid"`
@@ -126,8 +151,10 @@ type Document struct {
 	Summary       string    `gorm:"column:summary"`
 	HeaderImage   string    `gorm:"column:header_image"`
 	SubContent    string    `gorm:"column:sub_content"`
+	PureContent   string    `gorm:"column:pure_content"`
 	Marked        bool      `gorm:"column:marked;index:doc_is_marked"`
 	Unread        bool      `gorm:"column:unread;index:doc_is_unread"`
+	Token         TsVector  `gorm:"column:token;type:tsvector"`
 	CreatedAt     time.Time `gorm:"column:created_at"`
 	ChangedAt     time.Time `gorm:"column:changed_at"`
 }
@@ -154,7 +181,18 @@ func (d *Document) From(document *doc.Document) *Document {
 		d.Unread = *document.Unread
 	}
 	d.HeaderImage = document.HeaderImage
+	d.PureContent = document.PureContent
 	d.SubContent = document.SubContent
+	return d
+}
+
+func (d *Document) Tokens(document *doc.Document) *Document {
+	d.Token = TsVector(
+		fmt.Sprintf("setweight(to_tsvector('simple', '%s'), 'A') || setweight(to_tsvector('simple', '%s'), 'B')",
+			strings.Join(document.TitleTokens, " "),
+			strings.Join(document.ContentTokens, " "),
+		),
+	)
 	return d
 }
 
