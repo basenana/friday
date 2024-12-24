@@ -28,7 +28,7 @@ import (
 	_ "github.com/basenana/friday/pkg/dispatch/plugin"
 	"github.com/basenana/friday/pkg/models/doc"
 	"github.com/basenana/friday/pkg/service"
-	"github.com/basenana/friday/pkg/store/meili"
+	"github.com/basenana/friday/pkg/store/memory"
 	"github.com/basenana/friday/pkg/utils/logger"
 )
 
@@ -49,8 +49,10 @@ var _ = Describe("Chain", func() {
 	BeforeEach(func() {
 		service.ChainPool = dispatch.NewPool(10)
 		logger.InitLog()
+		client, err := memory.NewMemoryMetaStore()
+		Expect(err).Should(BeNil())
 		Chain = &service.Chain{
-			DocClient: &meili.MockClient{},
+			DocClient: client,
 			Plugins:   []plugin.ChainPlugin{},
 			Log:       logger.NewLog("test"),
 		}
@@ -84,7 +86,7 @@ var _ = Describe("Chain", func() {
 			CreatedAt:     t,
 			ChangedAt:     t,
 		}
-		err := Chain.CreateDocument(context.TODO(), doc11)
+		err = Chain.CreateDocument(context.TODO(), doc11)
 		Expect(err).Should(BeNil())
 		err = Chain.CreateDocument(context.TODO(), doc12)
 		Expect(err).Should(BeNil())

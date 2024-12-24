@@ -1,5 +1,5 @@
 /*
- Copyright 2023 Friday Author.
+ Copyright 2024 Friday Author.
 
  Licensed under the Apache License, Version 2.0 (the "License");
  you may not use this file except in compliance with the License.
@@ -14,7 +14,7 @@
  limitations under the License.
 */
 
-package postgres
+package db
 
 import (
 	"github.com/go-gormigrate/gormigrate/v2"
@@ -59,8 +59,23 @@ func buildMigrations() []*gormigrate.Migration {
 				if err != nil {
 					return err
 				}
-				//_ = db.Exec(`CREATE INDEX name ON table USING gist(content);`)
-				//_ = db.Exec("CREATE INDEX idx_doc_content ON document USING GIN (content gin_trgm_ops);")
+				return nil
+			},
+			Rollback: func(db *gorm.DB) error {
+				return nil
+			},
+		},
+		{
+			ID: "2024122201",
+			Migrate: func(db *gorm.DB) error {
+				err := db.AutoMigrate(
+					&Document{},
+				)
+				if err != nil {
+					return err
+				}
+				_ = db.Exec("CREATE EXTENSION pg_trgm;")
+				_ = db.Exec("CREATE INDEX idx_document_token ON public.document USING gin (token);")
 				return nil
 			},
 			Rollback: func(db *gorm.DB) error {

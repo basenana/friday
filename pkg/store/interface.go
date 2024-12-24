@@ -31,6 +31,7 @@ type VectorStore interface {
 
 type DocStoreInterface interface {
 	CreateDocument(ctx context.Context, doc *doc.Document) error
+	UpdateTokens(ctx context.Context, doc *doc.Document) error
 	UpdateDocument(ctx context.Context, doc *doc.Document) error
 	GetDocument(ctx context.Context, entryId int64) (*doc.Document, error)
 	FilterDocuments(ctx context.Context, filter *doc.DocumentFilter) ([]*doc.Document, error)

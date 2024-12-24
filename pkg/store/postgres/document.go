@@ -26,21 +26,25 @@ import (
 	"github.com/basenana/friday/pkg/models"
 	"github.com/basenana/friday/pkg/models/doc"
 	"github.com/basenana/friday/pkg/store"
+	"github.com/basenana/friday/pkg/store/db"
 	"github.com/basenana/friday/pkg/store/utils"
 )
 
 var _ store.DocStoreInterface = &PostgresClient{}
 
 func (p *PostgresClient) CreateDocument(ctx context.Context, doc *doc.Document) error {
-	defer trace.StartRegion(ctx, "metastore.sql.SaveDocument").End()
-	err := p.dEntity.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		docMod := &Document{}
+	defer trace.StartRegion(ctx, "store.doc.CreateDocument").End()
+	err := p.DEntity.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		docMod := &db.Document{}
 		res := tx.Where("oid = ?", doc.EntryId).First(docMod)
 		if res.Error != nil {
 			if errors.Is(res.Error, gorm.ErrRecordNotFound) {
 				docMod = docMod.From(doc)
 				res = tx.Create(docMod)
-				return res.Error
+				if res.Error != nil {
+					return res.Error
+				}
+
 			}
 			return res.Error
 		}
@@ -54,10 +58,29 @@ func (p *PostgresClient) CreateDocument(ctx context.Context, doc *doc.Document) 
 	return nil
 }
 
+func (p *PostgresClient) UpdateTokens(ctx context.Context, doc *doc.Document) error {
+	defer trace.StartRegion(ctx, "store.doc.UpdateTokens").End()
+	err := p.DEntity.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		docMod := &db.Document{}
+		res := tx.Where("oid = ?", doc.EntryId).First(docMod)
+		if res.Error != nil {
+			return res.Error
+		}
+		docMod = docMod.Tokens(doc)
+		p.Logger.Info("update token", docMod.Token)
+		res = tx.Model(&db.Document{}).Where("id = ?", docMod.ID).Update("token", gorm.Expr(string(docMod.Token)))
+		return res.Error
+	})
+	if err != nil {
+		return utils.SqlError2Error(err)
+	}
+	return nil
+}
+
 func (p *PostgresClient) UpdateDocument(ctx context.Context, doc *doc.Document) error {
-	defer trace.StartRegion(ctx, "metastore.sql.SaveDocument").End()
-	err := p.dEntity.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		docMod := &Document{}
+	defer trace.StartRegion(ctx, "store.doc.UpdateDocument").End()
+	err := p.DEntity.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		docMod := &db.Document{}
 		res := tx.Where("oid = ?", doc.EntryId).First(docMod)
 		if res.Error != nil {
 			if errors.Is(res.Error, gorm.ErrRecordNotFound) {
@@ -78,9 +101,9 @@ func (p *PostgresClient) UpdateDocument(ctx context.Context, doc *doc.Document) 
 }
 
 func (p *PostgresClient) GetDocument(ctx context.Context, entryId int64) (*doc.Document, error) {
-	defer trace.StartRegion(ctx, "metastore.sql.GetDocument").End()
-	doc := &Document{}
-	res := p.dEntity.WithNamespace(ctx).Where("oid = ?", entryId).First(doc)
+	defer trace.StartRegion(ctx, "store.doc.GetDocument").End()
+	doc := &db.Document{}
+	res := p.DEntity.WithNamespace(ctx).Where("oid = ?", entryId).First(doc)
 	if res.Error != nil {
 		return nil, utils.SqlError2Error(res.Error)
 	}
@@ -88,13 +111,13 @@ func (p *PostgresClient) GetDocument(ctx context.Context, entryId int64) (*doc.D
 }
 
 func (p *PostgresClient) FilterDocuments(ctx context.Context, filter *doc.DocumentFilter) ([]*doc.Document, error) {
-	defer trace.StartRegion(ctx, "metastore.sql.ListDocument").End()
-	docList := make([]Document, 0)
+	defer trace.StartRegion(ctx, "store.doc.FilterDocuments").End()
+	docList := make([]db.Document, 0)
 	q := p.WithNamespace(ctx)
 	if page := models.GetPagination(ctx); page != nil {
 		q = q.Offset(page.Offset()).Limit(page.Limit())
 	}
-	res := docOrder(docQueryFilter(q, filter), &filter.Order).Find(&docList)
+	res := docOrder(p.docQueryFilter(q, filter), &filter.Order).Find(&docList)
 	if res.Error != nil {
 		return nil, utils.SqlError2Error(res.Error)
 	}
@@ -107,15 +130,15 @@ func (p *PostgresClient) FilterDocuments(ctx context.Context, filter *doc.Docume
 }
 
 func (p *PostgresClient) DeleteDocument(ctx context.Context, entryId int64) error {
-	defer trace.StartRegion(ctx, "metastore.sql.DeleteDocument").End()
-	err := p.dEntity.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		res := namespaceQuery(ctx, tx).Where("oid = ?", entryId).Delete(&Document{})
+	defer trace.StartRegion(ctx, "store.doc.DeleteDocument").End()
+	err := p.DEntity.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		res := namespaceQuery(ctx, tx).Where("oid = ?", entryId).Delete(&db.Document{})
 		return res.Error
 	})
 	return utils.SqlError2Error(err)
 }
 
-func docQueryFilter(tx *gorm.DB, filter *doc.DocumentFilter) *gorm.DB {
+func (p *PostgresClient) docQueryFilter(tx *gorm.DB, filter *doc.DocumentFilter) *gorm.DB {
 	if filter.ParentID != nil {
 		tx = tx.Where("document.parent_entry_id = ?", filter.ParentID)
 	}
@@ -144,7 +167,9 @@ func docQueryFilter(tx *gorm.DB, filter *doc.DocumentFilter) *gorm.DB {
 		tx = tx.Where("document.name LIKE ?", "%"+filter.FuzzyName+"%")
 	}
 	if filter.Search != "" {
-		tx = tx.Where("document.content LIKE ?", "%"+filter.Search+"%")
+		tx = tx.Where("document.token @@ to_tsquery('simple', ?)", filter.Search).
+			Select("*, ts_rank(document.token, to_tsquery('simple', ?)) as rank", filter.Search).
+			Order("rank DESC")
 	}
 	return tx
 }
@@ -173,7 +198,7 @@ func namespaceQuery(ctx context.Context, tx *gorm.DB) *gorm.DB {
 func (p *PostgresClient) WithNamespace(ctx context.Context) *gorm.DB {
 	ns := models.GetNamespace(ctx)
 	if ns.String() == models.DefaultNamespaceValue {
-		return p.dEntity.WithContext(ctx)
+		return p.DEntity.WithContext(ctx)
 	}
-	return p.dEntity.WithContext(ctx).Where("namespace = ?", ns.String())
+	return p.DEntity.WithContext(ctx).Where("namespace = ?", ns.String())
 }
