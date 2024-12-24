@@ -101,6 +101,33 @@ func (c *Chain) CreateDocument(ctx context.Context, document *doc.Document) erro
 	})
 }
 
+func (c *Chain) UpdateTokens(ctx context.Context, namespace string, entryId int64) error {
+	return ChainPool.Run(ctx, func(ctx context.Context) error {
+		ctx = c.WithNamespace(ctx, namespace)
+		c.Log.Debugf("update document tokens entryId: %d", entryId)
+		var (
+			document *doc.Document
+			err      error
+		)
+		if document, err = c.GetDocument(ctx, namespace, entryId); err != nil {
+			c.Log.Errorf("get document error: %s", err)
+			return err
+		} else if document == nil {
+			c.Log.Debugf("document of entryId not found: %d", entryId)
+			return fmt.Errorf("document of entryId %d not found", entryId)
+		}
+		for _, plugin := range c.Plugins {
+			err := plugin.Run(ctx, document)
+			if err != nil {
+				c.Log.Errorf("plugin error: %s", err)
+				return err
+			}
+		}
+		c.Log.Debugf("update tokens: %+v", document.Name)
+		return c.DocClient.UpdateTokens(ctx, document)
+	})
+}
+
 func (c *Chain) UpdateDocument(ctx context.Context, document *doc.Document) error {
 	return ChainPool.Run(ctx, func(ctx context.Context) error {
 		ctx = c.WithNamespace(ctx, document.Namespace)
