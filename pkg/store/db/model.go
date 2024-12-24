@@ -1,5 +1,5 @@
 /*
- Copyright 2023 Friday Author.
+ Copyright 2024 Friday Author.
 
  Licensed under the Apache License, Version 2.0 (the "License");
  you may not use this file except in compliance with the License.
@@ -14,7 +14,7 @@
  limitations under the License.
 */
 
-package postgres
+package db
 
 import (
 	"database/sql/driver"

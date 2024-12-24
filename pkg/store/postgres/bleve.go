@@ -9,6 +9,8 @@ import (
 	"github.com/blevesearch/bleve/v2/registry"
 	"github.com/blevesearch/upsidedown_store_api"
 	"gorm.io/gorm"
+
+	"github.com/basenana/friday/pkg/store/db"
 )
 
 const (
@@ -75,9 +77,9 @@ func (p *PgKVWriter) ExecuteBatch(batch store.KVBatch) error {
 		return fmt.Errorf("wrong type of batch")
 	}
 
-	err := p.dEntity.DB.WithContext(context.Background()).Transaction(func(tx *gorm.DB) error {
+	err := p.DEntity.DB.WithContext(context.Background()).Transaction(func(tx *gorm.DB) error {
 		for k, mergeOps := range emulatedBatch.Merger.Merges {
-			mod := &BleveKV{ID: bytes2Str([]byte(k)), Key: []byte(k)}
+			mod := &db.BleveKV{ID: bytes2Str([]byte(k)), Key: []byte(k)}
 
 			res := tx.First(mod)
 			if res.Error != nil && !errors.Is(res.Error, gorm.ErrRecordNotFound) {
@@ -99,7 +101,7 @@ func (p *PgKVWriter) ExecuteBatch(batch store.KVBatch) error {
 		}
 
 		for _, op := range emulatedBatch.Ops {
-			mod := &BleveKV{ID: bytes2Str(op.K), Key: op.K, Value: op.V}
+			mod := &db.BleveKV{ID: bytes2Str(op.K), Key: op.K, Value: op.V}
 			var res *gorm.DB
 			if op.V != nil {
 				res = tx.Save(mod)
@@ -127,8 +129,8 @@ type PgKVReader struct {
 var _ store.KVReader = &PgKVReader{}
 
 func (p *PgKVReader) Get(key []byte) ([]byte, error) {
-	mod := &BleveKV{ID: bytes2Str(key)}
-	res := p.dEntity.DB.WithContext(context.Background()).First(mod)
+	mod := &db.BleveKV{ID: bytes2Str(key)}
+	res := p.DEntity.DB.WithContext(context.Background()).First(mod)
 	if res.Error != nil {
 		if errors.Is(res.Error, gorm.ErrRecordNotFound) {
 			return nil, nil
@@ -144,8 +146,8 @@ func (p *PgKVReader) MultiGet(keys [][]byte) ([][]byte, error) {
 		idList[i] = bytes2Str(k)
 	}
 
-	var modList []BleveKV
-	res := p.dEntity.DB.WithContext(context.Background()).Where("id IN ?", idList).Find(modList)
+	var modList []db.BleveKV
+	res := p.DEntity.DB.WithContext(context.Background()).Where("id IN ?", idList).Find(modList)
 	if res.Error != nil {
 		return nil, res.Error
 	}
@@ -157,8 +159,8 @@ func (p *PgKVReader) MultiGet(keys [][]byte) ([][]byte, error) {
 }
 
 func (p *PgKVReader) PrefixIterator(prefix []byte) store.KVIterator {
-	var modList []BleveKV
-	res := p.PostgresClient.dEntity.WithContext(context.Background()).
+	var modList []db.BleveKV
+	res := p.PostgresClient.DEntity.WithContext(context.Background()).
 		Where("id LIKE ?", bytes2Str(prefix)+"%").
 		Order("key DESC").Find(&modList)
 	if res.Error != nil {
@@ -175,8 +177,8 @@ func (p *PgKVReader) PrefixIterator(prefix []byte) store.KVIterator {
 }
 
 func (p *PgKVReader) RangeIterator(start, end []byte) store.KVIterator {
-	var modList []BleveKV
-	res := p.PostgresClient.dEntity.WithContext(context.Background()).
+	var modList []db.BleveKV
+	res := p.PostgresClient.DEntity.WithContext(context.Background()).
 		Where("id >= ? AND id < ?", bytes2Str(start), bytes2Str(end)).
 		Order("key DESC").Find(&modList)
 	if res.Error != nil {
@@ -201,7 +203,7 @@ func NewPgKVReader(cli *PostgresClient) *PgKVReader {
 }
 
 type KVIterator struct {
-	listKV     []BleveKV
+	listKV     []db.BleveKV
 	start, end []byte
 	prefix     []byte
 	crt        int
