@@ -93,7 +93,11 @@ func (c *Chain) CreateDocument(ctx context.Context, document *doc.Document) erro
 			}
 		}
 		c.Log.Debugf("create document: %+v", document.Name)
-		return c.DocClient.CreateDocument(ctx, document)
+		if err := c.DocClient.CreateDocument(ctx, document); err != nil {
+			c.Log.Errorf("create document error: %s", err)
+			return err
+		}
+		return c.DocClient.UpdateTokens(ctx, document)
 	})
 }
 
@@ -110,6 +114,9 @@ func (c *Chain) GetDocument(ctx context.Context, namespace string, entryId int64
 	ctx = c.WithNamespace(ctx, namespace)
 	doc, err := c.DocClient.GetDocument(ctx, entryId)
 	if err != nil {
+		if err == models.ErrNotFound {
+			return nil, nil
+		}
 		c.Log.Errorf("get document error: %s", err)
 		return nil, err
 	}

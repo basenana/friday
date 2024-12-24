@@ -39,7 +39,7 @@ func (h *HeaderImgPlugin) Run(ctx context.Context, doc *doc.Document) error {
 	var headerImgUrl string
 	query, err := goquery.NewDocumentFromReader(bytes.NewReader([]byte(doc.Content)))
 	if err != nil {
-		return fmt.Errorf("build doc query with id %d error: %s", doc.EntryId, err)
+		return fmt.Errorf("get header image of doc with id %d error: %s", doc.EntryId, err)
 	}
 
 	query.Find("img").EachWithBreak(func(i int, selection *goquery.Selection) bool {

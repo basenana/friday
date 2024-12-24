@@ -28,6 +28,7 @@ import (
 
 	"github.com/basenana/friday/pkg/models/vector"
 	"github.com/basenana/friday/pkg/store"
+	"github.com/basenana/friday/pkg/store/db"
 	"github.com/basenana/friday/pkg/utils"
 )
 
@@ -36,7 +37,7 @@ func (p *PostgresClient) Store(ctx context.Context, element *vector.Element, ext
 	if namespace == nil {
 		namespace = defaultNamespace
 	}
-	return p.dEntity.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	return p.DEntity.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if extra == nil {
 			extra = make(map[string]interface{})
 		}
@@ -48,7 +49,7 @@ func (p *PostgresClient) Store(ctx context.Context, element *vector.Element, ext
 			return err
 		}
 
-		var v *Index
+		var v *db.Index
 		v, err = v.From(element)
 		if err != nil {
 			return err
@@ -57,7 +58,7 @@ func (p *PostgresClient) Store(ctx context.Context, element *vector.Element, ext
 		v.Extra = string(b)
 		v.Namespace = namespace.(string)
 
-		vModel := &Index{}
+		vModel := &db.Index{}
 		res := tx.Where("namespace = ? AND name = ? AND idx_group = ?", namespace, element.Name, element.Group).First(vModel)
 		if res.Error != nil && res.Error != gorm.ErrRecordNotFound {
 			return res.Error
@@ -91,9 +92,9 @@ func (p *PostgresClient) Search(ctx context.Context, query vector.VectorDocQuery
 		vectors64 = append(vectors64, float64(v))
 	}
 	// query from db
-	existIndexes := make([]Index, 0)
+	existIndexes := make([]db.Index, 0)
 
-	res := p.dEntity.WithNamespace(ctx)
+	res := p.DEntity.WithNamespace(ctx)
 	if query.ParentId != 0 {
 		res = res.Where("parent_entry_id = ?", query.ParentId)
 	}
@@ -128,7 +129,7 @@ func (p *PostgresClient) Search(ctx context.Context, query vector.VectorDocQuery
 	}
 	results := make([]*vector.Doc, 0)
 	for _, index := range minKIndexes {
-		i := index.Object.(Index)
+		i := index.Object.(db.Index)
 		results = append(results, i.ToDoc())
 	}
 
@@ -136,8 +137,8 @@ func (p *PostgresClient) Search(ctx context.Context, query vector.VectorDocQuery
 }
 
 func (p *PostgresClient) Get(ctx context.Context, oid int64, name string, group int) (*vector.Element, error) {
-	vModel := &Index{}
-	tx := p.dEntity.WithNamespace(ctx).Where("name = ? AND idx_group = ?", name, group)
+	vModel := &db.Index{}
+	tx := p.DEntity.WithNamespace(ctx).Where("name = ? AND idx_group = ?", name, group)
 	if oid != 0 {
 		tx = tx.Where("oid = ?", oid)
 	}
@@ -155,7 +156,7 @@ var _ store.VectorStore = &PostgresClient{}
 
 func (p *PostgresClient) Inited(ctx context.Context) (bool, error) {
 	var count int64
-	res := p.dEntity.WithContext(ctx).Model(&BleveKV{}).Count(&count)
+	res := p.DEntity.WithContext(ctx).Model(&db.BleveKV{}).Count(&count)
 	if res.Error != nil {
 		return false, res.Error
 	}

@@ -155,6 +155,10 @@ func (c *Client) CreateDocument(ctx context.Context, doc *doc.Document) error {
 	return nil
 }
 
+func (c *Client) UpdateTokens(ctx context.Context, doc *doc.Document) error {
+	return nil
+}
+
 func (c *Client) UpdateDocument(ctx context.Context, doc *doc.Document) error {
 	// delete document attr
 	newAttrsQuery := (&DocumentAttrQuery{}).FromModel(doc)
