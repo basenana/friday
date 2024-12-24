@@ -74,6 +74,7 @@ func buildMigrations() []*gormigrate.Migration {
 				if err != nil {
 					return err
 				}
+				_ = db.Exec("CREATE EXTENSION pg_trgm;")
 				_ = db.Exec("CREATE INDEX idx_document_token ON public.document USING gin (token);")
 				return nil
 			},
