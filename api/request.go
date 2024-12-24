@@ -38,11 +38,12 @@ func (r *DocRequest) Valid() error {
 }
 
 type DocUpdateRequest struct {
-	Namespace string `json:"namespace"`
-	EntryId   int64  `json:"entryId,omitempty"`
-	ParentID  *int64 `json:"parentId,omitempty"`
-	UnRead    *bool  `json:"unRead,omitempty"`
-	Mark      *bool  `json:"mark,omitempty"`
+	Namespace   string `json:"namespace"`
+	EntryId     int64  `json:"entryId,omitempty"`
+	ParentID    *int64 `json:"parentId,omitempty"`
+	UnRead      *bool  `json:"unRead,omitempty"`
+	Mark        *bool  `json:"mark,omitempty"`
+	UpdateToken *bool  `json:"updateToken,omitempty"`
 }
 
 func (r *DocUpdateRequest) Valid() error {
@@ -53,6 +54,14 @@ func (r *DocUpdateRequest) Valid() error {
 		return fmt.Errorf("namespace is required")
 	}
 	return nil
+}
+
+func (r *DocUpdateRequest) IsUpdate() bool {
+	return r.ParentID != nil || r.UnRead != nil || r.Mark != nil
+}
+
+func (r *DocUpdateRequest) IsUpdateToken() bool {
+	return r.UpdateToken != nil && *r.UpdateToken
 }
 
 func (r *DocUpdateRequest) ToModel() *doc.Document {

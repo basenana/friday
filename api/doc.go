@@ -69,10 +69,20 @@ func (s *HttpServer) update() gin.HandlerFunc {
 		body.Namespace = namespace
 		enId, _ := strconv.Atoi(entryId)
 		body.EntryId = int64(enId)
-		// update the document
-		if err := s.chain.UpdateDocument(c, body.ToModel()); err != nil {
-			c.String(500, fmt.Sprintf("update document error: %s", err))
-			return
+
+		if body.IsUpdate() {
+			// update the document
+			if err := s.chain.UpdateDocument(c, body.ToModel()); err != nil {
+				c.String(500, fmt.Sprintf("update document error: %s", err))
+				return
+			}
+		}
+		if body.IsUpdateToken() {
+			// update token
+			if err := s.chain.UpdateTokens(c, namespace, body.EntryId); err != nil {
+				c.String(500, fmt.Sprintf("update document token error: %s", err))
+				return
+			}
 		}
 		c.JSON(200, body)
 	}
