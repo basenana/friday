@@ -31,8 +31,8 @@ import (
 const defaultNamespace = "global"
 
 type PostgresClient struct {
-	log     *zap.SugaredLogger
-	dEntity *db.Entity
+	Logger  *zap.SugaredLogger
+	DEntity *db.Entity
 }
 
 func NewPostgresClient(postgresUrl string) (*PostgresClient, error) {
@@ -55,13 +55,13 @@ func NewPostgresClient(postgresUrl string) (*PostgresClient, error) {
 		return nil, err
 	}
 
-	dbEnt, err := db.NewDbEntity(dbObj, Migrate)
+	dbEnt, err := db.NewDbEntity(dbObj, db.Migrate)
 	if err != nil {
 		return nil, err
 	}
 
 	return &PostgresClient{
-		log:     log,
-		dEntity: dbEnt,
+		Logger:  log,
+		DEntity: dbEnt,
 	}, nil
 }

@@ -40,6 +40,10 @@ func (m *MockClient) CreateDocument(ctx context.Context, doc *doc.Document) erro
 	return nil
 }
 
+func (m *MockClient) UpdateTokens(ctx context.Context, doc *doc.Document) error {
+	return nil
+}
+
 func (m *MockClient) UpdateDocument(ctx context.Context, doc *doc.Document) error {
 	aq := (&DocumentAttrQuery{}).FromModel(doc)
 	result := []*DocumentAttr{}
