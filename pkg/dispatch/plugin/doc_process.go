@@ -68,6 +68,10 @@ func trimContent(content string) (string, error) {
 		return "", err
 	}
 
+	query.Find("body img").Each(func(i int, s *goquery.Selection) {
+		s.Remove()
+	})
+
 	query.Find("body").EachWithBreak(func(i int, selection *goquery.Selection) bool {
 		t := strings.TrimSpace(selection.Text())
 		if t != "" {
