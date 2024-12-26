@@ -18,6 +18,7 @@ package service_test
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -152,6 +153,35 @@ var _ = Describe("Chain", func() {
 				docs, err := Chain.GetDocument(context.TODO(), "test-ns", int64(40))
 				Expect(err).Should(BeNil())
 				Expect(docs).Should(BeNil())
+			})
+		})
+	})
+})
+
+var _ = Describe("Search Context", func() {
+	var (
+		Chain *service.Chain
+	)
+	BeforeEach(func() {
+		service.ChainPool = dispatch.NewPool(10)
+		logger.InitLog()
+		Chain = &service.Chain{
+			Log: logger.NewLog("test"),
+		}
+	})
+
+	Describe("GenContext", func() {
+		Context("GenContext", func() {
+			It("GenContext should be successful", func() {
+				document := &doc.Document{
+					EntryId:     1,
+					PureContent: strings.Repeat("friday", 100) + "nanafs" + strings.Repeat("basenana", 100) + "nanafs" + strings.Repeat("friday", 100),
+				}
+				Chain.GenContext("nanafs", document)
+				Expect(document.SearchContext).Should(Equal([]string{
+					"...iday" + strings.Repeat("friday", 16) + "<b>nanafs</b>" + strings.Repeat("basenana", 12) + "base...",
+					"...nana" + strings.Repeat("basenana", 12) + "<b>nanafs</b>" + strings.Repeat("friday", 16) + "frid...",
+				}))
 			})
 		})
 	})

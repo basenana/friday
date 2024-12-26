@@ -17,6 +17,7 @@
 package postgres
 
 import (
+	"fmt"
 	"time"
 
 	"go.uber.org/zap"
@@ -39,7 +40,7 @@ func NewPostgresClient(postgresUrl string) (*PostgresClient, error) {
 	log := logger.NewLog("postgres")
 	dbObj, err := gorm.Open(postgres.Open(postgresUrl), &gorm.Config{Logger: utils.NewDbLogger()})
 	if err != nil {
-		panic(err)
+		return nil, fmt.Errorf("failed to connect to postgres: %w", err)
 	}
 
 	dbConn, err := dbObj.DB()
