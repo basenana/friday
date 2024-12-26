@@ -38,6 +38,7 @@ type Document struct {
 	PureContent   string    `json:"pure_content,omitempty"`
 	TitleTokens   []string  `json:"title_tokens,omitempty"`
 	ContentTokens []string  `json:"content_tokens,omitempty"`
+	SearchContext []string  `json:"search_context,omitempty"`
 	Marked        *bool     `json:"marked,omitempty"`
 	Unread        *bool     `json:"unread,omitempty"`
 	CreatedAt     time.Time `json:"created_at"`

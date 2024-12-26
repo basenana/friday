@@ -19,6 +19,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"regexp"
 
 	"go.uber.org/zap"
 
@@ -154,7 +155,30 @@ func (c *Chain) GetDocument(ctx context.Context, namespace string, entryId int64
 func (c *Chain) Search(ctx context.Context, filter *doc.DocumentFilter) ([]*doc.Document, error) {
 	ctx = c.WithNamespace(ctx, filter.Namespace)
 	c.Log.Debugf("search document: %+v", filter.String())
-	return c.DocClient.FilterDocuments(ctx, filter)
+	docs, err := c.DocClient.FilterDocuments(ctx, filter)
+	if err != nil {
+		c.Log.Errorf("search document error: %s", err)
+		return nil, err
+	}
+	for _, d := range docs {
+		c.GenContext(filter.Search, d)
+	}
+	return docs, nil
+}
+
+func (c *Chain) GenContext(search string, document *doc.Document) {
+	pattern := fmt.Sprintf(`(.{0,100})(%s)(.{0,100})`, regexp.QuoteMeta(search))
+	re := regexp.MustCompile(pattern)
+
+	matches := re.FindAllStringSubmatch(document.PureContent, -1)
+	if len(matches) > 0 {
+		for _, match := range matches {
+			before := match[1]
+			matchStr := match[2]
+			after := match[3]
+			document.SearchContext = append(document.SearchContext, fmt.Sprintf("...%s<b>%s</b>%s...", before, matchStr, after))
+		}
+	}
 }
 
 func (c *Chain) Delete(ctx context.Context, namespace string, entryId int64) error {
