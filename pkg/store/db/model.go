@@ -206,6 +206,9 @@ func (d *Document) UpdateFrom(document *doc.Document) *Document {
 	if document.ParentEntryID != nil {
 		d.ParentEntryID = document.ParentEntryID
 	}
+	if document.PureContent != "" {
+		d.PureContent = document.PureContent
+	}
 	return d
 }
 
@@ -220,6 +223,7 @@ func (d *Document) To() *doc.Document {
 		Summary:       d.Summary,
 		SubContent:    d.SubContent,
 		HeaderImage:   d.HeaderImage,
+		PureContent:   d.PureContent,
 		Marked:        &d.Marked,
 		Unread:        &d.Unread,
 		CreatedAt:     d.CreatedAt,

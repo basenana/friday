@@ -35,14 +35,14 @@ var RootCmd = &cobra.Command{
 }
 
 func init() {
-	logger.InitLog()
-
 	RootCmd.AddCommand(apps.ServeCmd)
 	RootCmd.AddCommand(apps.AgentCmd)
 	RootCmd.PersistentFlags().StringVar(&config.FilePath, "config", path.Join(config.LocalUserPath(), config.DefaultConfigBase), "friday config file")
 }
 
 func main() {
+	logger.InitLog()
+	defer logger.Sync()
 	if err := RootCmd.Execute(); err != nil {
 		panic(err)
 	}
