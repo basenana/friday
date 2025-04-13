@@ -175,12 +175,12 @@ var _ = Describe("Search Context", func() {
 			It("GenContext should be successful", func() {
 				document := &doc.Document{
 					EntryId:     1,
-					PureContent: strings.Repeat("friday", 100) + "nanafs" + strings.Repeat("basenana", 100) + "nanafs" + strings.Repeat("friday", 100),
+					PureContent: strings.Repeat("friday", 100) + strings.Repeat("Nanafs", 2) + strings.Repeat("basenana", 100) + "nanafs" + strings.Repeat("friday", 100),
 				}
 				Chain.GenContext("nanafs", document)
 				Expect(document.SearchContext).Should(Equal([]string{
-					"...iday" + strings.Repeat("friday", 16) + "<b>nanafs</b>" + strings.Repeat("basenana", 12) + "base...",
-					"...nana" + strings.Repeat("basenana", 12) + "<b>nanafs</b>" + strings.Repeat("friday", 16) + "frid...",
+					"..ay" + strings.Repeat("friday", 33) + strings.Repeat("<b>Nanafs</b>", 2) + strings.Repeat("basenana", 24) + "ba..",
+					".." + strings.Repeat("basenana", 25) + strings.Repeat("<b>nanafs</b>", 1) + strings.Repeat("friday", 33) + "fr..",
 				}))
 			})
 		})
