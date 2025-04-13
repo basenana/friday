@@ -168,6 +168,9 @@ func (c *Chain) Search(ctx context.Context, filter *doc.DocumentFilter) ([]*doc.
 }
 
 func (c *Chain) GenContext(search string, document *doc.Document) {
+	if search == "" {
+		return
+	}
 	searchContextCount := 200
 	re := regexp.MustCompile("(?i)" + regexp.QuoteMeta(search))
 	matches := re.FindAllStringIndex(document.PureContent, -1)
