@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"unicode/utf8"
 
 	"go.uber.org/zap"
 
@@ -167,17 +168,52 @@ func (c *Chain) Search(ctx context.Context, filter *doc.DocumentFilter) ([]*doc.
 }
 
 func (c *Chain) GenContext(search string, document *doc.Document) {
-	pattern := fmt.Sprintf(`(.{0,100})(%s)(.{0,100})`, regexp.QuoteMeta(search))
-	re := regexp.MustCompile(pattern)
+	searchContextCount := 200
+	re := regexp.MustCompile("(?i)" + regexp.QuoteMeta(search))
+	matches := re.FindAllStringIndex(document.PureContent, -1)
 
-	matches := re.FindAllStringSubmatch(document.PureContent, -1)
-	if len(matches) > 0 {
-		for _, match := range matches {
-			before := match[1]
-			matchStr := match[2]
-			after := match[3]
-			document.SearchContext = append(document.SearchContext, fmt.Sprintf("...%s<b>%s</b>%s...", before, matchStr, after))
+	highlight := func(text string) string {
+		return re.ReplaceAllStringFunc(text, func(s string) string {
+			return fmt.Sprintf("<b>%s</b>", s)
+		})
+	}
+	addfix := func(added bool) string {
+		if added {
+			return ".."
 		}
+		return ""
+	}
+
+	getSafeIndex := func(index int) int {
+		for {
+			if index == 0 || index == len(document.PureContent)-1 || utf8.RuneStart(document.PureContent[index]) {
+				return index
+			}
+			index++
+		}
+	}
+
+	previousEnd := -1
+	for _, match := range matches {
+		start, end := match[0], match[1]
+
+		// Skip overlapping matches
+		if previousEnd > 0 && start-previousEnd < searchContextCount {
+			continue
+		}
+
+		beforeIndex := getSafeIndex(max(0, start-searchContextCount))
+		afterIndex := getSafeIndex(min(len(document.PureContent)-1, end+searchContextCount))
+
+		before := document.PureContent[beforeIndex:start]
+		after := document.PureContent[end:afterIndex]
+
+		// Highlight the search term in before and after
+		before = highlight(addfix(beforeIndex > 0) + before)
+		after = highlight(after + addfix(afterIndex < len(document.PureContent)-1))
+
+		document.SearchContext = append(document.SearchContext, fmt.Sprintf("%s<b>%s</b>%s", before, document.PureContent[start:end], after))
+		previousEnd = end
 	}
 }
 
