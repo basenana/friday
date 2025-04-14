@@ -179,8 +179,8 @@ var _ = Describe("Search Context", func() {
 				}
 				Chain.GenContext("nanafs", document)
 				Expect(document.SearchContext).Should(Equal([]string{
-					"..ay" + strings.Repeat("friday", 33) + strings.Repeat("<b>Nanafs</b>", 2) + strings.Repeat("basenana", 24) + "ba..",
-					".." + strings.Repeat("basenana", 25) + strings.Repeat("<b>nanafs</b>", 1) + strings.Repeat("friday", 33) + "fr..",
+					"..iday" + strings.Repeat("friday", 66) + strings.Repeat("<b>Nanafs</b>", 2) + strings.Repeat("basenana", 49) + "ba..",
+					".." + strings.Repeat("basenana", 50) + strings.Repeat("<b>nanafs</b>", 1) + strings.Repeat("friday", 66) + "frid..",
 				}))
 			})
 		})

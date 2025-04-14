@@ -171,7 +171,7 @@ func (c *Chain) GenContext(search string, document *doc.Document) {
 	if search == "" {
 		return
 	}
-	searchContextCount := 200
+	searchContextCount := 400
 	re := regexp.MustCompile("(?i)" + regexp.QuoteMeta(search))
 	matches := re.FindAllStringIndex(document.PureContent, -1)
 

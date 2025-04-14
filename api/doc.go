@@ -149,7 +149,7 @@ func getFilterQuery(c *gin.Context) *doc.DocumentFilter {
 	}
 	docQuery := &doc.DocumentFilter{
 		Namespace: namespace,
-		Search:    c.Query("search"),
+		Search:    strings.ReplaceAll(c.Query("search"), " ", ""),
 		FuzzyName: c.Query("fuzzyName"),
 		Source:    c.Query("source"),
 		Page:      int64(page),
