@@ -11,9 +11,11 @@ require (
 	github.com/blevesearch/upsidedown_store_api v1.0.2
 	github.com/cdipaolo/goml v0.0.0-20220715001353-00e0c845ae1c
 	github.com/gin-gonic/gin v1.10.0
+	github.com/glebarez/sqlite v1.11.0
 	github.com/go-gormigrate/gormigrate/v2 v2.1.1
-	github.com/google/uuid v1.3.0
+	github.com/google/uuid v1.6.0
 	github.com/hyponet/jiebago v0.0.0-20240525141904-e34990856482
+	github.com/mark3labs/mcp-go v0.24.1
 	github.com/meilisearch/meilisearch-go v0.29.0
 	github.com/onsi/ginkgo v1.16.5
 	github.com/onsi/ginkgo/v2 v2.13.0
@@ -56,7 +58,6 @@ require (
 	github.com/gabriel-vasile/mimetype v1.4.7 // indirect
 	github.com/gin-contrib/sse v0.1.0 // indirect
 	github.com/glebarez/go-sqlite v1.21.2 // indirect
-	github.com/glebarez/sqlite v1.11.0 // indirect
 	github.com/go-logr/logr v1.2.4 // indirect
 	github.com/go-playground/locales v0.14.1 // indirect
 	github.com/go-playground/universal-translator v0.18.1 // indirect
@@ -89,9 +90,11 @@ require (
 	github.com/pelletier/go-toml/v2 v2.2.3 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/rogpeppe/go-internal v1.11.0 // indirect
+	github.com/spf13/cast v1.7.1 // indirect
 	github.com/spf13/pflag v1.0.5 // indirect
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
 	github.com/ugorji/go/codec v1.2.12 // indirect
+	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
 	go.etcd.io/bbolt v1.3.7 // indirect
 	go.uber.org/multierr v1.10.0 // indirect
 	golang.org/x/arch v0.12.0 // indirect
