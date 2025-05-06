@@ -80,6 +80,31 @@ func (o *OpenAIV1) Chat(ctx context.Context, stream bool, history []map[string]s
 		"stream":            stream,
 	}
 
+	if len(o.mcpClients) > 0 {
+		tools := make([]interface{}, 0)
+		for _, mcpClient := range o.mcpClients {
+			mcpTools, err := mcpClient.Tools(ctx)
+			if err != nil {
+				return nil, fmt.Errorf("list tools error: %w", err)
+			}
+			for _, tool := range mcpTools {
+				tools = append(tools,
+					map[string]interface{}{
+						"type": "function",
+						"function": map[string]interface{}{
+							"name":        tool.Name,
+							"description": tool.Description,
+							"parameters":  tool.InputSchema,
+						},
+					},
+				)
+			}
+		}
+
+		data["tools"] = tools
+		data["tool_choice"] = "auto"
+	}
+
 	var (
 		buf   = make(chan []byte)
 		errCh = make(chan error)

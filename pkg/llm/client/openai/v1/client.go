@@ -22,6 +22,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/basenana/friday/pkg/mcp"
 	"io"
 	"net/http"
 	"net/url"
@@ -52,7 +53,8 @@ type OpenAIV1 struct {
 
 	limiter *rate.Limiter
 
-	conf config.OpenAIConfig
+	mcpClients []mcp.Client
+	conf       config.OpenAIConfig
 }
 
 func NewOpenAIV1(log logger.Logger, baseUrl, key string, conf config.OpenAIConfig) *OpenAIV1 {
