@@ -2,23 +2,37 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
 type Client interface {
 	Initialize(ctx context.Context) error
-	Tools(ctx context.Context) ([]mcp.Tool, error)
-	CallTool(ctx context.Context, tool string, arguments map[string]interface{}) ([]mcp.Content, error)
+	GetTools(ctx context.Context) ([]mcp.Tool, error)
+	CallTool(ctx context.Context, tool string, arguments map[string]interface{}) (string, error)
 }
 
 type SSEClient struct {
-	b       *Backend
-	c       *client.Client
-	server  string
-	version string
-	started bool
+	Enable      bool
+	Name        string
+	Description string
+	Type        string // SSE
+
+	// SSE
+	URL     string
+	Headers map[string]string
+
+	tools     []mcp.Tool
+	prompt    []mcp.Prompt
+	resources []mcp.Resource
+	c         *client.Client
+	server    string
+	version   string
+	started   bool
 }
+
+var _ Client = &SSEClient{}
 
 func (c *SSEClient) Initialize(ctx context.Context) error {
 	if c.started {
@@ -52,9 +66,9 @@ func (c *SSEClient) Initialize(ctx context.Context) error {
 	return nil
 }
 
-func (c *SSEClient) Tools(ctx context.Context) ([]mcp.Tool, error) {
-	if c.b.Tools != nil {
-		return c.b.Tools, nil
+func (c *SSEClient) GetTools(ctx context.Context) ([]mcp.Tool, error) {
+	if c.tools != nil {
+		return c.tools, nil
 	}
 	toolsRequest := mcp.ListToolsRequest{}
 	toolListResult, err := c.c.ListTools(ctx, toolsRequest)
@@ -62,25 +76,33 @@ func (c *SSEClient) Tools(ctx context.Context) ([]mcp.Tool, error) {
 		return nil, err
 	}
 
-	c.b.Tools = toolListResult.Tools
-	return c.b.Tools, nil
+	c.tools = toolListResult.Tools
+	return c.tools, nil
 }
 
-func (c *SSEClient) CallTool(ctx context.Context, tool string, arguments map[string]interface{}) ([]mcp.Content, error) {
+func (c *SSEClient) CallTool(ctx context.Context, tool string, arguments map[string]interface{}) (string, error) {
 	request := mcp.CallToolRequest{}
 	request.Params.Name = tool
 	request.Params.Arguments = arguments
 
 	result, err := c.c.CallTool(ctx, request)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 
-	return result.Content, nil
+	var content string
+	for _, c := range result.Content {
+		raw, err := json.Marshal(c)
+		if err != nil {
+			return content, err
+		}
+		content += string(raw)
+	}
+	return content, nil
 }
 
 func NewSSEClient(name, desc, url string, headers map[string]string) (*SSEClient, error) {
-	b := &Backend{
+	sse := &SSEClient{
 		Enable:      false,
 		Name:        name,
 		Description: desc,
@@ -93,6 +115,7 @@ func NewSSEClient(name, desc, url string, headers map[string]string) (*SSEClient
 	if err != nil {
 		return nil, err
 	}
+	sse.c = c
 
-	return &SSEClient{b: b, c: c}, nil
+	return sse, nil
 }
