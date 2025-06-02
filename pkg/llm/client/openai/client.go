@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
 	"github.com/openai/openai-go/packages/param"
 	"github.com/openai/openai-go/packages/ssestream"
@@ -15,7 +16,7 @@ type Client struct {
 	model  Model
 }
 
-func (c *Client) Chart(ctx context.Context, userMessage string, session *Session) *Response {
+func (c *Client) Chat(ctx context.Context, userMessage string, session *Session) *Response {
 	resp := newResponse()
 	session.History = append(session.History, Message{UserMessage: userMessage})
 	go c.replyLoop(ctx, session, resp)

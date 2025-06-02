@@ -3,13 +3,17 @@ package openai
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
+	openai "github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
 	"github.com/openai/openai-go/packages/param"
 	"github.com/openai/openai-go/packages/ssestream"
+	"net/http"
 	"strings"
+	"time"
 )
 
 type CompatibleClient struct {
@@ -71,6 +75,11 @@ func (c *CompatibleClient) handleStream(ctx context.Context, stream *ssestream.S
 		session.History = append(session.History, Message{
 			AssistantMessage: message,
 		})
+	}
+
+	if !strings.HasSuffix(message, "\n") {
+		message += "\n"
+		resp.Stream("\n")
 	}
 
 	if strings.Contains(message, "tool_use") {
@@ -172,6 +181,12 @@ func NewCompatible(host, apiKey string, model Model) *CompatibleClient {
 	oc := openai.NewClient(
 		option.WithBaseURL(host),
 		option.WithAPIKey(apiKey),
+		option.WithHTTPClient(&http.Client{
+			Transport: &http.Transport{
+				TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+			},
+			Timeout: time.Hour,
+		}),
 	)
 	return &CompatibleClient{
 		openai: oc,
