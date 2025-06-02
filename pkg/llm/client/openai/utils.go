@@ -11,12 +11,13 @@ var (
 
 func extractXMLStructures(input string) []string {
 	input = strings.ReplaceAll(input, "\n", "")
-	matches := xmlPattern.FindAllString(input, -1)
+	parts := strings.Split(input, "<tool_use>")
 
 	var xmlStructures []string
-	for _, match := range matches {
-		xmlStructures = append(xmlStructures, match)
+	for _, part := range parts {
+		part = "<tool_use>" + part
+		matches := xmlPattern.FindAllString(part, -1)
+		xmlStructures = append(xmlStructures, matches...)
 	}
-
 	return xmlStructures
 }
