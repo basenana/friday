@@ -1,4 +1,4 @@
-name: sync image
+name: Image Sync
 
 on:
   workflow_dispatch:
@@ -22,7 +22,7 @@ jobs:
           PASSWORD: ${{ secrets.DOCKERHUB_ACCESS_TOKEN }}
           USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
         run: docker login --username ${USERNAME} --password ${PASSWORD}
-      - name: check latest tag
+      - name: sync
         continue-on-error: true
         env:
           ACR_TOKEN: ${{ secrets.ACR_TOKEN }}
