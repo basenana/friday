@@ -23,7 +23,6 @@ jobs:
           USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
         run: docker login --username ${USERNAME} --password ${PASSWORD}
       - name: sync
-        continue-on-error: true
         env:
           ACR_TOKEN: ${{ secrets.ACR_TOKEN }}
           ACR_USERNAME: ${{ secrets.ACR_USERNAME }}
