@@ -8,7 +8,7 @@ on:
         required: false
         type: string
       platform:
-        description: 'platform of image, default is all (amd64 and arm64)'
+        description: 'platform of image, default is all (amd64, arm64, all)'
         required: false
         type: string
 

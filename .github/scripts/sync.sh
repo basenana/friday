@@ -46,6 +46,45 @@ sync_image() {
   fi
 }
 
+sync_multi_platform_image() {
+    local registryName=$1
+    local image=$2
+    local tag=${3:-latest}
+    oldImage="${registryName}/${image}:${tag}"
+    archs=("amd64" "arm64")
+
+    if [ -z "$oldImage" ]; then
+        echo "old image is empty"
+        return 1
+    fi
+
+    for REGION in ${REGIONS[@]};
+    do
+      echo "in ${REGION}"
+      newImage="${REGION}/hdls/${image}:${tag}"
+      for arch in "${archs[@]}"; do
+          arch_tag=$(echo "$arch" | sed 's/\//_/g')
+          tagged_image="${newImage}-${arch_tag}"
+
+          echo "Processing $arch: $oldImage => $tagged_image"
+
+#          docker pull --platform $arch $oldImage
+#          docker tag $oldImage $tagged_image
+#          docker push $tagged_image
+          echo "docker pull --platform $arch $oldImage"
+
+          echo "docker tag $oldImage $tagged_image"
+          echo "docker push $tagged_image"
+      done
+
+#      docker manifest create ${newImage} ${newImage}-arm64 ${newImage}-amd64
+#      docker manifest push ${newImage}
+      echo "docker manifest create ${newImage} ${newImage}-arm64 ${newImage}-amd64"
+      echo "docker manifest push ${newImage}"
+      sleep 5
+    done
+}
+
 parse_image_name() {
     local image="$1"
 
@@ -69,7 +108,6 @@ parse_image_name() {
         registry_name="docker.io"
     fi
 
-    # 返回结果
     echo "$registry_name,$image_name,$tag"
 }
 
@@ -80,8 +118,7 @@ echo "Image Name: $image"
 echo "Tag: $tag"
 
 if [ "$platform" == "all" ]; then
-  sync_image $registryName $image $tag
-  sync_image $registryName $image $tag arm64
+  sync_multi_platform_image $registryName $image $tag
 else
   sync_image $registryName $image $tag $platform
 fi
