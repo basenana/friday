@@ -61,6 +61,7 @@ sync_multi_platform_image() {
     for REGION in ${REGIONS[@]};
     do
       echo "in ${REGION}"
+      docker login --username=${username} --password=${passwd} ${REGION}
       newImage="${REGION}/hdls/${image}:${tag}"
       for arch in "${archs[@]}"; do
           arch_tag=$(echo "$arch" | sed 's/\//_/g')
