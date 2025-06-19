@@ -21,7 +21,7 @@ sync_image() {
   if [ "$platform" == "amd64" ]; then platform=""; fi
   local platform_suffix=${platform:+-$platform}
 
-  echo "Syncing image: $image, platform: ${platform:-amd64}"
+  echo "Syncing image: $image, registry name: $registryName, platform: ${platform:-amd64}"
 
   if [ -n "$platform" ]; then
     docker pull $registryName/$image:${tag} --platform=${platform}
@@ -70,7 +70,7 @@ parse_image_name() {
     fi
 
     # 返回结果
-    echo "Result: $registry_name,$image_name,$tag"
+    echo "$registry_name,$image_name,$tag"
 }
 
 result=$(parse_image_name "$image_input")
