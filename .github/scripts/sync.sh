@@ -68,19 +68,13 @@ sync_multi_platform_image() {
 
           echo "Processing $arch: $oldImage => $tagged_image"
 
-#          docker pull --platform $arch $oldImage
-#          docker tag $oldImage $tagged_image
-#          docker push $tagged_image
-          echo "docker pull --platform $arch $oldImage"
-
-          echo "docker tag $oldImage $tagged_image"
-          echo "docker push $tagged_image"
+          docker pull --platform $arch $oldImage
+          docker tag $oldImage $tagged_image
+          docker push $tagged_image
       done
 
-#      docker manifest create ${newImage} ${newImage}-arm64 ${newImage}-amd64
-#      docker manifest push ${newImage}
-      echo "docker manifest create ${newImage} ${newImage}-arm64 ${newImage}-amd64"
-      echo "docker manifest push ${newImage}"
+      docker manifest create ${newImage} ${newImage}-arm64 ${newImage}-amd64
+      docker manifest push ${newImage}
       sleep 5
     done
 }
