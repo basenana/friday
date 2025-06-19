@@ -28,7 +28,7 @@ jobs:
           ACR_TOKEN: ${{ secrets.ACR_TOKEN }}
           ACR_USERNAME: ${{ secrets.ACR_USERNAME }}
         run: |
-          set +e
+          set -e
           cd ${GITHUB_WORKSPACE}/.github/scripts/
           platform=${{ inputs.platform }}
           if [ -z "$platform" ]; then
@@ -36,7 +36,7 @@ jobs:
           fi
           
           if [ ${{ inputs.image }} ]; then
-            ./sync.sh ${{ inputs.image }} ${{ inputs.tag }} $platform
+            ./sync.sh ${{ inputs.image }} $platform
           else
             echo "No image to sync"
           fi
