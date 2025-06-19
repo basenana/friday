@@ -1,0 +1,46 @@
+name: sync image
+
+on:
+  workflow_dispatch:
+    inputs:
+      image:
+        description: 'image to be synced'
+        required: false
+        type: string
+      platform:
+        description: 'platform of image, default is all (amd64 and arm64)'
+        required: false
+        type: string
+
+jobs:
+  image-sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - name: Login Docker Hub
+        env:
+          PASSWORD: ${{ secrets.DOCKERHUB_ACCESS_TOKEN }}
+          USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+        run: docker login --username ${USERNAME} --password ${PASSWORD}
+      - name: check latest tag
+        continue-on-error: true
+        env:
+          ACR_TOKEN: ${{ secrets.ACR_TOKEN }}
+          ACR_USERNAME: ${{ secrets.ACR_USERNAME }}
+        run: |
+          set +e
+          cd ${GITHUB_WORKSPACE}/.github/scripts/
+          platform=${{ inputs.platform }}
+          if [ -z "$platform" ]; then
+              platform="all"
+          fi
+          
+          if [ ${{ inputs.image }} ]; then
+            ./sync.sh ${{ inputs.image }} ${{ inputs.tag }} $platform
+          else
+            echo "No image to sync"
+          fi
+      - name: Setup upterm session
+        if: ${{ failure() }}
+        timeout-minutes: 60
+        uses: lhotari/action-upterm@v1
