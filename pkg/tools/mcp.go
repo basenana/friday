@@ -1,4 +1,4 @@
-package mcp
+package tools
 
 import (
 	"context"
@@ -7,7 +7,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
-type Client interface {
+type MCPClient interface {
 	Initialize(ctx context.Context) error
 	GetTools(ctx context.Context) ([]mcp.Tool, error)
 	CallTool(ctx context.Context, tool string, arguments map[string]interface{}) (string, error)
@@ -32,7 +32,7 @@ type SSEClient struct {
 	started   bool
 }
 
-var _ Client = &SSEClient{}
+var _ MCPClient = &SSEClient{}
 
 func (c *SSEClient) Initialize(ctx context.Context) error {
 	if c.started {
@@ -101,7 +101,7 @@ func (c *SSEClient) CallTool(ctx context.Context, tool string, arguments map[str
 	return content, nil
 }
 
-func NewSSEClient(name, desc, url string, headers map[string]string) (*SSEClient, error) {
+func NewSSEClient(name, desc, url string, headers map[string]string) (MCPClient, error) {
 	sse := &SSEClient{
 		Enable:      false,
 		Name:        name,
@@ -119,3 +119,43 @@ func NewSSEClient(name, desc, url string, headers map[string]string) (*SSEClient
 
 	return sse, nil
 }
+
+func LoadMCPTools(ctx context.Context, client MCPClient) ([]Tool, error) {
+	toolInfos, err := client.GetTools(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	result := make([]Tool, 0, len(toolInfos))
+	for i := range toolInfos {
+		define := toolInfos[i]
+		result = append(result, &mcpTool{
+			define: define,
+			client: client,
+		})
+	}
+	return result, nil
+}
+
+type mcpTool struct {
+	define mcp.Tool
+	client MCPClient
+}
+
+func (m *mcpTool) Name() string {
+	return m.define.Name
+}
+
+func (m *mcpTool) Description() string {
+	return m.define.Description
+}
+
+func (m *mcpTool) APISchema() map[string]any {
+	return map[string]interface{}{"type": "object", "properties": m.define.InputSchema.Properties}
+}
+
+func (m *mcpTool) Call(ctx context.Context, tool string, arguments map[string]interface{}) (string, error) {
+	return m.client.CallTool(ctx, tool, arguments)
+}
+
+var _ Tool = &mcpTool{}
