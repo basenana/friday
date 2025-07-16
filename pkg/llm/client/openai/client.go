@@ -87,7 +87,7 @@ func (c *Client) handleStream(ctx context.Context, stream *ssestream.Stream[open
 func (c *Client) toolCall(ctx context.Context, id string, name, argJson string, session *Session) Message {
 
 	for _, t := range session.Tools {
-		if t.Name != name {
+		if t.Name() != name {
 			continue
 		}
 
@@ -96,7 +96,7 @@ func (c *Client) toolCall(ctx context.Context, id string, name, argJson string, 
 			return Message{ToolCallID: id, ToolContent: fmt.Sprintf("unmarshal json argument failed: %s", err)}
 		}
 
-		content, err := t.server.client.CallTool(ctx, name, arg)
+		content, err := t.Call(ctx, name, arg)
 		if err != nil {
 			return Message{ToolCallID: id, ToolContent: fmt.Sprintf("call tool %s failed: %s", name, err)}
 		}
@@ -148,12 +148,9 @@ func (c *Client) chatCompletionNewParams(session *Session) *openai.ChatCompletio
 		for _, tool := range session.Tools {
 			p.Tools = append(p.Tools, openai.ChatCompletionToolParam{
 				Function: shared.FunctionDefinitionParam{
-					Name:        tool.Name,
-					Description: param.NewOpt(tool.Description),
-					Parameters: map[string]interface{}{
-						"type":       "object",
-						"properties": tool.InputSchema.Properties,
-					},
+					Name:        tool.Name(),
+					Description: param.NewOpt(tool.Description()),
+					Parameters:  tool.APISchema(),
 					//Strict:      param.NewOpt(true),
 				},
 				Type: "function",

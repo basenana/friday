@@ -22,7 +22,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/basenana/friday/pkg/mcp"
+	"github.com/basenana/friday/pkg/tools"
 	"io"
 	"net/http"
 	"net/url"
@@ -53,7 +53,7 @@ type OpenAIV1 struct {
 
 	limiter *rate.Limiter
 
-	mcpClients []mcp.Client
+	mcpClients []tools.MCPClient
 	conf       config.OpenAIConfig
 }
 

@@ -2,7 +2,7 @@ package actor
 
 import "github.com/basenana/friday/pkg/agent"
 
-type Coordinator struct {
+type Expert struct {
 	agent *agent.Agent
 	mail  *Mailbox
 }

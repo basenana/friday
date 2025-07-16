@@ -115,7 +115,7 @@ func (c *CompatibleClient) tryToolCall(ctx context.Context, content string, sess
 
 func (c *CompatibleClient) toolCall(ctx context.Context, id string, name, argJson string, session *Session) Message {
 	for _, t := range session.Tools {
-		if t.Name != name {
+		if t.Name() != name {
 			continue
 		}
 
@@ -124,7 +124,7 @@ func (c *CompatibleClient) toolCall(ctx context.Context, id string, name, argJso
 			return Message{ToolCallID: id, ToolContent: fmt.Sprintf("unmarshal json argument failed: %s", err)}
 		}
 
-		content, err := t.server.client.CallTool(ctx, name, arg)
+		content, err := t.Call(ctx, name, arg)
 		if err != nil {
 			return Message{ToolCallID: id, ToolContent: fmt.Sprintf("call tool %s failed: %s", name, err)}
 		}
@@ -225,11 +225,10 @@ func CompatibleSystem(session *Session) {
 		// define rules
 		define := ToolDefine{}
 		for _, t := range session.Tools {
-			arg := map[string]interface{}{"type": "object", "properties": t.InputSchema.Properties}
-			argContent, _ := json.Marshal(arg)
+			argContent, _ := json.Marshal(t.APISchema())
 			define.Tools = append(define.Tools, Tool{
-				Name:        t.Name,
-				Description: t.Description,
+				Name:        t.Name(),
+				Description: t.Description(),
 				Arguments:   string(argContent),
 			})
 		}

@@ -2,15 +2,14 @@ package agent
 
 import (
 	"context"
-	"fmt"
 	"github.com/basenana/friday/pkg/llm/client/openai"
-	mcpclient "github.com/basenana/friday/pkg/mcp"
+	"github.com/basenana/friday/pkg/tools"
 )
 
 type Agent struct {
 	systemPrompt string
 	session      *openai.Session
-	mcpClients   []mcpclient.Client
+	tools        []tools.Tool
 	client       *openai.Client
 }
 
@@ -19,12 +18,7 @@ func (a *Agent) Chat(ctx context.Context, message string, option Option) (*Reply
 		a.session = &openai.Session{
 			Prompt:  a.systemPrompt,
 			History: make([]openai.Message, 0),
-		}
-
-		for _, s := range a.mcpClients {
-			if err := a.session.AddMcpServer(ctx, s); err != nil {
-				return nil, fmt.Errorf("failed to add mcp server: %w", err)
-			}
+			Tools:   a.tools,
 		}
 	}
 
@@ -53,10 +47,15 @@ func (a *Agent) Chat(ctx context.Context, message string, option Option) (*Reply
 	return reply, nil
 }
 
-func New(prompt string, client *openai.Client, mcpClients []mcpclient.Client) *Agent {
+func (a *Agent) Reset(ctx context.Context) error {
+	a.session = nil
+	return nil
+}
+
+func New(prompt string, client *openai.Client, tools []tools.Tool) *Agent {
 	return &Agent{
 		systemPrompt: prompt,
-		mcpClients:   mcpClients,
+		tools:        tools,
 		client:       client,
 	}
 }

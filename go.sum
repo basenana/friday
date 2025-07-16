@@ -124,6 +124,8 @@ github.com/google/uuid v1.3.0/go.mod h1:TIyPZe4MgqvfeYDBFedMoGGpEw/LqOeaOT+nhxU+
 github.com/google/uuid v1.6.0 h1:NIvaJDMOsjHA8n1jAhLSgzrAzy1Hgr+hNrb57e+94F0=
 github.com/google/uuid v1.6.0/go.mod h1:TIyPZe4MgqvfeYDBFedMoGGpEw/LqOeaOT+nhxU+yHo=
 github.com/hpcloud/tail v1.0.0/go.mod h1:ab1qPbhIpdTxEkNHXyeSf5vhxWSCs/tWer42PpOxQnU=
+github.com/hyponet/eventbus v1.1.0 h1:/UEP8D86xwH6NpuuUnN8cf0NqabpbXHplQ5zwcrmVZU=
+github.com/hyponet/eventbus v1.1.0/go.mod h1:Qg8Z/EtRPvNRQR4TLNmKbLpY3rWZ3ft97jBnLNvGBWg=
 github.com/hyponet/jiebago v0.0.0-20240525141904-e34990856482 h1:6phC4CbKBzBQ7PHsf3I21WLF9Fxy8feaLhXmCgh/lcs=
 github.com/hyponet/jiebago v0.0.0-20240525141904-e34990856482/go.mod h1:/QDKR3hYNk0E+DX4XWJHuBsiC1UTGdGynWjps4Kj+T0=
 github.com/inconshreveable/mousetrap v1.1.0 h1:wN+x4NVGpMsO7ErUn/mUI3vEoE6Jt13X2s0bqwp9tc8=
