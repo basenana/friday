@@ -99,9 +99,9 @@ parse_image_name() {
         image_name="$image"
     fi
 
-    if [[ "$registry_name" == "$image_name" ]]; then
-        registry_name="docker.io"
-    fi
+#    if [[ "$registry_name" == "$image_name" ]]; then
+#        registry_name="docker.io"
+#    fi
 
     echo "$registry_name,$image_name,$tag"
 }
@@ -112,8 +112,8 @@ echo "Registry Name: $registryName"
 echo "Image Name: $image"
 echo "Tag: $tag"
 
-if [ "$platform" == "all" ]; then
-  sync_multi_platform_image $registryName $image $tag
-else
-  sync_image $registryName $image $tag $platform
-fi
+#if [ "$platform" == "all" ]; then
+#  sync_multi_platform_image $registryName $image $tag
+#else
+#  sync_image $registryName $image $tag $platform
+#fi
