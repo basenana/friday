@@ -112,8 +112,8 @@ echo "Registry Name: $registryName"
 echo "Image Name: $image"
 echo "Tag: $tag"
 
-#if [ "$platform" == "all" ]; then
-#  sync_multi_platform_image $registryName $image $tag
-#else
-#  sync_image $registryName $image $tag $platform
-#fi
+if [ "$platform" == "all" ]; then
+  sync_multi_platform_image $registryName $image $tag
+else
+  sync_image $registryName $image $tag $platform
+fi
