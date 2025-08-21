@@ -106,6 +106,7 @@ parse_image_name() {
     echo "$registry_name,$image_name,$tag"
 }
 
+echo "Input image: $image_input"
 result=$(parse_image_name "$image_input")
 IFS=',' read -r registryName image tag <<< "$result"
 echo "Registry Name: $registryName"
