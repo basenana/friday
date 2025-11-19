@@ -100,7 +100,6 @@ Retry:
 		c.logger.Infow("client-side llm api throttled", "wait", time.Since(startAt).String())
 	}
 
-	// 使用非流式调用
 	response, err := c.openai.Chat.Completions.New(ctx, *p,
 		[]option.RequestOption{
 			option.WithJSONSet("stream", false), // for some model using stream as default
@@ -157,37 +156,7 @@ func (c *client) chatCompletionNewParams(request Request) *openai.ChatCompletion
 		N:                param.NewOpt(int64(1)),
 	}
 
-	history := request.History()
-
-	var textContent string
-	var imageContents []string
-
-	for _, msg := range history {
-		if msg.SystemMessage != "" {
-			textContent = msg.SystemMessage
-		} else if msg.UserMessage != "" {
-			textContent = msg.UserMessage
-		} else if msg.ImageContent != "" {
-			imageContents = append(imageContents, msg.ImageContent)
-		}
-	}
-
-	if textContent != "" && len(imageContents) > 0 {
-		var contentParts []openai.ChatCompletionContentPartUnionParam
-
-		contentParts = append(contentParts, openai.TextContentPart(textContent))
-
-		// 添加图片
-		for _, imgURL := range imageContents {
-			contentParts = append(contentParts,
-				openai.ImageContentPart(openai.ChatCompletionContentPartImageImageURLParam{URL: imgURL}))
-		}
-
-		p.Messages = append(p.Messages, openai.UserMessage(contentParts))
-		return &p
-	}
-
-	for _, msg := range history {
+	for _, msg := range request.History() {
 		switch {
 		case msg.SystemMessage != "":
 			p.Messages = append(p.Messages,
@@ -213,10 +182,10 @@ func (c *client) chatCompletionNewParams(request Request) *openai.ChatCompletion
 			p.Messages = append(p.Messages,
 				openai.ToolMessage(msg.ToolContent, msg.ToolCallID),
 			)
-		case msg.ImageContent != "":
+		case msg.ImageURL != "":
 			p.Messages = append(p.Messages,
 				openai.UserMessage([]openai.ChatCompletionContentPartUnionParam{
-					openai.ImageContentPart(openai.ChatCompletionContentPartImageImageURLParam{URL: msg.ImageContent}),
+					openai.ImageContentPart(openai.ChatCompletionContentPartImageImageURLParam{URL: msg.ImageURL}),
 				}),
 			)
 		}
