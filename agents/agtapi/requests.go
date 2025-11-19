@@ -10,7 +10,7 @@ import (
 
 type Request struct {
 	UserMessage string
-	ImageURLs   []string // 图片URL列表，用于多模态分析
+	ImageURLs   []string
 	SessionID   string
 	Memory      *memory.Memory
 

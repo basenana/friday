@@ -1,8 +1,8 @@
 module github.com/basenana/friday
 
-go 1.23
+go 1.23.0
 
-toolchain go1.23.3
+toolchain go1.23.4
 
 require (
 	github.com/PuerkitoBio/goquery v1.10.0
@@ -18,7 +18,7 @@ require (
 	github.com/hyponet/eventbus v1.1.0
 	github.com/hyponet/jiebago v0.0.0-20240525141904-e34990856482
 	github.com/invopop/jsonschema v0.13.0
-	github.com/mark3labs/mcp-go v0.24.1
+	github.com/mark3labs/mcp-go v0.43.0
 	github.com/meilisearch/meilisearch-go v0.29.0
 	github.com/onsi/ginkgo v1.16.5
 	github.com/onsi/ginkgo/v2 v2.13.0

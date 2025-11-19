@@ -16,8 +16,6 @@ type Tool struct {
 	Annotations map[string]string `json:"annotations,omitempty"`
 	InputSchema ToolInputSchema   `json:"inputSchema"`
 	Handler     ToolHandlerFunc   `json:"-"`
-	McpTool     bool              `json:"McpTool"`
-	McpName     string            `json:"McpName"`
 }
 
 func (t *Tool) JsonSchema() map[string]interface{} {
