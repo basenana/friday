@@ -3,6 +3,8 @@ package memory
 import (
 	"context"
 	"fmt"
+	"os"
+	"strconv"
 	"sync"
 
 	"github.com/basenana/friday/providers/openai"
@@ -12,10 +14,28 @@ import (
 )
 
 const (
-	compactThreshold    = 100 * 1000
-	abstractThreshold   = 150 * 1000
 	toolResultKeyPrefix = "/tool/result"
 )
+
+var (
+	compactThreshold  int64 = 100 * 1000
+	abstractThreshold int64 = 150 * 1000
+)
+
+func init() {
+	if ctStr := os.Getenv("FRIDAY_MEMORY_COMPACT_THRESHOLD"); ctStr != "" {
+		ct, _ := strconv.ParseInt(ctStr, 10, 64)
+		if ct > 1000 {
+			compactThreshold = ct
+		}
+	}
+	if atStr := os.Getenv("FRIDAY_MEMORY_ABSTRACT_THRESHOLD"); atStr != "" {
+		at, _ := strconv.ParseInt(atStr, 10, 64)
+		if at > 1000 {
+			abstractThreshold = at
+		}
+	}
+}
 
 type Memory struct {
 	mid       string
