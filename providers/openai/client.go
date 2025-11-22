@@ -196,7 +196,7 @@ func (c *client) chatCompletionNewParams(request Request) *openai.ChatCompletion
 		p.Tools = append(p.Tools, openai.ChatCompletionToolParam{
 			Function: shared.FunctionDefinitionParam{
 				Name:        t.Name,
-				Strict:      param.NewOpt(true),
+				Strict:      param.NewOpt(c.model.StrictMode),
 				Description: param.NewOpt(t.Description),
 				Parameters:  t.Parameters,
 			},
