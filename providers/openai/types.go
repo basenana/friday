@@ -89,6 +89,7 @@ type Model struct {
 	Temperature      float64
 	FrequencyPenalty float64
 	PresencePenalty  float64
+	StrictMode       bool
 	QPM              int64
 	Proxy            string
 }
