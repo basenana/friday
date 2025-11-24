@@ -9,6 +9,8 @@ type Message struct {
 	ImageURL string `json:"imageUrl,omitempty" xml:"image_url,omitempty"`
 
 	ToolCallID        string `json:"toolCallID,omitempty" xml:"tool_call_id,omitempty"`
+	ToolName          string `json:"toolName,omitempty"`
+	ToolArguments     string `json:"toolArguments,omitempty"`
 	ToolContent       string `json:"toolContent,omitempty" xml:"tool_content,omitempty"`
 	OriginToolContent string `json:"-" xml:"-"` // for compact
 }
