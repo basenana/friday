@@ -147,13 +147,20 @@ func (c *client) StructuredPredict(ctx context.Context, request Request, model a
 
 func (c *client) chatCompletionNewParams(request Request) *openai.ChatCompletionNewParams {
 	p := openai.ChatCompletionNewParams{
-		Messages:         []openai.ChatCompletionMessageParamUnion{},
-		Model:            c.model.Name,
-		Temperature:      param.NewOpt(c.model.Temperature),
-		FrequencyPenalty: param.NewOpt(c.model.FrequencyPenalty),
-		PresencePenalty:  param.NewOpt(c.model.PresencePenalty),
-		TopP:             param.NewOpt(1.0),
-		N:                param.NewOpt(int64(1)),
+		Messages: []openai.ChatCompletionMessageParamUnion{},
+		Model:    c.model.Name,
+		TopP:     param.NewOpt(1.0),
+		N:        param.NewOpt(int64(1)),
+	}
+
+	if c.model.Temperature != nil {
+		p.Temperature = param.NewOpt(*c.model.Temperature)
+	}
+	if c.model.FrequencyPenalty != nil {
+		p.FrequencyPenalty = param.NewOpt(*c.model.FrequencyPenalty)
+	}
+	if c.model.PresencePenalty != nil {
+		p.PresencePenalty = param.NewOpt(*c.model.PresencePenalty)
 	}
 
 	for _, msg := range request.History() {

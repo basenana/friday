@@ -86,9 +86,9 @@ type Reasoning struct {
 
 type Model struct {
 	Name             string
-	Temperature      float64
-	FrequencyPenalty float64
-	PresencePenalty  float64
+	Temperature      *float64
+	FrequencyPenalty *float64
+	PresencePenalty  *float64
 	StrictMode       bool
 	QPM              int64
 	Proxy            string
