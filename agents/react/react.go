@@ -3,7 +3,6 @@ package react
 import (
 	"bytes"
 	"context"
-	"encoding/xml"
 	"fmt"
 	"strings"
 	"sync"
@@ -206,27 +205,15 @@ WaitMessage:
 	if reasoning != "" {
 		mem.AppendMessages(types.Message{AssistantReasoning: reasoning})
 	}
-	buf := &bytes.Buffer{}
-	if content != "" {
-		buf.WriteString(content)
-		buf.WriteString("\n")
-	}
 
 	if len(toolUse) > 0 {
-		for _, tu := range toolUse {
-			data, _ := xml.Marshal(tu)
-			buf.Write(data)
-			buf.WriteString("\n")
-		}
-
 		toolCallMessages := a.doToolCalls(ctx, toolUse, extraArgs, req, resp)
 		if len(toolCallMessages) > 0 {
 			supplements = append(supplements, toolCallMessages...)
 		}
 	}
 
-	if buf.Len() > 0 {
-		content = buf.String() // remind the llm there has a tool use request
+	if len(content) > 0 {
 		mem.AppendMessages(types.Message{AssistantMessage: content})
 	}
 	return supplements, statusCode
@@ -270,6 +257,8 @@ func (a *Agent) tryToolCall(ctx context.Context, use openai.ToolUse, extraArgs m
 	if useMark == "" {
 		useMark = use.Name
 	}
+
+	result = append(result, types.Message{ToolCallID: useMark, ToolName: use.Name, ToolArguments: use.Arguments})
 
 	td := a.getToolByName(use.Name)
 	if td == nil {

@@ -185,7 +185,16 @@ func (c *client) chatCompletionNewParams(request Request) *openai.ChatCompletion
 				openai.AssistantMessage(msg.AssistantReasoning),
 			)
 
-		case msg.ToolCallID != "":
+		case msg.ToolName != "": // tool call
+			p.Messages = append(p.Messages,
+				openai.ChatCompletionMessageParamUnion{OfAssistant: &openai.ChatCompletionAssistantMessageParam{
+					ToolCalls: []openai.ChatCompletionMessageToolCallParam{
+						{ID: msg.ToolCallID, Function: openai.ChatCompletionMessageToolCallFunctionParam{Arguments: msg.ToolArguments, Name: msg.ToolName}, Type: "function"},
+					},
+				}},
+			)
+
+		case msg.ToolContent != "":
 			p.Messages = append(p.Messages,
 				openai.ToolMessage(msg.ToolContent, msg.ToolCallID),
 			)
