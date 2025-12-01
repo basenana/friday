@@ -200,6 +200,23 @@ type simpleResponse struct {
 }
 
 func (r *simpleResponse) nextChoice(chunk openai.ChatCompletionChunkChoice) {
+	cchunk := &CompatibleChunk{}
+	err := json.Unmarshal([]byte(chunk.Delta.RawJSON()), cchunk)
+	if err != nil {
+		goto FailBack
+	}
+
+	switch {
+	case cchunk.Content != nil && len(*cchunk.Content) > 0:
+		r.stream <- Delta{Content: *cchunk.Content}
+
+	case cchunk.ReasoningContent != nil && len(*cchunk.ReasoningContent) > 0:
+		r.stream <- Delta{Reasoning: *cchunk.ReasoningContent}
+
+	}
+	return
+
+FailBack:
 	delta := chunk.Delta
 	switch {
 	case delta.Content != "":
