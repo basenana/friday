@@ -181,9 +181,9 @@ func (c *client) chatCompletionNewParams(request Request) *openai.ChatCompletion
 			)
 
 		case msg.AssistantReasoning != "":
-			p.Messages = append(p.Messages,
-				openai.AssistantMessage(msg.AssistantReasoning),
-			)
+			rmsg := openai.AssistantMessage("")
+			rmsg.SetExtraFields(map[string]any{"reasoning_content": msg.AssistantReasoning})
+			p.Messages = append(p.Messages, rmsg)
 
 		case msg.ToolName != "": // tool call
 			p.Messages = append(p.Messages,
