@@ -119,6 +119,9 @@ func (r *compatibleResponse) nextChoice(chunk openai.ChatCompletionChunkChoice) 
 	case delta.ReasoningContent != nil && len(*delta.ReasoningContent) > 0:
 		r.stream <- Delta{Reasoning: *delta.ReasoningContent}
 
+	default:
+		goto FailBack
+
 	}
 	return
 
@@ -212,6 +215,9 @@ func (r *simpleResponse) nextChoice(chunk openai.ChatCompletionChunkChoice) {
 
 	case cchunk.ReasoningContent != nil && len(*cchunk.ReasoningContent) > 0:
 		r.stream <- Delta{Reasoning: *cchunk.ReasoningContent}
+
+	default:
+		goto FailBack
 
 	}
 	return
