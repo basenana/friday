@@ -163,7 +163,8 @@ func (c *client) chatCompletionNewParams(request Request) *openai.ChatCompletion
 		p.PresencePenalty = param.NewOpt(*c.model.PresencePenalty)
 	}
 
-	for _, msg := range request.History() {
+	history := request.History()
+	for _, msg := range history {
 		switch {
 		case msg.SystemMessage != "":
 			p.Messages = append(p.Messages,
@@ -180,22 +181,17 @@ func (c *client) chatCompletionNewParams(request Request) *openai.ChatCompletion
 				openai.AssistantMessage(msg.AssistantMessage),
 			)
 
-		case msg.AssistantReasoning != "":
-			rmsg := &openai.ChatCompletionAssistantMessageParam{
-				Content: openai.ChatCompletionAssistantMessageParamContentUnion{OfString: param.NewOpt("")},
-			}
-			rmsg.SetExtraFields(map[string]any{"reasoning_content": msg.AssistantReasoning})
-			p.Messages = append(p.Messages,
-				openai.ChatCompletionMessageParamUnion{OfAssistant: rmsg},
-			)
-
 		case msg.ToolName != "": // tool call
+			tmsg := &openai.ChatCompletionAssistantMessageParam{
+				ToolCalls: []openai.ChatCompletionMessageToolCallParam{
+					{ID: msg.ToolCallID, Function: openai.ChatCompletionMessageToolCallFunctionParam{Arguments: msg.ToolArguments, Name: msg.ToolName}, Type: "function"},
+				},
+			}
+			if msg.AssistantReasoning != "" {
+				tmsg.SetExtraFields(map[string]any{"reasoning_content": msg.AssistantReasoning})
+			}
 			p.Messages = append(p.Messages,
-				openai.ChatCompletionMessageParamUnion{OfAssistant: &openai.ChatCompletionAssistantMessageParam{
-					ToolCalls: []openai.ChatCompletionMessageToolCallParam{
-						{ID: msg.ToolCallID, Function: openai.ChatCompletionMessageToolCallFunctionParam{Arguments: msg.ToolArguments, Name: msg.ToolName}, Type: "function"},
-					},
-				}},
+				openai.ChatCompletionMessageParamUnion{OfAssistant: tmsg},
 			)
 
 		case msg.ToolContent != "":

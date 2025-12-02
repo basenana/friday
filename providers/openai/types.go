@@ -11,7 +11,7 @@ import (
 
 type Client interface {
 	Completion(ctx context.Context, request Request) Response
-	CompletionNonStreaming(ctx context.Context, request Request) (string, error) // 非流式调用，用于多模态模型
+	CompletionNonStreaming(ctx context.Context, request Request) (string, error)
 	StructuredPredict(ctx context.Context, request Request, model any) error
 }
 
@@ -77,6 +77,8 @@ type ToolUse struct {
 	Name      string   `xml:"name" json:"name"`
 	Arguments string   `xml:"arguments" json:"arguments"`
 	Error     string   `xml:"error" json:"error"`
+
+	Reasoning string `xml:"-" json:"-"` // tool use in reasoning like deepseek v3.2
 }
 
 type Reasoning struct {

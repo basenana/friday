@@ -207,7 +207,7 @@ WaitMessage:
 	}
 
 	if len(toolUse) > 0 {
-		toolCallMessages := a.doToolCalls(ctx, toolUse, extraArgs, req, resp)
+		toolCallMessages := a.doToolCalls(ctx, toolUse, extraArgs, reasoning, req, resp)
 		if len(toolCallMessages) > 0 {
 			supplements = append(supplements, toolCallMessages...)
 		}
@@ -219,7 +219,7 @@ WaitMessage:
 	return supplements, statusCode
 }
 
-func (a *Agent) doToolCalls(ctx context.Context, toolUses []openai.ToolUse, extraArgs map[string]string, req *agtapi.Request, resp *agtapi.Response) []types.Message {
+func (a *Agent) doToolCalls(ctx context.Context, toolUses []openai.ToolUse, extraArgs map[string]string, reasoning string, req *agtapi.Request, resp *agtapi.Response) []types.Message {
 	var (
 		result []types.Message
 		update = make(chan []types.Message, len(toolUses))
@@ -232,7 +232,7 @@ func (a *Agent) doToolCalls(ctx context.Context, toolUses []openai.ToolUse, extr
 		go func() {
 			defer wg.Done()
 			// for long tool use such like an agent call
-			update <- a.tryToolCall(ctx, use, extraArgs, req, resp)
+			update <- a.tryToolCall(ctx, use, extraArgs, reasoning, req, resp)
 		}()
 	}
 	wg.Wait()
@@ -247,7 +247,7 @@ func (a *Agent) doToolCalls(ctx context.Context, toolUses []openai.ToolUse, extr
 	return result
 }
 
-func (a *Agent) tryToolCall(ctx context.Context, use openai.ToolUse, extraArgs map[string]string, req *agtapi.Request, resp *agtapi.Response) []types.Message {
+func (a *Agent) tryToolCall(ctx context.Context, use openai.ToolUse, extraArgs map[string]string, reasoning string, req *agtapi.Request, resp *agtapi.Response) []types.Message {
 	var (
 		result  []types.Message
 		buf     = &bytes.Buffer{}
@@ -258,7 +258,9 @@ func (a *Agent) tryToolCall(ctx context.Context, use openai.ToolUse, extraArgs m
 		useMark = use.Name
 	}
 
-	result = append(result, types.Message{ToolCallID: useMark, ToolName: use.Name, ToolArguments: use.Arguments})
+	// request a tool call message
+	// DeepSeek v3.2: if the model support using tool in reasoning, the reasoning need return
+	result = append(result, types.Message{ToolCallID: useMark, ToolName: use.Name, ToolArguments: use.Arguments, AssistantReasoning: reasoning})
 
 	td := a.getToolByName(use.Name)
 	if td == nil {

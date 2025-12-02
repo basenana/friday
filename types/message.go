@@ -1,5 +1,7 @@
 package types
 
+import "encoding/json"
+
 type Message struct {
 	SystemMessage      string `json:"systemMessage,omitempty" xml:"system_message,omitempty"`
 	UserMessage        string `json:"userMessage,omitempty" xml:"user_message,omitempty"`
@@ -16,5 +18,6 @@ type Message struct {
 }
 
 func (m Message) FuzzyTokens() int64 {
-	return int64(float64(len(m.SystemMessage)+len(m.UserMessage)+len(m.AssistantMessage)+len(m.ToolCallID)+len(m.ToolContent)) * 0.5)
+	raw, _ := json.Marshal(m)
+	return int64(float64(len([]rune(string(raw)))) * 0.5)
 }

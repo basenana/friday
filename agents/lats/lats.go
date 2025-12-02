@@ -199,11 +199,6 @@ func (a *Agent) runStep(ctx context.Context, req *agtapi.Request, resp *agtapi.R
 }
 
 func (a *Agent) extendCandidates(ctx context.Context, node *SearchNode) ([]string, error) {
-	var messages []types.Message
-	for _, r := range node.reasoning {
-		messages = append(messages, types.Message{AssistantReasoning: r})
-	}
-
 	buf := &bytes.Buffer{}
 	if a.option.SystemPrompt != "" {
 		buf.WriteString(a.option.SystemPrompt)
@@ -212,7 +207,7 @@ func (a *Agent) extendCandidates(ctx context.Context, node *SearchNode) ([]strin
 	prompt := a.option.ExpansionPrompt
 	prompt = strings.ReplaceAll(prompt, "{num_candidates}", fmt.Sprintf("%d", a.option.Expansions))
 	prompt = strings.ReplaceAll(prompt, "{query}", a.task)
-	prompt = strings.ReplaceAll(prompt, "{conversation_history}", conversationHistory(messages))
+	prompt = strings.ReplaceAll(prompt, "{conversation_history}", conversationHistoryMessages(node.reasoning...))
 
 	buf.WriteString(prompt)
 
@@ -298,24 +293,19 @@ WaitingRun:
 
 func (a *Agent) evaluate(ctx context.Context, node *SearchNode, reasoning string) (*Evaluation, error) {
 	var (
-		prompt   = a.option.ReflectionPrompt
-		messages []types.Message
-		nowAt    = time.Now()
-		eva      = &Evaluation{Score: 1}
-		buf      = &bytes.Buffer{}
-		err      error
+		prompt = a.option.ReflectionPrompt
+		nowAt  = time.Now()
+		eva    = &Evaluation{Score: 1}
+		buf    = &bytes.Buffer{}
+		err    error
 	)
 
 	if a.option.SystemPrompt != "" {
 		buf.WriteString(a.option.SystemPrompt)
 		buf.WriteString("\n")
 	}
-	for _, r := range node.reasoning {
-		messages = append(messages, types.Message{AssistantReasoning: r})
-	}
-	messages = append(messages, types.Message{AssistantReasoning: reasoning})
 	prompt = strings.ReplaceAll(prompt, "{query}", a.task)
-	prompt = strings.ReplaceAll(prompt, "{conversation_history}", conversationHistory(messages))
+	prompt = strings.ReplaceAll(prompt, "{conversation_history}", conversationHistoryMessages(append(node.reasoning, reasoning)...))
 	buf.WriteString(prompt)
 
 	a.logger.Infow("start run evaluate")
@@ -392,7 +382,7 @@ type Option struct {
 	Tools []*tools.Tool
 }
 
-func conversationHistory(messages []types.Message) string {
+func conversationHistoryMessages(messages ...string) string {
 	ch := &ConversationHistory{Messages: messages}
 	content, _ := xml.Marshal(ch)
 	return string(content)

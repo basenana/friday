@@ -45,7 +45,8 @@ type Memory struct {
 	history []types.Message
 	mux     sync.Mutex
 
-	sum *summarizer
+	sum       *summarizer
+	recorders []Recorder
 
 	storage Storage
 	tokens  int64
@@ -69,6 +70,9 @@ func (m *Memory) AppendMessages(messages ...types.Message) {
 	m.mux.Lock()
 	defer m.mux.Unlock()
 	for _, message := range messages {
+		for _, record := range m.recorders {
+			record.Record(message)
+		}
 		m.history = append(m.history, message)
 		m.tokens += message.FuzzyTokens()
 	}
@@ -187,20 +191,37 @@ func (m *Memory) Copy() *Memory {
 	return &nm
 }
 
-func NewEmpty(sessionID string) *Memory {
-	return &Memory{
+type OptionSetter func(*Memory)
+
+func NewEmpty(sessionID string, setters ...OptionSetter) *Memory {
+	mem := &Memory{
 		mid:     sessionID,
 		history: make([]types.Message, 0, 10),
 		storage: newInMemoryStorage(),
 		logger:  logger.New("memory"),
 	}
+
+	for _, setter := range setters {
+		setter(mem)
+	}
+	return mem
+}
+
+func WithSummarize(llmCli openai.Client) OptionSetter {
+	return func(m *Memory) {
+		if llmCli != nil {
+			m.sum = newSummarize(llmCli, m.updateHistoryWithAbstract)
+		}
+	}
+}
+
+func WithRecorders(recorders []Recorder) OptionSetter {
+	return func(m *Memory) {
+		m.recorders = recorders
+	}
 }
 
 func NewEmptyWithSummarize(sessionID string, llmCli openai.Client) *Memory {
-	m := NewEmpty(sessionID)
-	if llmCli == nil {
-		return m
-	}
-	m.sum = newSummarize(llmCli, m.updateHistoryWithAbstract)
+	m := NewEmpty(sessionID, WithSummarize(llmCli))
 	return m
 }

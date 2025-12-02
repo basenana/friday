@@ -124,6 +124,6 @@ type Candidates struct {
 }
 
 type ConversationHistory struct {
-	XMLName  xml.Name        `xml:"conversation_history"`
-	Messages []types.Message `xml:"messages"`
+	XMLName  xml.Name `xml:"conversation_history"`
+	Messages []string `xml:"messages"`
 }
