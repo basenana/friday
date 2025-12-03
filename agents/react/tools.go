@@ -75,7 +75,7 @@ func toolCall(ctx context.Context, use *ToolUse, extraArgs map[string]string, td
 	return string(content), nil
 }
 
-func newLLMRequest(mem *memory.Memory, toolList []*tools.Tool) openai.Request {
+func newLLMRequest(systemMessage string, mem *memory.Memory, toolList []*tools.Tool) openai.Request {
 	var toolDef []openai.ToolDefine
 	for _, t := range toolList {
 		toolDef = append(toolDef, openai.ToolDefine{
@@ -88,5 +88,5 @@ func newLLMRequest(mem *memory.Memory, toolList []*tools.Tool) openai.Request {
 	for _, t := range buildInTools {
 		toolDef = append(toolDef, t)
 	}
-	return openai.NewToolsRequest(memory.LLMRequest(mem), toolDef)
+	return openai.NewToolsRequest(memory.LLMRequest(systemMessage, mem), toolDef)
 }

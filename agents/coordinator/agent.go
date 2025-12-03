@@ -41,7 +41,6 @@ func (a *Agent) Chat(ctx context.Context, req *agtapi.Request) *agtapi.Response 
 		req.Memory = memory.NewEmptyWithSummarize(req.SessionID, a.llm)
 	}
 
-	req.Memory.Reset(initSystemPrompt(a.option), false)
 	ctx = memory.WithMemory(ctx, req.Memory)
 	ctx = withRequest(ctx, &request{req, resp})
 	go func() {
@@ -63,7 +62,7 @@ func (a *Agent) runSocialContact(ctx context.Context, req *agtapi.Request, resp 
 	nextReq := &agtapi.Request{
 		UserMessage:       req.UserMessage,
 		SessionID:         req.SessionID,
-		Memory:            req.Memory,
+		Memory:            req.Memory.Copy(),
 		ExtraKV:           req.ExtraKV,
 		OverwriteToolArgs: req.OverwriteToolArgs,
 	}
@@ -79,7 +78,7 @@ func (a *Agent) runReport(ctx context.Context, req *agtapi.Request, resp *agtapi
 	nextReq := &agtapi.Request{
 		UserMessage:       a.option.SummaryReportPrompt,
 		SessionID:         req.SessionID,
-		Memory:            req.Memory,
+		Memory:            req.Memory.Copy(),
 		ExtraKV:           req.ExtraKV,
 		OverwriteToolArgs: req.OverwriteToolArgs,
 	}

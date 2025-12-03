@@ -37,8 +37,7 @@ func (s *Agent) Chat(ctx context.Context, req *agtapi.Request) *agtapi.Response 
 		req.Memory = memory.NewEmptyWithSummarize(req.SessionID, s.llm)
 	}
 
-	mem := req.Memory.Copy()
-	mem.Reset(s.option.SystemPrompt, false)
+	mem := req.Memory
 	mem.AppendMessages(types.Message{UserMessage: req.UserMessage})
 	ctx = memory.WithMemory(ctx, mem)
 
@@ -55,7 +54,7 @@ func (s *Agent) handleLLMStream(ctx context.Context, mem *memory.Memory, req *ag
 	defer resp.Close()
 	var (
 		msgCnt     int
-		llmReq     = memory.LLMRequest(mem)
+		llmReq     = memory.LLMRequest(s.option.SystemPrompt, mem)
 		stream     = s.llm.Completion(ctx, llmReq)
 		warnTicker = time.NewTicker(time.Minute)
 	)
@@ -94,7 +93,7 @@ WaitMessage:
 func (s *Agent) handleStructLLMOutput(ctx context.Context, mem *memory.Memory, req *agtapi.Request, resp *agtapi.Response) {
 	defer resp.Close()
 	var (
-		llmReq = memory.LLMRequest(mem)
+		llmReq = memory.LLMRequest(s.option.SystemPrompt, mem)
 		model  = s.option.NewOutputModel()
 		err    = s.llm.StructuredPredict(ctx, llmReq, model)
 	)

@@ -51,7 +51,7 @@ func (a *Agent) Chat(ctx context.Context, req *agtapi.Request) *agtapi.Response 
 
 	if a.root == nil {
 		a.task = req.UserMessage
-		a.root = newRoot(a.option.SystemPrompt, a.task, req.Memory.Copy())
+		a.root = newRoot(a.task, req.Memory.Copy())
 	}
 	resp := agtapi.NewResponse()
 
@@ -252,7 +252,7 @@ func (a *Agent) runCandidate(ctx context.Context, node *SearchNode, req *agtapi.
 	nextReq := &agtapi.Request{
 		UserMessage:       message,
 		SessionID:         req.SessionID,
-		Memory:            node.memory,
+		Memory:            node.memory.Copy(),
 		ExtraKV:           make([]string, 0, len(req.ExtraKV)+4),
 		OverwriteToolArgs: req.OverwriteToolArgs,
 	}

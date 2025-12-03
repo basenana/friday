@@ -45,8 +45,7 @@ func (a *Agent) Chat(ctx context.Context, req *agtapi.Request) *agtapi.Response 
 		req.Memory = memory.NewEmptyWithSummarize(req.SessionID, a.llm)
 	}
 
-	mem := req.Memory.Copy()
-	a.resetMemory(mem)
+	mem := req.Memory
 	mem.AppendMessages(types.Message{UserMessage: req.UserMessage})
 
 	ctx = memory.WithMemory(ctx, mem)
@@ -82,7 +81,7 @@ func (a *Agent) reactLoop(ctx context.Context, mem *memory.Memory, req *agtapi.R
 		case <-ctx.Done():
 			return
 		default:
-			stream = a.llm.Completion(ctx, newLLMRequest(mem, a.tools))
+			stream = a.llm.Completion(ctx, newLLMRequest(a.option.SystemPrompt, mem, a.tools))
 			supplements, statusCode = a.handleLLMStream(ctx, stream, mem, req, resp)
 		}
 
@@ -303,10 +302,6 @@ func (a *Agent) getToolByName(name string) *tools.Tool {
 		}
 	}
 	return nil
-}
-
-func (a *Agent) resetMemory(mem *memory.Memory) {
-	mem.Reset(a.option.SystemPrompt, false)
 }
 
 func New(name, desc string, llm openai.Client, option Option) *Agent {

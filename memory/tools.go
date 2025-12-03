@@ -110,8 +110,8 @@ func remindMessage(key string) string {
 	return fmt.Sprintf("Retrieve from %s if needed", key)
 }
 
-func LLMRequest(m *Memory) openai.Request {
-	return openai.NewSimpleRequest(m.system.SystemMessage, m.history...)
+func LLMRequest(systemMessage string, m *Memory) openai.Request {
+	return openai.NewSimpleRequest(systemMessage, m.history...)
 }
 
 func WithMemory(ctx context.Context, m *Memory) context.Context {

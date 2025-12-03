@@ -20,8 +20,7 @@ type SearchNode struct {
 	info       *types.Stage
 }
 
-func newRoot(systemPrompt, reasoning string, mem *memory.Memory) *SearchNode {
-	mem.Reset(systemPrompt, false)
+func newRoot(reasoning string, mem *memory.Memory) *SearchNode {
 	mem.AppendMessages(types.Message{UserMessage: reasoning})
 	return &SearchNode{
 		id:         uuid.New().String(),
@@ -55,13 +54,11 @@ func (n *SearchNode) Expend(node *SearchNode, evaluation *Evaluation) {
 	node.parent = n
 	n.children = append(n.children, node)
 	node.memory = n.memory.Copy()
-	if evaluation != nil {
-		if msg := node.Latest(); msg != "" {
-			node.memory.AppendMessages(types.Message{AssistantMessage: msg})
-		}
-		node.memory.AppendMessages(types.Message{UserMessage: evaluation.Reasoning})
-		node.evaluation = evaluation
+	if msg := node.Latest(); msg != "" {
+		node.memory.AppendMessages(types.Message{AssistantMessage: msg})
 	}
+	node.memory.AppendMessages(types.Message{UserMessage: evaluation.Reasoning})
+	node.evaluation = evaluation
 	node.info = stage
 	node.BackPropagate(evaluation.Score)
 }
