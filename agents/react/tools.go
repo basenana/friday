@@ -5,10 +5,11 @@ import (
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
+	"hash/fnv"
+
 	"github.com/basenana/friday/memory"
 	"github.com/basenana/friday/providers/openai"
 	"github.com/basenana/friday/tools"
-	"hash/fnv"
 )
 
 var (
@@ -88,5 +89,5 @@ func newLLMRequest(systemMessage string, mem *memory.Memory, toolList []*tools.T
 	for _, t := range buildInTools {
 		toolDef = append(toolDef, t)
 	}
-	return openai.NewToolsRequest(memory.LLMRequest(systemMessage, mem), toolDef)
+	return openai.NewToolsRequest(openai.NewSimpleRequest(systemMessage, mem.History()...), toolDef)
 }

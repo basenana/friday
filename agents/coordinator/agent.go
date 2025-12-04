@@ -3,8 +3,9 @@ package coordinator
 import (
 	"context"
 	"fmt"
-	"github.com/basenana/friday/types"
 	"strings"
+
+	"github.com/basenana/friday/types"
 
 	"go.uber.org/zap"
 
@@ -35,14 +36,20 @@ func (a *Agent) Describe() string {
 }
 
 func (a *Agent) Chat(ctx context.Context, req *agtapi.Request) *agtapi.Response {
-	resp := agtapi.NewResponse()
+	var (
+		sid  = agtapi.GetOrCreateSession(ctx)
+		resp = agtapi.NewResponse()
+	)
 
 	if req.Memory == nil {
-		req.Memory = memory.NewEmptyWithSummarize(req.SessionID, a.llm)
+		req.Memory = memory.NewEmptyWithSummarize(sid, a.llm)
 	}
 
-	ctx = memory.WithMemory(ctx, req.Memory)
-	ctx = withRequest(ctx, &request{req, resp})
+	ctx = agtapi.NewContext(ctx, sid,
+		agtapi.WithMemory(req.Memory),
+		agtapi.WithResponse(resp),
+	)
+
 	go func() {
 		defer resp.Close()
 		if err := a.runSocialContact(ctx, req, resp); err != nil {
@@ -60,14 +67,11 @@ func (a *Agent) Chat(ctx context.Context, req *agtapi.Request) *agtapi.Response 
 
 func (a *Agent) runSocialContact(ctx context.Context, req *agtapi.Request, resp *agtapi.Response) error {
 	nextReq := &agtapi.Request{
-		UserMessage:       req.UserMessage,
-		SessionID:         req.SessionID,
-		Memory:            req.Memory.Copy(),
-		ExtraKV:           req.ExtraKV,
-		OverwriteToolArgs: req.OverwriteToolArgs,
+		UserMessage: req.UserMessage,
+		Memory:      req.Memory,
 	}
 	stream := a.react.Chat(ctx, nextReq)
-	if err := mergeResponse(ctx, nextReq, stream, resp); err != nil {
+	if err := agtapi.CopyResponse(ctx, stream, resp); err != nil {
 		a.logger.Warnw("merge contact response error", "error", err)
 		return err
 	}
@@ -76,13 +80,10 @@ func (a *Agent) runSocialContact(ctx context.Context, req *agtapi.Request, resp 
 
 func (a *Agent) runReport(ctx context.Context, req *agtapi.Request, resp *agtapi.Response) error {
 	nextReq := &agtapi.Request{
-		UserMessage:       a.option.SummaryReportPrompt,
-		SessionID:         req.SessionID,
-		Memory:            req.Memory.Copy(),
-		ExtraKV:           req.ExtraKV,
-		OverwriteToolArgs: req.OverwriteToolArgs,
+		UserMessage: a.option.SummaryReportPrompt,
+		Memory:      req.Memory,
 	}
-	a.logger.Infow("start summary report", "sessionID", req.SessionID)
+	a.logger.Infow("start summary report", "sessionID", agtapi.GetOrCreateSession(ctx))
 	stream := a.simple.Chat(ctx, nextReq)
 	for {
 		select {
@@ -101,7 +102,7 @@ func (a *Agent) runReport(ctx context.Context, req *agtapi.Request, resp *agtapi
 				continue
 			}
 			if evt.Delta.Content != "" {
-				agtapi.SendEvent(nextReq, resp, types.NewAnsEvent(evt.Delta.Content))
+				agtapi.SendEvent(resp, types.NewAnsEvent(evt.Delta.Content))
 			}
 		}
 	}
@@ -121,14 +122,11 @@ func (a *Agent) handleMailWithSubAgentsTool(ctx context.Context, request *tools.
 		return nil, fmt.Errorf("missing required parameter: text")
 	}
 
-	req := requestFromContext(ctx)
-	if req == nil {
-		a.logger.Warnw("no request from context")
-		return nil, fmt.Errorf("missing agent request")
-	}
+	var (
+		toAgentNames = strings.Split(toAgentNamesList, ",")
+		waiter       = make(chan string, len(toAgentNames))
+	)
 
-	toAgentNames := strings.Split(toAgentNamesList, ",")
-	waiter := make(chan string, len(toAgentNames))
 	defer close(waiter)
 	for _, toAgentName := range toAgentNames {
 		if toAgentName == "" {
@@ -136,8 +134,7 @@ func (a *Agent) handleMailWithSubAgentsTool(ctx context.Context, request *tools.
 			continue
 		}
 		go func(aname string) {
-			reply := a.mailWithSubAgent(ctx, req.req, req.resp, aname, title, text)
-			req.recordMail(aname, title, text, reply)
+			reply := a.mailWithSubAgent(ctx, aname, title, text)
 			waiter <- reply
 		}(toAgentName)
 	}
@@ -154,10 +151,11 @@ func (a *Agent) handleMailWithSubAgentsTool(ctx context.Context, request *tools.
 	return tools.NewToolResultText(strings.Join(replies, "\n\n")), nil
 }
 
-func (a *Agent) mailWithSubAgent(ctx context.Context, req *agtapi.Request, outsideResp *agtapi.Response, agentName, title, text string) string {
+func (a *Agent) mailWithSubAgent(ctx context.Context, agentName, title, text string) string {
 	var (
 		agt             ExpertAgent
 		answer, content string
+		mem             = agtapi.MemoryFromContext(ctx).Copy() // fork memory for subagents
 	)
 
 	for i, ea := range a.subAgents {
@@ -171,13 +169,6 @@ func (a *Agent) mailWithSubAgent(ctx context.Context, req *agtapi.Request, outsi
 		return fmt.Sprintf("Agent %s not found", agentName)
 	}
 
-	ekv := make([]string, 0, len(req.ExtraKV)+2)
-	for _, kv := range req.ExtraKV {
-		ekv = append(ekv, kv)
-	}
-	ekv = append(ekv, "subagent")
-	ekv = append(ekv, agentName)
-
 	stream := agt.Chat(ctx, &agtapi.Request{
 		UserMessage: strings.Join(
 			[]string{
@@ -185,10 +176,7 @@ func (a *Agent) mailWithSubAgent(ctx context.Context, req *agtapi.Request, outsi
 				"Title: " + title,
 				text,
 			}, "\n"),
-		SessionID:         req.SessionID,
-		Memory:            req.Memory,
-		ExtraKV:           ekv,
-		OverwriteToolArgs: req.OverwriteToolArgs,
+		Memory: mem,
 	})
 
 WaitReply:
@@ -207,7 +195,7 @@ WaitReply:
 			if evt.Delta != nil && evt.Delta.Content != "" {
 				content = evt.Delta.Content
 			}
-			agtapi.SendEvent(req, outsideResp, &evt)
+			agtapi.SendEventToResponse(ctx, &evt, "subagent", agentName)
 		case err := <-stream.Error():
 			if err != nil {
 				return fmt.Sprintf("Agent: %s: failed to read content: %s", agentName, err)
@@ -246,25 +234,6 @@ func prebuildMailTool(agt *Agent) []*tools.Tool {
 			),
 			tools.WithToolHandler(agt.handleMailWithSubAgentsTool),
 		),
-	}
-}
-
-func mergeResponse(ctx context.Context, req *agtapi.Request, from *agtapi.Response, to *agtapi.Response) error {
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case evt, ok := <-from.Events():
-			if !ok {
-				return nil
-			}
-			agtapi.SendEvent(req, to, &evt)
-		case err := <-from.Error():
-			if err != nil {
-				to.Fail(err)
-				return err
-			}
-		}
 	}
 }
 

@@ -39,22 +39,27 @@ func (a *Agent) Describe() string {
 
 func (a *Agent) Chat(ctx context.Context, req *agtapi.Request) *agtapi.Response {
 	var (
+		sid  = agtapi.GetOrCreateSession(ctx)
 		resp = agtapi.NewResponse()
 	)
 	if req.Memory == nil {
-		req.Memory = memory.NewEmptyWithSummarize(req.SessionID, a.llm)
+		req.Memory = memory.NewEmptyWithSummarize(sid, a.llm)
 	}
+
+	ctx = agtapi.NewContext(ctx, sid,
+		agtapi.WithMemory(req.Memory),
+		agtapi.WithResponse(resp),
+	)
 
 	mem := req.Memory
 	mem.AppendMessages(types.Message{UserMessage: req.UserMessage})
 
-	ctx = memory.WithMemory(ctx, mem)
 	a.logger.Infow("handle request", "message", req.UserMessage)
-	go a.reactLoop(ctx, mem, req, resp)
+	go a.reactLoop(ctx, mem, resp)
 	return resp
 }
 
-func (a *Agent) reactLoop(ctx context.Context, mem *memory.Memory, req *agtapi.Request, resp *agtapi.Response) {
+func (a *Agent) reactLoop(ctx context.Context, mem *memory.Memory, resp *agtapi.Response) {
 	defer resp.Close()
 
 	var (
@@ -82,7 +87,7 @@ func (a *Agent) reactLoop(ctx context.Context, mem *memory.Memory, req *agtapi.R
 			return
 		default:
 			stream = a.llm.Completion(ctx, newLLMRequest(a.option.SystemPrompt, mem, a.tools))
-			supplements, statusCode = a.handleLLMStream(ctx, stream, mem, req, resp)
+			supplements, statusCode = a.handleLLMStream(ctx, stream, mem, resp)
 		}
 
 		if statusCode == 1 {
@@ -120,7 +125,7 @@ func (a *Agent) reactLoop(ctx context.Context, mem *memory.Memory, req *agtapi.R
 	}
 }
 
-func (a *Agent) handleLLMStream(ctx context.Context, stream openai.Response, mem *memory.Memory, req *agtapi.Request, resp *agtapi.Response) ([]types.Message, code) {
+func (a *Agent) handleLLMStream(ctx context.Context, stream openai.Response, mem *memory.Memory, resp *agtapi.Response) ([]types.Message, code) {
 	var (
 		content      string
 		reasoning    string
@@ -130,8 +135,6 @@ func (a *Agent) handleLLMStream(ctx context.Context, stream openai.Response, mem
 		statusCode  = code(0) // not finish
 		supplements []types.Message
 		warnTicker  = time.NewTicker(time.Minute)
-
-		extraArgs = req.OverwriteToolArgs
 	)
 
 	defer warnTicker.Stop()
@@ -159,7 +162,7 @@ WaitMessage:
 			switch {
 			case len(msg.Content) > 0:
 				content += msg.Content
-				agtapi.SendEvent(req, resp, types.NewContentEvent(msg.Content))
+				agtapi.SendEventToResponse(ctx, types.NewContentEvent(msg.Content))
 
 			case len(msg.ToolUse) > 0:
 				for i := range msg.ToolUse {
@@ -173,7 +176,7 @@ WaitMessage:
 
 			case len(msg.Reasoning) > 0:
 				reasoning += msg.Reasoning
-				agtapi.SendEvent(req, resp, types.NewReasoningEvent(msg.Reasoning))
+				agtapi.SendEventToResponse(ctx, types.NewReasoningEvent(msg.Reasoning))
 			}
 		}
 	}
@@ -206,7 +209,7 @@ WaitMessage:
 	}
 
 	if len(toolUse) > 0 {
-		toolCallMessages := a.doToolCalls(ctx, toolUse, extraArgs, reasoning, req, resp)
+		toolCallMessages := a.doToolCalls(ctx, toolUse, reasoning)
 		if len(toolCallMessages) > 0 {
 			supplements = append(supplements, toolCallMessages...)
 		}
@@ -218,7 +221,7 @@ WaitMessage:
 	return supplements, statusCode
 }
 
-func (a *Agent) doToolCalls(ctx context.Context, toolUses []openai.ToolUse, extraArgs map[string]string, reasoning string, req *agtapi.Request, resp *agtapi.Response) []types.Message {
+func (a *Agent) doToolCalls(ctx context.Context, toolUses []openai.ToolUse, reasoning string) []types.Message {
 	var (
 		result []types.Message
 		update = make(chan []types.Message, len(toolUses))
@@ -231,7 +234,7 @@ func (a *Agent) doToolCalls(ctx context.Context, toolUses []openai.ToolUse, extr
 		go func() {
 			defer wg.Done()
 			// for long tool use such like an agent call
-			update <- a.tryToolCall(ctx, use, extraArgs, reasoning, req, resp)
+			update <- a.tryToolCall(ctx, use, reasoning)
 		}()
 	}
 	wg.Wait()
@@ -246,11 +249,12 @@ func (a *Agent) doToolCalls(ctx context.Context, toolUses []openai.ToolUse, extr
 	return result
 }
 
-func (a *Agent) tryToolCall(ctx context.Context, use openai.ToolUse, extraArgs map[string]string, reasoning string, req *agtapi.Request, resp *agtapi.Response) []types.Message {
+func (a *Agent) tryToolCall(ctx context.Context, use openai.ToolUse, reasoning string) []types.Message {
 	var (
-		result  []types.Message
-		buf     = &bytes.Buffer{}
-		useMark = use.ID
+		result    []types.Message
+		extraArgs = agtapi.OverwriteToolArgsFromContext(ctx)
+		buf       = &bytes.Buffer{}
+		useMark   = use.ID
 	)
 
 	if useMark == "" {
@@ -265,13 +269,13 @@ func (a *Agent) tryToolCall(ctx context.Context, use openai.ToolUse, extraArgs m
 	if td == nil {
 		msg := fmt.Sprintf("tool %s not found", use.Name)
 		result = append(result, types.Message{ToolCallID: useMark, ToolContent: msg})
-		agtapi.SendEvent(req, resp, types.NewToolUseEvent(use.Name, use.Arguments, "", msg))
+		agtapi.SendEventToResponse(ctx, types.NewToolUseEvent(use.Name, use.Arguments, "", msg))
 		return result
 	}
 
 	if use.Error != "" {
 		result = append(result, types.Message{ToolCallID: useMark, ToolContent: use.Error})
-		agtapi.SendEvent(req, resp, types.NewToolUseEvent(use.Name, use.Arguments, td.Description, use.Error))
+		agtapi.SendEventToResponse(ctx, types.NewToolUseEvent(use.Name, use.Arguments, td.Description, use.Error))
 		return result
 	}
 
@@ -280,7 +284,7 @@ func (a *Agent) tryToolCall(ctx context.Context, use openai.ToolUse, extraArgs m
 	msg, err := toolCall(ctx, toolUse, extraArgs, td)
 	if err != nil {
 		result = append(result, types.Message{ToolCallID: toolUse.ID(), ToolContent: fmt.Sprintf("using tool failed: %s", err)})
-		agtapi.SendEvent(req, resp, types.NewToolUseEvent(use.Name, use.Arguments, td.Description, err.Error()))
+		agtapi.SendEventToResponse(ctx, types.NewToolUseEvent(use.Name, use.Arguments, td.Description, err.Error()))
 		return result
 	}
 
@@ -290,7 +294,7 @@ func (a *Agent) tryToolCall(ctx context.Context, use openai.ToolUse, extraArgs m
 	buf.WriteString(msg)
 
 	result = append(result, types.Message{ToolCallID: toolUse.ID(), ToolContent: buf.String()})
-	agtapi.SendEvent(req, resp, types.NewToolUseEvent(use.Name, use.Arguments, td.Description, ""))
+	agtapi.SendEventToResponse(ctx, types.NewToolUseEvent(use.Name, use.Arguments, td.Description, ""))
 
 	return result
 }

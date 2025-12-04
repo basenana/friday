@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/basenana/friday/providers/openai"
 	"github.com/basenana/friday/tools"
 )
 
@@ -110,16 +109,8 @@ func remindMessage(key string) string {
 	return fmt.Sprintf("Retrieve from %s if needed", key)
 }
 
-func LLMRequest(systemMessage string, m *Memory) openai.Request {
-	return openai.NewSimpleRequest(systemMessage, m.history...)
-}
-
-func WithMemory(ctx context.Context, m *Memory) context.Context {
-	return context.WithValue(ctx, "agent.memory", m)
-}
-
 func memoryFromContext(ctx context.Context) *Memory {
-	raw := ctx.Value("agent.memory")
+	raw := ctx.Value("friday.ctx.memory")
 	if raw == nil {
 		return nil
 	}

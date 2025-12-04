@@ -44,29 +44,37 @@ func (a *Agent) Describe() string {
 }
 
 func (a *Agent) Chat(ctx context.Context, req *agtapi.Request) *agtapi.Response {
+	var (
+		sid  = agtapi.GetOrCreateSession(ctx)
+		resp = agtapi.NewResponse()
+	)
+	a.logger.Infow("handle request", "message", req.UserMessage, "session", sid)
+
 	if req.Memory == nil {
-		req.Memory = memory.NewEmptyWithSummarize(req.SessionID, a.llm)
+		req.Memory = memory.NewEmptyWithSummarize(sid, a.llm)
 	}
-	ctx = memory.WithMemory(ctx, req.Memory)
 
 	if a.root == nil {
 		a.task = req.UserMessage
 		a.root = newRoot(a.task, req.Memory.Copy())
 	}
-	resp := agtapi.NewResponse()
+
+	ctx = agtapi.NewContext(ctx, sid,
+		agtapi.WithMemory(req.Memory),
+		agtapi.WithResponse(resp),
+	)
 
 	go func() {
-		a.logger.Infow("handle request", "message", req.UserMessage)
 		defer resp.Close()
 		for {
-			ans, finish, err := a.runStep(ctx, req, resp)
+			ans, finish, err := a.runStep(ctx)
 			if err != nil {
 				resp.Fail(err)
 				return
 			}
 
 			if finish {
-				a.sendFinalAnswer(ctx, ans, req.Memory, req, resp)
+				a.sendFinalAnswer(ctx, ans, req.Memory)
 				return
 			}
 		}
@@ -74,7 +82,7 @@ func (a *Agent) Chat(ctx context.Context, req *agtapi.Request) *agtapi.Response 
 	return resp
 }
 
-func (a *Agent) runStep(ctx context.Context, req *agtapi.Request, resp *agtapi.Response) (string, bool, error) {
+func (a *Agent) runStep(ctx context.Context) (string, bool, error) {
 	crtNode := a.root.GetBestNode()
 	a.logger.Infow("[TREE] selecting node to expand", "node", crtNode.Latest())
 
@@ -95,7 +103,7 @@ func (a *Agent) runStep(ctx context.Context, req *agtapi.Request, resp *agtapi.R
 		n := newNode(candidate)
 		n.info = &types.Stage{ID: n.id, Describe: candidate, Status: types.Submitted}
 		crtNode.Expend(n, nil)
-		agtapi.SendEvent(req, resp, types.NewStageUpdateEvent(*n.info))
+		agtapi.SendEventToResponse(ctx, types.NewStageUpdateEvent(*n.info))
 		nextMove = append(nextMove, n)
 	}
 
@@ -131,12 +139,12 @@ func (a *Agent) runStep(ctx context.Context, req *agtapi.Request, resp *agtapi.R
 			}()
 
 			node.info.Status = types.Working
-			agtapi.SendEvent(req, resp, types.NewStageUpdateEvent(*node.info))
+			agtapi.SendEventToResponse(ctx, types.NewStageUpdateEvent(*node.info))
 			defer func() {
-				agtapi.SendEvent(req, resp, types.NewStageUpdateEvent(*node.info))
+				agtapi.SendEventToResponse(ctx, types.NewStageUpdateEvent(*node.info))
 			}()
 
-			reasoning, err := a.runCandidate(batchCtx, node, req, resp)
+			reasoning, err := a.runCandidate(batchCtx, node)
 			if err != nil {
 				if errors.Is(err, context.Canceled) {
 					node.info.Status = types.Canceled
@@ -162,7 +170,7 @@ func (a *Agent) runStep(ctx context.Context, req *agtapi.Request, resp *agtapi.R
 				a.logger.Errorw("evaluate failed", "err", err)
 				return
 			}
-			agtapi.SendEvent(req, resp, types.NewReasoningEvent(""),
+			agtapi.SendEventToResponse(ctx, types.NewReasoningEvent(""),
 				"evaluation", e.Reasoning,
 				"stage", node.info.ID, "score", fmt.Sprint(e.Score), "is_done", fmt.Sprint(e.IsDone))
 
@@ -235,7 +243,7 @@ func (a *Agent) extendCandidates(ctx context.Context, node *SearchNode) ([]strin
 	return cand.Candidates, nil
 }
 
-func (a *Agent) runCandidate(ctx context.Context, node *SearchNode, req *agtapi.Request, resp *agtapi.Response) (string, error) {
+func (a *Agent) runCandidate(ctx context.Context, node *SearchNode) (string, error) {
 	var (
 		runCtx, canF = context.WithTimeout(ctx, time.Minute*2)
 		message      = node.Latest()
@@ -250,14 +258,9 @@ func (a *Agent) runCandidate(ctx context.Context, node *SearchNode, req *agtapi.
 	}()
 
 	nextReq := &agtapi.Request{
-		UserMessage:       message,
-		SessionID:         req.SessionID,
-		Memory:            node.memory.Copy(),
-		ExtraKV:           make([]string, 0, len(req.ExtraKV)+4),
-		OverwriteToolArgs: req.OverwriteToolArgs,
+		UserMessage: message,
+		Memory:      node.memory.Copy(),
 	}
-	nextReq.ExtraKV = append(nextReq.ExtraKV, req.ExtraKV...)
-	nextReq.ExtraKV = append(nextReq.ExtraKV, []string{"stage", node.info.ID}...)
 	stream := a.react.Chat(runCtx, nextReq)
 
 WaitingRun:
@@ -275,13 +278,13 @@ WaitingRun:
 			}
 			if evt.Delta != nil {
 				if msg := evt.Delta; msg.Content != "" {
-					agtapi.SendEvent(nextReq, resp, types.NewReasoningEvent(msg.Content))
+					agtapi.SendEventToResponse(ctx, types.NewReasoningEvent(msg.Content), "stage", node.info.ID)
 					reasoning += msg.Content
 				}
 				continue
 			}
 			if evt.Data != nil {
-				agtapi.SendEvent(nextReq, resp, &evt)
+				agtapi.SendEventToResponse(ctx, &evt, "stage", node.info.ID)
 			}
 		}
 	}
@@ -335,14 +338,14 @@ func (a *Agent) evaluate(ctx context.Context, node *SearchNode, reasoning string
 	return eva, nil
 }
 
-func (a *Agent) sendFinalAnswer(ctx context.Context, ans string, mem *memory.Memory, req *agtapi.Request, resp *agtapi.Response) {
-	agtapi.SendEvent(req, resp, types.NewAnsEvent(ans))
+func (a *Agent) sendFinalAnswer(ctx context.Context, ans string, mem *memory.Memory) {
+	agtapi.SendEventToResponse(ctx, types.NewAnsEvent(ans))
 	if mem != nil {
 		mem.AppendMessages(types.Message{AssistantMessage: ans})
 	}
 }
 
-func New(name, desc string, llm openai.Client, reAct *react.Agent, opt Option) *Agent {
+func New(name, desc string, llm openai.Client, opt Option) *Agent {
 	if opt.Expansions == 0 {
 		opt.Expansions = 2
 	}
@@ -352,6 +355,12 @@ func New(name, desc string, llm openai.Client, reAct *react.Agent, opt Option) *
 	if opt.MaxParallel == 0 {
 		opt.MaxParallel = 5
 	}
+	if opt.MaxLoopTimes == 0 {
+		opt.MaxLoopTimes = 5
+	}
+	if opt.MaxToolCalls == 0 {
+		opt.MaxToolCalls = 20
+	}
 	if opt.ExpansionPrompt == "" {
 		opt.ExpansionPrompt = DEFAULT_CANDIDATES_PROMPT
 	}
@@ -360,20 +369,23 @@ func New(name, desc string, llm openai.Client, reAct *react.Agent, opt Option) *
 	}
 
 	return &Agent{
-		name:   name,
-		desc:   desc,
-		llm:    llm,
-		react:  reAct,
+		name: name,
+		desc: desc,
+		llm:  llm,
+		react: react.New(name, desc, llm,
+			react.Option{SystemPrompt: opt.SystemPrompt, MaxLoopTimes: opt.MaxLoopTimes, MaxToolCalls: opt.MaxToolCalls, Tools: opt.Tools}),
 		option: opt,
 		logger: logger.New("lats").With(zap.String("name", name)),
 	}
 }
 
 type Option struct {
-	Expansions  int
-	MaxRollouts int
-	MaxParallel int
-	FastMode    bool
+	Expansions   int
+	MaxRollouts  int
+	MaxParallel  int
+	MaxLoopTimes int
+	MaxToolCalls int
+	FastMode     bool
 
 	SystemPrompt     string
 	ExpansionPrompt  string

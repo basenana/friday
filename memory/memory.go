@@ -41,7 +41,6 @@ type Memory struct {
 	mid       string
 	copyTimes int
 
-	system  *types.Message
 	history []types.Message
 	mux     sync.Mutex
 
@@ -57,11 +56,10 @@ func (m *Memory) History() []types.Message {
 	m.mux.Lock()
 	defer m.mux.Unlock()
 	if m.tokens > compactThreshold {
-		m.logger.Warn("history limit exceeded, try to compact", "mid", m.mid)
+		m.logger.Warnw("history limit exceeded, try to compact", "mid", m.mid)
 		m.compactMessages()
 	}
 	result := make([]types.Message, 0, len(m.history)+1)
-	result = append(result, *m.system)
 	result = append(result, m.history...)
 	return result
 }
@@ -85,8 +83,8 @@ func (m *Memory) Tokens() int64 {
 
 func (m *Memory) compactMessages() {
 	var (
-		beforeTokens = m.tokens
-		afterTokens  = m.system.FuzzyTokens()
+		beforeTokens, afterTokens int64 = m.tokens, 0
+
 		msgLen       = len(m.history)
 		canbeCompact = msgLen / 2
 	)
@@ -148,7 +146,7 @@ func (m *Memory) updateHistoryWithAbstract(history []types.Message, abstract str
 	keep := m.history[cutAt:]
 	m.history = m.history[:0]
 
-	m.tokens = m.system.FuzzyTokens()
+	m.tokens = 0
 	m.history = append(m.history, types.Message{UserMessage: abstract})
 	m.history = append(m.history, keep...)
 	for _, msg := range m.history {
@@ -157,19 +155,6 @@ func (m *Memory) updateHistoryWithAbstract(history []types.Message, abstract str
 	m.logger.Infow("update history with abstract finished",
 		"beforeHistory", crtLen, "afterHistory", len(m.history),
 		"beforeToken", beforToken, "afterToken", m.tokens, "mid", m.mid)
-}
-
-func (m *Memory) Reset(system string, cleanHistory bool) {
-	m.mux.Lock()
-	defer m.mux.Unlock()
-	m.system = &types.Message{SystemMessage: system}
-	m.tokens = m.system.FuzzyTokens()
-	if cleanHistory {
-		m.history = make([]types.Message, 0, 10)
-	}
-	for _, msg := range m.history {
-		m.tokens += msg.FuzzyTokens()
-	}
 }
 
 func (m *Memory) Copy() *Memory {
@@ -193,9 +178,9 @@ func (m *Memory) Copy() *Memory {
 
 type OptionSetter func(*Memory)
 
-func NewEmpty(sessionID string, setters ...OptionSetter) *Memory {
+func NewEmpty(uid string, setters ...OptionSetter) *Memory {
 	mem := &Memory{
-		mid:     sessionID,
+		mid:     uid,
 		history: make([]types.Message, 0, 10),
 		storage: newInMemoryStorage(),
 		logger:  logger.New("memory"),
@@ -221,7 +206,7 @@ func WithRecorders(recorders []Recorder) OptionSetter {
 	}
 }
 
-func NewEmptyWithSummarize(sessionID string, llmCli openai.Client) *Memory {
-	m := NewEmpty(sessionID, WithSummarize(llmCli))
+func NewEmptyWithSummarize(uid string, llmCli openai.Client) *Memory {
+	m := NewEmpty(uid, WithSummarize(llmCli))
 	return m
 }

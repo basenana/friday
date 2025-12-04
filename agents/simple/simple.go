@@ -31,30 +31,38 @@ func (s *Agent) Describe() string {
 }
 
 func (s *Agent) Chat(ctx context.Context, req *agtapi.Request) *agtapi.Response {
-	var resp = agtapi.NewResponse()
+	var (
+		sid  = agtapi.GetOrCreateSession(ctx)
+		resp = agtapi.NewResponse()
+	)
 
+	s.logger.Infow("handle request", "session", sid, "userMessage", req.UserMessage)
 	if req.Memory == nil {
-		req.Memory = memory.NewEmptyWithSummarize(req.SessionID, s.llm)
+		req.Memory = memory.NewEmptyWithSummarize(sid, s.llm)
 	}
+
+	ctx = agtapi.NewContext(ctx, sid,
+		agtapi.WithMemory(req.Memory),
+		agtapi.WithResponse(resp),
+	)
 
 	mem := req.Memory
 	mem.AppendMessages(types.Message{UserMessage: req.UserMessage})
-	ctx = memory.WithMemory(ctx, mem)
 
 	if s.option.NewOutputModel == nil {
-		go s.handleLLMStream(ctx, mem, req, resp)
+		go s.handleLLMStream(ctx, mem, resp)
 	} else {
-		go s.handleStructLLMOutput(ctx, mem, req, resp)
+		go s.handleStructLLMOutput(ctx, mem, resp)
 	}
 
 	return resp
 }
 
-func (s *Agent) handleLLMStream(ctx context.Context, mem *memory.Memory, req *agtapi.Request, resp *agtapi.Response) {
+func (s *Agent) handleLLMStream(ctx context.Context, mem *memory.Memory, resp *agtapi.Response) {
 	defer resp.Close()
 	var (
 		msgCnt     int
-		llmReq     = memory.LLMRequest(s.option.SystemPrompt, mem)
+		llmReq     = openai.NewSimpleRequest(s.option.SystemPrompt, mem.History()...)
 		stream     = s.llm.Completion(ctx, llmReq)
 		warnTicker = time.NewTicker(time.Minute)
 	)
@@ -82,18 +90,18 @@ WaitMessage:
 			msgCnt++ // check api hang
 			switch {
 			case len(msg.Content) > 0:
-				agtapi.SendEvent(req, resp, types.NewContentEvent(msg.Content))
+				agtapi.SendEvent(resp, types.NewContentEvent(msg.Content))
 			case len(msg.Reasoning) > 0:
-				agtapi.SendEvent(req, resp, types.NewReasoningEvent(msg.Reasoning))
+				agtapi.SendEvent(resp, types.NewReasoningEvent(msg.Reasoning))
 			}
 		}
 	}
 }
 
-func (s *Agent) handleStructLLMOutput(ctx context.Context, mem *memory.Memory, req *agtapi.Request, resp *agtapi.Response) {
+func (s *Agent) handleStructLLMOutput(ctx context.Context, mem *memory.Memory, resp *agtapi.Response) {
 	defer resp.Close()
 	var (
-		llmReq = memory.LLMRequest(s.option.SystemPrompt, mem)
+		llmReq = openai.NewSimpleRequest(s.option.SystemPrompt, mem.History()...)
 		model  = s.option.NewOutputModel()
 		err    = s.llm.StructuredPredict(ctx, llmReq, model)
 	)
@@ -108,7 +116,7 @@ func (s *Agent) handleStructLLMOutput(ctx context.Context, mem *memory.Memory, r
 		resp.Fail(err)
 		return
 	}
-	agtapi.SendEvent(req, resp, types.NewContentEvent(string(raw)))
+	agtapi.SendEvent(resp, types.NewContentEvent(string(raw)))
 }
 
 func New(name, desc string, llm openai.Client, opt Option) *Agent {
