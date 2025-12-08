@@ -48,6 +48,22 @@ func NewSimpleRequest(systemMessage string, history ...types.Message) Request {
 }
 
 func NewToolsRequest(request Request, tools []ToolDefine) Request {
+
+	var (
+		filtered    []ToolDefine
+		existedTool = make(map[string]struct{})
+	)
+
+	for _, t := range tools {
+		_, exists := existedTool[t.Name]
+		if exists {
+			continue
+		}
+		filtered = append(filtered, t)
+		existedTool[t.Name] = struct{}{}
+	}
+
+	tools = filtered
 	req, ok := request.(*simpleRequest)
 	if ok {
 		req.tools = tools

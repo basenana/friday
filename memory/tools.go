@@ -10,7 +10,7 @@ import (
 	"github.com/basenana/friday/tools"
 )
 
-func ListStorageTools() []*tools.Tool {
+func ListStorageReadTools() []*tools.Tool {
 	return []*tools.Tool{
 		tools.NewTool("list_persistence_files",
 			tools.WithDescription("List all files that have been saved in the local execution environment."),
@@ -24,6 +24,11 @@ func ListStorageTools() []*tools.Tool {
 			),
 			tools.WithToolHandler(handleRetrieveFromFileTools),
 		),
+	}
+}
+
+func ListStorageWriteTools() []*tools.Tool {
+	return []*tools.Tool{
 		tools.NewTool("write_content_to_file",
 			tools.WithDescription("Save the data to the local file system for future access."),
 			tools.WithString("path",
