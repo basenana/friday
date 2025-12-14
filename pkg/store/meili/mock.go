@@ -19,10 +19,10 @@ package meili
 import (
 	"context"
 	"fmt"
+	"github.com/basenana/friday/pkg/store/types"
 	"reflect"
 	"strings"
 
-	"github.com/basenana/friday/pkg/models/doc"
 	"github.com/basenana/friday/pkg/store"
 )
 
@@ -33,18 +33,18 @@ type MockClient struct {
 
 var _ store.DocStoreInterface = &MockClient{}
 
-func (m *MockClient) CreateDocument(ctx context.Context, doc *doc.Document) error {
+func (m *MockClient) CreateDocument(ctx context.Context, doc *types.Document) error {
 	m.docs = append(m.docs, (&Document{}).FromModel(doc))
 	newAttrs := (&DocumentAttrList{}).FromModel(doc)
 	m.attrs = append(m.attrs, *newAttrs...)
 	return nil
 }
 
-func (m *MockClient) UpdateTokens(ctx context.Context, doc *doc.Document) error {
+func (m *MockClient) UpdateTokens(ctx context.Context, doc *types.Document) error {
 	return nil
 }
 
-func (m *MockClient) UpdateDocument(ctx context.Context, doc *doc.Document) error {
+func (m *MockClient) UpdateDocument(ctx context.Context, doc *types.Document) error {
 	aq := (&DocumentAttrQuery{}).FromModel(doc)
 	result := []*DocumentAttr{}
 	for _, attr := range m.attrs {
@@ -87,7 +87,7 @@ func (m *MockClient) UpdateDocument(ctx context.Context, doc *doc.Document) erro
 	return nil
 }
 
-func (m *MockClient) GetDocument(ctx context.Context, entryId int64) (*doc.Document, error) {
+func (m *MockClient) GetDocument(ctx context.Context, entryId int64) (*types.Document, error) {
 	var res *Document
 	for _, d := range m.docs {
 		if d.EntryId == fmt.Sprintf("%d", entryId) {
@@ -107,7 +107,7 @@ func (m *MockClient) GetDocument(ctx context.Context, entryId int64) (*doc.Docum
 	return nil, nil
 }
 
-func (m *MockClient) FilterDocuments(ctx context.Context, filter *doc.DocumentFilter) ([]*doc.Document, error) {
+func (m *MockClient) FilterDocuments(ctx context.Context, filter *types.DocumentFilter) ([]*types.Document, error) {
 	query := (&DocumentQuery{}).FromModel(filter)
 	if filter.ParentID != nil || filter.Unread != nil || filter.Marked != nil {
 		attrQuery := (&DocumentAttrQueries{}).FromFilter(filter)
@@ -161,7 +161,7 @@ func (m *MockClient) FilterDocuments(ctx context.Context, filter *doc.DocumentFi
 		}
 	}
 
-	result := []*doc.Document{}
+	result := []*types.Document{}
 	for _, d := range m.docs {
 		matched := true
 		all := len(query.AttrQueries)

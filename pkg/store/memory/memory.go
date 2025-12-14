@@ -18,13 +18,13 @@ package memory
 
 import (
 	"context"
+	"github.com/basenana/friday/pkg/store/types"
 	"time"
 
 	"github.com/glebarez/sqlite"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 
-	"github.com/basenana/friday/pkg/models/doc"
 	"github.com/basenana/friday/pkg/store"
 	"github.com/basenana/friday/pkg/store/db"
 	"github.com/basenana/friday/pkg/store/postgres"
@@ -72,23 +72,23 @@ func NewMemoryMetaStore() (*MemoryClient, error) {
 	}, nil
 }
 
-func (m *MemoryClient) CreateDocument(ctx context.Context, doc *doc.Document) error {
+func (m *MemoryClient) CreateDocument(ctx context.Context, doc *types.Document) error {
 	return m.dbStore.CreateDocument(ctx, doc)
 }
 
-func (m *MemoryClient) UpdateTokens(ctx context.Context, doc *doc.Document) error {
+func (m *MemoryClient) UpdateTokens(ctx context.Context, doc *types.Document) error {
 	return nil
 }
 
-func (m *MemoryClient) UpdateDocument(ctx context.Context, doc *doc.Document) error {
+func (m *MemoryClient) UpdateDocument(ctx context.Context, doc *types.Document) error {
 	return m.dbStore.UpdateDocument(ctx, doc)
 }
 
-func (m *MemoryClient) GetDocument(ctx context.Context, entryId int64) (*doc.Document, error) {
+func (m *MemoryClient) GetDocument(ctx context.Context, entryId int64) (*types.Document, error) {
 	return m.dbStore.GetDocument(ctx, entryId)
 }
 
-func (m *MemoryClient) FilterDocuments(ctx context.Context, filter *doc.DocumentFilter) ([]*doc.Document, error) {
+func (m *MemoryClient) FilterDocuments(ctx context.Context, filter *types.DocumentFilter) ([]*types.Document, error) {
 	filter.Search = ""
 	return m.dbStore.FilterDocuments(ctx, filter)
 }

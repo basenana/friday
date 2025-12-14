@@ -86,6 +86,14 @@ func newLLMRequest(systemMessage string, mem *memory.Memory, toolList []*tools.T
 		})
 	}
 
+	for _, t := range mem.Tools() {
+		toolDef = append(toolDef, openai.ToolDefine{
+			Name:        t.Name,
+			Description: t.Description,
+			Parameters:  t.JsonSchema(),
+		})
+	}
+
 	for _, t := range buildInTools {
 		toolDef = append(toolDef, t)
 	}

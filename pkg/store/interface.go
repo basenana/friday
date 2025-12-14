@@ -18,8 +18,8 @@ package store
 
 import (
 	"context"
+	"github.com/basenana/friday/pkg/store/types"
 
-	"github.com/basenana/friday/pkg/models/doc"
 	"github.com/basenana/friday/pkg/models/vector"
 )
 
@@ -30,10 +30,10 @@ type VectorStore interface {
 }
 
 type DocStoreInterface interface {
-	CreateDocument(ctx context.Context, doc *doc.Document) error
-	UpdateTokens(ctx context.Context, doc *doc.Document) error
-	UpdateDocument(ctx context.Context, doc *doc.Document) error
-	GetDocument(ctx context.Context, entryId int64) (*doc.Document, error)
-	FilterDocuments(ctx context.Context, filter *doc.DocumentFilter) ([]*doc.Document, error)
+	CreateDocument(ctx context.Context, doc *types.Document) error
+	UpdateTokens(ctx context.Context, doc *types.Document) error
+	UpdateDocument(ctx context.Context, doc *types.Document) error
+	GetDocument(ctx context.Context, entryId int64) (*types.Document, error)
+	FilterDocuments(ctx context.Context, filter *types.DocumentFilter) ([]*types.Document, error)
 	DeleteDocument(ctx context.Context, docId int64) error
 }

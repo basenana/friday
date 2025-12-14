@@ -328,10 +328,6 @@ func New(name, desc string, llm openai.Client, option Option) *Agent {
 		logger: logger.New("react").With(zap.String("name", name)),
 	}
 
-	for _, tool := range memory.ListStorageReadTools() {
-		agt.tools = append(agt.tools, tool)
-	}
-
 	return agt
 }
 

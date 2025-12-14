@@ -19,12 +19,12 @@ package postgres
 import (
 	"context"
 	"errors"
+	"github.com/basenana/friday/pkg/store/types"
 	"runtime/trace"
 
 	"gorm.io/gorm"
 
 	"github.com/basenana/friday/pkg/models"
-	"github.com/basenana/friday/pkg/models/doc"
 	"github.com/basenana/friday/pkg/store"
 	"github.com/basenana/friday/pkg/store/db"
 	"github.com/basenana/friday/pkg/store/utils"
@@ -32,7 +32,7 @@ import (
 
 var _ store.DocStoreInterface = &PostgresClient{}
 
-func (p *PostgresClient) CreateDocument(ctx context.Context, doc *doc.Document) error {
+func (p *PostgresClient) CreateDocument(ctx context.Context, doc *types.Document) error {
 	defer trace.StartRegion(ctx, "store.doc.CreateDocument").End()
 	err := p.DEntity.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		docMod := &db.Document{}
@@ -58,7 +58,7 @@ func (p *PostgresClient) CreateDocument(ctx context.Context, doc *doc.Document) 
 	return nil
 }
 
-func (p *PostgresClient) UpdateTokens(ctx context.Context, doc *doc.Document) error {
+func (p *PostgresClient) UpdateTokens(ctx context.Context, doc *types.Document) error {
 	defer trace.StartRegion(ctx, "store.doc.UpdateTokens").End()
 	err := p.DEntity.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		docMod := &db.Document{}
@@ -77,7 +77,7 @@ func (p *PostgresClient) UpdateTokens(ctx context.Context, doc *doc.Document) er
 	return nil
 }
 
-func (p *PostgresClient) UpdateDocument(ctx context.Context, doc *doc.Document) error {
+func (p *PostgresClient) UpdateDocument(ctx context.Context, doc *types.Document) error {
 	defer trace.StartRegion(ctx, "store.doc.UpdateDocument").End()
 	err := p.DEntity.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		docMod := &db.Document{}
@@ -100,7 +100,7 @@ func (p *PostgresClient) UpdateDocument(ctx context.Context, doc *doc.Document) 
 	return nil
 }
 
-func (p *PostgresClient) GetDocument(ctx context.Context, entryId int64) (*doc.Document, error) {
+func (p *PostgresClient) GetDocument(ctx context.Context, entryId int64) (*types.Document, error) {
 	defer trace.StartRegion(ctx, "store.doc.GetDocument").End()
 	doc := &db.Document{}
 	res := p.DEntity.WithNamespace(ctx).Where("oid = ?", entryId).First(doc)
@@ -110,7 +110,7 @@ func (p *PostgresClient) GetDocument(ctx context.Context, entryId int64) (*doc.D
 	return doc.To(), nil
 }
 
-func (p *PostgresClient) FilterDocuments(ctx context.Context, filter *doc.DocumentFilter) ([]*doc.Document, error) {
+func (p *PostgresClient) FilterDocuments(ctx context.Context, filter *types.DocumentFilter) ([]*types.Document, error) {
 	defer trace.StartRegion(ctx, "store.doc.FilterDocuments").End()
 	docList := make([]db.Document, 0)
 	q := p.WithNamespace(ctx)
@@ -122,7 +122,7 @@ func (p *PostgresClient) FilterDocuments(ctx context.Context, filter *doc.Docume
 		return nil, utils.SqlError2Error(res.Error)
 	}
 
-	result := make([]*doc.Document, len(docList))
+	result := make([]*types.Document, len(docList))
 	for i, doc := range docList {
 		result[i] = doc.To()
 	}
@@ -138,7 +138,7 @@ func (p *PostgresClient) DeleteDocument(ctx context.Context, entryId int64) erro
 	return utils.SqlError2Error(err)
 }
 
-func (p *PostgresClient) docQueryFilter(tx *gorm.DB, filter *doc.DocumentFilter) *gorm.DB {
+func (p *PostgresClient) docQueryFilter(tx *gorm.DB, filter *types.DocumentFilter) *gorm.DB {
 	if filter.ParentID != nil {
 		tx = tx.Where("document.parent_entry_id = ?", filter.ParentID)
 	}
@@ -174,7 +174,7 @@ func (p *PostgresClient) docQueryFilter(tx *gorm.DB, filter *doc.DocumentFilter)
 	return tx
 }
 
-func docOrder(tx *gorm.DB, order *doc.DocumentOrder) *gorm.DB {
+func docOrder(tx *gorm.DB, order *types.DocumentOrder) *gorm.DB {
 	if order != nil {
 		orderStr := order.Order.String()
 		if order.Desc {

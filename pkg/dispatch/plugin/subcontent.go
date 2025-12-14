@@ -19,11 +19,10 @@ package plugin
 import (
 	"bytes"
 	"context"
+	"github.com/basenana/friday/pkg/store/types"
 	"strings"
 
 	"github.com/PuerkitoBio/goquery"
-
-	"github.com/basenana/friday/pkg/models/doc"
 )
 
 type SubContentPlugin struct {
@@ -33,7 +32,7 @@ func (s *SubContentPlugin) Name() string {
 	return "subContent"
 }
 
-func (s *SubContentPlugin) Run(ctx context.Context, doc *doc.Document) error {
+func (s *SubContentPlugin) Run(ctx context.Context, doc *types.Document) error {
 	doc.SubContent = GenerateContentSubContent(doc.Content)
 	return nil
 }

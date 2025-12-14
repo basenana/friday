@@ -20,11 +20,11 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/basenana/friday/pkg/store/types"
 	"net/url"
 
 	"github.com/PuerkitoBio/goquery"
 
-	"github.com/basenana/friday/pkg/models/doc"
 	"github.com/basenana/friday/pkg/utils"
 )
 
@@ -35,7 +35,7 @@ func (h *HeaderImgPlugin) Name() string {
 	return "headerImg"
 }
 
-func (h *HeaderImgPlugin) Run(ctx context.Context, doc *doc.Document) error {
+func (h *HeaderImgPlugin) Run(ctx context.Context, doc *types.Document) error {
 	var headerImgUrl string
 	query, err := goquery.NewDocumentFromReader(bytes.NewReader([]byte(doc.Content)))
 	if err != nil {

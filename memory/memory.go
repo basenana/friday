@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"fmt"
+	"github.com/basenana/friday/tools"
 	"os"
 	"strconv"
 	"sync"
@@ -14,7 +15,7 @@ import (
 )
 
 const (
-	toolResultKeyPrefix = "/tool/result"
+	toolResultKeyPrefix = "tool-result"
 )
 
 var (
@@ -45,17 +46,17 @@ type Memory struct {
 	mux     sync.Mutex
 
 	sum       *summarizer
+	notebook  Notebook
 	recorders []Recorder
 
-	storage Storage
-	tokens  int64
-	logger  *zap.SugaredLogger
+	tokens int64
+	logger *zap.SugaredLogger
 }
 
 func (m *Memory) History() []types.Message {
 	m.mux.Lock()
 	defer m.mux.Unlock()
-	if m.tokens > compactThreshold {
+	if m.tokens > compactThreshold && m.notebook != nil {
 		m.logger.Warnw("history limit exceeded, try to compact", "mid", m.mid)
 		m.compactMessages()
 	}
@@ -96,8 +97,15 @@ func (m *Memory) compactMessages() {
 		}
 
 		if msg.ToolCallID != "" && msg.OriginToolContent == "" && len(msg.ToolContent) > 100 {
-			fk := fmt.Sprintf("%s/%s.txt", toolResultKeyPrefix, msg.ToolCallID)
-			_ = m.storage.Replace(context.Background(), fk, msg.ToolContent)
+			fk := fmt.Sprintf("%s-%s.note", toolResultKeyPrefix, msg.ToolCallID)
+			err := m.notebook.SaveOrUpdate(context.Background(), &Note{
+				ID:      fk,
+				Content: msg.ToolContent,
+			})
+			if err != nil {
+				m.logger.Errorw("save note for compact error", "err", err.Error())
+				continue
+			}
 
 			msg.OriginToolContent = msg.ToolContent
 			msg.ToolContent = remindMessage(fk)
@@ -157,6 +165,13 @@ func (m *Memory) updateHistoryWithAbstract(history []types.Message, abstract str
 		"beforeToken", beforToken, "afterToken", m.tokens, "mid", m.mid)
 }
 
+func (m *Memory) Tools() []*tools.Tool {
+	if m.notebook == nil {
+		return nil
+	}
+	return NotebookReadTools(m.notebook)
+}
+
 func (m *Memory) Copy() *Memory {
 	m.mux.Lock()
 	defer m.mux.Unlock()
@@ -164,11 +179,11 @@ func (m *Memory) Copy() *Memory {
 	m.copyTimes += 1
 	mid := fmt.Sprintf("%s.%d", m.mid, m.copyTimes)
 	nm := Memory{
-		mid:     mid,
-		history: make([]types.Message, len(m.history)),
-		storage: m.storage,
-		tokens:  m.tokens,
-		logger:  m.logger,
+		mid:      mid,
+		history:  make([]types.Message, len(m.history)),
+		notebook: m.notebook,
+		tokens:   m.tokens,
+		logger:   m.logger,
 	}
 	for i, msg := range m.history {
 		nm.history[i] = msg
@@ -182,7 +197,6 @@ func NewEmpty(uid string, setters ...OptionSetter) *Memory {
 	mem := &Memory{
 		mid:     uid,
 		history: make([]types.Message, 0, 10),
-		storage: newInMemoryStorage(),
 		logger:  logger.New("memory"),
 	}
 
@@ -197,6 +211,12 @@ func WithSummarize(llmCli openai.Client) OptionSetter {
 		if llmCli != nil {
 			m.sum = newSummarize(llmCli, m.updateHistoryWithAbstract)
 		}
+	}
+}
+
+func WithNotebook(notebook Notebook) OptionSetter {
+	return func(m *Memory) {
+		m.notebook = notebook
 	}
 }
 

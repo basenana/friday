@@ -18,13 +18,12 @@ package api
 
 import (
 	"fmt"
+	"github.com/basenana/friday/pkg/store/types"
 	"time"
-
-	"github.com/basenana/friday/pkg/models/doc"
 )
 
 type DocRequest struct {
-	doc.Document
+	types.Document
 }
 
 func (r *DocRequest) Valid() error {
@@ -64,8 +63,8 @@ func (r *DocUpdateRequest) IsUpdateToken() bool {
 	return r.UpdateToken != nil && *r.UpdateToken
 }
 
-func (r *DocUpdateRequest) ToModel() *doc.Document {
-	return &doc.Document{
+func (r *DocUpdateRequest) ToModel() *types.Document {
+	return &types.Document{
 		EntryId:       r.EntryId,
 		Namespace:     r.Namespace,
 		ParentEntryID: r.ParentID,
@@ -96,8 +95,8 @@ type DocQuery struct {
 	Desc     bool  `json:"desc,omitempty"`
 }
 
-func (q *DocQuery) ToModel() *doc.DocumentFilter {
-	return &doc.DocumentFilter{
+func (q *DocQuery) ToModel() *types.DocumentFilter {
+	return &types.DocumentFilter{
 		Namespace:      q.Namespace,
 		Search:         q.Search,
 		FuzzyName:      q.FuzzyName,
@@ -111,8 +110,8 @@ func (q *DocQuery) ToModel() *doc.DocumentFilter {
 		ChangedAtEnd:   q.ChangedAtEnd,
 		Page:           q.Page,
 		PageSize:       q.PageSize,
-		Order: doc.DocumentOrder{
-			Order: doc.DocOrder(q.Sort),
+		Order: types.DocumentOrder{
+			Order: types.DocOrder(q.Sort),
 			Desc:  q.Desc,
 		},
 	}

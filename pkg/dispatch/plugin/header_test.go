@@ -18,21 +18,20 @@ package plugin
 
 import (
 	"context"
+	"github.com/basenana/friday/pkg/store/types"
 	"testing"
-
-	"github.com/basenana/friday/pkg/models/doc"
 )
 
 func TestHeaderImgPlugin_Run(t *testing.T) {
 	tests := []struct {
 		name          string
-		document      *doc.Document
+		document      *types.Document
 		wantErr       bool
 		wantHeaderImg string
 	}{
 		{
 			name: "test-relative-address",
-			document: &doc.Document{
+			document: &types.Document{
 				WebUrl:  "https://blog.abc/123",
 				Content: "<p><img src=\"media/123.png\" alt=\"\" /></p>",
 			},
@@ -41,7 +40,7 @@ func TestHeaderImgPlugin_Run(t *testing.T) {
 		},
 		{
 			name: "test-normal",
-			document: &doc.Document{
+			document: &types.Document{
 				WebUrl:  "https://blog.abc",
 				Content: "<p><img src=\"https://def/123.png\" /></p>",
 			},

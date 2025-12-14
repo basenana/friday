@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/basenana/friday/pkg/store/types"
 	"strings"
 	"time"
 
@@ -28,7 +29,6 @@ import (
 
 	"github.com/basenana/friday/config"
 	"github.com/basenana/friday/pkg/models"
-	"github.com/basenana/friday/pkg/models/doc"
 	"github.com/basenana/friday/pkg/store"
 	"github.com/basenana/friday/pkg/utils"
 	"github.com/basenana/friday/pkg/utils/logger"
@@ -67,7 +67,7 @@ func NewMeiliClient(conf config.Config) (store.DocStoreInterface, error) {
 }
 
 func (c *Client) init() error {
-	testDoc := (&doc.Document{}).NewTest()
+	testDoc := (&types.Document{}).NewTest()
 	// doc index
 	if err := c.initIndex(c.docIndex, DocFilterableAttrs, DocSortAttrs, func() error {
 		return c.CreateDocument(context.TODO(), testDoc)
@@ -127,7 +127,7 @@ func (c *Client) initIndex(index meilisearch.IndexManager, filterableAttrs, sort
 	return nil
 }
 
-func (c *Client) CreateDocument(ctx context.Context, doc *doc.Document) error {
+func (c *Client) CreateDocument(ctx context.Context, doc *types.Document) error {
 	newDoc := (&Document{}).FromModel(doc)
 	c.log.Debugf("store entryId %s", newDoc.EntryId)
 	task, err := c.docIndex.AddDocuments(newDoc, "id")
@@ -155,11 +155,11 @@ func (c *Client) CreateDocument(ctx context.Context, doc *doc.Document) error {
 	return nil
 }
 
-func (c *Client) UpdateTokens(ctx context.Context, doc *doc.Document) error {
+func (c *Client) UpdateTokens(ctx context.Context, doc *types.Document) error {
 	return nil
 }
 
-func (c *Client) UpdateDocument(ctx context.Context, doc *doc.Document) error {
+func (c *Client) UpdateDocument(ctx context.Context, doc *types.Document) error {
 	// delete document attr
 	newAttrsQuery := (&DocumentAttrQuery{}).FromModel(doc)
 	c.log.Debugf("delete document attrs: %s", newAttrsQuery.String())
@@ -192,7 +192,7 @@ func (c *Client) UpdateDocument(ctx context.Context, doc *doc.Document) error {
 	return nil
 }
 
-func (c *Client) GetDocument(ctx context.Context, entryId int64) (*doc.Document, error) {
+func (c *Client) GetDocument(ctx context.Context, entryId int64) (*types.Document, error) {
 	namespace := models.GetNamespace(ctx)
 	query := (&DocumentQuery{}).OfEntryId(namespace.String(), entryId)
 	c.log.Debugf("get document by entryId: %d", entryId)
@@ -232,7 +232,7 @@ func (c *Client) GetDocument(ctx context.Context, entryId int64) (*doc.Document,
 	return document.ToModel(attrs), nil
 }
 
-func (c *Client) FilterDocuments(ctx context.Context, filter *doc.DocumentFilter) ([]*doc.Document, error) {
+func (c *Client) FilterDocuments(ctx context.Context, filter *types.DocumentFilter) ([]*types.Document, error) {
 	query := (&DocumentQuery{}).FromModel(filter)
 	if filter.ParentID != nil || filter.Unread != nil || filter.Marked != nil {
 		entryIds := make([]string, 0)
@@ -274,7 +274,7 @@ func (c *Client) FilterDocuments(ctx context.Context, filter *doc.DocumentFilter
 	}
 	c.log.Debugf("query document attr : [%s]", query.String())
 
-	documents := make([]*doc.Document, 0)
+	documents := make([]*types.Document, 0)
 	for _, hit := range rep.Hits {
 		b, _ := json.Marshal(hit)
 		document := &Document{}

@@ -18,6 +18,7 @@ package api
 
 import (
 	"fmt"
+	"github.com/basenana/friday/pkg/store/types"
 	"strconv"
 	"strings"
 	"time"
@@ -25,7 +26,6 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/basenana/friday/pkg/models"
-	"github.com/basenana/friday/pkg/models/doc"
 	"github.com/basenana/friday/pkg/utils"
 )
 
@@ -129,7 +129,7 @@ func (s *HttpServer) filter() gin.HandlerFunc {
 	}
 }
 
-func getFilterQuery(c *gin.Context) *doc.DocumentFilter {
+func getFilterQuery(c *gin.Context) *types.DocumentFilter {
 	namespace := c.Param("namespace")
 	page, err := strconv.Atoi(c.DefaultQuery("page", "1"))
 	if err != nil {
@@ -147,15 +147,15 @@ func getFilterQuery(c *gin.Context) *doc.DocumentFilter {
 		c.String(400, fmt.Sprintf("invalid sort: %s", c.Query("page")))
 		return nil
 	}
-	docQuery := &doc.DocumentFilter{
+	docQuery := &types.DocumentFilter{
 		Namespace: namespace,
 		Search:    strings.ReplaceAll(c.Query("search"), " ", ""),
 		FuzzyName: c.Query("fuzzyName"),
 		Source:    c.Query("source"),
 		Page:      int64(page),
 		PageSize:  int64(pageSize),
-		Order: doc.DocumentOrder{
-			Order: doc.DocOrder(sort),
+		Order: types.DocumentOrder{
+			Order: types.DocOrder(sort),
 			Desc:  c.Query("desc") == "true",
 		},
 	}

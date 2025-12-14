@@ -19,6 +19,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"github.com/basenana/friday/pkg/store/types"
 	"regexp"
 	"unicode/utf8"
 
@@ -28,7 +29,6 @@ import (
 	"github.com/basenana/friday/pkg/dispatch"
 	"github.com/basenana/friday/pkg/dispatch/plugin"
 	"github.com/basenana/friday/pkg/models"
-	"github.com/basenana/friday/pkg/models/doc"
 	"github.com/basenana/friday/pkg/store"
 	"github.com/basenana/friday/pkg/store/meili"
 	"github.com/basenana/friday/pkg/store/postgres"
@@ -76,7 +76,7 @@ func NewChain(conf config.Config) (*Chain, error) {
 	}, nil
 }
 
-func (c *Chain) CreateDocument(ctx context.Context, document *doc.Document) error {
+func (c *Chain) CreateDocument(ctx context.Context, document *types.Document) error {
 	return ChainPool.Run(ctx, func(ctx context.Context) error {
 		ctx = c.WithNamespace(ctx, document.Namespace)
 		c.Log.Debugf("create document od entryId: %d", document.EntryId)
@@ -108,7 +108,7 @@ func (c *Chain) UpdateTokens(ctx context.Context, namespace string, entryId int6
 		ctx = c.WithNamespace(ctx, namespace)
 		c.Log.Debugf("update document tokens entryId: %d", entryId)
 		var (
-			document *doc.Document
+			document *types.Document
 			err      error
 		)
 		if document, err = c.GetDocument(ctx, namespace, entryId); err != nil {
@@ -130,7 +130,7 @@ func (c *Chain) UpdateTokens(ctx context.Context, namespace string, entryId int6
 	})
 }
 
-func (c *Chain) UpdateDocument(ctx context.Context, document *doc.Document) error {
+func (c *Chain) UpdateDocument(ctx context.Context, document *types.Document) error {
 	return ChainPool.Run(ctx, func(ctx context.Context) error {
 		ctx = c.WithNamespace(ctx, document.Namespace)
 		c.Log.Debugf("update document of entryId: %d", document.EntryId)
@@ -138,7 +138,7 @@ func (c *Chain) UpdateDocument(ctx context.Context, document *doc.Document) erro
 	})
 }
 
-func (c *Chain) GetDocument(ctx context.Context, namespace string, entryId int64) (*doc.Document, error) {
+func (c *Chain) GetDocument(ctx context.Context, namespace string, entryId int64) (*types.Document, error) {
 	c.Log.Debugf("get document: namespace=%s, entryId=%d", namespace, entryId)
 	ctx = c.WithNamespace(ctx, namespace)
 	doc, err := c.DocClient.GetDocument(ctx, entryId)
@@ -153,7 +153,7 @@ func (c *Chain) GetDocument(ctx context.Context, namespace string, entryId int64
 	return doc, nil
 }
 
-func (c *Chain) Search(ctx context.Context, filter *doc.DocumentFilter) ([]*doc.Document, error) {
+func (c *Chain) Search(ctx context.Context, filter *types.DocumentFilter) ([]*types.Document, error) {
 	ctx = c.WithNamespace(ctx, filter.Namespace)
 	c.Log.Debugf("search document: %+v", filter.String())
 	docs, err := c.DocClient.FilterDocuments(ctx, filter)
@@ -167,7 +167,7 @@ func (c *Chain) Search(ctx context.Context, filter *doc.DocumentFilter) ([]*doc.
 	return docs, nil
 }
 
-func (c *Chain) GenContext(search string, document *doc.Document) {
+func (c *Chain) GenContext(search string, document *types.Document) {
 	if search == "" {
 		return
 	}

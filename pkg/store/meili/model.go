@@ -19,13 +19,13 @@ package meili
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/basenana/friday/pkg/store/types"
 	"strconv"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/meilisearch/meilisearch-go"
 
-	"github.com/basenana/friday/pkg/models/doc"
 	"github.com/basenana/friday/pkg/utils"
 )
 
@@ -77,7 +77,7 @@ func (d *Document) String() string {
 	return fmt.Sprintf("EntryId(%s) %s", d.EntryId, d.Name)
 }
 
-func (d *Document) FromModel(doc *doc.Document) *Document {
+func (d *Document) FromModel(doc *types.Document) *Document {
 	d.Id = uuid.New().String()
 	d.Kind = "document"
 	d.Namespace = doc.Namespace
@@ -94,9 +94,9 @@ func (d *Document) FromModel(doc *doc.Document) *Document {
 	return d
 }
 
-func (d *Document) ToModel(attrs []*DocumentAttr) *doc.Document {
+func (d *Document) ToModel(attrs []*DocumentAttr) *types.Document {
 	entryId, _ := strconv.Atoi(d.EntryId)
-	m := &doc.Document{
+	m := &types.Document{
 		EntryId:       int64(entryId),
 		Name:          d.Name,
 		Namespace:     d.Namespace,
@@ -188,7 +188,7 @@ func (d *DocumentAttrList) String() string {
 	return result
 }
 
-func (d *DocumentAttrList) FromModel(doc *doc.Document) *DocumentAttrList {
+func (d *DocumentAttrList) FromModel(doc *types.Document) *DocumentAttrList {
 	attrs := make([]*DocumentAttr, 0)
 	if doc.ParentEntryID != nil {
 		attrs = append(attrs, &DocumentAttr{
@@ -263,18 +263,18 @@ func (q *DocumentQuery) OfEntryId(namespace string, entryId int64) *DocumentQuer
 	}
 }
 
-func (q *DocumentQuery) FromModel(query *doc.DocumentFilter) *DocumentQuery {
+func (q *DocumentQuery) FromModel(query *types.DocumentFilter) *DocumentQuery {
 	q.Search = query.Search
 	q.HitsPerPage = query.PageSize
 	q.Page = query.Page
 	q.Sort = []Sort{}
-	if query.Order.Order == doc.Name {
+	if query.Order.Order == types.Name {
 		q.Sort = append(q.Sort, Sort{
 			Attr: "name",
 			Asc:  !query.Order.Desc,
 		})
 	}
-	if query.Order.Order == doc.CreatedAt {
+	if query.Order.Order == types.CreatedAt {
 		q.Sort = append(q.Sort, Sort{
 			Attr: "createdAt",
 			Asc:  !query.Order.Desc,
@@ -361,7 +361,7 @@ func (q *DocumentAttrQuery) String() string {
 	return result
 }
 
-func (q *DocumentAttrQuery) FromModel(doc *doc.Document) *DocumentAttrQuery {
+func (q *DocumentAttrQuery) FromModel(doc *types.Document) *DocumentAttrQuery {
 	q.AttrQueries = []*AttrQuery{{
 		Attr:   "kind",
 		Option: "=",
@@ -439,7 +439,7 @@ func (q *DocumentAttrQuery) ToFilter() interface{} {
 
 type DocumentAttrQueries []*DocumentAttrQuery
 
-func (q *DocumentAttrQueries) FromFilter(query *doc.DocumentFilter) *DocumentAttrQueries {
+func (q *DocumentAttrQueries) FromFilter(query *types.DocumentFilter) *DocumentAttrQueries {
 	attrQueries := make([]*DocumentAttrQuery, 0)
 	if query.ParentID != nil {
 		attrQueries = append(attrQueries, &DocumentAttrQuery{

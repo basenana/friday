@@ -18,6 +18,7 @@ package service_test
 
 import (
 	"context"
+	"github.com/basenana/friday/pkg/store/types"
 	"strings"
 	"time"
 
@@ -27,7 +28,6 @@ import (
 	"github.com/basenana/friday/pkg/dispatch"
 	"github.com/basenana/friday/pkg/dispatch/plugin"
 	_ "github.com/basenana/friday/pkg/dispatch/plugin"
-	"github.com/basenana/friday/pkg/models/doc"
 	"github.com/basenana/friday/pkg/service"
 	"github.com/basenana/friday/pkg/store/memory"
 	"github.com/basenana/friday/pkg/utils/logger"
@@ -41,9 +41,9 @@ var _ = Describe("Chain", func() {
 		entryId11 = int64(11)
 		entryId12 = int64(12)
 		entryId21 = int64(21)
-		doc11     *doc.Document
-		doc12     *doc.Document
-		doc21     *doc.Document
+		doc11     *types.Document
+		doc12     *types.Document
+		doc21     *types.Document
 		t         = time.Date(2024, time.January, 1, 0, 0, 0, 0, time.UTC)
 	)
 
@@ -60,7 +60,7 @@ var _ = Describe("Chain", func() {
 		for _, p := range plugin.DefaultRegisterer.Chains {
 			Chain.Plugins = append(Chain.Plugins, p)
 		}
-		doc11 = &doc.Document{
+		doc11 = &types.Document{
 			Namespace:     "test-ns",
 			EntryId:       entryId11,
 			ParentEntryID: &parentId1,
@@ -69,7 +69,7 @@ var _ = Describe("Chain", func() {
 			CreatedAt:     t,
 			ChangedAt:     t,
 		}
-		doc12 = &doc.Document{
+		doc12 = &types.Document{
 			Namespace:     "test-ns",
 			EntryId:       entryId12,
 			ParentEntryID: &parentId1,
@@ -78,7 +78,7 @@ var _ = Describe("Chain", func() {
 			CreatedAt:     t,
 			ChangedAt:     t,
 		}
-		doc21 = &doc.Document{
+		doc21 = &types.Document{
 			Namespace:     "test-ns",
 			EntryId:       entryId21,
 			ParentEntryID: &parentId2,
@@ -98,17 +98,17 @@ var _ = Describe("Chain", func() {
 	Describe("documents", func() {
 		Context("store document ", func() {
 			It("store document should be successful", func() {
-				err := Chain.CreateDocument(context.TODO(), &doc.Document{EntryId: int64(30)})
+				err := Chain.CreateDocument(context.TODO(), &types.Document{EntryId: int64(30)})
 				Expect(err).Should(BeNil())
 			})
 			It("store document attr should be successful", func() {
-				err := Chain.CreateDocument(context.TODO(), &doc.Document{EntryId: int64(31)})
+				err := Chain.CreateDocument(context.TODO(), &types.Document{EntryId: int64(31)})
 				Expect(err).Should(BeNil())
 			})
 		})
 		Context("search document", func() {
 			It("search document should be successful", func() {
-				docs, err := Chain.Search(context.TODO(), &doc.DocumentFilter{
+				docs, err := Chain.Search(context.TODO(), &types.DocumentFilter{
 					Search:    "test",
 					Namespace: "test-ns",
 				})
@@ -116,7 +116,7 @@ var _ = Describe("Chain", func() {
 				Expect(docs).Should(HaveLen(3))
 			})
 			It("search document with attr should be successful", func() {
-				docs, err := Chain.Search(context.TODO(), &doc.DocumentFilter{
+				docs, err := Chain.Search(context.TODO(), &types.DocumentFilter{
 					Search:    "test",
 					Namespace: "test-ns",
 					ParentID:  &parentId1,
@@ -127,7 +127,7 @@ var _ = Describe("Chain", func() {
 		})
 		Context("plugin should work", func() {
 			It("header plugin should work", func() {
-				doc3 := &doc.Document{
+				doc3 := &types.Document{
 					Namespace: "test-ns",
 					EntryId:   int64(100),
 					Name:      "test-name-100",
@@ -142,7 +142,7 @@ var _ = Describe("Chain", func() {
 		})
 		Context("delete document", func() {
 			It("delete document by filter should be successful", func() {
-				err := Chain.CreateDocument(context.TODO(), &doc.Document{
+				err := Chain.CreateDocument(context.TODO(), &types.Document{
 					Namespace: "test-ns",
 					EntryId:   int64(40),
 					Name:      "test-name-40",
@@ -173,7 +173,7 @@ var _ = Describe("Search Context", func() {
 	Describe("GenContext", func() {
 		Context("GenContext", func() {
 			It("GenContext should be successful", func() {
-				document := &doc.Document{
+				document := &types.Document{
 					EntryId:     1,
 					PureContent: strings.Repeat("friday", 100) + strings.Repeat("Nanafs", 2) + strings.Repeat("basenana", 100) + "nanafs" + strings.Repeat("friday", 100),
 				}

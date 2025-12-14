@@ -20,10 +20,10 @@ import (
 	"database/sql/driver"
 	"encoding/json"
 	"fmt"
+	"github.com/basenana/friday/pkg/store/types"
 	"strings"
 	"time"
 
-	"github.com/basenana/friday/pkg/models/doc"
 	"github.com/basenana/friday/pkg/models/vector"
 )
 
@@ -163,7 +163,7 @@ func (d *Document) TableName() string {
 	return "document"
 }
 
-func (d *Document) From(document *doc.Document) *Document {
+func (d *Document) From(document *types.Document) *Document {
 	d.ID = document.EntryId
 	d.OID = document.EntryId
 	d.Name = document.Name
@@ -186,7 +186,7 @@ func (d *Document) From(document *doc.Document) *Document {
 	return d
 }
 
-func (d *Document) Tokens(document *doc.Document) *Document {
+func (d *Document) Tokens(document *types.Document) *Document {
 	d.Token = TsVector(
 		fmt.Sprintf("setweight(to_tsvector('simple', '%s'), 'A') || setweight(to_tsvector('simple', '%s'), 'B')",
 			strings.Join(document.TitleTokens, " "),
@@ -196,7 +196,7 @@ func (d *Document) Tokens(document *doc.Document) *Document {
 	return d
 }
 
-func (d *Document) UpdateFrom(document *doc.Document) *Document {
+func (d *Document) UpdateFrom(document *types.Document) *Document {
 	if document.Unread != nil {
 		d.Unread = *document.Unread
 	}
@@ -212,8 +212,8 @@ func (d *Document) UpdateFrom(document *doc.Document) *Document {
 	return d
 }
 
-func (d *Document) To() *doc.Document {
-	result := &doc.Document{
+func (d *Document) To() *types.Document {
+	result := &types.Document{
 		EntryId:       d.OID,
 		Name:          d.Name,
 		Namespace:     d.Namespace,

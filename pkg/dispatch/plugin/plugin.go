@@ -18,13 +18,12 @@ package plugin
 
 import (
 	"context"
-
-	"github.com/basenana/friday/pkg/models/doc"
+	"github.com/basenana/friday/pkg/store/types"
 )
 
 type ChainPlugin interface {
 	Name() string
-	Run(ctx context.Context, doc *doc.Document) error
+	Run(ctx context.Context, doc *types.Document) error
 }
 
 type ChainRegistry struct {

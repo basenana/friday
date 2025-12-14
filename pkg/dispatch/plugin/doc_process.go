@@ -20,12 +20,11 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/basenana/friday/pkg/store/types"
 	"strings"
 
 	"github.com/PuerkitoBio/goquery"
 	"github.com/hyponet/jiebago"
-
-	"github.com/basenana/friday/pkg/models/doc"
 )
 
 type DocProcessPlugin struct {
@@ -46,7 +45,7 @@ func (s *DocProcessPlugin) Name() string {
 	return "docProcess"
 }
 
-func (s *DocProcessPlugin) Run(ctx context.Context, doc *doc.Document) error {
+func (s *DocProcessPlugin) Run(ctx context.Context, doc *types.Document) error {
 	var err error
 	// html analysis
 	doc.PureContent, err = trimContent(doc.Content)
