@@ -12,13 +12,14 @@ import (
 type Notebook interface {
 	ListNotes(ctx context.Context) ([]*Note, error)
 	GetNote(ctx context.Context, id string) (*Note, error)
-	SaveOrUpdate(ctx context.Context, note *Note) error
+	SaveOrUpdate(ctx context.Context, note *Note) (*Note, error)
 }
 
 type Note struct {
-	ID       string `json:"id"`
-	Describe string `json:"describe,omitempty"`
-	Content  string `json:"content,omitempty"`
+	ID    string `json:"id"`
+	Title string `json:"title"`
+
+	Content string `json:"content,omitempty"`
 }
 
 func NotebookReadTools(nb Notebook) []*tools.Tool {
@@ -64,23 +65,31 @@ func NotebookWriteTools(nb Notebook) []*tools.Tool {
 	return []*tools.Tool{
 		tools.NewTool("create_note_to_notebook",
 			tools.WithDescription("Save the data to the notebook for future access."),
+			tools.WithString("title",
+				tools.Required(),
+				tools.Description("The title of the note, convenient for subsequent quick lookup, DO NOT exceed 10 words."),
+			),
 			tools.WithString("content",
 				tools.Required(),
 				tools.Description("Note content that needs to be saved"),
 			),
 			tools.WithToolHandler(func(ctx context.Context, request *tools.Request) (*tools.Result, error) {
+				title, ok := request.Arguments["title"].(string)
+				if !ok {
+					return nil, fmt.Errorf("missing required parameter: title")
+				}
 				content, ok := request.Arguments["content"].(string)
 				if !ok {
 					return nil, fmt.Errorf("missing required parameter: content")
 				}
 
-				n := &Note{ID: "", Describe: "", Content: content}
-				err := nb.SaveOrUpdate(ctx, n)
+				n := &Note{ID: "", Title: title, Content: content}
+				n, err := nb.SaveOrUpdate(ctx, n)
 				if err != nil {
 					return tools.NewToolResultError(err.Error()), nil
 				}
 
-				return tools.NewToolResultText("ok"), nil
+				return tools.NewToolResultText(fmt.Sprintf("note %s saved", n.ID)), nil
 			}),
 		),
 	}
@@ -121,12 +130,12 @@ func (m *inMemoryNotebook) GetNote(ctx context.Context, id string) (*Note, error
 	return note, nil
 }
 
-func (m *inMemoryNotebook) SaveOrUpdate(ctx context.Context, note *Note) error {
+func (m *inMemoryNotebook) SaveOrUpdate(ctx context.Context, note *Note) (*Note, error) {
 	if note.ID == "" {
 		note.ID = uuid.New().String()
 	}
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
 	m.records[note.ID] = note
-	return nil
+	return note, nil
 }
