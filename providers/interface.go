@@ -14,10 +14,11 @@
  * limitations under the License.
  */
 
-package embedding
+package providers
 
 import (
 	"context"
+
 	"github.com/basenana/friday/providers/openai"
 )
 

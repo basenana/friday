@@ -13,6 +13,8 @@ type Message struct {
 	ToolArguments     string `json:"tool_arguments,omitempty"`
 	ToolContent       string `json:"tool_content,omitempty"`
 	OriginToolContent string `json:"origin_tool_content,omitempty"`
+
+	Time string `json:"time,omitempty"`
 }
 
 func (m Message) FuzzyTokens() int64 {

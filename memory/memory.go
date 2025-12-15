@@ -3,19 +3,16 @@ package memory
 import (
 	"context"
 	"fmt"
-	"github.com/basenana/friday/tools"
 	"os"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/basenana/friday/providers/openai"
+	"github.com/basenana/friday/tools"
 	"github.com/basenana/friday/types"
 	"github.com/basenana/friday/utils/logger"
 	"go.uber.org/zap"
-)
-
-const (
-	toolResultKeyPrefix = "tool-result"
 )
 
 var (
@@ -68,7 +65,11 @@ func (m *Memory) History() []types.Message {
 func (m *Memory) AppendMessages(messages ...types.Message) {
 	m.mux.Lock()
 	defer m.mux.Unlock()
+	nowAt := time.Now().Format(time.RFC3339)
 	for _, message := range messages {
+		if message.Time == "" {
+			message.Time = nowAt
+		}
 		for _, record := range m.recorders {
 			record.Record(message)
 		}
@@ -165,10 +166,10 @@ func (m *Memory) updateHistoryWithAbstract(history []types.Message, abstract str
 }
 
 func (m *Memory) Tools() []*tools.Tool {
-	if m.notebook == nil {
-		return nil
+	if m.notebook != nil {
+		return m.notebook.ReadTools()
 	}
-	return NotebookReadTools(m.notebook)
+	return nil
 }
 
 func (m *Memory) Copy() *Memory {
@@ -219,9 +220,9 @@ func WithNotebook(notebook Notebook) OptionSetter {
 	}
 }
 
-func WithRecorders(recorders []Recorder) OptionSetter {
+func WithRecorders(recorders ...Recorder) OptionSetter {
 	return func(m *Memory) {
-		m.recorders = recorders
+		m.recorders = append(m.recorders, recorders...)
 	}
 }
 
