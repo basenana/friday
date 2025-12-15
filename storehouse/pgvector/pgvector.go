@@ -147,7 +147,7 @@ func (p *DB) Filter(ctx context.Context, chunkType string, metadata map[string]s
 		tx = tx.Where("type = ?", chunkType)
 	}
 	for key, value := range metadata {
-		tx = tx.Where(fmt.Sprintf("chunk.metadata ->> '%s' = ?", key), value)
+		tx = tx.Where(fmt.Sprintf("friday_chunks.metadata ->> '%s' = ?", key), value)
 	}
 	err := tx.Find(&models).Error
 	if err != nil {
