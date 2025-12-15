@@ -72,11 +72,18 @@ func New(postgresUrl string, embedding providers.Embedding) (*DB, error) {
 }
 
 func (p *DB) Save(ctx context.Context, chunks ...*storehouse.Chunk) ([]*storehouse.Chunk, error) {
+	var err error
 	for _, chunk := range chunks {
 		defaultChunkSetup(chunk)
+		if len(chunk.Vector) == 0 {
+			chunk.Vector, err = p.embedding.Vectorization(ctx, chunk.Content)
+			if err != nil {
+				return nil, err
+			}
+		}
 	}
 
-	err := p.dEntity.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	err = p.dEntity.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 
 		for _, chunk := range chunks {
 			model := &ChunkModel{}

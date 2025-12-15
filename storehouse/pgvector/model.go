@@ -34,7 +34,7 @@ type ChunkModel struct {
 	Type      string `gorm:"column:type;index:ck_type"`
 	Metadata  JSON   `gorm:"column:metadata"`
 	Content   string `gorm:"column:content"`
-	Vector    string `gorm:"column:vector;type:vector(1536)"`
+	Vector    string `gorm:"column:vector;type:vector"`
 	CreatedAt int64  `gorm:"column:created_at"`
 	ChangedAt int64  `gorm:"column:changed_at"`
 }
@@ -64,8 +64,8 @@ func (v *ChunkModel) To() *storehouse.Chunk {
 		Vector:   make([]float64, 0),
 	}
 
-	jsonData(string(v.Metadata), ck.Metadata)
-	jsonData(v.Vector, ck.Vector)
+	jsonData(string(v.Metadata), &ck.Metadata)
+	jsonData(v.Vector, &ck.Vector)
 	return ck
 }
 
