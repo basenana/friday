@@ -17,7 +17,7 @@ import (
 
 var (
 	compactThreshold  int64 = 100 * 1000
-	abstractThreshold int64 = 150 * 1000
+	abstractThreshold int64 = 110 * 1000
 )
 
 func init() {
@@ -208,8 +208,12 @@ func NewEmpty(uid string, setters ...OptionSetter) *Memory {
 
 func WithSummarize(llmCli openai.Client) OptionSetter {
 	return func(m *Memory) {
-		if llmCli != nil {
-			m.sum = newSummarize(llmCli, m.updateHistoryWithAbstract)
+		if llmCli == nil {
+			return
+		}
+		m.sum = newSummarize(llmCli, m.updateHistoryWithAbstract)
+		if m.notebook == nil {
+			m.notebook = NewInMemoryNotebook()
 		}
 	}
 }
