@@ -125,7 +125,7 @@ func (p *DB) Get(ctx context.Context, id string) (*storehouse.Chunk, error) {
 	err := p.dEntity.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var res *gorm.DB
 		res = tx.Where("id = ?", id).First(vModel)
-		if res.Error != nil && !errors.Is(res.Error, gorm.ErrRecordNotFound) {
+		if res.Error != nil {
 			return res.Error
 		}
 		return nil
@@ -134,7 +134,23 @@ func (p *DB) Get(ctx context.Context, id string) (*storehouse.Chunk, error) {
 	if err != nil {
 		return nil, err
 	}
-	return vModel.To(), err
+	return vModel.To(), nil
+}
+
+func (p *DB) Delete(ctx context.Context, id string) error {
+	err := p.dEntity.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var res *gorm.DB
+		res = tx.Where("id = ?", id).Delete(&ChunkModel{})
+		if res.Error != nil && !errors.Is(res.Error, gorm.ErrRecordNotFound) {
+			return res.Error
+		}
+		return nil
+	})
+
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func (p *DB) Filter(ctx context.Context, chunkType string, metadata map[string]string) ([]*storehouse.Chunk, error) {

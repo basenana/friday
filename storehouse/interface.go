@@ -9,6 +9,7 @@ import (
 type Sotrehouse interface {
 	Save(ctx context.Context, chunks ...*Chunk) ([]*Chunk, error)
 	Get(ctx context.Context, id string) (*Chunk, error)
+	Delete(ctx context.Context, id string) error
 	Filter(ctx context.Context, chunkType string, metadata map[string]string) ([]*Chunk, error)
 	SearchTools() []*tools.Tool
 }
