@@ -195,8 +195,13 @@ func (c *client) chatCompletionNewParams(request Request) *openai.ChatCompletion
 			)
 
 		case msg.ToolContent != "":
+			toolContent := msg.ToolContent
+			if msg.SimplifiedToolContent != "" {
+				toolContent = msg.SimplifiedToolContent
+			}
+
 			p.Messages = append(p.Messages,
-				openai.ToolMessage(msg.ToolContent, msg.ToolCallID),
+				openai.ToolMessage(toolContent, msg.ToolCallID),
 			)
 		case msg.ImageURL != "":
 			p.Messages = append(p.Messages,

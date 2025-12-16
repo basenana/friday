@@ -4,11 +4,10 @@ import (
 	"bytes"
 	"fmt"
 
-	"github.com/basenana/friday/storehouse"
 	"github.com/basenana/friday/types"
 )
 
-func SplitMessages(chunkType string, metadata map[string]string, messages []types.Message, config SplitConfig) []*storehouse.Chunk {
+func SplitMessages(chunkType string, metadata map[string]string, messages []types.Message, config SplitConfig) []*types.Chunk {
 	history := covertHistoryMessage2Text(messages)
 	return SplitTextContent(chunkType, metadata, history, config)
 }

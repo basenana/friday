@@ -4,9 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/basenana/friday/types"
 	"time"
 
-	"github.com/basenana/friday/storehouse"
 	"github.com/basenana/friday/utils/logger"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
@@ -27,7 +27,7 @@ func newChunkID() string {
 	return uuid.New().String()
 }
 
-func defaultChunkSetup(chunk *storehouse.Chunk) {
+func defaultChunkSetup(chunk *types.Chunk) {
 	if chunk.Type == "" {
 		chunk.Type = "default"
 	}

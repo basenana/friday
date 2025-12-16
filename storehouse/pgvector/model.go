@@ -21,12 +21,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/basenana/friday/types"
 	"time"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/schema"
-
-	"github.com/basenana/friday/storehouse"
 )
 
 type ChunkModel struct {
@@ -43,7 +42,7 @@ func (v *ChunkModel) TableName() string {
 	return "friday_chunks"
 }
 
-func (v *ChunkModel) From(ck *storehouse.Chunk) {
+func (v *ChunkModel) From(ck *types.Chunk) {
 	v.ID = ck.ID
 	v.Type = ck.Type
 	v.Metadata, _ = json.Marshal(ck.Metadata)
@@ -55,8 +54,8 @@ func (v *ChunkModel) From(ck *storehouse.Chunk) {
 	}
 }
 
-func (v *ChunkModel) To() *storehouse.Chunk {
-	ck := &storehouse.Chunk{
+func (v *ChunkModel) To() *types.Chunk {
+	ck := &types.Chunk{
 		ID:       v.ID,
 		Type:     v.Type,
 		Metadata: make(map[string]string),

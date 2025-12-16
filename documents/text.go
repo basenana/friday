@@ -2,9 +2,9 @@ package documents
 
 import (
 	"fmt"
+	"github.com/basenana/friday/types"
 	"strings"
 
-	"github.com/basenana/friday/storehouse"
 	"github.com/basenana/friday/utils"
 	"github.com/basenana/friday/utils/logger"
 	"go.uber.org/zap"
@@ -95,9 +95,9 @@ func (t *TextSpliter) join(docs []string) string {
 	return strings.TrimSpace(strings.Join(docs, t.separator))
 }
 
-func SplitTextContent(chunkType string, metadata map[string]string, content string, config SplitConfig) []*storehouse.Chunk {
+func SplitTextContent(chunkType string, metadata map[string]string, content string, config SplitConfig) []*types.Chunk {
 	var (
-		chunks  []*storehouse.Chunk
+		chunks  []*types.Chunk
 		docHash = utils.ComputeStructHash(content, nil)
 		idx     int
 	)
@@ -105,11 +105,11 @@ func SplitTextContent(chunkType string, metadata map[string]string, content stri
 	sp := NewTextSpliter(config.Size, config.Overlap, "\n")
 	chunkContents := sp.Split(content)
 	for _, chunk := range chunkContents {
-		c := &storehouse.Chunk{
+		c := &types.Chunk{
 			Type: chunkType,
 			Metadata: map[string]string{
-				storehouse.MetadataDocument: docHash,
-				storehouse.MetadataIndex:    fmt.Sprintf("%d", idx),
+				types.MetadataChunkDocument: docHash,
+				types.MetadataChunkIndex:    fmt.Sprintf("%d", idx),
 			},
 			Content: chunk,
 		}

@@ -17,7 +17,7 @@ type Inquirer struct {
 	desc   string
 	react  *react.Agent
 	llm    openai.Client
-	store  storehouse.Sotrehouse
+	store  storehouse.Storehouse
 	logger *zap.SugaredLogger
 }
 
@@ -25,7 +25,7 @@ func (q *Inquirer) Chat(ctx context.Context, req *agtapi.Request) *agtapi.Respon
 	return q.react.Chat(ctx, req)
 }
 
-func NewInquirer(name, desc string, llm openai.Client, store storehouse.Sotrehouse, opt Option) *Inquirer {
+func NewInquirer(name, desc string, llm openai.Client, store storehouse.Storehouse, opt Option) *Inquirer {
 	var searchTools []*tools.Tool
 	searchTools = append(searchTools, opt.Tools...)
 	searchTools = append(searchTools, store.SearchTools()...)

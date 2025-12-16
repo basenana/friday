@@ -3,13 +3,14 @@ package knowledge
 import (
 	"context"
 	"fmt"
+	"github.com/basenana/friday/types"
 	"strconv"
 
 	"github.com/basenana/friday/storehouse"
 	"github.com/basenana/friday/tools"
 )
 
-func storehouseTools(store storehouse.Sotrehouse, chunkType string, metadata map[string]string) []*tools.Tool {
+func storehouseTools(store storehouse.Storehouse, chunkType string, metadata map[string]string) []*tools.Tool {
 	common := []*tools.Tool{
 		tools.NewTool("save_knowledge_to_base",
 			tools.WithDescription("Save knowledge card into the knowledge base for subsequent recall and utilization."),
@@ -23,7 +24,7 @@ func storehouseTools(store storehouse.Sotrehouse, chunkType string, metadata map
 					return nil, fmt.Errorf("missing required parameter: card_content")
 				}
 
-				chunks, err := store.Save(ctx, &storehouse.Chunk{
+				chunks, err := store.SaveChunks(ctx, &types.Chunk{
 					ID:       "",
 					Type:     chunkType,
 					Metadata: metadata,

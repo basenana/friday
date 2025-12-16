@@ -21,8 +21,8 @@ func (s *summarizer) doSummarize(history []types.Message) {
 
 	originHistory := make([]types.Message, len(history))
 	for i, msg := range history {
-		if msg.OriginToolContent != "" {
-			msg.ToolContent = msg.OriginToolContent
+		if msg.SimplifiedToolContent != "" {
+			msg.SimplifiedToolContent = ""
 		}
 		originHistory[i] = msg
 	}

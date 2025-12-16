@@ -97,7 +97,7 @@ func (m *Memory) compactMessages() {
 			continue
 		}
 
-		if msg.ToolCallID != "" && msg.OriginToolContent == "" && len(msg.ToolContent) > 100 {
+		if msg.ToolCallID != "" && msg.SimplifiedToolContent == "" && len(msg.ToolContent) > 100 {
 			n, err := m.notebook.SaveOrUpdate(context.Background(), &Note{
 				Title:   "tool-result-" + msg.ToolCallID,
 				Content: msg.ToolContent,
@@ -107,8 +107,7 @@ func (m *Memory) compactMessages() {
 				continue
 			}
 
-			msg.OriginToolContent = msg.ToolContent
-			msg.ToolContent = remindMessage(n.ID)
+			msg.SimplifiedToolContent = remindMessage(n.ID)
 			afterTokens += msg.FuzzyTokens()
 			m.history[i] = msg
 			continue

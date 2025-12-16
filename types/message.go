@@ -8,11 +8,11 @@ type Message struct {
 
 	ImageURL string `json:"image_url,omitempty"`
 
-	ToolCallID        string `json:"tool_call_id,omitempty"`
-	ToolName          string `json:"tool_name,omitempty"`
-	ToolArguments     string `json:"tool_arguments,omitempty"`
-	ToolContent       string `json:"tool_content,omitempty"`
-	OriginToolContent string `json:"origin_tool_content,omitempty"`
+	ToolCallID            string `json:"tool_call_id,omitempty"`
+	ToolName              string `json:"tool_name,omitempty"`
+	ToolArguments         string `json:"tool_arguments,omitempty"`
+	ToolContent           string `json:"tool_content,omitempty"`
+	SimplifiedToolContent string `json:"-"`
 
 	Time string `json:"time,omitempty"`
 }
@@ -26,7 +26,14 @@ func (m Message) FuzzyTokens() int64 {
 		len([]rune(m.ToolCallID)),
 		len([]rune(m.ToolName)),
 		len([]rune(m.ToolArguments)),
-		len([]rune(m.ToolContent)),
+	}
+
+	if m.ToolContent != "" {
+		if m.SimplifiedToolContent != "" {
+			counter = append(counter, len([]rune(m.SimplifiedToolContent)))
+		} else {
+			counter = append(counter, len([]rune(m.ToolContent)))
+		}
 	}
 
 	var total float64

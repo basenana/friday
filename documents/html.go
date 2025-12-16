@@ -1,14 +1,14 @@
 package documents
 
 import (
+	"github.com/basenana/friday/types"
 	"regexp"
 	"strings"
 
 	htmltomarkdown "github.com/JohannesKaufmann/html-to-markdown/v2"
-	"github.com/basenana/friday/storehouse"
 )
 
-func SplitHTMLContent(chunkType string, metadata map[string]string, content string, config SplitConfig) []*storehouse.Chunk {
+func SplitHTMLContent(chunkType string, metadata map[string]string, content string, config SplitConfig) []*types.Chunk {
 	markdown, err := htmltomarkdown.ConvertString(content)
 	if err != nil {
 		return SplitTextContent(chunkType, metadata, HTMLContentTrim(content), config)

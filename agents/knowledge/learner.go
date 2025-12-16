@@ -19,7 +19,7 @@ type Learner struct {
 	chunkMetadata map[string]string
 	react         *react.Agent
 	llm           openai.Client
-	store         storehouse.Sotrehouse
+	store         storehouse.Storehouse
 	logger        *zap.SugaredLogger
 }
 
@@ -27,7 +27,7 @@ func (l *Learner) Chat(ctx context.Context, req *agtapi.Request) *agtapi.Respons
 	return l.react.Chat(ctx, req)
 }
 
-func NewLearner(name, desc string, llm openai.Client, store storehouse.Sotrehouse, chunkType string, chunkMetadata map[string]string, opt Option) *Learner {
+func NewLearner(name, desc string, llm openai.Client, store storehouse.Storehouse, chunkType string, chunkMetadata map[string]string, opt Option) *Learner {
 	var searchTools []*tools.Tool
 	searchTools = append(searchTools, opt.Tools...)
 	searchTools = append(searchTools, storehouseTools(store, chunkType, chunkMetadata)...)

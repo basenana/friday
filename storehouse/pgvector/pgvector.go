@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/basenana/friday/types"
 	"strconv"
 	"time"
 
@@ -39,7 +40,7 @@ type DB struct {
 	log       *zap.SugaredLogger
 }
 
-var _ storehouse.Sotrehouse = &DB{}
+var _ storehouse.Storehouse = &DB{}
 var _ storehouse.Vector = &DB{}
 
 func New(postgresUrl string, embedding providers.Embedding) (*DB, error) {
@@ -72,7 +73,57 @@ func New(postgresUrl string, embedding providers.Embedding) (*DB, error) {
 	}, nil
 }
 
-func (p *DB) Save(ctx context.Context, chunks ...*storehouse.Chunk) ([]*storehouse.Chunk, error) {
+func (p *DB) FilterSessions(ctx context.Context, filter map[string]string) ([]*types.Session, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (p *DB) OpenSession(ctx context.Context, session *types.Session) (*types.Session, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (p *DB) AppendMessages(ctx context.Context, sessionID string, message ...*types.Message) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (p *DB) CloseSession(ctx context.Context, sessionID string) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (p *DB) AppendMemories(ctx context.Context, memory ...*types.Memory) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (p *DB) FilterMemories(ctx context.Context, filter map[string]string) ([]*types.Memory, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (p *DB) GetDocument(ctx context.Context, docID string) (*types.Document, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (p *DB) CreateDocument(ctx context.Context, document *types.Document) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (p *DB) UpdateDocument(ctx context.Context, document *types.Document) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (p *DB) DeleteDocument(ctx context.Context, docID string) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (p *DB) SaveChunks(ctx context.Context, chunks ...*types.Chunk) ([]*types.Chunk, error) {
 	var err error
 	for _, chunk := range chunks {
 		defaultChunkSetup(chunk)
@@ -121,7 +172,7 @@ func (p *DB) Save(ctx context.Context, chunks ...*storehouse.Chunk) ([]*storehou
 	return chunks, nil
 }
 
-func (p *DB) Get(ctx context.Context, id string) (*storehouse.Chunk, error) {
+func (p *DB) GetChunk(ctx context.Context, id string) (*types.Chunk, error) {
 	vModel := &ChunkModel{}
 	err := p.dEntity.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var res *gorm.DB
@@ -138,7 +189,7 @@ func (p *DB) Get(ctx context.Context, id string) (*storehouse.Chunk, error) {
 	return vModel.To(), nil
 }
 
-func (p *DB) Delete(ctx context.Context, id string) error {
+func (p *DB) DeleteChunk(ctx context.Context, id string) error {
 	err := p.dEntity.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var res *gorm.DB
 		res = tx.Where("id = ?", id).Delete(&ChunkModel{})
@@ -154,13 +205,13 @@ func (p *DB) Delete(ctx context.Context, id string) error {
 	return nil
 }
 
-func (p *DB) Filter(ctx context.Context, chunkType string, metadata map[string]string) ([]*storehouse.Chunk, error) {
+func (p *DB) FilterChunks(ctx context.Context, chunkType string, metadata map[string]string) ([]*types.Chunk, error) {
 	var (
-		chunks []*storehouse.Chunk
+		chunks []*types.Chunk
 		models []*ChunkModel
 		tx     = p.dEntity.WithContext(ctx)
 	)
-	if chunkType != storehouse.TypeAll {
+	if chunkType != types.TypeAll {
 		tx = tx.Where("type = ?", chunkType)
 	}
 	for key, value := range metadata {
@@ -176,15 +227,15 @@ func (p *DB) Filter(ctx context.Context, chunkType string, metadata map[string]s
 	return chunks, nil
 }
 
-func (p *DB) QueryVector(ctx context.Context, chunkType string, vector []float64, k int) ([]*storehouse.Chunk, error) {
+func (p *DB) QueryVector(ctx context.Context, chunkType string, vector []float64, k int) ([]*types.Chunk, error) {
 	var (
 		vectorModels = make([]ChunkModel, 0)
-		result       = make([]*storehouse.Chunk, 0)
+		result       = make([]*types.Chunk, 0)
 	)
 	if err := p.dEntity.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var res *gorm.DB
 		res = p.dEntity.WithContext(ctx)
-		if chunkType != storehouse.TypeAll {
+		if chunkType != types.TypeAll {
 			res = res.Where("type = ?", chunkType)
 		}
 		res = res.Order(fmt.Sprintf("vector <-> '%s'", jsonString(vector))).Limit(k).Find(&vectorModels)
@@ -202,7 +253,7 @@ func (p *DB) QueryVector(ctx context.Context, chunkType string, vector []float64
 	return result, nil
 }
 
-func (p *DB) SemanticQuery(ctx context.Context, chunkType, query string, k int) ([]*storehouse.Chunk, error) {
+func (p *DB) SemanticQuery(ctx context.Context, chunkType, query string, k int) ([]*types.Chunk, error) {
 	p.log.Infow("semantic query", "chunkType", chunkType, "query", query)
 	vector, err := p.embedding.Vectorization(ctx, query)
 	if err != nil {
@@ -225,7 +276,7 @@ func (p *DB) SearchTools() []*tools.Tool {
 					return nil, fmt.Errorf("missing required parameter: query")
 				}
 
-				chunks, err := p.SemanticQuery(ctx, storehouse.TypeAll, query, 3)
+				chunks, err := p.SemanticQuery(ctx, types.TypeAll, query, 3)
 				if err != nil {
 					return tools.NewToolResultError(err.Error()), nil
 				}
@@ -249,29 +300,29 @@ func (p *DB) SearchTools() []*tools.Tool {
 					return nil, fmt.Errorf("missing required parameter: id")
 				}
 
-				chunk, err := p.Get(ctx, cid)
+				chunk, err := p.GetChunk(ctx, cid)
 				if err != nil {
 					return tools.NewToolResultError(err.Error()), nil
 				}
 
-				if chunk == nil || len(chunk.Metadata) == 0 || chunk.Metadata[storehouse.MetadataDocument] == "" {
+				if chunk == nil || len(chunk.Metadata) == 0 || chunk.Metadata[types.MetadataChunkDocument] == "" {
 					return tools.NewToolResultText("No additional information"), nil
 				}
 
-				idx, _ := strconv.Atoi(chunk.Metadata[storehouse.MetadataIndex])
+				idx, _ := strconv.Atoi(chunk.Metadata[types.MetadataChunkIndex])
 				startIdx := idx - 2
 				endIdx := idx + 2
-				relatedChunks, err := p.Filter(ctx, chunk.Type, map[string]string{storehouse.MetadataDocument: chunk.Metadata[storehouse.MetadataDocument]})
+				relatedChunks, err := p.FilterChunks(ctx, chunk.Type, map[string]string{types.MetadataChunkDocument: chunk.Metadata[types.MetadataChunkDocument]})
 				if err != nil {
 					return tools.NewToolResultError(err.Error()), nil
 				}
 
-				var chunks []*storehouse.Chunk
+				var chunks []*types.Chunk
 				for _, relatedChunk := range relatedChunks {
-					if _, ok = relatedChunk.Metadata[storehouse.MetadataIndex]; !ok {
+					if _, ok = relatedChunk.Metadata[types.MetadataChunkIndex]; !ok {
 						continue
 					}
-					idx, err = strconv.Atoi(relatedChunk.Metadata[storehouse.MetadataIndex])
+					idx, err = strconv.Atoi(relatedChunk.Metadata[types.MetadataChunkIndex])
 					if err != nil {
 						continue
 					}
