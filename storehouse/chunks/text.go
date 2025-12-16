@@ -1,4 +1,4 @@
-package documents
+package chunks
 
 import (
 	"fmt"
@@ -33,7 +33,7 @@ func NewTextSpliter(chunkSize int, chunkOverlap int, separator string) *TextSpli
 		separator = "\n"
 	}
 	return &TextSpliter{
-		log:          logger.New("documents.TextSpliter"),
+		log:          logger.New("chunks.textSpliter"),
 		separator:    separator,
 		chunkSize:    chunkSize,
 		chunkOverlap: chunkOverlap,

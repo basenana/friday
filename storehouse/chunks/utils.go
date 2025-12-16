@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package documents
+package chunks
 
 import (
 	"fmt"
