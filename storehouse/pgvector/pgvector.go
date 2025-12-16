@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/basenana/friday/providers"
@@ -186,7 +187,7 @@ func (p *DB) QueryVector(ctx context.Context, chunkType string, vector []float64
 		if chunkType != storehouse.TypeAll {
 			res = res.Where("type = ?", chunkType)
 		}
-		res = res.Order(fmt.Sprintf("vector <-> '%s' DESC", jsonString(vector))).Limit(k).Find(&vectorModels)
+		res = res.Order(fmt.Sprintf("vector <-> '%s'", jsonString(vector))).Limit(k).Find(&vectorModels)
 		if res.Error != nil {
 			return res.Error
 		}
@@ -212,7 +213,7 @@ func (p *DB) SemanticQuery(ctx context.Context, chunkType, query string, k int) 
 
 func (p *DB) SearchTools() []*tools.Tool {
 	return []*tools.Tool{
-		tools.NewTool("semantic_query",
+		tools.NewTool("knowledge_semantic_query",
 			tools.WithDescription("Semantic search capabilities, using natural language to query and recall content from knowledge bases, which helps obtain more accurate relevant information."),
 			tools.WithString("query",
 				tools.Required(),
@@ -231,6 +232,53 @@ func (p *DB) SearchTools() []*tools.Tool {
 
 				if len(chunks) == 0 {
 					return tools.NewToolResultError("no results found"), nil
+				}
+
+				return tools.NewToolResultText(utils.Res2Str(chunks)), nil
+			}),
+		),
+		tools.NewTool("knowledge_related_query",
+			tools.WithDescription("Based on the known knowledge ID, query content strongly associated with this knowledge. When you confirm a specific knowledge as required information, utilize this tool to enrich the contextual framework of that knowledge."),
+			tools.WithString("id",
+				tools.Required(),
+				tools.Description("The ID of the knowledge that needs to be supplemented"),
+			),
+			tools.WithToolHandler(func(ctx context.Context, request *tools.Request) (*tools.Result, error) {
+				cid, ok := request.Arguments["id"].(string)
+				if !ok {
+					return nil, fmt.Errorf("missing required parameter: id")
+				}
+
+				chunk, err := p.Get(ctx, cid)
+				if err != nil {
+					return tools.NewToolResultError(err.Error()), nil
+				}
+
+				if chunk == nil || len(chunk.Metadata) == 0 || chunk.Metadata[storehouse.MetadataDocument] == "" {
+					return tools.NewToolResultText("No additional information"), nil
+				}
+
+				idx, _ := strconv.Atoi(chunk.Metadata[storehouse.MetadataIndex])
+				startIdx := idx - 2
+				endIdx := idx + 2
+				relatedChunks, err := p.Filter(ctx, chunk.Type, map[string]string{storehouse.MetadataDocument: chunk.Metadata[storehouse.MetadataDocument]})
+				if err != nil {
+					return tools.NewToolResultError(err.Error()), nil
+				}
+
+				var chunks []*storehouse.Chunk
+				for _, relatedChunk := range relatedChunks {
+					if _, ok = relatedChunk.Metadata[storehouse.MetadataIndex]; !ok {
+						continue
+					}
+					idx, err = strconv.Atoi(relatedChunk.Metadata[storehouse.MetadataIndex])
+					if err != nil {
+						continue
+					}
+
+					if idx >= startIdx && idx <= endIdx {
+						chunks = append(chunks, relatedChunk)
+					}
 				}
 
 				return tools.NewToolResultText(utils.Res2Str(chunks)), nil

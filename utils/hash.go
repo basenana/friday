@@ -3,9 +3,10 @@ package utils
 import (
 	"encoding/binary"
 	"fmt"
-	"github.com/davecgh/go-spew/spew"
 	"hash"
 	"hash/fnv"
+
+	"github.com/davecgh/go-spew/spew"
 )
 
 func ComputeHierarchyStructHash(parent, child interface{}, collisionCount *int32) string {
@@ -51,5 +52,5 @@ func DeepHashObject(hasher hash.Hash, objectToWrite interface{}) {
 		DisableMethods: true,
 		SpewKeys:       true,
 	}
-	printer.Fprintf(hasher, "%#v", objectToWrite)
+	_, _ = printer.Fprintf(hasher, "%#v", objectToWrite)
 }

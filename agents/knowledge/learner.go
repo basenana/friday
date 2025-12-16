@@ -13,12 +13,14 @@ import (
 )
 
 type Learner struct {
-	name   string
-	desc   string
-	react  *react.Agent
-	llm    openai.Client
-	store  storehouse.Sotrehouse
-	logger *zap.SugaredLogger
+	name          string
+	desc          string
+	chunkType     string
+	chunkMetadata map[string]string
+	react         *react.Agent
+	llm           openai.Client
+	store         storehouse.Sotrehouse
+	logger        *zap.SugaredLogger
 }
 
 func (l *Learner) Chat(ctx context.Context, req *agtapi.Request) *agtapi.Response {
@@ -35,8 +37,10 @@ func NewLearner(name, desc string, llm openai.Client, store storehouse.Sotrehous
 	}
 
 	return &Learner{
-		name: name,
-		desc: desc,
+		name:          name,
+		desc:          desc,
+		chunkType:     chunkType,
+		chunkMetadata: chunkMetadata,
 		react: react.New(name, desc, llm, react.Option{
 			SystemPrompt: opt.SystemPrompt,
 			MaxLoopTimes: 5,

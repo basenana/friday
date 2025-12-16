@@ -14,4 +14,7 @@ const (
 	TypeDocument string = "document" // deadly right things
 	TypeReview   string = "review"   // learned from final report/result
 	TypeMemory   string = "memory"   // learned from conversation
+
+	MetadataDocument string = "chunk_document"
+	MetadataIndex    string = "chunk_index"
 )

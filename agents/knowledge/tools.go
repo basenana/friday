@@ -13,14 +13,14 @@ func storehouseTools(store storehouse.Sotrehouse, chunkType string, metadata map
 	common := []*tools.Tool{
 		tools.NewTool("save_knowledge_to_base",
 			tools.WithDescription("Save knowledge card into the knowledge base for subsequent recall and utilization."),
-			tools.WithString("content",
+			tools.WithString("card_content",
 				tools.Required(),
 				tools.Description("The content of the knowledge card, Do not exceed 500 words"),
 			),
 			tools.WithToolHandler(func(ctx context.Context, request *tools.Request) (*tools.Result, error) {
-				content, ok := request.Arguments["content"].(string)
+				content, ok := request.Arguments["card_content"].(string)
 				if !ok || content == "" {
-					return nil, fmt.Errorf("missing required parameter: content")
+					return nil, fmt.Errorf("missing required parameter: card_content")
 				}
 
 				chunks, err := store.Save(ctx, &storehouse.Chunk{
