@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/basenana/friday/providers"
@@ -295,7 +296,16 @@ func (p *DB) CreateDocument(ctx context.Context, document *types.Document) error
 	metadata[types.MetadataDocument] = document.ID
 	metadata[types.MetadataChunkDocument] = contentHash
 
-	chunkList := chunks.SplitTextContent(types.TypeDocument, metadata, document.Content, chunks.SplitConfig{})
+	var chunkList []*types.Chunk
+	switch strings.ToLower(document.MIMEType) {
+	case "text/plain", "text/markdown":
+		chunkList = chunks.SplitTextContent(types.TypeDocument, metadata, document.Content, chunks.SplitConfig{})
+	case "text/html":
+		chunkList = chunks.SplitHTMLContent(types.TypeDocument, metadata, document.Content, chunks.SplitConfig{})
+	default:
+		chunkList = chunks.SplitTextContent(types.TypeDocument, metadata, document.Content, chunks.SplitConfig{})
+	}
+
 	for _, chunk := range chunkList {
 		if err = defaultChunkSetup(ctx, chunk, p.embedding); err != nil {
 			return err
