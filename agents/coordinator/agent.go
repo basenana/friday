@@ -37,15 +37,18 @@ func (a *Agent) Describe() string {
 
 func (a *Agent) Chat(ctx context.Context, req *agtapi.Request) *agtapi.Response {
 	var (
-		sid  = agtapi.GetOrCreateSession(ctx)
 		resp = agtapi.NewResponse()
 	)
 
-	if req.Memory == nil {
-		req.Memory = memory.NewEmptyWithSummarize(sid, a.llm)
+	if req.Session == nil {
+		req.Session = types.NewDummySession()
 	}
 
-	ctx = agtapi.NewContext(ctx, sid,
+	if req.Memory == nil {
+		req.Memory = memory.NewEmpty(req.Session.ID, memory.WithSummarize(a.llm))
+	}
+
+	ctx = agtapi.NewContext(ctx, req.Session,
 		agtapi.WithMemory(req.Memory),
 		agtapi.WithResponse(resp),
 	)
@@ -83,7 +86,7 @@ func (a *Agent) runReport(ctx context.Context, req *agtapi.Request, resp *agtapi
 		UserMessage: a.option.SummaryReportPrompt,
 		Memory:      req.Memory,
 	}
-	a.logger.Infow("start summary report", "sessionID", agtapi.GetOrCreateSession(ctx))
+	a.logger.Infow("start summary report", "sessionID", req.Session.ID)
 	stream := a.simple.Chat(ctx, nextReq)
 	for {
 		select {

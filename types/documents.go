@@ -3,6 +3,7 @@ package types
 import "time"
 
 type Memory struct {
+	ID       string            `json:"id"`
 	Overview string            `json:"overview"`
 	Details  string            `json:"details"`  // Cause, Process, and Result
 	Relevant string            `json:"relevant"` // Related people or things
@@ -35,6 +36,8 @@ const (
 	TypeReview   string = "review"   // learned from final report/result
 	TypeMemory   string = "memory"   // learned from conversation
 
+	MetadataDocument      string = "friday.document"
 	MetadataChunkDocument string = "friday.chunk_document"
 	MetadataChunkIndex    string = "friday.chunk_index"
+	MetadataMemory        string = "friday.memory"
 )

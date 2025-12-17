@@ -10,6 +10,7 @@ import (
 	"github.com/basenana/friday/memory"
 	"github.com/basenana/friday/providers/openai"
 	"github.com/basenana/friday/tools"
+	"github.com/basenana/friday/types"
 )
 
 var (
@@ -45,8 +46,8 @@ type ToolUseResult struct {
 	Result  string   `xml:"result"`
 }
 
-func toolCall(ctx context.Context, use *ToolUse, extraArgs map[string]string, td *tools.Tool) (string, error) {
-	req := &tools.Request{Arguments: make(map[string]interface{})}
+func toolCall(ctx context.Context, session *types.Session, use *ToolUse, extraArgs map[string]string, td *tools.Tool) (string, error) {
+	req := &tools.Request{Arguments: make(map[string]interface{}), Session: session}
 	if err := json.Unmarshal([]byte(use.Arguments), &req.Arguments); err != nil {
 		return "", fmt.Errorf("unmarshal json argument failed: %s", err)
 	}

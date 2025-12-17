@@ -228,8 +228,3 @@ func WithRecorders(recorders ...Recorder) OptionSetter {
 		m.recorders = append(m.recorders, recorders...)
 	}
 }
-
-func NewEmptyWithSummarize(uid string, llmCli openai.Client) *Memory {
-	m := NewEmpty(uid, WithSummarize(llmCli))
-	return m
-}

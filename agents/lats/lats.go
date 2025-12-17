@@ -45,13 +45,15 @@ func (a *Agent) Describe() string {
 
 func (a *Agent) Chat(ctx context.Context, req *agtapi.Request) *agtapi.Response {
 	var (
-		sid  = agtapi.GetOrCreateSession(ctx)
 		resp = agtapi.NewResponse()
 	)
-	a.logger.Infow("handle request", "message", req.UserMessage, "session", sid)
+
+	if req.Session == nil {
+		req.Session = types.NewDummySession()
+	}
 
 	if req.Memory == nil {
-		req.Memory = memory.NewEmptyWithSummarize(sid, a.llm)
+		req.Memory = memory.NewEmpty(req.Session.ID, memory.WithSummarize(a.llm))
 	}
 
 	if a.root == nil {
@@ -59,11 +61,12 @@ func (a *Agent) Chat(ctx context.Context, req *agtapi.Request) *agtapi.Response 
 		a.root = newRoot(a.task, req.Memory.Copy())
 	}
 
-	ctx = agtapi.NewContext(ctx, sid,
+	ctx = agtapi.NewContext(ctx, req.Session,
 		agtapi.WithMemory(req.Memory),
 		agtapi.WithResponse(resp),
 	)
 
+	a.logger.Infow("handle request", "message", req.UserMessage, "session", req.Session.ID)
 	go func() {
 		defer resp.Close()
 		for {

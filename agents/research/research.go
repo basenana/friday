@@ -40,16 +40,19 @@ func (a *Agent) Describe() string {
 
 func (a *Agent) Chat(ctx context.Context, req *agtapi.Request) *agtapi.Response {
 	var (
-		sid         = agtapi.GetOrCreateSession(ctx)
 		resp        = agtapi.NewResponse()
 		planningAgt = planning.New("planning", "", a.llm, planning.Option{Tools: a.opt.PlanningTools})
 	)
 
-	if req.Memory == nil {
-		req.Memory = memory.NewEmpty(sid, memory.WithSummarize(a.llm))
+	if req.Session == nil {
+		req.Session = types.NewDummySession()
 	}
 
-	ctx = agtapi.NewContext(ctx, sid,
+	if req.Memory == nil {
+		req.Memory = memory.NewEmpty(req.Session.ID, memory.WithSummarize(a.llm))
+	}
+
+	ctx = agtapi.NewContext(ctx, req.Session,
 		agtapi.WithMemory(req.Memory),
 		agtapi.WithResponse(resp),
 	)

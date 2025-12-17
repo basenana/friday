@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"github.com/basenana/friday/types"
 	"time"
+
+	"github.com/basenana/friday/providers"
+	"github.com/basenana/friday/types"
 
 	"github.com/basenana/friday/utils/logger"
 	"github.com/google/uuid"
@@ -23,14 +25,22 @@ func jsonData(str string, data any) {
 	_ = json.Unmarshal([]byte(str), data)
 }
 
-func newChunkID() string {
+func newRecordID() string {
 	return uuid.New().String()
 }
 
-func defaultChunkSetup(chunk *types.Chunk) {
+func defaultChunkSetup(ctx context.Context, chunk *types.Chunk, embedding providers.Embedding) error {
 	if chunk.Type == "" {
 		chunk.Type = "default"
 	}
+	var err error
+	if len(chunk.Vector) == 0 {
+		chunk.Vector, err = embedding.Vectorization(ctx, chunk.Content)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 type Logger struct {

@@ -2,6 +2,8 @@ package tools
 
 import (
 	"context"
+
+	"github.com/basenana/friday/types"
 )
 
 type ToolSet interface {
@@ -45,6 +47,7 @@ type ToolInputSchema struct {
 
 type Request struct {
 	Arguments map[string]interface{} `json:"arguments"`
+	Session   *types.Session         `json:"session"`
 }
 
 type Result struct {

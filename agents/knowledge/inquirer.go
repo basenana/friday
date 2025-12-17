@@ -21,6 +21,14 @@ type Inquirer struct {
 	logger *zap.SugaredLogger
 }
 
+func (q *Inquirer) Name() string {
+	return q.name
+}
+
+func (q *Inquirer) Describe() string {
+	return q.desc
+}
+
 func (q *Inquirer) Chat(ctx context.Context, req *agtapi.Request) *agtapi.Response {
 	return q.react.Chat(ctx, req)
 }

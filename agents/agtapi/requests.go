@@ -7,6 +7,7 @@ import (
 )
 
 type Request struct {
+	Session     *types.Session
 	UserMessage string
 	ImageURLs   []string
 	Memory      *memory.Memory

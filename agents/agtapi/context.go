@@ -6,7 +6,6 @@ import (
 	"github.com/basenana/friday/memory"
 	"github.com/basenana/friday/types"
 	"github.com/basenana/friday/utils/logger"
-	"github.com/google/uuid"
 )
 
 const (
@@ -16,20 +15,20 @@ const (
 	ctxToolArgsKey = "friday.ctx.tool.args"
 )
 
+func SessionFromContext(ctx context.Context) *types.Session {
+	m := ctx.Value(ctxSessionKey)
+	if m == nil {
+		return nil
+	}
+	return m.(*types.Session)
+}
+
 func MemoryFromContext(ctx context.Context) *memory.Memory {
 	m := ctx.Value(ctxMemoryKey)
 	if m == nil {
 		return nil
 	}
 	return m.(*memory.Memory)
-}
-
-func GetOrCreateSession(ctx context.Context) string {
-	s := ctx.Value(ctxSessionKey)
-	if s == nil {
-		return uuid.New().String()
-	}
-	return s.(string)
 }
 
 func ResponseFromContext(ctx context.Context) *Response {
@@ -50,11 +49,11 @@ func OverwriteToolArgsFromContext(ctx context.Context) map[string]string {
 
 type ContextOption func(ctx context.Context) context.Context
 
-func NewContext(ctx context.Context, sessionID string, options ...ContextOption) context.Context {
+func NewContext(ctx context.Context, session *types.Session, options ...ContextOption) context.Context {
 	// ensure session id
 	s := ctx.Value(ctxSessionKey)
-	if s == nil || s.(string) != sessionID {
-		ctx = context.WithValue(ctx, ctxSessionKey, sessionID)
+	if s == nil || s.(*types.Session).ID != session.ID {
+		ctx = context.WithValue(ctx, ctxSessionKey, session)
 	}
 
 	for _, opt := range options {

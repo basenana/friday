@@ -32,22 +32,26 @@ func (s *Agent) Describe() string {
 
 func (s *Agent) Chat(ctx context.Context, req *agtapi.Request) *agtapi.Response {
 	var (
-		sid  = agtapi.GetOrCreateSession(ctx)
 		resp = agtapi.NewResponse()
 	)
 
-	s.logger.Infow("handle request", "session", sid, "userMessage", req.UserMessage)
-	if req.Memory == nil {
-		req.Memory = memory.NewEmptyWithSummarize(sid, s.llm)
+	if req.Session == nil {
+		req.Session = types.NewDummySession()
 	}
 
-	ctx = agtapi.NewContext(ctx, sid,
+	if req.Memory == nil {
+		req.Memory = memory.NewEmpty(req.Session.ID, memory.WithSummarize(s.llm))
+	}
+
+	ctx = agtapi.NewContext(ctx, req.Session,
 		agtapi.WithMemory(req.Memory),
 		agtapi.WithResponse(resp),
 	)
 
 	mem := req.Memory
 	mem.AppendMessages(types.Message{UserMessage: req.UserMessage})
+
+	s.logger.Infow("handle request", "session", req.Session.ID, "userMessage", req.UserMessage)
 
 	if s.option.NewOutputModel == nil {
 		go s.handleLLMStream(ctx, mem, resp)
