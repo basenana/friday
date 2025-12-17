@@ -43,7 +43,7 @@ func buildMigrations() []*gormigrate.Migration {
 
 func Migrate(db *gorm.DB) error {
 	options := gormigrate.DefaultOptions
-	options.TableName = "friday_chunkversion"
+	options.TableName = "friday_schema"
 	m := gormigrate.New(db, options, buildMigrations())
 	err := m.Migrate()
 	return err
