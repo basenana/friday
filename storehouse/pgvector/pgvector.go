@@ -184,6 +184,9 @@ func (p *DB) GetMemory(ctx context.Context, memoryID string) (*types.Memory, err
 	tx = tx.Where("id = ?", memoryID)
 	err := tx.First(&model).Error
 	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, types.ErrNotFound
+		}
 		return nil, err
 	}
 	return model.To(), nil
@@ -266,6 +269,9 @@ func (p *DB) GetDocument(ctx context.Context, docID string) (*types.Document, er
 	tx = tx.Where("id = ?", docID)
 	err := tx.First(&model).Error
 	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, types.ErrNotFound
+		}
 		return nil, err
 	}
 	return model.To(), nil
@@ -445,6 +451,9 @@ func (p *DB) GetChunk(ctx context.Context, id string) (*types.Chunk, error) {
 		var res *gorm.DB
 		res = tx.Where("id = ?", id).First(vModel)
 		if res.Error != nil {
+			if errors.Is(res.Error, gorm.ErrRecordNotFound) {
+				return types.ErrNotFound
+			}
 			return res.Error
 		}
 		return nil
