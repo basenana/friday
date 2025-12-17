@@ -27,6 +27,10 @@ func buildMigrations() []*gormigrate.Migration {
 			ID: "2023100700",
 			Migrate: func(db *gorm.DB) error {
 				return db.AutoMigrate(
+					&SessionModel{},
+					&MessageModel{},
+					&DocumentModel{},
+					&MemoryModel{},
 					&ChunkModel{},
 				)
 			},
