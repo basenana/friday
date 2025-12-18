@@ -176,6 +176,11 @@ func (c *client) chatCompletionNewParams(request Request) *openai.ChatCompletion
 				openai.UserMessage(msg.UserMessage),
 			)
 
+		case msg.AgentMessage != "":
+			p.Messages = append(p.Messages,
+				openai.UserMessage(msg.AgentMessage),
+			)
+
 		case msg.AssistantMessage != "":
 			p.Messages = append(p.Messages,
 				openai.AssistantMessage(msg.AssistantMessage),

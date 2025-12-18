@@ -80,7 +80,7 @@ func (a *Agent) Chat(ctx context.Context, req *agtapi.Request) *agtapi.Response 
 
 		if len(planningAgt.TodoList()) == 0 {
 			req.Memory.AppendMessages(types.Message{
-				UserMessage: "You haven't generated any to-do items, and you'll lose your job. You're being given one last chance."})
+				AgentMessage: "You haven't generated any to-do items, and you'll lose your job. You're being given one last chance."})
 			goto Retry
 		}
 
@@ -149,7 +149,7 @@ func (a *Agent) doResearch(ctx context.Context, leader *react.Agent, planningAgt
 	)
 	for !allFinish {
 		runTaskCount++
-		if err := a.runTask(ctx, leader, runTaskPrompt(req.UserMessage, planningAgt.TodoList()), req); err != nil {
+		if err := a.runTask(ctx, leader, runTaskPrompt(planningAgt.TodoList()), req); err != nil {
 			a.logger.Warnw("run task failed, skip and next", "err", err)
 			if failCount += 1; failCount >= 5 {
 				return err
@@ -167,6 +167,8 @@ func (a *Agent) doResearch(ctx context.Context, leader *react.Agent, planningAgt
 
 		allFinish = planningAgt.AllFinish()
 		if !allFinish {
+			req.Memory.AppendMessages(types.Message{AgentMessage: "Warning message: There are currently unfinished items in your todo list. " +
+				"If you believe you have completed them, you need to use a tool to update the todo list status."})
 			a.logger.Infow("researching not finish, try again later", "researchTimes", runTaskCount, "researchLoopLimit", a.opt.MaxResearchLoopTimes)
 		}
 	}
@@ -269,7 +271,6 @@ func New(name, desc string, llm openai.Client, opt Option) *Agent {
 		logger: logger.New("research"),
 	}
 	agt.leaderTools = append(agt.leaderTools, newResearchTool(agt)...)
-	agt.leaderTools = append(agt.leaderTools, opt.Tools...)
 
 	return agt
 }

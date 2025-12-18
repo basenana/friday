@@ -19,9 +19,8 @@ type Notebook interface {
 }
 
 type Note struct {
-	ID    string `json:"id"`
-	Title string `json:"title"`
-
+	ID      string `json:"id"`
+	Title   string `json:"title"`
 	Content string `json:"content,omitempty"`
 }
 
@@ -94,7 +93,7 @@ func (m *inMemoryNotebook) ReadTools() []*tools.Tool {
 				tools.Description("The id of note. If you don't know the id, you need to use `list_all_notes` to find it."),
 			),
 			tools.WithToolHandler(func(ctx context.Context, request *tools.Request) (*tools.Result, error) {
-				nid, ok := request.Arguments["nid"].(string)
+				nid, ok := request.Arguments["id"].(string)
 				if !ok || nid == "" {
 					return nil, fmt.Errorf("missing required parameter: id")
 				}

@@ -21,7 +21,7 @@ type SearchNode struct {
 }
 
 func newRoot(reasoning string, mem *memory.Memory) *SearchNode {
-	mem.AppendMessages(types.Message{UserMessage: reasoning})
+	mem.AppendMessages(types.Message{AgentMessage: reasoning})
 	return &SearchNode{
 		id:         uuid.New().String(),
 		evaluation: &Evaluation{Score: 1},
@@ -57,7 +57,7 @@ func (n *SearchNode) Expend(node *SearchNode, evaluation *Evaluation) {
 	if msg := node.Latest(); msg != "" {
 		node.memory.AppendMessages(types.Message{AssistantMessage: msg})
 	}
-	node.memory.AppendMessages(types.Message{UserMessage: evaluation.Reasoning})
+	node.memory.AppendMessages(types.Message{AgentMessage: evaluation.Reasoning})
 	node.evaluation = evaluation
 	node.info = stage
 	node.BackPropagate(evaluation.Score)

@@ -1,7 +1,6 @@
 package react
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"strings"
@@ -121,9 +120,9 @@ func (a *Agent) reactLoop(ctx context.Context, session *types.Session, mem *memo
 		}
 		switch statusCode {
 		case 2:
-			mem.AppendMessages(types.Message{UserMessage: `The tool is used in an incorrect format; please try using the tool again.`})
+			mem.AppendMessages(types.Message{AgentMessage: `The tool is used in an incorrect format; please try using the tool again.`})
 		default:
-			mem.AppendMessages(types.Message{UserMessage: "If you believe the conversation is complete, use the tool to end the conversation."})
+			mem.AppendMessages(types.Message{AgentMessage: "If you believe the conversation is complete, use the tool to end the conversation."})
 		}
 	}
 }
@@ -260,7 +259,6 @@ func (a *Agent) tryToolCall(ctx context.Context, session *types.Session, use ope
 	var (
 		result    []types.Message
 		extraArgs = agtapi.OverwriteToolArgsFromContext(ctx)
-		buf       = &bytes.Buffer{}
 		useMark   = use.ID
 	)
 
@@ -295,12 +293,7 @@ func (a *Agent) tryToolCall(ctx context.Context, session *types.Session, use ope
 		return result
 	}
 
-	buf.Reset()
-	buf.WriteString("The following are the tool execution results. " +
-		"Please analyze further based on the tool's response, but do not directly return the original execution results to the user:")
-	buf.WriteString(msg)
-
-	result = append(result, types.Message{ToolCallID: toolUse.ID(), ToolContent: buf.String()})
+	result = append(result, types.Message{ToolCallID: toolUse.ID(), ToolContent: msg})
 	agtapi.SendEventToResponse(ctx, types.NewToolUseEvent(use.Name, use.Arguments, td.Description, ""))
 
 	return result

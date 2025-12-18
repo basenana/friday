@@ -6,7 +6,7 @@ import (
 )
 
 func remindMessage(nid string) string {
-	return fmt.Sprintf("Retrieve from note with id: %s if needed", nid)
+	return fmt.Sprintf("Retrieve from notebook with id: %s if needed", nid)
 }
 
 func memoryFromContext(ctx context.Context) *Memory {

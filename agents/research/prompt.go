@@ -3,9 +3,10 @@ package research
 import (
 	"bytes"
 	"fmt"
-	"github.com/basenana/friday/agents/planning"
 	"strings"
 	"time"
+
+	"github.com/basenana/friday/agents/planning"
 )
 
 const (
@@ -311,14 +312,14 @@ func promptWithMoreInfo(prompt string) string {
 	return strings.ReplaceAll(prompt, "{current_date}", time.Now().Format(time.DateOnly))
 }
 
-func runTaskPrompt(userMessage string, todoList []planning.TodoListItem) string {
+func runTaskPrompt(todoList []planning.TodoListItem) string {
 	var (
 		buf = &bytes.Buffer{}
 	)
-	buf.WriteString(fmt.Sprintf("User Message: %s\n\n", userMessage))
 	buf.WriteString("Below is the todo list updated based on user requests:\n")
 	for _, t := range todoList {
 		buf.WriteString(fmt.Sprintf("id=%d describe=%s done=%v\n", t.ID, t.Describe, t.IsFinish))
 	}
+	buf.WriteString("Please complete all items in your to-do list and update every item status in the to-do list using tools.")
 	return buf.String()
 }

@@ -3,6 +3,7 @@ package types
 type Message struct {
 	SystemMessage      string `json:"system_message,omitempty"`
 	UserMessage        string `json:"user_message,omitempty"`
+	AgentMessage       string `json:"agent_message,omitempty"`
 	AssistantMessage   string `json:"assistant_message,omitempty"`
 	AssistantReasoning string `json:"assistant_reasoning,omitempty"`
 
@@ -21,6 +22,7 @@ func (m Message) FuzzyTokens() int64 {
 	counter := []int{
 		len([]rune(m.SystemMessage)),
 		len([]rune(m.UserMessage)),
+		len([]rune(m.AgentMessage)),
 		len([]rune(m.AssistantMessage)),
 		len([]rune(m.ImageURL)),
 		len([]rune(m.ToolCallID)),
