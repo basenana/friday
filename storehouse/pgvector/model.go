@@ -148,7 +148,7 @@ func (m *MemoryModel) To() *types.Memory {
 
 	jsonData(string(m.Metadata), &memory.Metadata)
 	memory.Time = time.Unix(0, m.CreatedAt)
-	return nil
+	return memory
 }
 
 type DocumentModel struct {
@@ -187,7 +187,7 @@ func (d *DocumentModel) To() *types.Document {
 		Content:  d.Content,
 	}
 	jsonData(string(d.Metadata), &document.Metadata)
-	return nil
+	return document
 }
 
 type ChunkModel struct {
