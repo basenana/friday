@@ -1,6 +1,7 @@
 package planning
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"github.com/basenana/friday/tools"
@@ -73,8 +74,12 @@ func (a *Agent) SetTodoDone(todoID int32) {
 }
 
 func New(name, desc string, llm openai.Client, option Option) *Agent {
+	systemPrompt := &bytes.Buffer{}
+	systemPrompt.WriteString(DEFAULT_PLANNING_PROMPT)
 	if option.SystemPrompt == "" {
-		option.SystemPrompt = DEFAULT_PLANNING_PROMPT
+		systemPrompt.WriteString("<user_requirements_for_planning>\n")
+		systemPrompt.WriteString(option.SystemPrompt)
+		systemPrompt.WriteString("</user_requirements_for_planning>\n")
 	}
 
 	agt := &Agent{
@@ -89,7 +94,7 @@ func New(name, desc string, llm openai.Client, option Option) *Agent {
 	option.Tools = append(option.Tools, agt.PlanningTools()...)
 
 	agt.react = react.New(name, desc, llm, react.Option{
-		SystemPrompt: option.SystemPrompt,
+		SystemPrompt: systemPrompt.String(),
 		MaxLoopTimes: 5,
 		MaxToolCalls: 10,
 		Tools:        option.Tools,

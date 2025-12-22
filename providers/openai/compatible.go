@@ -90,6 +90,8 @@ func (c *CompatibleClient) chatCompletionNewParams(request Request) *openai.Chat
 		buf.WriteString("\n")
 
 		buf.WriteString(DEFAULT_TOOL_USE_PROMPT)
+		buf.WriteString("<available_tools>\n")
+		buf.WriteString("Above example were using notional tools that might not exist for you. You only have access to these tools:\n")
 		toolDefine := &ToolDefinePrompt{}
 		for _, tool := range toolList {
 			argContent, _ := json.Marshal(tool.Parameters)
@@ -102,6 +104,7 @@ func (c *CompatibleClient) chatCompletionNewParams(request Request) *openai.Chat
 		defineContent, _ := xml.Marshal(toolDefine)
 		buf.Write(defineContent)
 		buf.WriteString("\n")
+		buf.WriteString("</available_tools>\n")
 
 		p.Messages[0] = openai.SystemMessage(buf.String())
 	}

@@ -175,7 +175,6 @@ func (a *Agent) mailWithSubAgent(ctx context.Context, agentName, title, text str
 	stream := agt.Chat(ctx, &agtapi.Request{
 		UserMessage: strings.Join(
 			[]string{
-				NEW_TASK_PROMPT,
 				"Title: " + title,
 				text,
 			}, "\n"),

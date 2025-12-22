@@ -28,7 +28,7 @@ func (s *summarizer) doSummarize(history []types.Message) {
 	}
 
 	content, err := s.llm.CompletionNonStreaming(context.Background(), openai.NewSimpleRequest(summarizePrompt, originHistory...))
-	s.updateHook(originHistory, summaryPrefix+content, err)
+	s.updateHook(originHistory, content, err)
 	atomic.StoreInt32(&s.working, 0)
 }
 
@@ -41,7 +41,8 @@ func newSummarize(llm openai.Client, hook func(history []types.Message, abstract
 }
 
 const (
-	summarizePrompt = `Your job is to summarize a history of previous messages in a conversation between an AI persona and a human.
+	summarizePrompt = `<background>
+Your job is to summarize a history of previous messages in a conversation between an AI persona and a human.
 The conversation you are given is a from a fixed context window and may not be complete.
 Messages sent by the AI are marked with the 'assistant' role.
 The AI 'assistant' can also make calls to tools, whose outputs can be seen in messages with the 'tool' role.
@@ -52,7 +53,15 @@ The 'user' role is also used for important system events, such as login events a
 Summarize what happened in the conversation from the perspective of the AI (use the first person from the perspective of the AI).
 Keep your summary less than 1000 words, do NOT exceed this word limit.
 Only output the summary, do NOT include anything else in your output, and use the same language as the user input content.
+</background>
 
+<summary_core_objective>
+- Based on historical messages, summarize and generate text that conforms to the definition in summary_formatting.
+- Do not output any content other than the summary text.
+</summary_core_objective>
+
+
+<summary_formatting>
 The summary should refer to the template below:
 
 ## Basic Information
@@ -71,6 +80,7 @@ Important Data: Key figures, dates, names, and other hard information involved
 
 Special Context: Context that may affect understanding (e.g., preconditions, urgency)
 Emotional Labeling: Label the emotional state of participants if necessary (e.g., "User expresses dissatisfaction")
+</summary_formatting>
 `
 
 	summaryPrefix = `Several lengthy dialogues have already taken place. The following is a condensed summary of the progress of these historical dialogues:

@@ -136,6 +136,11 @@ func (m *Memory) updateHistoryWithAbstract(history []types.Message, abstract str
 		return
 	}
 
+	if abstract == "" {
+		m.logger.Errorw("abstract history is empty", "mid", m.mid)
+		return
+	}
+
 	m.mux.Lock()
 	defer m.mux.Unlock()
 
@@ -157,7 +162,7 @@ func (m *Memory) updateHistoryWithAbstract(history []types.Message, abstract str
 	m.history = m.history[:0]
 
 	m.tokens = 0
-	m.history = append(m.history, types.Message{AgentMessage: abstract})
+	m.history = append(m.history, types.Message{AgentMessage: summaryPrefix + abstract})
 	m.history = append(m.history, keep...)
 	for _, msg := range m.history {
 		m.tokens += msg.FuzzyTokens()

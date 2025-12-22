@@ -60,11 +60,14 @@ func (a *Agent) Chat(ctx context.Context, req *agtapi.Request) *agtapi.Response 
 	req.Memory.AppendMessages(types.Message{UserMessage: req.UserMessage})
 
 	buf := &bytes.Buffer{}
+	buf.WriteString(a.opt.LeaderPrompt)
 	if a.opt.SystemPrompt != "" {
+		buf.WriteString("\n")
+		buf.WriteString("<user_requirements>\n")
 		buf.WriteString(a.opt.SystemPrompt)
 		buf.WriteString("\n")
+		buf.WriteString("</user_requirements>\n")
 	}
-	buf.WriteString(a.opt.LeaderPrompt)
 
 	var leaderTools []*tools.Tool
 	leaderTools = append(leaderTools, planningAgt.PlanningTools()...)
@@ -253,9 +256,6 @@ func New(name, desc string, llm openai.Client, opt Option) *Agent {
 	if opt.SubAgentPrompt == "" {
 		opt.SubAgentPrompt = SUBAGENT_PROMPT
 	}
-	if opt.CitationPrompt == "" {
-		opt.CitationPrompt = CITATION_PROMPT
-	}
 	if opt.SummaryPrompt == "" {
 		opt.SummaryPrompt = SUMMARYRE_SYSTEM_PROMPT
 	}
@@ -279,7 +279,6 @@ type Option struct {
 	LeaderPrompt         string
 	SubAgentPrompt       string
 	SystemPrompt         string
-	CitationPrompt       string
 	SummaryPrompt        string
 	MaxResearchLoopTimes int
 	Tools                []*tools.Tool
