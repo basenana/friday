@@ -127,7 +127,7 @@ type OptionSetter func(*Memory)
 func NewEmpty(ctxID string, setters ...OptionSetter) *Memory {
 	mem := &Memory{
 		ctxID:   ctxID,
-		session: newLimitedSession(ctxID),
+		session: newLimitedSession(ctxID, 20),
 		history: make([]types.Message, 0, 10), logger: logger.New("memory"),
 	}
 
@@ -151,6 +151,12 @@ func New(session Session, setters ...OptionSetter) *Memory {
 
 	mem.history = session.History(context.TODO())
 	return mem
+}
+
+func WithUnlimitedSession() OptionSetter {
+	return func(m *Memory) {
+		m.session = newLimitedSession(m.ctxID, -1)
+	}
 }
 
 func WithHistory(history ...types.Message) OptionSetter {

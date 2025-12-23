@@ -127,7 +127,7 @@ func (m *MemoryCompact) summaryMessage(ctx context.Context, payload *types.Sessi
 
 	stream := m.simple.Chat(ctx, &agtapi.Request{
 		UserMessage: "Please summarize the historical messages as required, from now on, every character you output will become part of the abstract",
-		Memory:      memory.NewEmpty(m.session.ID(), memory.WithHistory(history...)),
+		Memory:      memory.NewEmpty(m.session.ID(), memory.WithHistory(history...), memory.WithUnlimitedSession()),
 	})
 	abstract, err := agtapi.ReadAllContent(ctx, stream)
 	if err != nil {

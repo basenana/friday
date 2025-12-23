@@ -21,8 +21,8 @@ type limitedSession struct {
 	historyLimit int
 }
 
-func newLimitedSession(id string) Session {
-	return &limitedSession{id: id, historyLimit: 20}
+func newLimitedSession(id string, limited int) Session {
+	return &limitedSession{id: id, historyLimit: limited}
 }
 
 func (e *limitedSession) ID() string {
@@ -42,7 +42,7 @@ func (e *limitedSession) RunHooks(ctx context.Context, hookName string, payload 
 		return nil
 	}
 
-	if len(payload.History) > e.historyLimit {
+	if e.historyLimit > 0 && len(payload.History) > e.historyLimit {
 		payload.History = payload.History[:e.historyLimit]
 	}
 	return nil
