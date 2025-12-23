@@ -9,8 +9,10 @@ import (
 )
 
 type Storehouse interface {
-	FilterSessions(ctx context.Context, filter map[string]string, includesClosed bool) ([]*types.Session, error)
-	OpenSession(ctx context.Context, session *types.Session) (*types.Session, error)
+	ListSessions(ctx context.Context, filter map[string]string, includesClosed bool) ([]*types.Session, error)
+	CreateSession(ctx context.Context, session *types.Session) (*types.Session, error)
+	UpdateSession(ctx context.Context, session *types.Session) error
+	OpenSession(ctx context.Context, sessionID string) (*types.Session, error)
 	AppendMessages(ctx context.Context, sessionID string, message ...*types.Message) error
 	ListMessages(ctx context.Context, sessionID string) ([]*types.Message, error)
 	CloseSession(ctx context.Context, sessionID string) error

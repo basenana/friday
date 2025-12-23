@@ -1,8 +1,10 @@
-package memory
+package session
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/basenana/friday/tools"
@@ -14,14 +16,13 @@ type Notebook interface {
 	ListNotes(ctx context.Context) ([]*Note, error)
 	GetNote(ctx context.Context, id string) (*Note, error)
 	SaveOrUpdate(ctx context.Context, note *Note) (*Note, error)
-	ReadTools() []*tools.Tool
-	WriteTools() []*tools.Tool
 }
 
 type Note struct {
-	ID      string `json:"id"`
-	Title   string `json:"title"`
-	Content string `json:"content,omitempty"`
+	ID       string `json:"id"`
+	Title    string `json:"title"`
+	Content  string `json:"content,omitempty"`
+	Filtered string `json:"filtered,omitempty"`
 }
 
 type inMemoryNotebook struct {
@@ -69,12 +70,12 @@ func (m *inMemoryNotebook) SaveOrUpdate(ctx context.Context, note *Note) (*Note,
 	return note, nil
 }
 
-func (m *inMemoryNotebook) ReadTools() []*tools.Tool {
+func NotebookReadTools(nb Notebook) []*tools.Tool {
 	return []*tools.Tool{
 		tools.NewTool("list_all_notes",
 			tools.WithDescription("List all notes that have been saved in notebook."),
 			tools.WithToolHandler(func(ctx context.Context, request *tools.Request) (*tools.Result, error) {
-				notes, err := m.ListNotes(ctx)
+				notes, err := nb.ListNotes(ctx)
 				if err != nil {
 					return tools.NewToolResultError(err.Error()), nil
 				}
@@ -92,14 +93,46 @@ func (m *inMemoryNotebook) ReadTools() []*tools.Tool {
 				tools.Required(),
 				tools.Description("The id of note. If you don't know the id, you need to use `list_all_notes` to find it."),
 			),
+			tools.WithArray("filter_keywords",
+				tools.Items(map[string]interface{}{"type": "string", "description": "The keyword that need to be filtered should be used; only rows that match the keywords will be returned."}),
+				tools.Description("Quickly search for the content you need using keywords. If no keywords are provided, the full text will be returned. Keywords are related by \"or\"."),
+			),
 			tools.WithToolHandler(func(ctx context.Context, request *tools.Request) (*tools.Result, error) {
 				nid, ok := request.Arguments["id"].(string)
 				if !ok || nid == "" {
 					return nil, fmt.Errorf("missing required parameter: id")
 				}
-				note, err := m.GetNote(ctx, nid)
+				note, err := nb.GetNote(ctx, nid)
 				if err != nil {
 					return tools.NewToolResultError(err.Error()), nil
+				}
+
+				filters, ok := request.Arguments["filter_keywords"].([]any)
+				if ok && len(filters) > 0 {
+					keywords := make(map[string]struct{})
+					for _, f := range filters {
+						keyword, ok := f.(string)
+						if ok {
+							keywords[keyword] = struct{}{}
+						}
+					}
+
+					buf := &bytes.Buffer{}
+					noteLines := strings.Split(note.Content, "\n")
+					for _, line := range noteLines {
+						for keyword := range keywords {
+							if strings.Contains(line, keyword) {
+								buf.WriteString(line)
+								buf.WriteString("\n")
+							}
+						}
+					}
+
+					note.Content = ""
+					note.Filtered = buf.String()
+					if note.Filtered == "" {
+						note.Filtered = "no filtered note"
+					}
 				}
 
 				return tools.NewToolResultText(utils.Res2Str(note)), nil
@@ -108,7 +141,7 @@ func (m *inMemoryNotebook) ReadTools() []*tools.Tool {
 	}
 }
 
-func (m *inMemoryNotebook) WriteTools() []*tools.Tool {
+func NotebookWriteTools(nb Notebook) []*tools.Tool {
 	return []*tools.Tool{
 		tools.NewTool("create_note_to_notebook",
 			tools.WithDescription("Save the data to the notebook for future access."),
@@ -131,7 +164,7 @@ func (m *inMemoryNotebook) WriteTools() []*tools.Tool {
 				}
 
 				n := &Note{ID: "", Title: title, Content: content}
-				n, err := m.SaveOrUpdate(ctx, n)
+				n, err := nb.SaveOrUpdate(ctx, n)
 				if err != nil {
 					return tools.NewToolResultError(err.Error()), nil
 				}

@@ -21,7 +21,6 @@ import (
 type Agent struct {
 	react     *react.Agent
 	simple    *simple.Agent
-	llm       openai.Client
 	subAgents []ExpertAgent
 	option    Option
 	logger    *zap.SugaredLogger
@@ -45,7 +44,7 @@ func (a *Agent) Chat(ctx context.Context, req *agtapi.Request) *agtapi.Response 
 	}
 
 	if req.Memory == nil {
-		req.Memory = memory.NewEmpty(req.Session.ID, memory.WithSummarize(a.llm))
+		req.Memory = memory.NewEmpty(req.Session.ID)
 	}
 
 	ctx = agtapi.NewContext(ctx, req.Session,
@@ -248,7 +247,6 @@ func New(name, desc string, llm openai.Client, opt Option) *Agent {
 	}
 
 	agt := &Agent{
-		llm:       llm,
 		subAgents: opt.SubAgents,
 		option:    opt,
 		logger:    logger.New("coordinator"),

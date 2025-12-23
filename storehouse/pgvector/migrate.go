@@ -38,6 +38,17 @@ func buildMigrations() []*gormigrate.Migration {
 				return nil
 			},
 		},
+		{
+			ID: "2025122000",
+			Migrate: func(db *gorm.DB) error {
+				return db.AutoMigrate(
+					&MessageModel{},
+				)
+			},
+			Rollback: func(db *gorm.DB) error {
+				return nil
+			},
+		},
 	}
 }
 

@@ -76,7 +76,7 @@ func New(postgresUrl string, embedding providers.Embedding) (*DB, error) {
 	}, nil
 }
 
-func (p *DB) FilterSessions(ctx context.Context, filter map[string]string, includesClosed bool) ([]*types.Session, error) {
+func (p *DB) ListSessions(ctx context.Context, filter map[string]string, includesClosed bool) ([]*types.Session, error) {
 	var (
 		sessions []*types.Session
 		models   []*SessionModel
@@ -103,15 +103,18 @@ func (p *DB) FilterSessions(ctx context.Context, filter map[string]string, inclu
 	return sessions, nil
 }
 
-func (p *DB) OpenSession(ctx context.Context, session *types.Session) (*types.Session, error) {
-	if session.ID == "" { // quick create new session
+func (p *DB) CreateSession(ctx context.Context, session *types.Session) (*types.Session, error) {
+	if session.ID == "" {
 		session.ID = newRecordID()
-		if err := p.dEntity.WithContext(ctx).Save(session).Error; err != nil {
-			return nil, err
-		}
-		return session, nil
 	}
 
+	if err := p.dEntity.WithContext(ctx).Save(session).Error; err != nil {
+		return nil, err
+	}
+	return session, nil
+}
+
+func (p *DB) UpdateSession(ctx context.Context, session *types.Session) error {
 	err := p.dEntity.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		model := &SessionModel{}
 		res := tx.WithContext(ctx).Where("id = ?", session.ID).Find(model)
@@ -119,7 +122,29 @@ func (p *DB) OpenSession(ctx context.Context, session *types.Session) (*types.Se
 			return res.Error
 		}
 
-		// TODO: update session configs?
+		model.From(session)
+		return tx.WithContext(ctx).Save(model).Error
+	})
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (p *DB) OpenSession(ctx context.Context, sessionID string) (*types.Session, error) {
+	var session *types.Session
+	err := p.dEntity.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		model := &SessionModel{}
+		res := tx.WithContext(ctx).Where("id = ?", sessionID).Find(model)
+		if res.Error != nil {
+			return res.Error
+		}
+
+		model.LastOpenedAt = time.Now().UnixNano()
+		res = tx.Save(model)
+		if res.Error != nil {
+			return res.Error
+		}
 
 		session = model.To()
 		return nil

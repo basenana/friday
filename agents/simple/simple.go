@@ -40,7 +40,7 @@ func (s *Agent) Chat(ctx context.Context, req *agtapi.Request) *agtapi.Response 
 	}
 
 	if req.Memory == nil {
-		req.Memory = memory.NewEmpty(req.Session.ID, memory.WithSummarize(s.llm))
+		req.Memory = memory.NewEmpty(req.Session.ID)
 	}
 
 	ctx = agtapi.NewContext(ctx, req.Session,

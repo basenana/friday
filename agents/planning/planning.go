@@ -4,8 +4,9 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/basenana/friday/tools"
 	"sort"
+
+	"github.com/basenana/friday/tools"
 
 	"github.com/basenana/friday/agents"
 	"github.com/basenana/friday/agents/agtapi"
@@ -20,7 +21,6 @@ type Agent struct {
 
 	name   string
 	desc   string
-	llm    openai.Client
 	opt    Option
 	todo   *TodoList
 	pt     []*tools.Tool
@@ -85,7 +85,6 @@ func New(name, desc string, llm openai.Client, option Option) *Agent {
 	agt := &Agent{
 		name:   name,
 		desc:   desc,
-		llm:    llm,
 		opt:    option,
 		todo:   emptyTodoList(),
 		logger: logger.New("planning"),

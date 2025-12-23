@@ -15,6 +15,10 @@ const (
 	MetadataSessionState       = "friday.state"
 	MetadataSessionStateOpen   = "open"
 	MetadataSessionStateClosed = "closed"
+
+	SessionHookBeforeModel  = "before_model"
+	SessionHookAfterModel   = "after_model"
+	SessionHookBeforeClosed = "before_closed"
 )
 
 type Session struct {
@@ -34,4 +38,9 @@ func NewDummySession() *Session {
 		Type:     SessionTypeChat,
 		Metadata: map[string]string{},
 	}
+}
+
+type SessionPayload struct {
+	ContextID string
+	History   []Message
 }

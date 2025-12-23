@@ -16,7 +16,6 @@ type Inquirer struct {
 	name   string
 	desc   string
 	react  *react.Agent
-	llm    openai.Client
 	store  storehouse.Storehouse
 	logger *zap.SugaredLogger
 }
@@ -51,7 +50,6 @@ func NewInquirer(name, desc string, llm openai.Client, store storehouse.Storehou
 			MaxToolCalls: 20,
 			Tools:        searchTools,
 		}),
-		llm:    llm,
 		store:  store,
 		logger: logger.New("inquirer"),
 	}

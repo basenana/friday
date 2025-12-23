@@ -30,16 +30,17 @@ import (
 )
 
 type SessionModel struct {
-	ID        string `gorm:"column:id;primaryKey"`
-	Type      string `gorm:"column:type"`
-	Metadata  JSON   `gorm:"column:metadata"`
-	System    string `gorm:"column:system"`
-	Purpose   string `gorm:"column:purpose"`
-	Summary   string `gorm:"column:summary"`
-	Report    string `gorm:"column:report"`
-	Feedback  string `gorm:"column:feedback"`
-	CreatedAt int64  `gorm:"column:created_at"`
-	ChangedAt int64  `gorm:"column:changed_at"`
+	ID           string `gorm:"column:id;primaryKey"`
+	Type         string `gorm:"column:type"`
+	Metadata     JSON   `gorm:"column:metadata"`
+	System       string `gorm:"column:system"`
+	Purpose      string `gorm:"column:purpose"`
+	Summary      string `gorm:"column:summary"`
+	Report       string `gorm:"column:report"`
+	Feedback     string `gorm:"column:feedback"`
+	CreatedAt    int64  `gorm:"column:created_at"`
+	ChangedAt    int64  `gorm:"column:changed_at"`
+	LastOpenedAt int64  `gorm:"column:last_opened_at"`
 }
 
 func (s *SessionModel) TableName() string {
@@ -49,6 +50,9 @@ func (s *SessionModel) TableName() string {
 func (s *SessionModel) From(session *types.Session) {
 	s.ID = session.ID
 	s.Type = string(session.Type)
+	if session.Metadata != nil {
+		session.Metadata = make(map[string]string)
+	}
 	s.Metadata, _ = json.Marshal(session.Metadata)
 	s.System = session.System
 	s.Purpose = session.Purpose
@@ -80,6 +84,7 @@ func (s *SessionModel) To() *types.Session {
 type MessageModel struct {
 	ID        int64  `gorm:"column:id;primaryKey;autoIncrement"`
 	SessionID string `gorm:"column:session_id;index:msg_session"`
+	Metadata  JSON   `gorm:"column:metadata"`
 	Content   JSON   `gorm:"column:content"`
 	CreatedAt int64  `gorm:"column:created_at"`
 	ChangedAt int64  `gorm:"column:changed_at"`
@@ -91,6 +96,10 @@ func (m *MessageModel) TableName() string {
 
 func (m *MessageModel) From(sessionID string, msg *types.Message) {
 	m.SessionID = sessionID
+	if msg.Metadata == nil {
+		msg.Metadata = make(map[string]string)
+	}
+	m.Metadata, _ = json.Marshal(msg.Metadata)
 	m.Content, _ = json.Marshal(msg)
 	m.ChangedAt = time.Now().UnixNano()
 	if m.CreatedAt == 0 {
@@ -102,6 +111,7 @@ func (m *MessageModel) To() *types.Message {
 	msg := &types.Message{}
 
 	jsonData(string(m.Content), &msg)
+	jsonData(string(m.Metadata), &msg.Metadata)
 	return msg
 }
 
@@ -121,6 +131,9 @@ func (m *MemoryModel) TableName() string {
 }
 
 func (m *MemoryModel) From(memory *types.Memory) {
+	if memory.Metadata == nil {
+		memory.Metadata = make(map[string]string)
+	}
 	m.ID = memory.ID
 	m.Metadata, _ = json.Marshal(memory.Metadata)
 	m.Overview = memory.Overview
@@ -167,6 +180,9 @@ func (d *DocumentModel) TableName() string {
 }
 
 func (d *DocumentModel) From(doc *types.Document) {
+	if doc.Metadata == nil {
+		doc.Metadata = make(map[string]string)
+	}
 	d.ID = doc.ID
 	d.Metadata, _ = json.Marshal(doc.Metadata)
 	d.Title = doc.Title
@@ -205,6 +221,9 @@ func (v *ChunkModel) TableName() string {
 }
 
 func (v *ChunkModel) From(ck *types.Chunk) {
+	if ck.Metadata == nil {
+		ck.Metadata = make(map[string]string)
+	}
 	v.ID = ck.ID
 	v.Type = ck.Type
 	v.Metadata, _ = json.Marshal(ck.Metadata)

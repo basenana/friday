@@ -45,7 +45,7 @@ func (a *Agent) Chat(ctx context.Context, req *agtapi.Request) *agtapi.Response 
 	}
 
 	if req.Memory == nil {
-		req.Memory = memory.NewEmpty(req.Session.ID, memory.WithSummarize(a.llm))
+		req.Memory = memory.NewEmpty(req.Session.ID)
 	}
 
 	ctx = agtapi.NewContext(ctx, req.Session,
@@ -71,6 +71,7 @@ func (a *Agent) reactLoop(ctx context.Context, session *types.Session, mem *memo
 		toolCalled  = 0
 		supplements []types.Message
 		stream      openai.Response
+		err         error
 	)
 
 	defer func() {
@@ -88,7 +89,18 @@ func (a *Agent) reactLoop(ctx context.Context, session *types.Session, mem *memo
 		case <-ctx.Done():
 			return
 		default:
+			err = mem.RunBeforeModelHook(ctx)
+			if err != nil {
+				resp.Fail(err)
+				return
+			}
 			stream = a.llm.Completion(ctx, newLLMRequest(a.option.SystemPrompt, mem, a.tools))
+			err = mem.RunAfterModelHook(ctx)
+			if err != nil {
+				resp.Fail(err)
+				return
+			}
+
 			supplements, statusCode = a.handleLLMStream(ctx, stream, session, mem, resp)
 		}
 

@@ -20,7 +20,6 @@ type Learner struct {
 	chunkType     string
 	chunkMetadata map[string]string
 	react         *react.Agent
-	llm           openai.Client
 	store         storehouse.Storehouse
 	logger        *zap.SugaredLogger
 }
@@ -90,7 +89,6 @@ func NewLearner(llm openai.Client, store storehouse.Storehouse, chunkType string
 	learner := &Learner{
 		chunkType:     chunkType,
 		chunkMetadata: chunkMetadata,
-		llm:           llm,
 		store:         store,
 		logger:        logger.New("learner"),
 	}
