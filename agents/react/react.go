@@ -57,11 +57,11 @@ func (a *Agent) Chat(ctx context.Context, req *agtapi.Request) *agtapi.Response 
 	mem.AppendMessages(types.Message{UserMessage: req.UserMessage})
 
 	a.logger.Infow("handle request", "message", req.UserMessage, "session", req.Session.ID)
-	go a.reactLoop(ctx, req.Session, mem, resp)
+	go a.reactLoop(ctx, mem, resp)
 	return resp
 }
 
-func (a *Agent) reactLoop(ctx context.Context, session *types.Session, mem *memory.Memory, resp *agtapi.Response) {
+func (a *Agent) reactLoop(ctx context.Context, mem *memory.Memory, resp *agtapi.Response) {
 	defer resp.Close()
 
 	var (
@@ -101,7 +101,7 @@ func (a *Agent) reactLoop(ctx context.Context, session *types.Session, mem *memo
 				return
 			}
 
-			supplements, statusCode = a.handleLLMStream(ctx, stream, session, mem, resp)
+			supplements, statusCode = a.handleLLMStream(ctx, stream, mem, resp)
 		}
 
 		if statusCode == 1 {
@@ -139,7 +139,7 @@ func (a *Agent) reactLoop(ctx context.Context, session *types.Session, mem *memo
 	}
 }
 
-func (a *Agent) handleLLMStream(ctx context.Context, stream openai.Response, session *types.Session, mem *memory.Memory, resp *agtapi.Response) ([]types.Message, code) {
+func (a *Agent) handleLLMStream(ctx context.Context, stream openai.Response, mem *memory.Memory, resp *agtapi.Response) ([]types.Message, code) {
 	var (
 		content      string
 		reasoning    string
@@ -223,7 +223,7 @@ WaitMessage:
 	}
 
 	if len(toolUse) > 0 {
-		toolCallMessages := a.doToolCalls(ctx, session, toolUse, reasoning)
+		toolCallMessages := a.doToolCalls(ctx, mem, toolUse, reasoning)
 		if len(toolCallMessages) > 0 {
 			supplements = append(supplements, toolCallMessages...)
 		}
@@ -235,16 +235,12 @@ WaitMessage:
 	return supplements, statusCode
 }
 
-func (a *Agent) doToolCalls(ctx context.Context, session *types.Session, toolUses []openai.ToolUse, reasoning string) []types.Message {
+func (a *Agent) doToolCalls(ctx context.Context, mem *memory.Memory, toolUses []openai.ToolUse, reasoning string) []types.Message {
 	var (
 		result []types.Message
 		update = make(chan []types.Message, len(toolUses))
 		wg     = &sync.WaitGroup{}
 	)
-
-	if session.Metadata == nil {
-		session.Metadata = make(map[string]string)
-	}
 
 	for i := range toolUses {
 		use := toolUses[i]
@@ -252,7 +248,7 @@ func (a *Agent) doToolCalls(ctx context.Context, session *types.Session, toolUse
 		go func() {
 			defer wg.Done()
 			// for long tool use such like an agent call
-			update <- a.tryToolCall(ctx, session, use, reasoning)
+			update <- a.tryToolCall(ctx, mem, use, reasoning)
 		}()
 	}
 	wg.Wait()
@@ -267,7 +263,7 @@ func (a *Agent) doToolCalls(ctx context.Context, session *types.Session, toolUse
 	return result
 }
 
-func (a *Agent) tryToolCall(ctx context.Context, session *types.Session, use openai.ToolUse, reasoning string) []types.Message {
+func (a *Agent) tryToolCall(ctx context.Context, mem *memory.Memory, use openai.ToolUse, reasoning string) []types.Message {
 	var (
 		result    []types.Message
 		extraArgs = agtapi.OverwriteToolArgsFromContext(ctx)
@@ -298,7 +294,7 @@ func (a *Agent) tryToolCall(ctx context.Context, session *types.Session, use ope
 
 	toolUse := &ToolUse{GenID: use.ID, Name: use.Name, Arguments: use.Arguments}
 	a.logger.Infow("using tool", "tool", toolUse.Name, "args", toolUse.Arguments)
-	msg, err := toolCall(ctx, session, toolUse, extraArgs, td)
+	msg, err := toolCall(ctx, mem, toolUse, extraArgs, td)
 	if err != nil {
 		result = append(result, types.Message{ToolCallID: toolUse.ID(), ToolContent: fmt.Sprintf("using tool failed: %s", err)})
 		agtapi.SendEventToResponse(ctx, types.NewToolUseEvent(use.Name, use.Arguments, td.Description, err.Error()))

@@ -2,8 +2,8 @@ package memory
 
 import (
 	"context"
+	"github.com/basenana/friday/vfs"
 
-	"github.com/basenana/friday/tools"
 	"github.com/basenana/friday/types"
 )
 
@@ -12,7 +12,8 @@ type Session interface {
 	History(ctx context.Context) []types.Message
 	AppendMessage(cte context.Context, ctxID string, message *types.Message)
 	RunHooks(ctx context.Context, hookName string, payload *types.SessionPayload) error
-	Tools() []*tools.Tool
+	VFS() vfs.VirtualFileSystem
+	Session() *types.Session
 }
 
 type limitedSession struct {
@@ -47,6 +48,10 @@ func (e *limitedSession) RunHooks(ctx context.Context, hookName string, payload 
 	return nil
 }
 
-func (e *limitedSession) Tools() []*tools.Tool {
-	return []*tools.Tool{}
+func (e *limitedSession) VFS() vfs.VirtualFileSystem {
+	return nil
+}
+
+func (e *limitedSession) Session() *types.Session {
+	return &types.Session{ID: e.id}
 }

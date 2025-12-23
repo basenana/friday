@@ -3,6 +3,7 @@ package sessions
 import (
 	"context"
 	"fmt"
+	vfs2 "github.com/basenana/friday/vfs"
 	"os"
 	"strconv"
 
@@ -29,18 +30,18 @@ func init() {
 }
 
 type MemoryCompact struct {
-	simple   *simple.Agent
-	session  *Descriptor
-	notebook Notebook
-	logger   *zap.SugaredLogger
+	simple  *simple.Agent
+	session *Descriptor
+	vfs     vfs2.VirtualFileSystem
+	logger  *zap.SugaredLogger
 }
 
 func RegisterMemoryCompactHook(llm openai.Client, session *Descriptor) {
 	mc := &MemoryCompact{
-		simple:   simple.New("compact", "", llm, simple.Option{SystemPrompt: summarizePrompt}),
-		session:  session,
-		notebook: session.Notebook(),
-		logger:   logger.New("compact").With(zap.String("session", session.ID())),
+		simple:  simple.New("compact", "", llm, simple.Option{SystemPrompt: summarizePrompt}),
+		session: session,
+		vfs:     session.VFS(),
+		logger:  logger.New("compact").With(zap.String("session", session.ID())),
 	}
 	session.RegisterHooks(mc)
 }
@@ -89,19 +90,19 @@ func (m *MemoryCompact) compactMessages(ctx context.Context, payload *types.Sess
 			continue
 		}
 
-		if i < needKeepIdx && msg.ToolCallID != "" && len(msg.ToolContent) > 200 {
-			n, err := m.notebook.SaveOrUpdate(ctx, &Note{
-				Title:   "Tool Result for " + msg.ToolCallID,
-				Content: msg.ToolContent,
+		if i < needKeepIdx && msg.ToolCallID != "" && len(msg.ToolContent) > 500 {
+			n, err := m.vfs.WriteFile(ctx, &vfs2.VFile{
+				Abstract: "Tool Result for " + msg.ToolCallID,
+				Content:  msg.ToolContent,
 			})
 			if err != nil {
-				m.logger.Errorw("save note for compact error", "err", err.Error())
+				m.logger.Errorw("save file for compact error", "err", err.Error())
 				afterTokens += msg.FuzzyTokens()
 				newHistory = append(newHistory, msg)
 				continue
 			}
 
-			msg.ToolContent = remindMessage(n.ID)
+			msg.ToolContent = remindMessage(n.Filename)
 			afterTokens += msg.FuzzyTokens()
 			newHistory = append(newHistory, msg)
 			continue
@@ -182,37 +183,6 @@ func (m *MemoryCompact) updateHistoryWithAbstract(history []types.Message, abstr
 	return newHistory
 }
 
-func (m *MemoryCompact) compactToolUse(ctx context.Context, payload *types.SessionPayload) error {
-	notebookCalls := make(map[string]bool)
-	for i, msg := range payload.History {
-		if msg.ToolName == "" && msg.ToolContent == "" {
-			continue
-		}
-
-		if msg.ToolName == "retrieve_from_notebook" && msg.ToolCallID != "" {
-			notebookCalls[msg.ToolCallID] = true
-			continue
-		}
-
-		if msg.ToolContent == "" || notebookCalls[msg.ToolCallID] || msg.FuzzyTokens() < 1000 {
-			continue
-		}
-
-		n, err := m.notebook.SaveOrUpdate(ctx, &Note{
-			Title:   "Tool Result for " + msg.ToolCallID,
-			Content: msg.ToolContent,
-		})
-		if err != nil {
-			m.logger.Errorw("save note for compact tool use error", "err", err.Error())
-			continue
-		}
-
-		msg.ToolContent = remindMessage(n.ID)
-		payload.History[i] = msg
-	}
-	return nil
-}
-
 func theIndexAfterKeep(msgLen int) int {
 	mid := msgLen / 2
 	keep5 := msgLen - 5
@@ -222,8 +192,8 @@ func theIndexAfterKeep(msgLen int) int {
 	return mid
 }
 
-func remindMessage(nid string) string {
-	return fmt.Sprintf("The original content was saved in notebook, note id is %s. Use tools to obtain the original text if needed.", nid)
+func remindMessage(fname string) string {
+	return fmt.Sprintf("The original content has been write to file %s. Use tools to retrieve the original text if needed.", fname)
 }
 
 const (

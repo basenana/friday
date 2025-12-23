@@ -5,12 +5,12 @@ import (
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
+	"github.com/basenana/friday/vfs"
 	"hash/fnv"
 
 	"github.com/basenana/friday/memory"
 	"github.com/basenana/friday/providers/openai"
 	"github.com/basenana/friday/tools"
-	"github.com/basenana/friday/types"
 )
 
 var (
@@ -40,8 +40,8 @@ func (t *ToolUse) ID() string {
 	return t.GenID
 }
 
-func toolCall(ctx context.Context, session *types.Session, use *ToolUse, extraArgs map[string]string, td *tools.Tool) (string, error) {
-	req := &tools.Request{Arguments: make(map[string]interface{}), Session: session}
+func toolCall(ctx context.Context, mem *memory.Memory, use *ToolUse, extraArgs map[string]string, td *tools.Tool) (string, error) {
+	req := &tools.Request{Arguments: make(map[string]interface{}), Session: mem.Session()}
 	if err := json.Unmarshal([]byte(use.Arguments), &req.Arguments); err != nil {
 		return "", fmt.Errorf("unmarshal json argument failed: %s", err)
 	}
@@ -61,6 +61,20 @@ func toolCall(ctx context.Context, session *types.Session, use *ToolUse, extraAr
 	content, err := json.MarshalIndent(result, "", "  ")
 	if err != nil {
 		return "", fmt.Errorf("marshal tool %s result failed: %s", use.Name, err)
+	}
+
+	if len(content) > 1000 {
+		fs := mem.VFS()
+		f, err := fs.WriteFile(ctx, &vfs.VFile{
+			Filename: fmt.Sprintf("tool-call-%s.txt", use.ID()),
+			Abstract: "Tool call result",
+			Content:  string(content),
+		})
+		if err != nil {
+			return "", fmt.Errorf("write tool result to file failed: %s", err)
+		}
+
+		content = []byte(fmt.Sprintf("The tool's execution result was successfully saved in file %s.", f.Filename))
 	}
 
 	return string(content), nil

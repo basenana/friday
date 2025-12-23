@@ -2,6 +2,7 @@ package sessions
 
 import (
 	"context"
+	"github.com/basenana/friday/vfs"
 	"strings"
 	"sync"
 	"time"
@@ -60,21 +61,21 @@ func NewManager(store storehouse.Storehouse) *Manager {
 }
 
 type Descriptor struct {
-	session  *types.Session
-	store    storehouse.Storehouse
-	hooks    map[string][]HookHandler
-	notebook Notebook
-	mux      sync.Mutex
-	logger   *zap.SugaredLogger
+	session *types.Session
+	store   storehouse.Storehouse
+	hooks   map[string][]HookHandler
+	vfs     vfs.VirtualFileSystem
+	mux     sync.Mutex
+	logger  *zap.SugaredLogger
 }
 
 func newSessionDescriptor(s *types.Session, store storehouse.Storehouse) *Descriptor {
 	return &Descriptor{
-		session:  s,
-		store:    store,
-		hooks:    make(map[string][]HookHandler),
-		notebook: NewInMemoryNotebook(),
-		logger:   logger.New("session").With(zap.String("id", s.ID)),
+		session: s,
+		store:   store,
+		hooks:   make(map[string][]HookHandler),
+		vfs:     vfs.NewInMemoryFS(),
+		logger:  logger.New("session").With(zap.String("id", s.ID)),
 	}
 }
 
@@ -134,12 +135,12 @@ func (d *Descriptor) Session() *types.Session {
 	return d.session
 }
 
-func (d *Descriptor) Notebook() Notebook {
-	return d.notebook
+func (d *Descriptor) VFS() vfs.VirtualFileSystem {
+	return d.vfs
 }
 
 func (d *Descriptor) Tools() []*tools.Tool {
-	return NotebookReadTools(d.notebook)
+	return tools.ReadTools(d.vfs)
 }
 
 func (d *Descriptor) Close() error {
