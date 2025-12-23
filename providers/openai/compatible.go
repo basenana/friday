@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"encoding/xml"
+	"github.com/openai/openai-go/packages/param"
 	"time"
 
 	"github.com/basenana/friday/utils/logger"
@@ -71,7 +72,80 @@ func (c *CompatibleClient) Completion(ctx context.Context, request Request) Resp
 }
 
 func (c *CompatibleClient) chatCompletionNewParams(request Request) *openai.ChatCompletionNewParams {
-	p := c.client.chatCompletionNewParams(request)
+	p := &openai.ChatCompletionNewParams{
+		Messages: []openai.ChatCompletionMessageParamUnion{},
+		Model:    c.model.Name,
+		TopP:     param.NewOpt(1.0),
+		N:        param.NewOpt(int64(1)),
+	}
+
+	if c.model.Temperature != nil {
+		p.Temperature = param.NewOpt(*c.model.Temperature)
+	}
+	if c.model.FrequencyPenalty != nil {
+		p.FrequencyPenalty = param.NewOpt(*c.model.FrequencyPenalty)
+	}
+	if c.model.PresencePenalty != nil {
+		p.PresencePenalty = param.NewOpt(*c.model.PresencePenalty)
+	}
+
+	history := request.History()
+	for _, msg := range history {
+		switch {
+		case msg.SystemMessage != "":
+			p.Messages = append(p.Messages,
+				openai.SystemMessage(msg.SystemMessage),
+			)
+
+		case msg.UserMessage != "":
+			p.Messages = append(p.Messages,
+				openai.UserMessage(msg.UserMessage),
+			)
+
+		case msg.AgentMessage != "":
+			p.Messages = append(p.Messages,
+				openai.UserMessage(msg.AgentMessage),
+			)
+
+		case msg.AssistantMessage != "":
+			p.Messages = append(p.Messages,
+				openai.AssistantMessage(msg.AssistantMessage),
+			)
+
+		case msg.ToolName != "": // tool call
+			tmsg := &openai.ChatCompletionAssistantMessageParam{
+				ToolCalls: []openai.ChatCompletionMessageToolCallParam{
+					{ID: msg.ToolCallID, Function: openai.ChatCompletionMessageToolCallFunctionParam{Arguments: msg.ToolArguments, Name: msg.ToolName}, Type: "function"},
+				},
+			}
+			if msg.AssistantReasoning != "" {
+				tmsg.SetExtraFields(map[string]any{"reasoning_content": msg.AssistantReasoning})
+			}
+			p.Messages = append(p.Messages,
+				openai.ChatCompletionMessageParamUnion{OfAssistant: tmsg},
+			)
+
+		case msg.ToolContent != "":
+			tur := &ToolUseResult{Name: msg.ToolCallID, Result: msg.ToolContent}
+			content, err := xml.Marshal(tur)
+			if err == nil {
+				p.Messages = append(p.Messages,
+					openai.ToolMessage(string(content), msg.ToolCallID),
+				)
+			} else {
+				p.Messages = append(p.Messages,
+					openai.ToolMessage(msg.ToolContent, msg.ToolCallID),
+				)
+			}
+
+		case msg.ImageURL != "":
+			p.Messages = append(p.Messages,
+				openai.UserMessage([]openai.ChatCompletionContentPartUnionParam{
+					openai.ImageContentPart(openai.ChatCompletionContentPartImageImageURLParam{URL: msg.ImageURL}),
+				}),
+			)
+		}
+	}
 
 	// rewrite system prompt
 	toolList := request.ToolDefines()

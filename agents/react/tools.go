@@ -40,12 +40,6 @@ func (t *ToolUse) ID() string {
 	return t.GenID
 }
 
-type ToolUseResult struct {
-	XMLName xml.Name `xml:"tool_use_result"`
-	Name    string   `xml:"name"`
-	Result  string   `xml:"result"`
-}
-
 func toolCall(ctx context.Context, session *types.Session, use *ToolUse, extraArgs map[string]string, td *tools.Tool) (string, error) {
 	req := &tools.Request{Arguments: make(map[string]interface{}), Session: session}
 	if err := json.Unmarshal([]byte(use.Arguments), &req.Arguments); err != nil {
@@ -69,11 +63,6 @@ func toolCall(ctx context.Context, session *types.Session, use *ToolUse, extraAr
 		return "", fmt.Errorf("marshal tool %s result failed: %s", use.Name, err)
 	}
 
-	tur := &ToolUseResult{Name: use.Name, Result: string(content)}
-	content, err = xml.Marshal(tur)
-	if err != nil {
-		return "", fmt.Errorf("marshal tool use %s result failed: %s", use.Name, err)
-	}
 	return string(content), nil
 }
 

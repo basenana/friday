@@ -72,8 +72,8 @@ func (m *inMemoryNotebook) SaveOrUpdate(ctx context.Context, note *Note) (*Note,
 
 func NotebookReadTools(nb Notebook) []*tools.Tool {
 	return []*tools.Tool{
-		tools.NewTool("list_all_notes",
-			tools.WithDescription("List all notes that have been saved in notebook."),
+		tools.NewTool("list_all_from_notebook",
+			tools.WithDescription("Your previous work will be saved in this notebook. This tool can list all notes that have been saved in notebook."),
 			tools.WithToolHandler(func(ctx context.Context, request *tools.Request) (*tools.Result, error) {
 				notes, err := nb.ListNotes(ctx)
 				if err != nil {
@@ -87,11 +87,11 @@ func NotebookReadTools(nb Notebook) []*tools.Tool {
 				return tools.NewToolResultText(utils.Res2Str(notes)), nil
 			}),
 		),
-		tools.NewTool("retrieve_from_notebook",
-			tools.WithDescription("This tool reads saved note content."),
+		tools.NewTool("retrieve_note_from_notebook",
+			tools.WithDescription("Use this tool to recall or search for notes. It's recommended to filter queries using combined keywords to reduce the burden on the context."),
 			tools.WithString("id",
 				tools.Required(),
-				tools.Description("The id of note. If you don't know the id, you need to use `list_all_notes` to find it."),
+				tools.Description("The id of note. If you don't know the id, you need to use `list_all_from_notebook` to find it."),
 			),
 			tools.WithArray("filter_keywords",
 				tools.Items(map[string]interface{}{"type": "string", "description": "The keyword that need to be filtered should be used; only rows that match the keywords will be returned."}),

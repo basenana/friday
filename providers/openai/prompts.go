@@ -1,5 +1,7 @@
 package openai
 
+import "encoding/xml"
+
 const (
 	DEFAULT_STRUCTURED_PREDICT_PROMPT = `<background>
 You are a intelligent data processing engine. Your core objective is to analyze the user's request, perform reasoning and computation using logic and knowledge, and ultimately deliver the processed result in the form of a **perfectly formatted JSON object that strictly complies with the provided JSON Schema**.
@@ -195,4 +197,10 @@ type ToolPrompt struct {
 
 type ToolDefinePrompt struct {
 	Tools []ToolPrompt `xml:"tools"`
+}
+
+type ToolUseResult struct {
+	XMLName xml.Name `xml:"tool_use_result"`
+	Name    string   `xml:"name"`
+	Result  string   `xml:"result"`
 }

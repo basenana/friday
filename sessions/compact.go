@@ -46,7 +46,7 @@ func RegisterMemoryCompactHook(llm openai.Client, session *Descriptor) {
 }
 
 func (m *MemoryCompact) GetHooks() map[string][]HookHandler {
-	return map[string][]HookHandler{types.SessionHookBeforeModel: {m.compactToolUse, m.compactHistory}}
+	return map[string][]HookHandler{types.SessionHookBeforeModel: {m.compactHistory}, types.SessionHookAfterModel: {m.compactToolUse}}
 }
 
 func (m *MemoryCompact) compactHistory(ctx context.Context, payload *types.SessionPayload) error {
@@ -89,7 +89,7 @@ func (m *MemoryCompact) compactMessages(ctx context.Context, payload *types.Sess
 			continue
 		}
 
-		if i < needKeepIdx && msg.ToolCallID != "" && len(msg.ToolContent) > 150 {
+		if i < needKeepIdx && msg.ToolCallID != "" && len(msg.ToolContent) > 200 {
 			n, err := m.notebook.SaveOrUpdate(ctx, &Note{
 				Title:   "tool-result-" + msg.ToolCallID,
 				Content: msg.ToolContent,
@@ -223,7 +223,7 @@ func theIndexAfterKeep(msgLen int) int {
 }
 
 func remindMessage(nid string) string {
-	return fmt.Sprintf("Retrieve from notebook with id: %s if needed", nid)
+	return fmt.Sprintf("The original content was saved in the notebook. Retrieve or search from notebook with note id: %s if needed", nid)
 }
 
 const (
