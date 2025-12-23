@@ -5,7 +5,7 @@ import (
 )
 
 func Res2Str(obj interface{}) string {
-	raw, err := json.Marshal(obj)
+	raw, err := json.MarshalIndent(obj, "", "  ")
 	if err != nil {
 		return err.Error()
 	}

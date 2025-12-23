@@ -58,7 +58,7 @@ func toolCall(ctx context.Context, session *types.Session, use *ToolUse, extraAr
 	if err != nil {
 		return "", err
 	}
-	content, err := json.Marshal(result)
+	content, err := json.MarshalIndent(result, "", "  ")
 	if err != nil {
 		return "", fmt.Errorf("marshal tool %s result failed: %s", use.Name, err)
 	}
