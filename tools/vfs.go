@@ -1,15 +1,13 @@
 package tools
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"github.com/basenana/friday/utils"
 	"github.com/basenana/friday/vfs"
-	"strings"
 )
 
-func ReadTools(fs vfs.VirtualFileSystem) []*Tool {
+func VFSReadTools(fs vfs.VirtualFileSystem) []*Tool {
 	return []*Tool{
 		NewTool("list_all_files",
 			WithDescription("Your previous work will be saved in the work dir. This tool can list all files that have been saved."),
@@ -48,30 +46,19 @@ func ReadTools(fs vfs.VirtualFileSystem) []*Tool {
 
 				filters, ok := request.Arguments["filter_keywords"].([]any)
 				if ok && len(filters) > 0 {
-					keywords := make(map[string]struct{})
+					var keywords []string
 					for _, f := range filters {
 						keyword, ok := f.(string)
 						if ok {
-							keywords[keyword] = struct{}{}
+							keywords = append(keywords, keyword)
 						}
 					}
 
-					buf := &bytes.Buffer{}
-					contentLines := strings.Split(f.Content, "\n")
-					for _, line := range contentLines {
-						for keyword := range keywords {
-							if strings.Contains(line, keyword) {
-								buf.WriteString(line)
-								buf.WriteString("\n")
-							}
-						}
-					}
-
-					f.Content = ""
-					f.Filtered = buf.String()
+					f.Filtered = utils.GrepC(f.Content, 3, keywords...)
 					if f.Filtered == "" {
 						f.Filtered = "no filtered content"
 					}
+					f.Content = ""
 				}
 
 				return NewToolResultText(utils.Res2Str(f)), nil
@@ -80,7 +67,7 @@ func ReadTools(fs vfs.VirtualFileSystem) []*Tool {
 	}
 }
 
-func WriteTools(fs vfs.VirtualFileSystem) []*Tool {
+func VFSWriteTools(fs vfs.VirtualFileSystem) []*Tool {
 	return []*Tool{
 		NewTool("write_file",
 			WithDescription("Save the data to workdir for future access."),

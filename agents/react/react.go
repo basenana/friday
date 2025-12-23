@@ -278,7 +278,7 @@ func (a *Agent) tryToolCall(ctx context.Context, mem *memory.Memory, use openai.
 	// DeepSeek v3.2: if the model support using tool in reasoning, the reasoning need return
 	result = append(result, types.Message{ToolCallID: useMark, ToolName: use.Name, ToolArguments: use.Arguments, AssistantReasoning: reasoning})
 
-	td := a.getToolByName(use.Name)
+	td := a.getToolByName(mem, use.Name)
 	if td == nil {
 		msg := fmt.Sprintf("tool %s not found", use.Name)
 		result = append(result, types.Message{ToolCallID: useMark, ToolContent: msg})
@@ -307,7 +307,12 @@ func (a *Agent) tryToolCall(ctx context.Context, mem *memory.Memory, use openai.
 	return result
 }
 
-func (a *Agent) getToolByName(name string) *tools.Tool {
+func (a *Agent) getToolByName(mem *memory.Memory, name string) *tools.Tool {
+	for _, tool := range mem.Tools() {
+		if tool.Name == name {
+			return tool
+		}
+	}
 	for _, tool := range a.tools {
 		if tool.Name == name {
 			return tool

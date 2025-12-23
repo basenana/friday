@@ -19,6 +19,7 @@ type Memory struct {
 	session Session
 
 	history []types.Message
+	tools   []*tools.Tool
 	mux     sync.Mutex
 
 	tokens int64
@@ -85,11 +86,16 @@ func (m *Memory) Session() *types.Session {
 }
 
 func (m *Memory) Tools() []*tools.Tool {
+	if m.tools != nil {
+		return m.tools
+	}
+
 	memoryTools := make([]*tools.Tool, 0)
 	if v := m.session.VFS(); v != nil {
-		memoryTools = append(memoryTools, tools.ReadTools(v)...)
+		memoryTools = append(memoryTools, tools.VFSReadTools(v)...)
 	}
-	return memoryTools
+	m.tools = memoryTools
+	return m.tools
 }
 
 func (m *Memory) Tokens() int64 {

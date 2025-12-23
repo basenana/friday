@@ -140,7 +140,7 @@ func (d *Descriptor) VFS() vfs.VirtualFileSystem {
 }
 
 func (d *Descriptor) Tools() []*tools.Tool {
-	return tools.ReadTools(d.vfs)
+	return tools.VFSReadTools(d.vfs)
 }
 
 func (d *Descriptor) Close() error {
