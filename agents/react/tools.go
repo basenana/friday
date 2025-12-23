@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
-	"github.com/basenana/friday/vfs"
 	"hash/fnv"
 
 	"github.com/basenana/friday/memory"
@@ -41,7 +40,7 @@ func (t *ToolUse) ID() string {
 }
 
 func toolCall(ctx context.Context, mem *memory.Memory, use *ToolUse, extraArgs map[string]string, td *tools.Tool) (string, error) {
-	req := &tools.Request{Arguments: make(map[string]interface{}), Session: mem.Session()}
+	req := &tools.Request{Arguments: make(map[string]interface{}), Session: mem.Session(), VFS: mem.VFS()}
 	if err := json.Unmarshal([]byte(use.Arguments), &req.Arguments); err != nil {
 		return "", fmt.Errorf("unmarshal json argument failed: %s", err)
 	}
@@ -61,20 +60,6 @@ func toolCall(ctx context.Context, mem *memory.Memory, use *ToolUse, extraArgs m
 	content, err := json.MarshalIndent(result, "", "  ")
 	if err != nil {
 		return "", fmt.Errorf("marshal tool %s result failed: %s", use.Name, err)
-	}
-
-	if len(content) > 1000 {
-		fs := mem.VFS()
-		f, err := fs.WriteFile(ctx, &vfs.VFile{
-			Filename: fmt.Sprintf("tool-call-%s.txt", use.ID()),
-			Abstract: "Tool call result",
-			Content:  string(content),
-		})
-		if err != nil {
-			return "", fmt.Errorf("write tool result to file failed: %s", err)
-		}
-
-		content = []byte(fmt.Sprintf("The tool's execution result was successfully saved in file %s.", f.Filename))
 	}
 
 	return string(content), nil
