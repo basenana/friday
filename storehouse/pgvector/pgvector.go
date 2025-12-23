@@ -108,7 +108,9 @@ func (p *DB) CreateSession(ctx context.Context, session *types.Session) (*types.
 		session.ID = newRecordID()
 	}
 
-	if err := p.dEntity.WithContext(ctx).Save(session).Error; err != nil {
+	model := &SessionModel{}
+	model.From(session)
+	if err := p.dEntity.WithContext(ctx).Save(model).Error; err != nil {
 		return nil, err
 	}
 	return session, nil
