@@ -1,4 +1,4 @@
-package session
+package sessions
 
 import (
 	"context"
@@ -12,23 +12,23 @@ type Hooks interface {
 	GetHooks() map[string][]HookHandler
 }
 
-func (s *Session) RegisterHooks(hooks Hooks) {
+func (d *Descriptor) RegisterHooks(hooks Hooks) {
 	next := hooks.GetHooks()
-	s.mux.Lock()
-	defer s.mux.Unlock()
-	if s.hooks == nil {
-		s.hooks = make(map[string][]HookHandler)
+	d.mux.Lock()
+	defer d.mux.Unlock()
+	if d.hooks == nil {
+		d.hooks = make(map[string][]HookHandler)
 	}
 
 	for hookName, hookFuncs := range next {
-		s.hooks[hookName] = append(s.hooks[hookName], hookFuncs...)
+		d.hooks[hookName] = append(d.hooks[hookName], hookFuncs...)
 	}
 }
 
-func (s *Session) RunHooks(ctx context.Context, hookName string, payload *types.SessionPayload) error {
-	s.mux.Lock()
-	hooks, ok := s.hooks[hookName]
-	s.mux.Unlock()
+func (d *Descriptor) RunHooks(ctx context.Context, hookName string, payload *types.SessionPayload) error {
+	d.mux.Lock()
+	hooks, ok := d.hooks[hookName]
+	d.mux.Unlock()
 
 	if !ok || len(hooks) == 0 {
 		return nil

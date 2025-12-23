@@ -1,4 +1,4 @@
-package session
+package sessions
 
 import (
 	"context"
@@ -30,12 +30,12 @@ func init() {
 
 type MemoryCompact struct {
 	simple   *simple.Agent
-	session  *Session
+	session  *Descriptor
 	notebook Notebook
 	logger   *zap.SugaredLogger
 }
 
-func RegisterMemoryCompactHook(llm openai.Client, session *Session) {
+func RegisterMemoryCompactHook(llm openai.Client, session *Descriptor) {
 	mc := &MemoryCompact{
 		simple:   simple.New("compact", "", llm, simple.Option{SystemPrompt: summarizePrompt}),
 		session:  session,

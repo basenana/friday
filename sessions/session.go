@@ -1,4 +1,4 @@
-package session
+package sessions
 
 import (
 	"context"
@@ -40,12 +40,12 @@ func (m *Manager) NewAgenticSession(ctx context.Context, metadata map[string]str
 	return m.store.CreateSession(ctx, session)
 }
 
-func (m *Manager) OpenSession(ctx context.Context, sessionID string) (*Session, error) {
+func (m *Manager) OpenSession(ctx context.Context, sessionID string) (*Descriptor, error) {
 	s, err := m.store.OpenSession(ctx, sessionID)
 	if err != nil {
 		return nil, err
 	}
-	return NewSession(s, m.store), nil
+	return newSessionDescriptor(s, m.store), nil
 }
 
 func (m *Manager) DeleteSession(ctx context.Context, sessionID string) error {
@@ -59,7 +59,7 @@ func NewManager(store storehouse.Storehouse) *Manager {
 	}
 }
 
-type Session struct {
+type Descriptor struct {
 	session  *types.Session
 	store    storehouse.Storehouse
 	hooks    map[string][]HookHandler
@@ -68,8 +68,8 @@ type Session struct {
 	logger   *zap.SugaredLogger
 }
 
-func NewSession(s *types.Session, store storehouse.Storehouse) *Session {
-	return &Session{
+func newSessionDescriptor(s *types.Session, store storehouse.Storehouse) *Descriptor {
+	return &Descriptor{
 		session:  s,
 		store:    store,
 		hooks:    make(map[string][]HookHandler),
@@ -78,18 +78,18 @@ func NewSession(s *types.Session, store storehouse.Storehouse) *Session {
 	}
 }
 
-func (s *Session) ID() string {
-	return s.session.ID
+func (d *Descriptor) ID() string {
+	return d.session.ID
 }
 
-func (s *Session) History(ctx context.Context) []types.Message {
-	return s.contextHistory(ctx, s.ID())
+func (d *Descriptor) History(ctx context.Context) []types.Message {
+	return d.contextHistory(ctx, d.ID())
 }
 
-func (s *Session) contextHistory(ctx context.Context, contextID string) []types.Message {
-	allMessages, err := s.store.ListMessages(ctx, contextID)
+func (d *Descriptor) contextHistory(ctx context.Context, contextID string) []types.Message {
+	allMessages, err := d.store.ListMessages(ctx, contextID)
 	if err != nil {
-		s.logger.Errorw("failed to list session messages", zap.Error(err))
+		d.logger.Errorw("failed to list session messages", zap.Error(err))
 		return nil
 	}
 
@@ -108,7 +108,7 @@ func (s *Session) contextHistory(ctx context.Context, contextID string) []types.
 	return result
 }
 
-func (s *Session) AppendMessage(ctx context.Context, ctxID string, message *types.Message) {
+func (d *Descriptor) AppendMessage(ctx context.Context, ctxID string, message *types.Message) {
 	nowAt := time.Now().Format(time.RFC3339)
 	if message.Time == "" {
 		message.Time = nowAt
@@ -118,26 +118,30 @@ func (s *Session) AppendMessage(ctx context.Context, ctxID string, message *type
 		message.Metadata = make(map[string]string)
 	}
 	message.Metadata["context_id"] = ctxID
-	err := s.store.AppendMessages(ctx, s.session.ID, message)
+	err := d.store.AppendMessages(ctx, d.session.ID, message)
 	if err != nil {
-		s.logger.Warnw("failed to save message to store", zap.Error(err))
+		d.logger.Warnw("failed to save message to store", zap.Error(err))
 	}
 }
 
-func (s *Session) UpdateSummary(ctx context.Context, purpose, abstract string) error {
-	s.session.Purpose = purpose
-	s.session.Summary = abstract
-	return s.store.UpdateSession(ctx, s.session)
+func (d *Descriptor) UpdateSummary(ctx context.Context, purpose, abstract string) error {
+	d.session.Purpose = purpose
+	d.session.Summary = abstract
+	return d.store.UpdateSession(ctx, d.session)
 }
 
-func (s *Session) Notebook() Notebook {
-	return s.notebook
+func (d *Descriptor) Session() *types.Session {
+	return d.session
 }
 
-func (s *Session) Tools() []*tools.Tool {
-	return NotebookReadTools(s.notebook)
+func (d *Descriptor) Notebook() Notebook {
+	return d.notebook
 }
 
-func (s *Session) Close() error {
-	return s.RunHooks(context.Background(), types.SessionHookBeforeClosed, &types.SessionPayload{})
+func (d *Descriptor) Tools() []*tools.Tool {
+	return NotebookReadTools(d.notebook)
+}
+
+func (d *Descriptor) Close() error {
+	return d.RunHooks(context.Background(), types.SessionHookBeforeClosed, &types.SessionPayload{})
 }
