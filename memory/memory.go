@@ -99,6 +99,8 @@ func (m *Memory) Copy() *Memory {
 		tokens:  m.tokens,
 		logger:  m.logger,
 	}
+
+	nm.history = make([]types.Message, len(m.history))
 	for i, msg := range m.history {
 		nm.history[i] = msg
 	}
