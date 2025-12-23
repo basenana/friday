@@ -1,7 +1,6 @@
 package research
 
 import (
-	"bytes"
 	"context"
 	"strings"
 	"time"
@@ -59,20 +58,10 @@ func (a *Agent) Chat(ctx context.Context, req *agtapi.Request) *agtapi.Response 
 
 	req.Memory.AppendMessages(types.Message{UserMessage: req.UserMessage})
 
-	buf := &bytes.Buffer{}
-	buf.WriteString(a.opt.LeaderPrompt)
-	if a.opt.SystemPrompt != "" {
-		buf.WriteString("\n")
-		buf.WriteString("<user_requirements>\n")
-		buf.WriteString(a.opt.SystemPrompt)
-		buf.WriteString("\n")
-		buf.WriteString("</user_requirements>\n")
-	}
-
 	var leaderTools []*tools.Tool
 	leaderTools = append(leaderTools, planningAgt.PlanningTools()...)
 	leaderTools = append(leaderTools, a.leaderTools...)
-	leader := a.newReAct("leader", "", promptWithMoreInfo(buf.String()), leaderTools)
+	leader := a.newReAct("leader", "", promptWithMoreInfo(a.opt.LeaderPrompt), leaderTools)
 	go func() {
 		defer resp.Close()
 	Retry:
@@ -263,6 +252,12 @@ func New(name, desc string, llm openai.Client, opt Option) *Agent {
 		opt.MaxResearchLoopTimes = 5
 	}
 
+	if opt.SystemPrompt != "" {
+		opt.LeaderPrompt = promptWithUserRequirements(opt.SystemPrompt, opt.LeaderPrompt)
+		opt.SubAgentPrompt = promptWithUserRequirements(opt.SystemPrompt, opt.SubAgentPrompt)
+		opt.SummaryPrompt = promptWithUserRequirements(opt.SystemPrompt, opt.SummaryPrompt)
+	}
+
 	agt := &Agent{
 		name:   name,
 		desc:   desc,
@@ -278,8 +273,8 @@ func New(name, desc string, llm openai.Client, opt Option) *Agent {
 type Option struct {
 	LeaderPrompt         string
 	SubAgentPrompt       string
-	SystemPrompt         string
 	SummaryPrompt        string
+	SystemPrompt         string
 	MaxResearchLoopTimes int
 	Tools                []*tools.Tool
 	PlanningTools        []*tools.Tool

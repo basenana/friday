@@ -56,14 +56,14 @@ func (a *Agent) runBlockingsSubagentHandler(ctx context.Context, request *tools.
 		go func(task string) {
 			var (
 				startAt = time.Now()
-				mem     = agtapi.MemoryFromContext(ctx)
+				mem     = agtapi.MemoryFromContext(ctx).Copy()
 			)
 
 			a.logger.Infof("subagent task: %s", task)
 			defer wg.Done()
 			content, err := agtapi.ReadAllContent(ctx, agt.Chat(ctx, &agtapi.Request{
 				UserMessage: task,
-				Memory:      mem.Copy(),
+				Memory:      mem,
 			}))
 			if err != nil {
 				a.logger.Warnw("run subagent task failed", "task", task, "err", err)

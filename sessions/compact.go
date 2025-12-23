@@ -91,7 +91,6 @@ func (m *MemoryCompact) compactMessages(ctx context.Context, payload *types.Sess
 
 		if i < needKeepIdx && msg.ToolCallID != "" && len(msg.ToolContent) > 200 {
 			n, err := m.notebook.SaveOrUpdate(ctx, &Note{
-				ID:      fmt.Sprintf("tool-result-%s.txt", msg.ToolCallID),
 				Title:   "Tool Result for " + msg.ToolCallID,
 				Content: msg.ToolContent,
 			})
@@ -200,7 +199,6 @@ func (m *MemoryCompact) compactToolUse(ctx context.Context, payload *types.Sessi
 		}
 
 		n, err := m.notebook.SaveOrUpdate(ctx, &Note{
-			ID:      fmt.Sprintf("tool-result-%s.txt", msg.ToolCallID),
 			Title:   "Tool Result for " + msg.ToolCallID,
 			Content: msg.ToolContent,
 		})
@@ -225,7 +223,7 @@ func theIndexAfterKeep(msgLen int) int {
 }
 
 func remindMessage(nid string) string {
-	return fmt.Sprintf("The original content was saved in file %s. Use tools to obtain the original text if needed.", nid)
+	return fmt.Sprintf("The original content was saved in notebook, note id is %s. Use tools to obtain the original text if needed.", nid)
 }
 
 const (
