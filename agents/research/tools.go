@@ -11,7 +11,7 @@ import (
 	"github.com/basenana/friday/tools"
 )
 
-func newResearchTool(agt *Agent) []*tools.Tool {
+func newLeaderTool(agt *Agent) []*tools.Tool {
 	return []*tools.Tool{
 		tools.NewTool(
 			"run_blocking_subagents",
@@ -45,7 +45,19 @@ func (a *Agent) runBlockingsSubagentHandler(ctx context.Context, request *tools.
 	}
 
 	var (
-		agt     = a.newReAct("subagent", "research worker", promptWithMoreInfo(a.opt.SubAgentPrompt), a.opt.Tools)
+		parentMem     = agtapi.MemoryFromContext(ctx)
+		subAgentTools []*tools.Tool
+	)
+	for _, t := range a.opt.Tools {
+		subAgentTools = append(subAgentTools, t)
+	}
+
+	if sp := parentMem.Scratchpad(); sp != nil {
+		subAgentTools = append(subAgentTools, tools.ScratchpadWriteTools(sp)...)
+	}
+
+	var (
+		agt     = a.newReAct("subagent", "research worker", promptWithMoreInfo(a.opt.SubAgentPrompt), subAgentTools)
 		wg      = sync.WaitGroup{}
 		result  = make(chan string, len(tasks))
 		reports []string
@@ -56,7 +68,7 @@ func (a *Agent) runBlockingsSubagentHandler(ctx context.Context, request *tools.
 		go func(task string) {
 			var (
 				startAt = time.Now()
-				mem     = agtapi.MemoryFromContext(ctx).Copy()
+				mem     = parentMem.Copy()
 			)
 
 			a.logger.Infof("subagent task: %s", task)

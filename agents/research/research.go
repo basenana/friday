@@ -265,7 +265,7 @@ func New(name, desc string, llm openai.Client, opt Option) *Agent {
 		opt:    opt,
 		logger: logger.New("research"),
 	}
-	agt.leaderTools = append(agt.leaderTools, newResearchTool(agt)...)
+	agt.leaderTools = append(agt.leaderTools, newLeaderTool(agt)...)
 
 	return agt
 }

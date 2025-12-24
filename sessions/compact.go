@@ -96,7 +96,7 @@ func (m *MemoryCompact) compactMessages(ctx context.Context, payload *types.Sess
 				Content: msg.ToolContent,
 			})
 			if err != nil {
-				m.logger.Errorw("save file for compact error", "err", err.Error())
+				m.logger.Errorw("save note for compact error", "err", err.Error())
 				afterTokens += msg.FuzzyTokens()
 				newHistory = append(newHistory, msg)
 				continue
@@ -126,6 +126,7 @@ func (m *MemoryCompact) summaryMessage(ctx context.Context, payload *types.Sessi
 	}
 
 	stream := m.summary.Chat(ctx, &agtapi.Request{
+		Session:     m.session.Session(),
 		UserMessage: "Please summarize the historical messages as required, from now on, every character you output will become part of the abstract",
 		Memory:      memory.NewEmpty(m.session.ID(), memory.WithHistory(history...), memory.WithUnlimitedSession()),
 	})
@@ -237,6 +238,27 @@ Important Data: Key figures, dates, names, and other hard information involved
 Special Context: Context that may affect understanding (e.g., preconditions, urgency)
 Emotional Labeling: Label the emotional state of participants if necessary (e.g., "User expresses dissatisfaction")
 </summary_formatting>
+
+<citation_requirements>
+- Always cite sources using markdown footnote format (e.g., [^1])
+- List all referenced URLs at the end of your response
+- Clearly distinguish between quoted information and your own analysis
+- Respond in the same language as the user's query
+
+  <citation_examples>
+    <example>
+    According to recent studies, global temperatures have risen by 1.1°C since pre-industrial times[^1].
+
+    [^1]: [Climate Report in 2023](https://example.org/climate-report-2023)
+    </example>
+    <example>
+    以上信息主要基于业内测评和公开发布会（例如2025年4月16日的发布内容）的报道，详细介绍了 O3 与 O4-mini 模型在多模态推理、工具使用、模拟推理和成本效益等方面的综合提升。[^1][^2]
+
+    [^1]: [OpenAI发布o3与o4-mini，性能爆表，可用图像思考](https://zhuanlan.zhihu.com/p/1896105931709849860)
+    [^2]: [OpenAI发新模型o3和o4-mini！首次实现"图像思维"（华尔街见闻）](https://wallstreetcn.com/articles/3745356)
+    </example>
+  </citation_examples>
+</citation_requirements>
 `
 
 	summaryPrefix = `Several lengthy dialogues have already taken place. The following is a condensed summary of the progress of these historical dialogues:
