@@ -110,6 +110,8 @@ func (m *Memory) Copy() *Memory {
 	nm := Memory{
 		ctxID:   mid,
 		session: m.session,
+		tools:   m.tools,
+		mux:     sync.Mutex{},
 		tokens:  m.tokens,
 		logger:  m.logger,
 	}

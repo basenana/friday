@@ -84,14 +84,14 @@ func ScratchpadReadTools(sp Scratchpad) []*Tool {
 			}),
 		),
 		NewTool("read_note_from_scratchpad",
-			WithDescription("Use this tool to retrieve or grep notes in the scratchpad. Obtain the full text without setting any filter_keywords."),
+			WithDescription("Use this tool to retrieve or grep notes in the scratchpad."),
 			WithString("note_id",
 				Required(),
 				Description("The id of note. If you don't know the id, you need to use `list_all_from_scratchpad` to find it."),
 			),
 			WithArray("filter_keywords",
-				Items(map[string]interface{}{"type": "string", "description": "The keyword that need to be filtered should be used; only rows that match the keywords will be returned."}),
-				Description("Quickly search for the content you need using keywords. Keywords are related by \"or\"."),
+				Items(map[string]interface{}{"type": "string", "description": "Use the keyword to filter note content; only the selected lines and their context are returned."}),
+				Description("Keyword-based note searching is very useful for long texts. Keywords are related by \"or\". Get all content without setting keywords"),
 			),
 			WithToolHandler(func(ctx context.Context, request *Request) (*Result, error) {
 				noteId, ok := request.Arguments["note_id"].(string)
