@@ -192,8 +192,8 @@ func theIndexAfterKeep(msgLen int) int {
 	return mid
 }
 
-func remindMessage(fname string) string {
-	return fmt.Sprintf("The original content has been write to file %s. Use tools to retrieve the original text if needed.", fname)
+func remindMessage(noteID string) string {
+	return fmt.Sprintf("The original content has been write to the scratchpad, note id: %s. Use tools to retrieve the original text if needed.", noteID)
 }
 
 const (
