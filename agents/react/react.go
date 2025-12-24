@@ -65,6 +65,7 @@ func (a *Agent) reactLoop(ctx context.Context, mem *memory.Memory, resp *agtapi.
 	defer resp.Close()
 
 	var (
+		session     = mem.Session().ID
 		startAt     = time.Now()
 		statusCode  code
 		extraTry    = 0
@@ -76,12 +77,12 @@ func (a *Agent) reactLoop(ctx context.Context, mem *memory.Memory, resp *agtapi.
 
 	defer func() {
 		a.logger.Infow("react loop finish",
-			"toolUse", toolCalled, "extraTry", extraTry, "elapsed", time.Since(startAt).String())
+			"toolUse", toolCalled, "extraTry", extraTry, "session", session, "elapsed", time.Since(startAt).String())
 	}()
 
 	for {
 		if toolCalled >= a.option.MaxToolCalls {
-			a.logger.Warnw("too many tool calls exceeded")
+			a.logger.Warnw("too many tool calls exceeded", "session", session)
 			return
 		}
 
@@ -124,11 +125,11 @@ func (a *Agent) reactLoop(ctx context.Context, mem *memory.Memory, resp *agtapi.
 		*/
 		extraTry++
 		if extraTry >= a.option.MaxLoopTimes {
-			a.logger.Warnw("too many loop times exceeded")
+			a.logger.Warnw("too many loop times exceeded", "session", session)
 			return
 		}
 		if extraTry > 3 {
-			a.logger.Warnw("the LLM did not terminate the loop as expected", "status", statusCode, "extraTry", extraTry)
+			a.logger.Warnw("the LLM did not terminate the loop as expected", "status", statusCode, "extraTry", extraTry, "session", session)
 		}
 		switch statusCode {
 		case 2:
@@ -146,6 +147,7 @@ func (a *Agent) handleLLMStream(ctx context.Context, stream openai.Response, mem
 		messageCount int
 		toolUse      []openai.ToolUse
 
+		session     = mem.Session().ID
 		statusCode  = code(0) // not finish
 		supplements []types.Message
 		warnTicker  = time.NewTicker(time.Minute)
@@ -165,7 +167,7 @@ WaitMessage:
 				return supplements, 0
 			}
 		case <-warnTicker.C:
-			a.logger.Warnw("still waiting llm completed", "receivedMessage", messageCount)
+			a.logger.Warnw("still waiting llm completed", "receivedMessage", messageCount, "session", session)
 
 		case msg, ok := <-stream.Message():
 			if !ok {
@@ -196,7 +198,8 @@ WaitMessage:
 	}
 
 	a.logger.Infow("message finish",
-		"fuzzyTokens", mem.Tokens(), "promptTokens", stream.Tokens().PromptTokens, "completionTokens", stream.Tokens().CompletionTokens)
+		"fuzzyTokens", mem.Tokens(), "promptTokens", stream.Tokens().PromptTokens,
+		"completionTokens", stream.Tokens().CompletionTokens, "session", session)
 
 	func() {
 		/*
@@ -210,10 +213,10 @@ WaitMessage:
 		}
 
 		if strings.Contains(content, "topic_finish_") {
-			a.logger.Warnw("topic_finish tool use incorrect", "content", content)
+			a.logger.Warnw("topic_finish tool use incorrect", "content", content, "session", session)
 			statusCode.update(1)
 		} else if strings.Contains(content, "<tool_use") {
-			a.logger.Warnw("tool use incorrect", "content", content)
+			a.logger.Warnw("tool use incorrect", "content", content, "session", session)
 			statusCode.update(2)
 		}
 	}()
@@ -268,6 +271,7 @@ func (a *Agent) tryToolCall(ctx context.Context, mem *memory.Memory, use openai.
 		result    []types.Message
 		extraArgs = agtapi.OverwriteToolArgsFromContext(ctx)
 		useMark   = use.ID
+		session   = mem.Session().ID
 	)
 
 	if useMark == "" {
@@ -283,21 +287,24 @@ func (a *Agent) tryToolCall(ctx context.Context, mem *memory.Memory, use openai.
 		msg := fmt.Sprintf("tool %s not found", use.Name)
 		result = append(result, types.Message{ToolCallID: useMark, ToolContent: msg})
 		agtapi.SendEventToResponse(ctx, types.NewToolUseEvent(use.Name, use.Arguments, "", msg))
+		a.logger.Warnw(msg, "tool", use.Name, "session", session)
 		return result
 	}
 
 	if use.Error != "" {
 		result = append(result, types.Message{ToolCallID: useMark, ToolContent: use.Error})
 		agtapi.SendEventToResponse(ctx, types.NewToolUseEvent(use.Name, use.Arguments, td.Description, use.Error))
+		a.logger.Warnw("try tool call error", "tool", use.Name, "error", use.Error, "session", session)
 		return result
 	}
 
 	toolUse := &ToolUse{GenID: use.ID, Name: use.Name, Arguments: use.Arguments}
-	a.logger.Infow("using tool", "tool", toolUse.Name, "args", toolUse.Arguments)
+	a.logger.Infow("using tool", "tool", toolUse.Name, "args", toolUse.Arguments, "session", session)
 	msg, err := toolCall(ctx, mem, toolUse, extraArgs, td)
 	if err != nil {
 		result = append(result, types.Message{ToolCallID: toolUse.ID(), ToolContent: fmt.Sprintf("using tool failed: %s", err)})
 		agtapi.SendEventToResponse(ctx, types.NewToolUseEvent(use.Name, use.Arguments, td.Description, err.Error()))
+		a.logger.Warnw("using tool failed", "tool", use.Name, "error", err, "session", session)
 		return result
 	}
 
