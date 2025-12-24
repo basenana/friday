@@ -113,11 +113,15 @@ func ScratchpadReadTools(sp Scratchpad) []*Tool {
 						}
 					}
 
-					note.Filtered = utils.GrepC(note.Content, 3, keywords...)
+					note.Filtered = utils.CutToSafeLength(utils.GrepC(note.Content, 3, keywords...), 5000)
 					if note.Filtered == "" {
 						note.Filtered = "no filtered content"
 					}
 					note.Content = ""
+				}
+
+				if note.Content != "" {
+					note.Content = utils.CutToSafeLength(note.Content, 5000)
 				}
 
 				return NewToolResultText(utils.Res2Str(note)), nil
