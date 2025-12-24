@@ -40,7 +40,7 @@ func (t *ToolUse) ID() string {
 }
 
 func toolCall(ctx context.Context, mem *memory.Memory, use *ToolUse, extraArgs map[string]string, td *tools.Tool) (string, error) {
-	req := &tools.Request{Arguments: make(map[string]interface{}), Session: mem.Session(), VFS: mem.VFS()}
+	req := &tools.Request{Arguments: make(map[string]interface{}), Session: mem.Session(), Scratchpad: mem.Scratchpad()}
 	if err := json.Unmarshal([]byte(use.Arguments), &req.Arguments); err != nil {
 		return "", fmt.Errorf("unmarshal json argument failed: %s", err)
 	}

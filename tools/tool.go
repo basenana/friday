@@ -3,7 +3,6 @@ package tools
 import (
 	"context"
 	"github.com/basenana/friday/types"
-	"github.com/basenana/friday/vfs"
 )
 
 type ToolSet interface {
@@ -46,9 +45,9 @@ type ToolInputSchema struct {
 }
 
 type Request struct {
-	Arguments map[string]interface{} `json:"arguments"`
-	Session   *types.Session         `json:"session"`
-	VFS       vfs.VirtualFileSystem  `json:"-"`
+	Arguments  map[string]interface{} `json:"arguments"`
+	Session    *types.Session         `json:"session"`
+	Scratchpad Scratchpad             `json:"-"`
 }
 
 type Result struct {

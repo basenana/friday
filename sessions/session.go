@@ -2,7 +2,6 @@ package sessions
 
 import (
 	"context"
-	"github.com/basenana/friday/vfs"
 	"strings"
 	"sync"
 	"time"
@@ -61,21 +60,21 @@ func NewManager(store storehouse.Storehouse) *Manager {
 }
 
 type Descriptor struct {
-	session *types.Session
-	store   storehouse.Storehouse
-	hooks   map[string][]HookHandler
-	vfs     vfs.VirtualFileSystem
-	mux     sync.Mutex
-	logger  *zap.SugaredLogger
+	session    *types.Session
+	store      storehouse.Storehouse
+	hooks      map[string][]HookHandler
+	scratchpad tools.Scratchpad
+	mux        sync.Mutex
+	logger     *zap.SugaredLogger
 }
 
 func newSessionDescriptor(s *types.Session, store storehouse.Storehouse) *Descriptor {
 	return &Descriptor{
-		session: s,
-		store:   store,
-		hooks:   make(map[string][]HookHandler),
-		vfs:     vfs.NewInMemoryFS(),
-		logger:  logger.New("session").With(zap.String("id", s.ID)),
+		session:    s,
+		store:      store,
+		hooks:      make(map[string][]HookHandler),
+		scratchpad: tools.NewInMemoryScratchpad(),
+		logger:     logger.New("session").With(zap.String("id", s.ID)),
 	}
 }
 
@@ -135,12 +134,12 @@ func (d *Descriptor) Session() *types.Session {
 	return d.session
 }
 
-func (d *Descriptor) VFS() vfs.VirtualFileSystem {
-	return d.vfs
+func (d *Descriptor) Scratchpad() tools.Scratchpad {
+	return d.scratchpad
 }
 
 func (d *Descriptor) Tools() []*tools.Tool {
-	return tools.VFSReadTools(d.vfs)
+	return tools.ScratchpadReadTools(d.scratchpad)
 }
 
 func (d *Descriptor) Close() error {

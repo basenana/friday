@@ -3,7 +3,6 @@ package memory
 import (
 	"context"
 	"fmt"
-	"github.com/basenana/friday/vfs"
 	"sync"
 
 	"github.com/basenana/friday/tools"
@@ -77,8 +76,8 @@ func (m *Memory) RunAfterModelHook(ctx context.Context) error {
 	return m.RunHook(ctx, types.SessionHookAfterModel)
 }
 
-func (m *Memory) VFS() vfs.VirtualFileSystem {
-	return m.session.VFS()
+func (m *Memory) Scratchpad() tools.Scratchpad {
+	return m.session.Scratchpad()
 }
 
 func (m *Memory) Session() *types.Session {
@@ -91,8 +90,8 @@ func (m *Memory) Tools() []*tools.Tool {
 	}
 
 	memoryTools := make([]*tools.Tool, 0)
-	if v := m.session.VFS(); v != nil {
-		memoryTools = append(memoryTools, tools.VFSReadTools(v)...)
+	if v := m.session.Scratchpad(); v != nil {
+		memoryTools = append(memoryTools, tools.ScratchpadReadTools(v)...)
 	}
 	m.tools = memoryTools
 	return m.tools

@@ -14,6 +14,9 @@ type Hooks interface {
 
 func (d *Descriptor) RegisterHooks(hooks Hooks) {
 	next := hooks.GetHooks()
+	if len(next) == 0 {
+		return
+	}
 	d.mux.Lock()
 	defer d.mux.Unlock()
 	if d.hooks == nil {
@@ -26,6 +29,9 @@ func (d *Descriptor) RegisterHooks(hooks Hooks) {
 }
 
 func (d *Descriptor) RunHooks(ctx context.Context, hookName string, payload *types.SessionPayload) error {
+	if d.hooks == nil {
+		return nil
+	}
 	d.mux.Lock()
 	hooks, ok := d.hooks[hookName]
 	d.mux.Unlock()

@@ -314,63 +314,115 @@ Follow these steps to generate the final report:
     - Final check for typos, logical flow, and readability.
 </workflow>
 
-<output_format>
-Structure your response strictly as follows:
+<output_template>
+# Research Report
 
-# Report Title
-(A clear title reflecting the summary's core content.)
+# Research Report (Title the report using the research question)
 
-## Executive Summary / Overview
-(1-3 sentences summarizing the core conclusions or main points for quick comprehension.)
+## Key Information Alignment
 
-## [Section 1: Flexible Heading Based on Content]
-(Content here. Use hierarchical subheadings as needed for clarity.)
-## [Section 2: Flexible Heading Based on Content]
-(Content here.)
+(**Core Question**: State the ultimate question this research must answer in one clear sentence.) 
 
-... (Add or adjust sections like Key Concepts, Main Features, Types, Applications, Challenges, etc., based on the specific query and materials.)
+(**Core Conclusion**: Provide the final answer directly in one paragraph. This is the focus of the abstract.) 
 
-## Key Takeaways
-(Bullet points or concise paragraphs highlighting the most important conclusions.)
+(**Key Arguments**: List the 2-3 most compelling arguments supporting the conclusion, each in one sentence.) 
 
-## Conclusion
-(Concluding remarks that reinforce the primary findings, echoing the executive summary.)
+(**Primary Recommendations**: Based on the conclusion, propose 1-2 highest-priority action items.) 
 
-## Notes & References
--   **Sources**: List references to the provided materials.
--   **Limitations**: (If applicable) e.g., "Note: The provided materials primarily focus on [aspect A], thus depth regarding [aspect B] may be limited," or "Minor discrepancies on [point X] across sources have been reconciled in this summary."
-</output_format>
+(**Report Limitations**: Honestly state the most important boundary or assumption of this report in one sentence.)
 
-<report_example>
-User Query: "Summarize the basic principles and current challenges of quantum computing."
+## Research Panorama (What We Did)
 
-Materials: [Content of Material 1], [Content of Material 2]...
+### Problem Definition & Decomposition
 
-# Summary Report: Basic Principles and Key Challenges of Quantum Computing
+(**Original Problem**: Interpretation of the user's request and the goal of this report.)
 
-## Executive Summary
-This report summarizes the fundamental principles of quantum computing, which leverages qubits, superposition, and entanglement to achieve computational power surpassing classical computers, and analyzes core challenges in error correction, stability, and hardware scaling.
+(**Problem Decomposition**: Break down the main question into 3-5 researchable sub-questions.) 
 
-## 1. Basic Principles of Quantum Computing
-1.1 Qubits: Unlike classical bits, qubits can exist in a superposition of states |0> and |1>.
-1.2 Quantum Superposition: ...
-1.3 Quantum Entanglement: ...
+> Example: To answer "Should we adopt Technology A?", it can be decomposed into: 
+> 1. What is the current maturity and trend of Technology A?
+> 2. Which of our pain points does it solve, and what new challenges does it introduce?
+> 3. How are industry peers applying it, and what are the outcomes?
+> 4. What are the required investments and expected returns?
 
-## 2. Current Key Challenges
-2.1 Quantum Decoherence: ...
-2.2 Error Correction Difficulty: ...
+## Information Synthesis (What We Found)
 
-## Key Takeaways
--   Principle A is foundational because...
--   Challenge B remains the most significant hurdle due to...
+### Key Finding 1 \[Corresponding to Sub-question 1\]
 
-## Conclusion
-In summary, while quantum computing holds transformative potential through its unique principles, practical realization is currently constrained by significant technical challenges, particularly in maintaining qubit coherence.
+(**Core Facts & Data**:Present the main information points obtained from the research objectively. Includes basic principles, working process, and explanations of concepts. Use plain language to describe them in detail point by point. Avoid using lists or tables for simple enumeration.)
 
-## Notes & References
--   **Sources**: Material 1 (describing qubits), Material 2 (explaining quantum entanglement).
--   **Limitations**: The report is based on the provided introductory materials; it does not cover recent, highly specialized research developments.
-</report_example>
+(**Interpretation**: What do these facts mean? Indicate the patterns, trends, or contradictions within them.)
+
+### Key Finding 2 \[Corresponding to Sub-question 2\]
+
+(Same structure as above)
+
+*...Repeat this structure according to the number of sub-questions...*
+
+### Connections Between Findings (Optional, but important)
+
+(Use a paragraph or a simple relationship diagram to explain how the above key findings influence, corroborate, or contradict each other.)
+
+## Analysis & Answer (What We Conclude)
+
+### Direct Answer to the Core Question
+
+(**Conclusion Summary**: Based on all findings, answer the core question from the cover page directly and explicitly in one paragraph. Avoid ambiguity.)
+
+> Example: "Based on the above analysis, **the conditions for adopting Technology A are not yet mature at present**. The core reasons are... However, close attention should be paid to..."
+
+### Supporting Arguments for the Conclusion
+
+**Argument 1** (Corresponding to Finding 1, explaining how it supports the final conclusion.)
+
+**Argument 2** (Corresponding to Finding 2.)
+
+**Argument 3** (Corresponding to Finding 3.)
+
+> (This section is the logical core of the report, demonstrating the reasoning process from 'findings' to 'conclusion'.)
+
+### Important Additional Insights
+
+(Extended findings or warnings that are crucial for understanding the problem, though they may not directly determine the core answer.)
+
+> Example: "It is worth noting that although Technology A itself is immature, the underlying Concept B has become an industry consensus. We should..."
+
+## Extended Information (What Else You Need to Know)
+
+### Extended Recommendations for Decision-Making
+
+(If the conclusion is "proceed," outline the first steps. If "not recommended," propose alternative directions or monitoring suggestions.)
+
+> Example: "Recommendations: 1. Halt large-scale investment and instead form a 3-person team for quarterly technology tracking; 2. Immediately assess the feasibility of alternative solution C."
+
+### Key Uncertainties
+
+(Clearly list variables that could overturn this conclusion, and how to monitor them.)
+
+> Example: "The biggest variable is: if XX supplier releases a new product in Q2, it could significantly reduce costs. It is recommended to watch their launch event."
+
+### Recommended Resources for Deep Dive
+
+(For readers with different needs, select 3-5 reports, articles, or data sources most worth reading in-depth, accompanied by a one-sentence reason for recommendation.)
+
+## Appendix (Details for Reference)
+
+### Research Scope & Methodology
+
+**Information Sources** (Clearly list, e.g., 10 industry reports, 5 competitor analyses, 3 expert interviews, internal data review.)
+
+**Research Methods** (Briefly describe how the information was analyzed, e.g., comparative analysis, case study analysis, data trend summarization.)
+
+**Limitations Statement** (Honestly state the boundaries of this research, e.g., certain regional markets were not covered, forecasts are based on current technological conditions.)
+
+### Data & Explanations
+
+(Complete set of important data or charts.) (Terminology explanation: re-explain professional terms in non-specialist language.)
+
+### References
+
+(Detailed list of information sources, including links, titles, and excerpts of core viewpoints.)
+</output_template>
 
 <citation_requirements>
 - Always cite sources using markdown footnote format (e.g., [^1])
@@ -404,6 +456,8 @@ REMEMBER:
 - The report needs to have a clear purpose, and its **main goal** is to **systematically answer** the user’s questions; any content that does not align with the article’s purpose should **not appear** in the report.  
 - Citations and annotations from the original material must be **retained** and organized into the report; they **cannot be omitted**.  
 - The execution process of problem‑solving in historical messages should **not be included** in the report.  
+
+From now on, every word you write will become part of the final report.
 `
 )
 

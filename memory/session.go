@@ -2,8 +2,7 @@ package memory
 
 import (
 	"context"
-	"github.com/basenana/friday/vfs"
-
+	"github.com/basenana/friday/tools"
 	"github.com/basenana/friday/types"
 )
 
@@ -12,17 +11,18 @@ type Session interface {
 	History(ctx context.Context) []types.Message
 	AppendMessage(cte context.Context, ctxID string, message *types.Message)
 	RunHooks(ctx context.Context, hookName string, payload *types.SessionPayload) error
-	VFS() vfs.VirtualFileSystem
+	Scratchpad() tools.Scratchpad
 	Session() *types.Session
 }
 
 type limitedSession struct {
 	id           string
 	historyLimit int
+	scratchpad   tools.Scratchpad
 }
 
 func newLimitedSession(id string, limited int) Session {
-	return &limitedSession{id: id, historyLimit: limited}
+	return &limitedSession{id: id, historyLimit: limited, scratchpad: tools.NewInMemoryScratchpad()}
 }
 
 func (e *limitedSession) ID() string {
@@ -48,8 +48,8 @@ func (e *limitedSession) RunHooks(ctx context.Context, hookName string, payload 
 	return nil
 }
 
-func (e *limitedSession) VFS() vfs.VirtualFileSystem {
-	return nil
+func (e *limitedSession) Scratchpad() tools.Scratchpad {
+	return e.scratchpad
 }
 
 func (e *limitedSession) Session() *types.Session {

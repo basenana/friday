@@ -11,7 +11,6 @@ import (
 
 	"github.com/basenana/friday/agents/agtapi"
 	"github.com/basenana/friday/agents/react"
-	"github.com/basenana/friday/agents/simple"
 	"github.com/basenana/friday/memory"
 	"github.com/basenana/friday/providers/openai"
 	"github.com/basenana/friday/tools"
@@ -20,7 +19,7 @@ import (
 
 type Agent struct {
 	react     *react.Agent
-	simple    *simple.Agent
+	summary   *react.Agent
 	subAgents []ExpertAgent
 	option    Option
 	logger    *zap.SugaredLogger
@@ -86,7 +85,7 @@ func (a *Agent) runReport(ctx context.Context, req *agtapi.Request, resp *agtapi
 		Memory:      req.Memory,
 	}
 	a.logger.Infow("start summary report", "sessionID", req.Session.ID)
-	stream := a.simple.Chat(ctx, nextReq)
+	stream := a.summary.Chat(ctx, nextReq)
 	for {
 		select {
 		case <-ctx.Done():
@@ -243,7 +242,7 @@ func New(name, desc string, llm openai.Client, opt Option) *Agent {
 		opt.CoordinatePrompt = COORDINATE_PROMPT
 	}
 	if opt.SummaryReportPrompt == "" {
-		opt.SummaryReportPrompt = DEFAULT_SUMMARYRE_PORTPROMPT
+		opt.SummaryReportPrompt = DEFAULT_SUMMARY_PROMPT
 	}
 
 	agt := &Agent{
@@ -260,7 +259,7 @@ func New(name, desc string, llm openai.Client, opt Option) *Agent {
 		MaxLoopTimes: 5,
 		Tools:        agentTools,
 	})
-	agt.simple = simple.New(name, desc, llm, simple.Option{
+	agt.summary = react.New(name, desc, llm, react.Option{
 		SystemPrompt: opt.SystemPrompt,
 	})
 	return agt

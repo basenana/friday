@@ -9,7 +9,6 @@ import (
 	"github.com/basenana/friday/agents/agtapi"
 	"github.com/basenana/friday/agents/planning"
 	"github.com/basenana/friday/agents/react"
-	"github.com/basenana/friday/agents/simple"
 	"github.com/basenana/friday/memory"
 	"github.com/basenana/friday/providers/openai"
 	"github.com/basenana/friday/tools"
@@ -201,11 +200,12 @@ func (a *Agent) runTask(ctx context.Context, leader *react.Agent, task string, r
 
 func (a *Agent) doSummary(ctx context.Context, req *agtapi.Request, resp *agtapi.Response) error {
 	a.logger.Infow("run summary")
-	agt := simple.New("summary", "", a.llm, simple.Option{SystemPrompt: a.opt.SummaryPrompt})
+	agt := react.New("summary", "", a.llm, react.Option{SystemPrompt: a.opt.SummaryPrompt})
 	userMessage := SUMMARYRE_USER_PROMPT
 
 	userMessage = strings.ReplaceAll(userMessage, "{user_task}", req.UserMessage)
 	stream := agt.Chat(ctx, &agtapi.Request{
+		Session:     req.Session,
 		UserMessage: userMessage,
 		Memory:      req.Memory,
 	})

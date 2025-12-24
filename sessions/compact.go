@@ -3,12 +3,12 @@ package sessions
 import (
 	"context"
 	"fmt"
-	vfs2 "github.com/basenana/friday/vfs"
+	"github.com/basenana/friday/agents/react"
+	"github.com/basenana/friday/tools"
 	"os"
 	"strconv"
 
 	"github.com/basenana/friday/agents/agtapi"
-	"github.com/basenana/friday/agents/simple"
 	"github.com/basenana/friday/memory"
 	"github.com/basenana/friday/providers/openai"
 	"github.com/basenana/friday/types"
@@ -30,18 +30,18 @@ func init() {
 }
 
 type MemoryCompact struct {
-	simple  *simple.Agent
-	session *Descriptor
-	vfs     vfs2.VirtualFileSystem
-	logger  *zap.SugaredLogger
+	summary    *react.Agent
+	session    *Descriptor
+	scratchpad tools.Scratchpad
+	logger     *zap.SugaredLogger
 }
 
 func RegisterMemoryCompactHook(llm openai.Client, session *Descriptor) {
 	mc := &MemoryCompact{
-		simple:  simple.New("compact", "", llm, simple.Option{SystemPrompt: summarizePrompt}),
-		session: session,
-		vfs:     session.VFS(),
-		logger:  logger.New("compact").With(zap.String("session", session.ID())),
+		summary:    react.New("compact", "", llm, react.Option{SystemPrompt: summarizePrompt}),
+		session:    session,
+		scratchpad: session.Scratchpad(),
+		logger:     logger.New("compact").With(zap.String("session", session.ID())),
 	}
 	session.RegisterHooks(mc)
 }
@@ -91,9 +91,9 @@ func (m *MemoryCompact) compactMessages(ctx context.Context, payload *types.Sess
 		}
 
 		if i < needKeepIdx && msg.ToolCallID != "" && len(msg.ToolContent) > 500 {
-			n, err := m.vfs.WriteFile(ctx, &vfs2.VFile{
-				Abstract: "Tool Result for " + msg.ToolCallID,
-				Content:  msg.ToolContent,
+			n, err := m.scratchpad.WriteNote(ctx, &tools.ScratchpadNote{
+				Title:   "Tool Result for " + msg.ToolCallID,
+				Content: msg.ToolContent,
 			})
 			if err != nil {
 				m.logger.Errorw("save file for compact error", "err", err.Error())
@@ -102,7 +102,7 @@ func (m *MemoryCompact) compactMessages(ctx context.Context, payload *types.Sess
 				continue
 			}
 
-			msg.ToolContent = remindMessage(n.Filename)
+			msg.ToolContent = remindMessage(n.ID)
 			afterTokens += msg.FuzzyTokens()
 			newHistory = append(newHistory, msg)
 			continue
@@ -125,7 +125,7 @@ func (m *MemoryCompact) summaryMessage(ctx context.Context, payload *types.Sessi
 		return nil
 	}
 
-	stream := m.simple.Chat(ctx, &agtapi.Request{
+	stream := m.summary.Chat(ctx, &agtapi.Request{
 		UserMessage: "Please summarize the historical messages as required, from now on, every character you output will become part of the abstract",
 		Memory:      memory.NewEmpty(m.session.ID(), memory.WithHistory(history...), memory.WithUnlimitedSession()),
 	})

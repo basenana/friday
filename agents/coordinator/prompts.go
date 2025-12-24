@@ -78,13 +78,15 @@ Body: Problem Summary | Key Evidence Requirements | Acceptance Criteria.
 </message_protocol>
 `
 
-	DEFAULT_SUMMARYRE_PORTPROMPT = `Based on communication history with different agents, compile a complete report to answer the user's questions.
+	DEFAULT_SUMMARY_PROMPT = `Based on communication history with different agents, compile a complete report to answer the user's questions.
 
-Report Requirements:
+Requirements:
 1. Use the same language as the user's question.
 2. Explain the user's question.
 3. Perform root cause analysis of the problem.
 4. Do not provide specific fixes.
+
+From now on, every word you write will become part of the final report.
 `
 )
 
