@@ -87,7 +87,8 @@ func (d *Descriptor) History(ctx context.Context) []types.Message {
 }
 
 func (d *Descriptor) contextHistory(ctx context.Context, contextID string) []types.Message {
-	allMessages, err := d.store.ListMessages(ctx, contextID)
+	d.logger.Infow("list context history", "ctxId", contextID)
+	allMessages, err := d.store.ListMessages(ctx, d.session.ID)
 	if err != nil {
 		d.logger.Errorw("failed to list session messages", zap.Error(err))
 		return nil
