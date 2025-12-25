@@ -38,7 +38,7 @@ func (c *client) Completion(ctx context.Context, request Request) Response {
 		)
 
 		defer func() {
-			c.logger.Infow("[LLM-CALL] completion-with-streaming finish", "elapsed", time.Since(startAt).String())
+			c.logger.Infow("completion-with-streaming finish", "elapsed", time.Since(startAt).String())
 		}()
 
 	Retry:
@@ -88,7 +88,7 @@ func (c *client) CompletionNonStreaming(ctx context.Context, request Request) (s
 	)
 
 	defer func() {
-		c.logger.Infow("[LLM-CALL] completion-non-streaming finish", "elapsed", time.Since(startAt).String())
+		c.logger.Infow("completion-non-streaming finish", "elapsed", time.Since(startAt).String())
 	}()
 
 Retry:

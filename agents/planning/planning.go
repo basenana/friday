@@ -39,6 +39,7 @@ func (a *Agent) Describe() string {
 
 func (a *Agent) Chat(ctx context.Context, req *agtapi.Request) *agtapi.Response {
 	return a.react.Chat(ctx, &agtapi.Request{
+		Session:     req.Session,
 		UserMessage: fmt.Sprintf("%s\n%s", displayTodoList(a.todo), req.UserMessage),
 		Memory:      req.Memory,
 	})

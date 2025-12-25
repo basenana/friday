@@ -299,7 +299,7 @@ func (a *Agent) tryToolCall(ctx context.Context, mem *memory.Memory, use openai.
 	}
 
 	toolUse := &ToolUse{GenID: use.ID, Name: use.Name, Arguments: use.Arguments}
-	a.logger.Infow("using tool", "tool", toolUse.Name, "args", toolUse.Arguments, "session", session)
+	a.logger.Infow("父 using tool", "tool", toolUse.Name, "args", toolUse.Arguments, "session", session)
 	msg, err := toolCall(ctx, mem, toolUse, extraArgs, td, toolUseCount)
 	if err != nil {
 		result = append(result, types.Message{ToolCallID: toolUse.ID(), ToolContent: fmt.Sprintf("using tool failed: %s", err)})

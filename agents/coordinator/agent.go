@@ -81,6 +81,7 @@ func (a *Agent) runSocialContact(ctx context.Context, req *agtapi.Request, resp 
 
 func (a *Agent) runReport(ctx context.Context, req *agtapi.Request, resp *agtapi.Response) error {
 	nextReq := &agtapi.Request{
+		Session:     req.Session,
 		UserMessage: a.option.SummaryReportPrompt,
 		Memory:      req.Memory,
 	}
@@ -171,6 +172,7 @@ func (a *Agent) mailWithSubAgent(ctx context.Context, agentName, title, text str
 	}
 
 	stream := agt.Chat(ctx, &agtapi.Request{
+		Session: mem.Session(),
 		UserMessage: strings.Join(
 			[]string{
 				"Title: " + title,

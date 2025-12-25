@@ -63,16 +63,9 @@ func (a *Agent) Chat(ctx context.Context, req *agtapi.Request) *agtapi.Response 
 	leader := a.newReAct("leader", "", promptWithMoreInfo(a.opt.LeaderPrompt), leaderTools)
 	go func() {
 		defer resp.Close()
-	Retry:
-		if err := a.doPlanning(ctx, FIRST_PLANNING_PROMPT, planningAgt, req, resp); err != nil {
+		if err := a.doPlanningWithCheck(ctx, FIRST_PLANNING_PROMPT, planningAgt, req, resp); err != nil {
 			a.logger.Errorw("failed to planning", "error", err)
 			return
-		}
-
-		if len(planningAgt.TodoList()) == 0 {
-			req.Memory.AppendMessages(types.Message{
-				AgentMessage: "You haven't generated any to-do items, and you'll lose your job. You're being given one last chance."})
-			goto Retry
 		}
 
 		if err := a.doResearch(ctx, leader, planningAgt, req, resp); err != nil {
@@ -88,6 +81,27 @@ func (a *Agent) Chat(ctx context.Context, req *agtapi.Request) *agtapi.Response 
 	return resp
 }
 
+func (a *Agent) doPlanningWithCheck(ctx context.Context, userMessage string, planningAgt *planning.Agent, req *agtapi.Request, resp *agtapi.Response) error {
+	req = &agtapi.Request{
+		Session:     req.Session,
+		UserMessage: userMessage,
+		Memory:      req.Memory.Copy(),
+	}
+
+Retry:
+	if err := a.doPlanning(ctx, FIRST_PLANNING_PROMPT, planningAgt, req, resp); err != nil {
+		a.logger.Errorw("failed to planning", "error", err)
+		return err
+	}
+
+	if len(planningAgt.TodoList()) == 0 {
+		req.Memory.AppendMessages(types.Message{
+			AgentMessage: "You haven't generated any to-do items, and you'll lose your job. You're being given one last chance."})
+		goto Retry
+	}
+	return nil
+}
+
 func (a *Agent) doPlanning(ctx context.Context, userMessage string, planningAgt *planning.Agent, req *agtapi.Request, resp *agtapi.Response) error {
 	var startAt = time.Now()
 	a.logger.Infow("run planning")
@@ -95,11 +109,8 @@ func (a *Agent) doPlanning(ctx context.Context, userMessage string, planningAgt 
 	userMessage = strings.ReplaceAll(userMessage, "{user_task}", req.UserMessage)
 	var (
 		content string
-		stream  = planningAgt.Chat(ctx, &agtapi.Request{
-			UserMessage: userMessage,
-			Memory:      req.Memory.Copy(),
-		})
-		err error
+		stream  = planningAgt.Chat(ctx, req)
+		err     error
 	)
 
 	for {
@@ -170,6 +181,7 @@ func (a *Agent) doResearch(ctx context.Context, leader *react.Agent, planningAgt
 func (a *Agent) runTask(ctx context.Context, leader *react.Agent, task string, req *agtapi.Request) error {
 	var (
 		stream = leader.Chat(ctx, &agtapi.Request{
+			Session:     req.Session,
 			UserMessage: task,
 			Memory:      req.Memory,
 		})

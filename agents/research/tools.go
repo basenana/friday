@@ -79,6 +79,7 @@ func (a *Agent) runBlockingsSubagentHandler(ctx context.Context, request *tools.
 			a.logger.Infof("subagent task: %s", task)
 			defer wg.Done()
 			content, err := agtapi.ReadAllContent(ctx, agt.Chat(ctx, &agtapi.Request{
+				Session:     mem.Session(),
 				UserMessage: task,
 				Memory:      mem,
 			}))
@@ -123,7 +124,7 @@ func (a *Agent) setupSubagentMemory(ctx context.Context) *memory.Memory {
 
 	sum := summarize.New("stagesummary", "", a.llm, summarize.Option{})
 	summary, err := agtapi.ReadAllContent(ctx, sum.Chat(ctx, &agtapi.Request{Session: parentMem.Session(), Memory: parentMem.Copy()}))
-	if err != nil {
+	if err != nil || summary == "" {
 		a.logger.Warn("failed to get stage summary, using origin memory", zap.Error(err))
 		return parentMem
 	}
