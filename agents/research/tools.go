@@ -2,7 +2,12 @@ package research
 
 import (
 	"context"
+	"fmt"
+	"github.com/basenana/friday/agents/summarize"
+	"github.com/basenana/friday/memory"
+	"github.com/basenana/friday/types"
 	"github.com/basenana/friday/utils"
+	"go.uber.org/zap"
 	"strings"
 	"sync"
 	"time"
@@ -45,7 +50,7 @@ func (a *Agent) runBlockingsSubagentHandler(ctx context.Context, request *tools.
 	}
 
 	var (
-		parentMem     = agtapi.MemoryFromContext(ctx)
+		parentMem     = a.setupSubagentMemory(ctx)
 		subAgentTools []*tools.Tool
 	)
 	for _, t := range a.opt.Tools {
@@ -96,4 +101,42 @@ func (a *Agent) runBlockingsSubagentHandler(ctx context.Context, request *tools.
 	}
 
 	return tools.NewToolResultText(utils.Res2Str(reports)), nil
+}
+
+func (a *Agent) setupSubagentMemory(ctx context.Context) *memory.Memory {
+
+	var (
+		parentMem = agtapi.MemoryFromContext(ctx)
+		history   = parentMem.History()
+		tokens    int64
+	)
+
+	for _, msg := range history {
+		tokens += msg.FuzzyTokens()
+	}
+
+	if tokens < 10000 {
+		return parentMem
+	}
+
+	a.logger.Infow("compressing the subagent context", "parentTokens", tokens)
+
+	sum := summarize.New("stagesummary", "", a.llm, summarize.Option{})
+	summary, err := agtapi.ReadAllContent(ctx, sum.Chat(ctx, &agtapi.Request{Session: parentMem.Session(), Memory: parentMem.Copy()}))
+	if err != nil {
+		a.logger.Warn("failed to get stage summary, using origin memory", zap.Error(err))
+		return parentMem
+	}
+
+	parentMem = parentMem.Copy()
+	parentMem.Modify(func(messages []types.Message) []types.Message {
+		newMessage := make([]types.Message, len(messages))
+		if len(messages) > 0 {
+			newMessage = append(newMessage, messages[0])
+		}
+		newMessage = append(newMessage, types.Message{
+			AgentMessage: fmt.Sprintf("This is a summary of the current work progress.: \n%s", summary)})
+		return newMessage
+	})
+	return parentMem
 }

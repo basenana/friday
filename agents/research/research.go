@@ -263,7 +263,7 @@ func New(name, desc string, llm openai.Client, opt Option) *Agent {
 		desc:   desc,
 		llm:    llm,
 		opt:    opt,
-		logger: logger.New("research"),
+		logger: logger.New("research").With(zap.String("name", name)),
 	}
 	agt.leaderTools = append(agt.leaderTools, newLeaderTool(agt)...)
 

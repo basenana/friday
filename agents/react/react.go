@@ -67,9 +67,8 @@ func (a *Agent) reactLoop(ctx context.Context, mem *memory.Memory, resp *agtapi.
 	var (
 		session     = mem.Session().ID
 		startAt     = time.Now()
+		usage       = &loopUsage{Limit: a.option.MaxLoopTimes, ToolLimit: a.option.MaxToolCalls}
 		statusCode  code
-		extraTry    = 0
-		toolCalled  = 0
 		supplements []types.Message
 		stream      openai.Response
 		err         error
@@ -77,11 +76,11 @@ func (a *Agent) reactLoop(ctx context.Context, mem *memory.Memory, resp *agtapi.
 
 	defer func() {
 		a.logger.Infow("react loop finish",
-			"toolUse", toolCalled, "extraTry", extraTry, "session", session, "elapsed", time.Since(startAt).String())
+			"toolUse", usage.ToolUse, "extraTry", usage.Try, "session", session, "elapsed", time.Since(startAt).String())
 	}()
 
 	for {
-		if toolCalled >= a.option.MaxToolCalls {
+		if usage.ToolUse >= usage.ToolLimit {
 			a.logger.Warnw("too many tool calls exceeded", "session", session)
 			return
 		}
@@ -102,7 +101,7 @@ func (a *Agent) reactLoop(ctx context.Context, mem *memory.Memory, resp *agtapi.
 				return
 			}
 
-			supplements, statusCode = a.handleLLMStream(ctx, stream, mem, resp)
+			supplements, statusCode = a.handleLLMStream(ctx, stream, mem, resp, usage)
 		}
 
 		if statusCode == 1 {
@@ -112,7 +111,7 @@ func (a *Agent) reactLoop(ctx context.Context, mem *memory.Memory, resp *agtapi.
 		if len(supplements) > 0 {
 			for _, supplement := range supplements {
 				if supplement.ToolContent != "" {
-					toolCalled++
+					usage.ToolUse++
 				}
 			}
 			mem.AppendMessages(supplements...)
@@ -123,13 +122,13 @@ func (a *Agent) reactLoop(ctx context.Context, mem *memory.Memory, resp *agtapi.
 			extraTry implements a safeguard mechanism
 			tracking retry attempts beyond expected levels in LLM processes
 		*/
-		extraTry++
-		if extraTry >= a.option.MaxLoopTimes {
+		usage.Try++
+		if usage.Try >= usage.Limit {
 			a.logger.Warnw("too many loop times exceeded", "session", session)
 			return
 		}
-		if extraTry > 3 {
-			a.logger.Warnw("the LLM did not terminate the loop as expected", "status", statusCode, "extraTry", extraTry, "session", session)
+		if usage.Try > 3 {
+			a.logger.Warnw("the LLM did not terminate the loop as expected", "status", statusCode, "extraTry", usage.Try, "session", session)
 		}
 		switch statusCode {
 		case 2:
@@ -140,7 +139,7 @@ func (a *Agent) reactLoop(ctx context.Context, mem *memory.Memory, resp *agtapi.
 	}
 }
 
-func (a *Agent) handleLLMStream(ctx context.Context, stream openai.Response, mem *memory.Memory, resp *agtapi.Response) ([]types.Message, code) {
+func (a *Agent) handleLLMStream(ctx context.Context, stream openai.Response, mem *memory.Memory, resp *agtapi.Response, usage *loopUsage) ([]types.Message, code) {
 	var (
 		content      string
 		reasoning    string
@@ -226,7 +225,7 @@ WaitMessage:
 	}
 
 	if len(toolUse) > 0 {
-		toolCallMessages := a.doToolCalls(ctx, mem, toolUse, reasoning)
+		toolCallMessages := a.doToolCalls(ctx, mem, toolUse, reasoning, usage)
 		if len(toolCallMessages) > 0 {
 			supplements = append(supplements, toolCallMessages...)
 		}
@@ -238,21 +237,22 @@ WaitMessage:
 	return supplements, statusCode
 }
 
-func (a *Agent) doToolCalls(ctx context.Context, mem *memory.Memory, toolUses []openai.ToolUse, reasoning string) []types.Message {
+func (a *Agent) doToolCalls(ctx context.Context, mem *memory.Memory, toolUses []openai.ToolUse, reasoning string, usage *loopUsage) []types.Message {
 	var (
-		result []types.Message
-		update = make(chan []types.Message, len(toolUses))
-		wg     = &sync.WaitGroup{}
+		result       []types.Message
+		update       = make(chan []types.Message, len(toolUses))
+		toolUseCount = usage.ToolUse // remind the usage
+		wg           = &sync.WaitGroup{}
 	)
 
 	for i := range toolUses {
 		use := toolUses[i]
 		wg.Add(1)
-		go func() {
+		go func(tc int) {
 			defer wg.Done()
 			// for long tool use such like an agent call
-			update <- a.tryToolCall(ctx, mem, use, reasoning)
-		}()
+			update <- a.tryToolCall(ctx, mem, use, reasoning, tc)
+		}(toolUseCount + i + 1)
 	}
 	wg.Wait()
 	close(update)
@@ -266,7 +266,7 @@ func (a *Agent) doToolCalls(ctx context.Context, mem *memory.Memory, toolUses []
 	return result
 }
 
-func (a *Agent) tryToolCall(ctx context.Context, mem *memory.Memory, use openai.ToolUse, reasoning string) []types.Message {
+func (a *Agent) tryToolCall(ctx context.Context, mem *memory.Memory, use openai.ToolUse, reasoning string, toolUseCount int) []types.Message {
 	var (
 		result    []types.Message
 		extraArgs = agtapi.OverwriteToolArgsFromContext(ctx)
@@ -300,7 +300,7 @@ func (a *Agent) tryToolCall(ctx context.Context, mem *memory.Memory, use openai.
 
 	toolUse := &ToolUse{GenID: use.ID, Name: use.Name, Arguments: use.Arguments}
 	a.logger.Infow("using tool", "tool", toolUse.Name, "args", toolUse.Arguments, "session", session)
-	msg, err := toolCall(ctx, mem, toolUse, extraArgs, td)
+	msg, err := toolCall(ctx, mem, toolUse, extraArgs, td, toolUseCount)
 	if err != nil {
 		result = append(result, types.Message{ToolCallID: toolUse.ID(), ToolContent: fmt.Sprintf("using tool failed: %s", err)})
 		agtapi.SendEventToResponse(ctx, types.NewToolUseEvent(use.Name, use.Arguments, td.Description, err.Error()))
@@ -375,4 +375,11 @@ func (c *code) update(n int32) {
 	if n > int32(*c) {
 		*c = code(n)
 	}
+}
+
+type loopUsage struct {
+	Try       int
+	Limit     int
+	ToolUse   int
+	ToolLimit int
 }

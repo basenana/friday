@@ -76,7 +76,7 @@ func (l *Learner) storehouseTools() []*tools.Tool {
 	return common
 }
 
-func NewLearner(llm openai.Client, store storehouse.Storehouse, chunkType string, chunkMetadata map[string]string, opt Option) *Learner {
+func NewLearner(name, desc string, llm openai.Client, store storehouse.Storehouse, chunkType string, chunkMetadata map[string]string, opt Option) *Learner {
 	if opt.SystemPrompt == "" {
 		opt.SystemPrompt = DEFAULT_LEARNER_PROMPT
 	}
@@ -90,7 +90,7 @@ func NewLearner(llm openai.Client, store storehouse.Storehouse, chunkType string
 		chunkType:     chunkType,
 		chunkMetadata: chunkMetadata,
 		store:         store,
-		logger:        logger.New("learner"),
+		logger:        logger.New("learner").With(zap.String("name", name)),
 	}
 
 	var searchTools []*tools.Tool

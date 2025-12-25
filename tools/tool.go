@@ -51,8 +51,9 @@ type Request struct {
 }
 
 type Result struct {
-	Content []Content `json:"content"`
-	IsError bool      `json:"isError"`
+	Content      []Content `json:"content"`
+	ToolUseTimes int       `json:"toolUsedTimes,omitempty"`
+	IsError      bool      `json:"isError,omitempty"`
 }
 
 // NewToolResultText creates a new CallToolResult with a text content

@@ -39,7 +39,7 @@ func (t *ToolUse) ID() string {
 	return t.GenID
 }
 
-func toolCall(ctx context.Context, mem *memory.Memory, use *ToolUse, extraArgs map[string]string, td *tools.Tool) (string, error) {
+func toolCall(ctx context.Context, mem *memory.Memory, use *ToolUse, extraArgs map[string]string, td *tools.Tool, toolUsage int) (string, error) {
 	req := &tools.Request{Arguments: make(map[string]interface{}), Session: mem.Session(), Scratchpad: mem.Scratchpad()}
 	if err := json.Unmarshal([]byte(use.Arguments), &req.Arguments); err != nil {
 		return "", fmt.Errorf("unmarshal json argument failed: %s", err)
@@ -57,6 +57,8 @@ func toolCall(ctx context.Context, mem *memory.Memory, use *ToolUse, extraArgs m
 	if err != nil {
 		return "", err
 	}
+
+	result.ToolUseTimes = toolUsage
 	content, err := json.MarshalIndent(result, "", "  ")
 	if err != nil {
 		return "", fmt.Errorf("marshal tool %s result failed: %s", use.Name, err)

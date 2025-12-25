@@ -33,6 +33,14 @@ func (m *Memory) History() []types.Message {
 	return result
 }
 
+func (m *Memory) Modify(modifyMyMemory func(messages []types.Message) []types.Message) {
+	m.mux.Lock()
+	defer m.mux.Unlock()
+	oldMemory := make([]types.Message, 0, len(m.history)+1)
+	oldMemory = append(oldMemory, m.history...)
+	m.history = modifyMyMemory(oldMemory)
+}
+
 func (m *Memory) AppendMessages(messages ...types.Message) {
 	m.mux.Lock()
 	defer m.mux.Unlock()

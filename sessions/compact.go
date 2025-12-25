@@ -3,7 +3,7 @@ package sessions
 import (
 	"context"
 	"fmt"
-	"github.com/basenana/friday/agents/react"
+	"github.com/basenana/friday/agents/summarize"
 	"github.com/basenana/friday/tools"
 	"os"
 	"strconv"
@@ -30,7 +30,7 @@ func init() {
 }
 
 type MemoryCompact struct {
-	summary    *react.Agent
+	summary    *summarize.Agent
 	session    *Descriptor
 	scratchpad tools.Scratchpad
 	logger     *zap.SugaredLogger
@@ -38,7 +38,7 @@ type MemoryCompact struct {
 
 func RegisterMemoryCompactHook(llm openai.Client, session *Descriptor) {
 	mc := &MemoryCompact{
-		summary:    react.New("compact", "", llm, react.Option{SystemPrompt: summarizePrompt}),
+		summary:    summarize.New("compacter", "", llm, summarize.Option{}),
 		session:    session,
 		scratchpad: session.Scratchpad(),
 		logger:     logger.New("compact").With(zap.String("session", session.ID())),
@@ -141,10 +141,12 @@ func (m *MemoryCompact) summaryMessage(ctx context.Context, payload *types.Sessi
 		return nil
 	}
 
-	err = m.session.UpdateSummary(ctx, "", abstract)
-	if err != nil {
-		m.logger.Errorw("failed to update summary", "err", err)
-		// skip
+	if payload.ContextID == m.session.ID() {
+		err = m.session.UpdateSummary(ctx, "", abstract)
+		if err != nil {
+			m.logger.Errorw("failed to update summary", "err", err)
+			// skip
+		}
 	}
 
 	payload.History = m.updateHistoryWithAbstract(payload.History, abstract)
@@ -153,26 +155,33 @@ func (m *MemoryCompact) summaryMessage(ctx context.Context, payload *types.Sessi
 
 func (m *MemoryCompact) updateHistoryWithAbstract(history []types.Message, abstract string) []types.Message {
 	if abstract == "" || len(history) == 0 {
+		return history
+	}
+
+	effectiveHistory := make([]types.Message, 0, len(history))
+	for _, msg := range history {
+		if msg.UserMessage == "" && msg.AssistantMessage == "" {
+			continue
+		}
+		effectiveHistory = append(effectiveHistory, msg)
 	}
 
 	m.logger.Infow("abstract history", "abstract", abstract)
 
 	var (
-		cutAt      = len(history)
-		crtLen     = len(history)
+		cutAt      = len(effectiveHistory) - 5 // keep 5 newest message
 		newHistory []types.Message
 		afterToken int64
 	)
 
-	if crtLen-cutAt < 5 { // keep 5 newest message
-		cutAt = crtLen - 5
-	}
 	if cutAt < 0 {
 		cutAt = 0
 	}
-	keep := history[cutAt:]
+	keep := effectiveHistory[cutAt:]
 
-	newHistory = append(newHistory, history[0]) // keep first
+	if cutAt > 0 {
+		newHistory = append(newHistory, effectiveHistory[0]) // keep first
+	}
 
 	newHistory = append(newHistory, types.Message{AgentMessage: summaryPrefix + abstract})
 	newHistory = append(newHistory, keep...)
@@ -180,7 +189,7 @@ func (m *MemoryCompact) updateHistoryWithAbstract(history []types.Message, abstr
 		afterToken += msg.FuzzyTokens()
 	}
 	m.logger.Infow("update history with abstract finished",
-		"beforeHistory", crtLen, "afterHistory", len(newHistory), "afterToken", afterToken)
+		"beforeHistory", len(history), "afterHistory", len(newHistory), "afterToken", afterToken)
 	return newHistory
 }
 
@@ -198,69 +207,6 @@ func remindMessage(noteID string) string {
 }
 
 const (
-	summarizePrompt = `<background>
-Your job is to summarize a history of previous messages in a conversation between an AI persona and a human.
-The conversation you are given is a from a fixed context window and may not be complete.
-Messages sent by the AI are marked with the 'assistant' role.
-The AI 'assistant' can also make calls to tools, whose outputs can be seen in messages with the 'tool' role.
-Things the AI says in the message content are considered inner monologue and are not seen by the user.
-The only AI messages seen by the user are from when the AI uses 'send_message'.
-Messages the user sends are in the 'user' role.
-The 'user' role is also used for important system events, such as login events and heartbeat events (heartbeats run the AI's program without user action, allowing the AI to act without prompting from the user sending them a message).
-Summarize what happened in the conversation from the perspective of the AI (use the first person from the perspective of the AI).
-Keep your summary less than 1000 words, do NOT exceed this word limit.
-Only output the summary, do NOT include anything else in your output, and use the same language as the user input content.
-</background>
-
-<summary_core_objective>
-- Based on historical messages, summarize and generate text that conforms to the definition in summary_formatting.
-- Do not output any content other than the summary text.
-</summary_core_objective>
-
-
-<summary_formatting>
-The summary should refer to the template below:
-
-## Basic Information
-
-Participants: Individuals/roles involved in the dialogue
-Topic/Purpose: The core issue or goal of the dialogue
-
-## Key Content Extraction
-
-Main Points: Core opinions expressed by each party, preliminary conclusions, and current progress
-Points of contention: Existing disagreements or issues for which consensus has not been reached
-Action Items: The next steps that have been confirmed but have not yet been implemented
-Important Data: Key figures, dates, names, and other hard information involved
-
-## Additional Information
-
-Special Context: Context that may affect understanding (e.g., preconditions, urgency)
-Emotional Labeling: Label the emotional state of participants if necessary (e.g., "User expresses dissatisfaction")
-</summary_formatting>
-
-<citation_requirements>
-- Always cite sources using markdown footnote format (e.g., [^1])
-- List all referenced URLs at the end of your response
-- Clearly distinguish between quoted information and your own analysis
-- Respond in the same language as the user's query
-
-  <citation_examples>
-    <example>
-    According to recent studies, global temperatures have risen by 1.1°C since pre-industrial times[^1].
-
-    [^1]: [Climate Report in 2023](https://example.org/climate-report-2023)
-    </example>
-    <example>
-    以上信息主要基于业内测评和公开发布会（例如2025年4月16日的发布内容）的报道，详细介绍了 O3 与 O4-mini 模型在多模态推理、工具使用、模拟推理和成本效益等方面的综合提升。[^1][^2]
-
-    [^1]: [OpenAI发布o3与o4-mini，性能爆表，可用图像思考](https://zhuanlan.zhihu.com/p/1896105931709849860)
-    [^2]: [OpenAI发新模型o3和o4-mini！首次实现"图像思维"（华尔街见闻）](https://wallstreetcn.com/articles/3745356)
-    </example>
-  </citation_examples>
-</citation_requirements>
-`
-
 	summaryPrefix = `Several lengthy dialogues have already taken place. The following is a condensed summary of the progress of these historical dialogues:
 `
 )

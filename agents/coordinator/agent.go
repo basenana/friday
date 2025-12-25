@@ -248,7 +248,7 @@ func New(name, desc string, llm openai.Client, opt Option) *Agent {
 	agt := &Agent{
 		subAgents: opt.SubAgents,
 		option:    opt,
-		logger:    logger.New("coordinator"),
+		logger:    logger.New("coordinator").With(zap.String("name", name)),
 	}
 
 	var agentTools []*tools.Tool

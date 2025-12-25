@@ -87,7 +87,7 @@ func New(name, desc string, llm openai.Client, option Option) *Agent {
 		desc:   desc,
 		opt:    option,
 		todo:   emptyTodoList(),
-		logger: logger.New("planning"),
+		logger: logger.New("planning").With(zap.String("name", name)),
 	}
 
 	option.Tools = append(option.Tools, agt.PlanningTools()...)

@@ -51,6 +51,6 @@ func NewInquirer(name, desc string, llm openai.Client, store storehouse.Storehou
 			Tools:        searchTools,
 		}),
 		store:  store,
-		logger: logger.New("inquirer"),
+		logger: logger.New("inquirer").With(zap.String("name", name)),
 	}
 }

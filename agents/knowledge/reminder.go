@@ -107,7 +107,7 @@ func (r *Reminder) storehouseTools() []*tools.Tool {
 	return common
 }
 
-func NewReminder(llm openai.Client, store storehouse.Storehouse, chunkMetadata map[string]string, opt Option) *Reminder {
+func NewReminder(name, desc string, llm openai.Client, store storehouse.Storehouse, chunkMetadata map[string]string, opt Option) *Reminder {
 	if opt.SystemPrompt == "" {
 		opt.SystemPrompt = DEFAULT_REMINDER_PROMPT
 	}
@@ -121,7 +121,7 @@ func NewReminder(llm openai.Client, store storehouse.Storehouse, chunkMetadata m
 		chunkMetadata: chunkMetadata,
 		llm:           llm,
 		store:         store,
-		logger:        logger.New("reminder"),
+		logger:        logger.New("reminder").With(zap.String("name", name)),
 	}
 
 	var searchTools []*tools.Tool
