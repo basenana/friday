@@ -3,10 +3,13 @@ package sessions
 import (
 	"context"
 	"fmt"
-	"github.com/basenana/friday/agents/summarize"
-	"github.com/basenana/friday/tools"
 	"os"
 	"strconv"
+	"strings"
+
+	"github.com/basenana/friday/agents/summarize"
+	"github.com/basenana/friday/storehouse"
+	"github.com/basenana/friday/tools"
 
 	"github.com/basenana/friday/agents/agtapi"
 	"github.com/basenana/friday/memory"
@@ -32,6 +35,7 @@ func init() {
 type MemoryCompact struct {
 	summary    *summarize.Agent
 	session    *Descriptor
+	store      storehouse.Storehouse
 	scratchpad tools.Scratchpad
 	logger     *zap.SugaredLogger
 }
@@ -40,6 +44,7 @@ func RegisterMemoryCompactHook(llm openai.Client, session *Descriptor) {
 	mc := &MemoryCompact{
 		summary:    summarize.New("compacter", "", llm, summarize.Option{}),
 		session:    session,
+		store:      session.store,
 		scratchpad: session.Scratchpad(),
 		logger:     logger.New("compact").With(zap.String("session", session.ID())),
 	}
@@ -119,7 +124,7 @@ func (m *MemoryCompact) compactMessages(ctx context.Context, payload *types.Sess
 }
 
 func (m *MemoryCompact) summaryMessage(ctx context.Context, payload *types.SessionPayload) error {
-	history := m.session.contextHistory(ctx, payload.ContextID)
+	history := m.contextHistory(ctx, payload.ContextID)
 	if len(history) == 0 {
 		m.logger.Warnw("origin history is empty")
 		return nil
@@ -153,6 +158,27 @@ func (m *MemoryCompact) summaryMessage(ctx context.Context, payload *types.Sessi
 	return nil
 }
 
+func (m *MemoryCompact) contextHistory(ctx context.Context, contextID string) []types.Message {
+	allMessages, err := m.store.ListMessages(ctx, m.session.ID())
+	if err != nil {
+		return nil
+	}
+
+	var result []types.Message
+	for _, msg := range allMessages {
+		ctxID, ok := msg.Metadata["context_id"]
+		if !ok || ctxID == "" {
+			continue
+		}
+
+		if strings.HasPrefix(contextID, ctxID) {
+			result = append(result, *msg)
+		}
+	}
+
+	return result
+}
+
 func (m *MemoryCompact) updateHistoryWithAbstract(history []types.Message, abstract string) []types.Message {
 	if abstract == "" || len(history) == 0 {
 		return history
@@ -166,10 +192,14 @@ func (m *MemoryCompact) updateHistoryWithAbstract(history []types.Message, abstr
 		effectiveHistory = append(effectiveHistory, msg)
 	}
 
+	if len(effectiveHistory) == 0 {
+		return history
+	}
+
 	m.logger.Infow("abstract history", "abstract", abstract)
 
 	var (
-		cutAt      = len(effectiveHistory) - 5 // keep 5 newest message
+		cutAt      = len(effectiveHistory) - 5
 		newHistory []types.Message
 		afterToken int64
 	)
@@ -196,7 +226,7 @@ func (m *MemoryCompact) updateHistoryWithAbstract(history []types.Message, abstr
 func theIndexAfterKeep(msgLen int) int {
 	mid := msgLen / 2
 	keep5 := msgLen - 5
-	if keep5 > msgLen {
+	if keep5 > 0 {
 		return keep5
 	}
 	return mid

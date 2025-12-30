@@ -45,7 +45,7 @@ func (m *Memory) Modify(modifyMyMemory func(messages []types.Message) []types.Me
 	for _, msg := range m.history {
 		m.tokens += msg.FuzzyTokens()
 	}
-	m.logger.Info("history modified", "beforeTokens", oldTokens, "newTokens", m.tokens)
+	m.logger.Infow("history modified", "beforeTokens", oldTokens, "newTokens", m.tokens)
 }
 
 func (m *Memory) AppendMessages(messages ...types.Message) {

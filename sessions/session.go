@@ -2,7 +2,6 @@ package sessions
 
 import (
 	"context"
-	"strings"
 	"sync"
 	"time"
 
@@ -83,11 +82,6 @@ func (d *Descriptor) ID() string {
 }
 
 func (d *Descriptor) History(ctx context.Context) []types.Message {
-	return d.contextHistory(ctx, d.ID())
-}
-
-func (d *Descriptor) contextHistory(ctx context.Context, contextID string) []types.Message {
-	d.logger.Infow("list context history", "ctxId", contextID)
 	allMessages, err := d.store.ListMessages(ctx, d.session.ID)
 	if err != nil {
 		d.logger.Errorw("failed to list session messages", zap.Error(err))
@@ -97,13 +91,11 @@ func (d *Descriptor) contextHistory(ctx context.Context, contextID string) []typ
 	var result []types.Message
 	for _, msg := range allMessages {
 		ctxID, ok := msg.Metadata["context_id"]
-		if !ok || ctxID == "" {
+		if !ok || ctxID != d.session.ID { // ignore subagents message
 			continue
 		}
 
-		if strings.HasPrefix(contextID, ctxID) {
-			result = append(result, *msg)
-		}
+		result = append(result, *msg)
 	}
 
 	return result

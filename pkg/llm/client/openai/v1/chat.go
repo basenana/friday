@@ -83,7 +83,7 @@ func (o *OpenAIV1) Chat(ctx context.Context, stream bool, history []map[string]s
 	if len(o.mcpClients) > 0 {
 		tools := make([]interface{}, 0)
 		for _, mcpClient := range o.mcpClients {
-			mcpTools, err := mcpClient.Tools(ctx)
+			mcpTools, err := mcpClient.GetTools(ctx)
 			if err != nil {
 				return nil, fmt.Errorf("list tools error: %w", err)
 			}
