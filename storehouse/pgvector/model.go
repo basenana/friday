@@ -206,14 +206,37 @@ func (d *DocumentModel) To() *types.Document {
 	return document
 }
 
+type TsVector string
+
+func (t *TsVector) Scan(value interface{}) error {
+	if value == nil {
+		*t = ""
+		return nil
+	}
+	switch v := value.(type) {
+	case []byte:
+		*t = TsVector(v)
+	case string:
+		*t = TsVector(v)
+	default:
+		return fmt.Errorf("cannot scan type %T into TsVector", value)
+	}
+	return nil
+}
+
+func (t *TsVector) Value() (driver.Value, error) {
+	return string(*t), nil
+}
+
 type ChunkModel struct {
-	ID        string `gorm:"column:id;primaryKey"`
-	Type      string `gorm:"column:type;index:ck_type"`
-	Metadata  JSON   `gorm:"column:metadata"`
-	Content   string `gorm:"column:content"`
-	Vector    string `gorm:"column:vector;type:vector"`
-	CreatedAt int64  `gorm:"column:created_at"`
-	ChangedAt int64  `gorm:"column:changed_at"`
+	ID        string   `gorm:"column:id;primaryKey"`
+	Type      string   `gorm:"column:type;index:ck_type"`
+	Metadata  JSON     `gorm:"column:metadata"`
+	Content   string   `gorm:"column:content"`
+	Vector    string   `gorm:"column:vector;type:vector"`
+	Token     TsVector `gorm:"column:token;type:tsvector"`
+	CreatedAt int64    `gorm:"column:created_at"`
+	ChangedAt int64    `gorm:"column:changed_at"`
 }
 
 func (v *ChunkModel) TableName() string {
@@ -229,6 +252,10 @@ func (v *ChunkModel) From(ck *types.Chunk) {
 	v.Metadata, _ = json.Marshal(ck.Metadata)
 	v.Content = ck.Content
 	v.Vector = jsonString(ck.Vector)
+	// Token is set by defaultChunkSetup before From is called
+	if len(ck.Token) > 0 {
+		v.Token = TsVector(toTsVector(ck.Token))
+	}
 	v.ChangedAt = time.Now().UnixNano()
 	if v.CreatedAt == 0 {
 		v.CreatedAt = v.ChangedAt

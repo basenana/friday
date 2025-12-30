@@ -45,6 +45,7 @@ type DB struct {
 
 var _ storehouse.Storehouse = &DB{}
 var _ storehouse.Vector = &DB{}
+var _ storehouse.SearchEngine = &DB{}
 
 func New(postgresUrl string, embedding providers.Embedding) (*DB, error) {
 	dbObj, err := gorm.Open(postgres.Open(postgresUrl), &gorm.Config{Logger: NewDbLogger()})
@@ -250,7 +251,14 @@ func (p *DB) AppendMemories(ctx context.Context, memories ...*types.Memory) erro
 				return err
 			}
 		}
-		return p.saveChunksInTransaction(tx, chunkList...)
+		// Prepare ChunkModels outside transaction
+		chunkModels := make([]*ChunkModel, 0, len(chunkList))
+		for _, ck := range chunkList {
+			m := &ChunkModel{}
+			m.From(ck)
+			chunkModels = append(chunkModels, m)
+		}
+		return p.saveChunksInTransaction(tx, chunkModels...)
 	})
 }
 
@@ -342,11 +350,20 @@ func (p *DB) CreateDocument(ctx context.Context, document *types.Document) error
 	model := &DocumentModel{}
 	model.From(document)
 	model.ContentHash = contentHash
+
+	// Prepare ChunkModels outside transaction
+	chunkModels := make([]*ChunkModel, 0, len(chunkList))
+	for _, ck := range chunkList {
+		m := &ChunkModel{}
+		m.From(ck)
+		chunkModels = append(chunkModels, m)
+	}
+
 	return p.dEntity.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err = tx.Create(model).Error; err != nil {
 			return err
 		}
-		return p.saveChunksInTransaction(tx, chunkList...)
+		return p.saveChunksInTransaction(tx, chunkModels...)
 	})
 }
 
@@ -384,6 +401,14 @@ func (p *DB) UpdateDocument(ctx context.Context, document *types.Document) error
 		}
 	}
 
+	// Prepare ChunkModels outside transaction
+	chunkModels := make([]*ChunkModel, 0, len(chunkList))
+	for _, ck := range chunkList {
+		m := &ChunkModel{}
+		m.From(ck)
+		chunkModels = append(chunkModels, m)
+	}
+
 	return p.dEntity.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		model.From(document)
 		oldHash := model.ContentHash
@@ -399,7 +424,7 @@ func (p *DB) UpdateDocument(ctx context.Context, document *types.Document) error
 			return err
 		}
 
-		return p.saveChunksInTransaction(tx, chunkList...)
+		return p.saveChunksInTransaction(tx, chunkModels...)
 	})
 }
 
@@ -430,8 +455,16 @@ func (p *DB) SaveChunks(ctx context.Context, chunkList ...*types.Chunk) ([]*type
 		}
 	}
 
+	// Prepare ChunkModels outside transaction
+	models := make([]*ChunkModel, 0, len(chunkList))
+	for _, chunk := range chunkList {
+		model := &ChunkModel{}
+		model.From(chunk)
+		models = append(models, model)
+	}
+
 	err = p.dEntity.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		return p.saveChunksInTransaction(tx, chunkList...)
+		return p.saveChunksInTransaction(tx, models...)
 	})
 
 	if err != nil {
@@ -441,30 +474,31 @@ func (p *DB) SaveChunks(ctx context.Context, chunkList ...*types.Chunk) ([]*type
 	return chunkList, nil
 }
 
-func (p *DB) saveChunksInTransaction(tx *gorm.DB, chunkList ...*types.Chunk) error {
-	for _, chunk := range chunkList {
-		model := &ChunkModel{}
-
-		if chunk.ID != "" {
+func (p *DB) saveChunksInTransaction(tx *gorm.DB, models ...*ChunkModel) error {
+	for _, model := range models {
+		var res *gorm.DB
+		if model.ID != "" {
 			// to update
-			res := tx.Where("id = ?", chunk.ID).Find(model)
+			existing := &ChunkModel{}
+			res = tx.Where("id = ?", model.ID).Find(existing)
 			if res.Error != nil {
 				return res.Error
 			}
-
-			model.From(chunk)
-			res = tx.Save(model)
-			if res.Error != nil {
-				return res.Error
-			}
+			existing.From(&types.Chunk{
+				ID:       model.ID,
+				Type:     model.Type,
+				Metadata: map[string]string{},
+				Content:  model.Content,
+			})
+			existing.Token = model.Token
+			res = tx.Save(existing)
 		} else {
 			// to create
-			chunk.ID = newRecordID()
-			model.From(chunk)
-			res := tx.Create(model)
-			if res.Error != nil {
-				return res.Error
-			}
+			model.ID = newRecordID()
+			res = tx.Create(model)
+		}
+		if res.Error != nil {
+			return res.Error
 		}
 	}
 	return nil
@@ -573,6 +607,46 @@ func (p *DB) SemanticQuery(ctx context.Context, chunkType, query string, k int) 
 		return nil, fmt.Errorf("failed to embed to vector: %w", err)
 	}
 	return p.QueryVector(ctx, chunkType, vector, k)
+}
+
+func (p *DB) QueryLanguage(ctx context.Context, chunkType string, query string) ([]*types.Chunk, error) {
+	p.log.Infow("keyword query", "chunkType", chunkType, "query", query)
+
+	// Convert space-separated keywords to tsquery format with AND semantics
+	// "python docker" -> "python & docker"
+	keywords := strings.Fields(query)
+	if len(keywords) == 0 {
+		return []*types.Chunk{}, nil
+	}
+	tsQuery := strings.Join(keywords, " & ")
+
+	var (
+		chunkModels []ChunkModel
+		result      []*types.Chunk
+	)
+
+	err := p.dEntity.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var res *gorm.DB
+		res = tx.Model(&ChunkModel{}).
+			Where("token @@ to_tsquery('simple', ?)", tsQuery).
+			Select("*, ts_rank(token, to_tsquery('simple', ?)) as rank", tsQuery)
+
+		if chunkType != types.TypeAll {
+			res = res.Where("type = ?", chunkType)
+		}
+
+		res = res.Order("rank DESC").Find(&chunkModels)
+		return res.Error
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	for _, cm := range chunkModels {
+		result = append(result, cm.To())
+	}
+	return result, nil
 }
 
 func (p *DB) SearchTools(chunkTypes ...string) []*tools.Tool {

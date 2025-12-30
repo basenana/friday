@@ -50,6 +50,22 @@ func buildMigrations() []*gormigrate.Migration {
 				return nil
 			},
 		},
+		{
+			ID: "2025123000",
+			Migrate: func(db *gorm.DB) error {
+				if err := db.AutoMigrate(&ChunkModel{}); err != nil {
+					return err
+				}
+				return db.Exec(`
+					UPDATE friday_chunks
+					SET token = to_tsvector('simple', content)
+					WHERE token IS NULL OR token = ''
+				`).Error
+			},
+			Rollback: func(db *gorm.DB) error {
+				return nil
+			},
+		},
 	}
 }
 
