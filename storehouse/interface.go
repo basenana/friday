@@ -4,8 +4,6 @@ import (
 	"context"
 
 	"github.com/basenana/friday/types"
-
-	"github.com/basenana/friday/tools"
 )
 
 type Storehouse interface {
@@ -31,7 +29,6 @@ type Storehouse interface {
 	GetChunk(ctx context.Context, id string) (*types.Chunk, error)
 	DeleteChunk(ctx context.Context, id string) error
 	FilterChunks(ctx context.Context, chunkType string, filter map[string]string) ([]*types.Chunk, error)
-	SearchTools(chunkTypes ...string) []*tools.Tool
 }
 
 type Vector interface {

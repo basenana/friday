@@ -21,14 +21,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/basenana/friday/providers"
 	"github.com/basenana/friday/storehouse"
 	"github.com/basenana/friday/storehouse/chunks"
-	"github.com/basenana/friday/tools"
 	"github.com/basenana/friday/types"
 	"github.com/basenana/friday/utils"
 	"github.com/basenana/friday/utils/logger"
@@ -652,97 +650,3 @@ func (p *DB) QueryLanguage(ctx context.Context, query string) ([]*types.Document
 	return result, nil
 }
 
-func (p *DB) SearchTools(chunkTypes ...string) []*tools.Tool {
-	matchChunkType := make(map[string]bool)
-	for _, chunkType := range chunkTypes {
-		matchChunkType[chunkType] = true
-	}
-
-	return []*tools.Tool{
-		tools.NewTool("knowledge_semantic_query",
-			tools.WithDescription("Using natural language to query and recall content from knowledge bases. "+
-				"The knowledge base stores all personalized data related to the current user. "+
-				"When you need more accurate information, please use this tool actively."),
-			tools.WithString("query",
-				tools.Required(),
-				tools.Description("Describe your problem using natural language. For search accuracy, query only one simple question at a time."),
-			),
-			tools.WithToolHandler(func(ctx context.Context, request *tools.Request) (*tools.Result, error) {
-				query, ok := request.Arguments["query"].(string)
-				if !ok {
-					return nil, fmt.Errorf("missing required parameter: query")
-				}
-
-				chunkList, err := p.SemanticQuery(ctx, types.TypeAll, query, 5)
-				if err != nil {
-					return tools.NewToolResultError(err.Error()), nil
-				}
-
-				if len(matchChunkType) > 0 {
-					fc := make([]*types.Chunk, 0, len(chunkList))
-					for _, chunk := range chunkList {
-						if _, ok = matchChunkType[chunk.Type]; !ok {
-							continue
-						}
-						fc = append(fc, chunk)
-					}
-					chunkList = fc
-				}
-
-				if len(chunkList) == 0 {
-					return tools.NewToolResultError("no results found"), nil
-				}
-
-				return tools.NewToolResultText(utils.Res2Str(chunkList)), nil
-			}),
-		),
-		tools.NewTool("knowledge_related_query",
-			tools.WithDescription("Based on the known knowledge ID, query more content associated information with this knowledge. "+
-				"When you confirm a specific knowledge as required information, utilize this tool to enrich the contextual framework of that knowledge."),
-			tools.WithString("id",
-				tools.Required(),
-				tools.Description("The ID of the knowledge that needs to be supplemented"),
-			),
-			tools.WithToolHandler(func(ctx context.Context, request *tools.Request) (*tools.Result, error) {
-				cid, ok := request.Arguments["id"].(string)
-				if !ok {
-					return nil, fmt.Errorf("missing required parameter: id")
-				}
-
-				chunk, err := p.GetChunk(ctx, cid)
-				if err != nil {
-					return tools.NewToolResultError(err.Error()), nil
-				}
-
-				if chunk == nil || len(chunk.Metadata) == 0 || chunk.Metadata[types.MetadataChunkDocument] == "" {
-					return tools.NewToolResultText("No additional information"), nil
-				}
-
-				idx, _ := strconv.Atoi(chunk.Metadata[types.MetadataChunkIndex])
-				startIdx := idx - 2
-				endIdx := idx + 2
-				relatedChunks, err := p.FilterChunks(ctx, chunk.Type, map[string]string{types.MetadataChunkDocument: chunk.Metadata[types.MetadataChunkDocument]})
-				if err != nil {
-					return tools.NewToolResultError(err.Error()), nil
-				}
-
-				var chunkList []*types.Chunk
-				for _, relatedChunk := range relatedChunks {
-					if _, ok = relatedChunk.Metadata[types.MetadataChunkIndex]; !ok {
-						continue
-					}
-					idx, err = strconv.Atoi(relatedChunk.Metadata[types.MetadataChunkIndex])
-					if err != nil {
-						continue
-					}
-
-					if idx >= startIdx && idx <= endIdx {
-						chunkList = append(chunkList, relatedChunk)
-					}
-				}
-
-				return tools.NewToolResultText(utils.Res2Str(chunkList)), nil
-			}),
-		),
-	}
-}

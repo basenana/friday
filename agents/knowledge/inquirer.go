@@ -35,7 +35,7 @@ func (q *Inquirer) Chat(ctx context.Context, req *agtapi.Request) *agtapi.Respon
 func NewInquirer(name, desc string, llm openai.Client, store storehouse.Storehouse, opt Option) *Inquirer {
 	var searchTools []*tools.Tool
 	searchTools = append(searchTools, opt.Tools...)
-	searchTools = append(searchTools, store.SearchTools()...)
+	searchTools = append(searchTools, tools.SearchTools(store)...)
 
 	if opt.SystemPrompt == "" {
 		opt.SystemPrompt = DEFAULT_INQUIRER_PROMPT

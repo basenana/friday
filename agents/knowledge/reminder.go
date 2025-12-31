@@ -103,7 +103,7 @@ func (r *Reminder) storehouseTools() []*tools.Tool {
 		),
 	}
 
-	common = append(common, r.store.SearchTools()...)
+	common = append(common, tools.SearchTools(r.store)...)
 	return common
 }
 
