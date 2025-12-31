@@ -165,14 +165,15 @@ func (m *MemoryModel) To() *types.Memory {
 }
 
 type DocumentModel struct {
-	ID          string `gorm:"column:id;primaryKey"`
-	Metadata    JSON   `gorm:"column:metadata"`
-	Title       string `gorm:"column:title"`
-	MIMEType    string `gorm:"column:mimetype"`
-	Content     string `gorm:"column:content"`
-	ContentHash string `gorm:"column:content_hash"`
-	CreatedAt   int64  `gorm:"column:created_at"`
-	ChangedAt   int64  `gorm:"column:changed_at"`
+	ID          string   `gorm:"column:id;primaryKey"`
+	Metadata    JSON     `gorm:"column:metadata"`
+	Title       string   `gorm:"column:title"`
+	MIMEType    string   `gorm:"column:mimetype"`
+	Content     string   `gorm:"column:content"`
+	ContentHash string   `gorm:"column:content_hash"`
+	Token       TsVector `gorm:"column:token;type:tsvector"`
+	CreatedAt   int64    `gorm:"column:created_at"`
+	ChangedAt   int64    `gorm:"column:changed_at"`
 }
 
 func (d *DocumentModel) TableName() string {
@@ -229,14 +230,13 @@ func (t *TsVector) Value() (driver.Value, error) {
 }
 
 type ChunkModel struct {
-	ID        string   `gorm:"column:id;primaryKey"`
-	Type      string   `gorm:"column:type;index:ck_type"`
-	Metadata  JSON     `gorm:"column:metadata"`
-	Content   string   `gorm:"column:content"`
-	Vector    string   `gorm:"column:vector;type:vector"`
-	Token     TsVector `gorm:"column:token;type:tsvector"`
-	CreatedAt int64    `gorm:"column:created_at"`
-	ChangedAt int64    `gorm:"column:changed_at"`
+	ID        string `gorm:"column:id;primaryKey"`
+	Type      string `gorm:"column:type;index:ck_type"`
+	Metadata  JSON   `gorm:"column:metadata"`
+	Content   string `gorm:"column:content"`
+	Vector    string `gorm:"column:vector;type:vector"`
+	CreatedAt int64  `gorm:"column:created_at"`
+	ChangedAt int64  `gorm:"column:changed_at"`
 }
 
 func (v *ChunkModel) TableName() string {
@@ -252,10 +252,6 @@ func (v *ChunkModel) From(ck *types.Chunk) {
 	v.Metadata, _ = json.Marshal(ck.Metadata)
 	v.Content = ck.Content
 	v.Vector = jsonString(ck.Vector)
-	// Token is set by defaultChunkSetup before From is called
-	if len(ck.Token) > 0 {
-		v.Token = TsVector(toTsVector(ck.Token))
-	}
 	v.ChangedAt = time.Now().UnixNano()
 	if v.CreatedAt == 0 {
 		v.CreatedAt = v.ChangedAt

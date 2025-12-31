@@ -40,9 +40,6 @@ func defaultChunkSetup(ctx context.Context, chunk *types.Chunk, embedding provid
 			return err
 		}
 	}
-	if len(chunk.Token) == 0 {
-		chunk.Token = splitTokens(chunk.Content)
-	}
 	return nil
 }
 

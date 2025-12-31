@@ -359,9 +359,14 @@ func (p *DB) CreateDocument(ctx context.Context, document *types.Document) error
 		chunkModels = append(chunkModels, m)
 	}
 
+	tokenExpr := toTsVectorExpr(document)
 	return p.dEntity.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err = tx.Create(model).Error; err != nil {
 			return err
+		}
+		res := tx.Model(&DocumentModel{}).Where("id = ?", model.ID).Update("token", gorm.Expr(tokenExpr))
+		if res.Error != nil {
+			return res.Error
 		}
 		return p.saveChunksInTransaction(tx, chunkModels...)
 	})
@@ -409,12 +414,18 @@ func (p *DB) UpdateDocument(ctx context.Context, document *types.Document) error
 		chunkModels = append(chunkModels, m)
 	}
 
+	tokenExpr := toTsVectorExpr(document)
 	return p.dEntity.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		model.From(document)
 		oldHash := model.ContentHash
 		model.ContentHash = contentHash
 		if err = p.dEntity.WithContext(ctx).Save(model).Error; err != nil {
 			return err
+		}
+
+		res := tx.Model(&DocumentModel{}).Where("id = ?", model.ID).Update("token", gorm.Expr(tokenExpr))
+		if res.Error != nil {
+			return res.Error
 		}
 
 		if err = p.deleteChunksInTransaction(tx, types.TypeDocument, map[string]string{
@@ -490,7 +501,6 @@ func (p *DB) saveChunksInTransaction(tx *gorm.DB, models ...*ChunkModel) error {
 				Metadata: map[string]string{},
 				Content:  model.Content,
 			})
-			existing.Token = model.Token
 			res = tx.Save(existing)
 		} else {
 			// to create
@@ -609,33 +619,26 @@ func (p *DB) SemanticQuery(ctx context.Context, chunkType, query string, k int) 
 	return p.QueryVector(ctx, chunkType, vector, k)
 }
 
-func (p *DB) QueryLanguage(ctx context.Context, chunkType string, query string) ([]*types.Chunk, error) {
-	p.log.Infow("keyword query", "chunkType", chunkType, "query", query)
+func (p *DB) QueryLanguage(ctx context.Context, query string) ([]*types.Document, error) {
+	p.log.Infow("keyword query", "query", query)
 
-	// Convert space-separated keywords to tsquery format with AND semantics
-	// "python docker" -> "python & docker"
 	keywords := strings.Fields(query)
 	if len(keywords) == 0 {
-		return []*types.Chunk{}, nil
+		return []*types.Document{}, nil
 	}
 	tsQuery := strings.Join(keywords, " & ")
 
 	var (
-		chunkModels []ChunkModel
-		result      []*types.Chunk
+		docModels []DocumentModel
+		result    []*types.Document
 	)
 
 	err := p.dEntity.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var res *gorm.DB
-		res = tx.Model(&ChunkModel{}).
+		res := tx.Model(&DocumentModel{}).
 			Where("token @@ to_tsquery('simple', ?)", tsQuery).
 			Select("*, ts_rank(token, to_tsquery('simple', ?)) as rank", tsQuery)
 
-		if chunkType != types.TypeAll {
-			res = res.Where("type = ?", chunkType)
-		}
-
-		res = res.Order("rank DESC").Find(&chunkModels)
+		res = res.Order("rank DESC").Find(&docModels)
 		return res.Error
 	})
 
@@ -643,8 +646,8 @@ func (p *DB) QueryLanguage(ctx context.Context, chunkType string, query string) 
 		return nil, err
 	}
 
-	for _, cm := range chunkModels {
-		result = append(result, cm.To())
+	for _, dm := range docModels {
+		result = append(result, dm.To())
 	}
 	return result, nil
 }

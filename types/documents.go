@@ -26,7 +26,6 @@ type Chunk struct {
 	Type     string            `json:"type"`
 	Metadata map[string]string `json:"metadata"`
 	Content  string            `json:"content"`
-	Token    []string          `json:"token"` // pre-tokenized tokens for search
 
 	Vector []float64 `json:"-"`
 }

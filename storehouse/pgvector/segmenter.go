@@ -17,17 +17,21 @@
 package pgvector
 
 import (
+	"fmt"
+	"regexp"
 	"strings"
 	"sync"
 
+	"github.com/basenana/friday/types"
 	"github.com/hyponet/jiebago"
 )
 
 var (
-	seg      jiebago.Segmenter
-	segInit  sync.Once
-	segErr   error
-	dictPath = "dict.txt"
+	seg          jiebago.Segmenter
+	segInit      sync.Once
+	segErr       error
+	dictPath     = "dict.txt"
+	contentClean = regexp.MustCompile(`[^\p{Han}a-zA-Z0-9\s]`)
 )
 
 // SetDictPath sets the dictionary path for Chinese word segmentation.
@@ -46,7 +50,7 @@ func splitTokens(content string) []string {
 		return []string{}
 	}
 
-	strings.ReplaceAll(content, "'", "")
+	content = contentClean.ReplaceAllString(content, " ")
 	contentCh := seg.CutForSearch(content, true)
 	tokens := make([]string, 0, len(contentCh))
 	for token := range contentCh {
@@ -60,9 +64,12 @@ func splitTokens(content string) []string {
 	return tokens
 }
 
-func toTsVector(tokens []string) string {
-	if len(tokens) == 0 {
-		return ""
-	}
-	return strings.Join(tokens, " ")
+func toTsVectorExpr(document *types.Document) string {
+	titleTokens := splitTokens(document.Title)
+	contentTokens := splitTokens(document.Content)
+
+	return fmt.Sprintf("setweight(to_tsvector('simple', '%s'), 'A') || setweight(to_tsvector('simple', '%s'), 'B')",
+		strings.Join(titleTokens, " "),
+		strings.Join(contentTokens, " "),
+	)
 }

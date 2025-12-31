@@ -40,5 +40,5 @@ type Vector interface {
 }
 
 type SearchEngine interface {
-	QueryLanguage(ctx context.Context, chunkType string, query string) ([]*types.Chunk, error)
+	QueryLanguage(ctx context.Context, query string) ([]*types.Document, error)
 }
