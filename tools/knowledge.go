@@ -54,7 +54,7 @@ func baseKnowledgeTools(store storehouse.Storehouse, vector storehouse.Vector, c
 					return NewToolResultError("vector search not available"), nil
 				}
 
-				chunkList, err := vector.SemanticQuery(ctx, types.TypeAll, query, 5)
+				chunkList, err := vector.SemanticQuery(ctx, types.TypeAll, nil, query, 5)
 				if err != nil {
 					return NewToolResultError(err.Error()), nil
 				}
@@ -155,7 +155,7 @@ func vectorTools(store storehouse.Vector, chunkTypes ...string) []*Tool {
 					topK = int(n)
 				}
 
-				chunkList, err := store.SemanticQuery(ctx, types.TypeAll, query, topK)
+				chunkList, err := store.SemanticQuery(ctx, types.TypeAll, nil, query, topK)
 				if err != nil {
 					return NewToolResultError(err.Error()), nil
 				}

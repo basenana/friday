@@ -32,8 +32,8 @@ type Storehouse interface {
 }
 
 type Vector interface {
-	QueryVector(ctx context.Context, chunkType string, vector []float64, k int) ([]*types.Chunk, error)
-	SemanticQuery(ctx context.Context, chunkType, query string, k int) ([]*types.Chunk, error)
+	QueryVector(ctx context.Context, chunkType string, filter map[string]string, vector []float64, k int) ([]*types.Chunk, error)
+	SemanticQuery(ctx context.Context, chunkType string, filter map[string]string, query string, k int) ([]*types.Chunk, error)
 }
 
 type SearchEngine interface {

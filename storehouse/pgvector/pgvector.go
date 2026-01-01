@@ -582,7 +582,7 @@ func (p *DB) FilterChunks(ctx context.Context, chunkType string, filter map[stri
 	return chunkList, nil
 }
 
-func (p *DB) QueryVector(ctx context.Context, chunkType string, vector []float64, k int) ([]*types.Chunk, error) {
+func (p *DB) QueryVector(ctx context.Context, chunkType string, filter map[string]string, vector []float64, k int) ([]*types.Chunk, error) {
 	var (
 		vectorModels = make([]ChunkModel, 0)
 		result       = make([]*types.Chunk, 0)
@@ -592,6 +592,9 @@ func (p *DB) QueryVector(ctx context.Context, chunkType string, vector []float64
 		res = p.dEntity.WithContext(ctx)
 		if chunkType != types.TypeAll {
 			res = res.Where("type = ?", chunkType)
+		}
+		for key, value := range filter {
+			res = res.Where(fmt.Sprintf("%s.metadata ->> '%s' = ?", (&ChunkModel{}).TableName(), key), value)
 		}
 		res = res.Order(fmt.Sprintf("vector <-> '%s'", jsonString(vector))).Limit(k).Find(&vectorModels)
 		if res.Error != nil {
@@ -608,13 +611,13 @@ func (p *DB) QueryVector(ctx context.Context, chunkType string, vector []float64
 	return result, nil
 }
 
-func (p *DB) SemanticQuery(ctx context.Context, chunkType, query string, k int) ([]*types.Chunk, error) {
+func (p *DB) SemanticQuery(ctx context.Context, chunkType string, filter map[string]string, query string, k int) ([]*types.Chunk, error) {
 	p.log.Infow("semantic query", "chunkType", chunkType, "query", query)
 	vector, err := p.embedding.Vectorization(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("failed to embed to vector: %w", err)
 	}
-	return p.QueryVector(ctx, chunkType, vector, k)
+	return p.QueryVector(ctx, chunkType, filter, vector, k)
 }
 
 func (p *DB) QueryLanguage(ctx context.Context, query string) ([]*types.Document, error) {
@@ -649,4 +652,3 @@ func (p *DB) QueryLanguage(ctx context.Context, query string) ([]*types.Document
 	}
 	return result, nil
 }
-
