@@ -126,7 +126,7 @@ type MemoryModel struct {
 	Comment    string `gorm:"column:comment"`
 	UsageCount int    `gorm:"column:usage_count"`
 	CreatedAt  int64  `gorm:"column:created_at"`
-	LastUsedAt int64  `gorm:"column:last_used_at"`
+	LastUsedAt int64  `gorm:"column:last_used_at;index:mem_used_at"`
 }
 
 func (m *MemoryModel) TableName() string {

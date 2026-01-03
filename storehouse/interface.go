@@ -19,6 +19,7 @@ type Storehouse interface {
 	AppendMemories(ctx context.Context, memory ...*types.Memory) error
 	FilterMemories(ctx context.Context, filter map[string]string) ([]*types.Memory, error)
 	ForgetMemory(ctx context.Context, memoryID string) error
+	ForgetMemories(ctx context.Context, shouldForget func(*types.Memory) bool, lastUsedDaysAgo int) error
 
 	GetDocument(ctx context.Context, docID string) (*types.Document, error)
 	CreateDocument(ctx context.Context, document *types.Document) error

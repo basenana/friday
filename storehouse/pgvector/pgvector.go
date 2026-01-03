@@ -240,6 +240,9 @@ func (p *DB) AppendMemories(ctx context.Context, memories ...*types.Memory) erro
 		if memory.Metadata == nil {
 			memory.Metadata = make(map[string]string)
 		}
+		if memory.CreatedAt.IsZero() {
+			memory.CreatedAt = time.Now()
+		}
 		memory.Metadata[types.MetadataMemory] = memory.ID
 
 		chunk := chunks.MemoryToChunkCard(memory)
@@ -307,6 +310,26 @@ func (p *DB) ForgetMemory(ctx context.Context, memoryID string) error {
 
 	if err != nil {
 		return err
+	}
+	return nil
+}
+
+func (p *DB) ForgetMemories(ctx context.Context, shouldForget func(*types.Memory) bool, lastUsedDaysAgo int) error {
+	threshold := time.Now().AddDate(0, 0, -lastUsedDaysAgo)
+	var models []*MemoryModel
+	if err := p.dEntity.WithContext(ctx).
+		Where("last_used_at < ?", threshold.UnixNano()).
+		Find(&models).Error; err != nil {
+		return err
+	}
+
+	for _, m := range models {
+		memory := m.To()
+		if shouldForget(memory) {
+			if err := p.ForgetMemory(ctx, memory.ID); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }
