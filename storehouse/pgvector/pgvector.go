@@ -323,15 +323,18 @@ func (p *DB) ForgetMemories(ctx context.Context, shouldForget func(*types.Memory
 		return err
 	}
 
+	var resultErr error
 	for _, m := range models {
 		memory := m.To()
 		if shouldForget(memory) {
+			p.log.Infow("need to forget memory", "id", memory.ID)
 			if err := p.ForgetMemory(ctx, memory.ID); err != nil {
-				return err
+				p.log.Errorw("forget memory failed", "id", memory.ID, "err", err)
+				resultErr = err
 			}
 		}
 	}
-	return nil
+	return resultErr
 }
 
 func (p *DB) GetDocument(ctx context.Context, docID string) (*types.Document, error) {
