@@ -117,8 +117,8 @@ func (m *MessageModel) To() *types.Message {
 
 type MemoryModel struct {
 	ID         string `gorm:"column:id;primaryKey"`
-	Type       string `gorm:"column:type"`
-	Category   string `gorm:"column:category"`
+	Type       string `gorm:"column:type;index:mem_type"`
+	Category   string `gorm:"column:category;index:mem_cat"`
 	Metadata   JSON   `gorm:"column:metadata"`
 	Overview   string `gorm:"column:overview"`
 	Details    string `gorm:"column:details"`
