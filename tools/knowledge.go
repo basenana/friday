@@ -11,15 +11,10 @@ import (
 )
 
 func SearchTools(store storehouse.Storehouse, chunkTypes ...string) []*Tool {
-	var vector storehouse.Vector
-	if vs, ok := store.(storehouse.Vector); ok {
-		vector = vs
-	}
-
-	result := baseKnowledgeTools(store, vector, chunkTypes...)
+	result := baseTools(store)
 
 	if vs, ok := store.(storehouse.Vector); ok {
-		result = append(result, vectorTools(vs, chunkTypes...)...)
+		result = append(result, vectorTools(store, vs, chunkTypes...)...)
 	}
 
 	if se, ok := store.(storehouse.SearchEngine); ok {
@@ -29,7 +24,98 @@ func SearchTools(store storehouse.Storehouse, chunkTypes ...string) []*Tool {
 	return result
 }
 
-func baseKnowledgeTools(store storehouse.Storehouse, vector storehouse.Vector, chunkTypes ...string) []*Tool {
+func baseTools(store storehouse.Storehouse) []*Tool {
+	return []*Tool{
+		NewTool("list_memory_categories",
+			WithDescription("List all memory categories for a specific memory type."),
+			WithString("memory_type",
+				Required(),
+				Description("The type of memories to list categories for (e.g., 'memory')"),
+			),
+			WithToolHandler(func(ctx context.Context, request *Request) (*Result, error) {
+				memoryType, ok := request.Arguments["memory_type"].(string)
+				if !ok {
+					return nil, fmt.Errorf("missing required parameter: memory_type")
+				}
+
+				categories, err := store.ListMemoryCategories(ctx, memoryType)
+				if err != nil {
+					return NewToolResultError(err.Error()), nil
+				}
+
+				return NewToolResultText(utils.Res2Str(categories)), nil
+			}),
+		),
+		NewTool("list_documents",
+			WithDescription("List all documents."),
+			WithToolHandler(func(ctx context.Context, request *Request) (*Result, error) {
+				docs, err := store.ListDocuments(ctx)
+				if err != nil {
+					return NewToolResultError(err.Error()), nil
+				}
+
+				return NewToolResultText(utils.Res2Str(docs)), nil
+			}),
+		),
+		NewTool("get_document",
+			WithDescription("Get a document by its ID."),
+			WithString("id",
+				Required(),
+				Description("The ID of the document to retrieve"),
+			),
+			WithToolHandler(func(ctx context.Context, request *Request) (*Result, error) {
+				id, ok := request.Arguments["id"].(string)
+				if !ok {
+					return nil, fmt.Errorf("missing required parameter: id")
+				}
+
+				doc, err := store.GetDocument(ctx, id)
+				if err != nil {
+					return NewToolResultError(err.Error()), nil
+				}
+
+				return NewToolResultText(utils.Res2Str(doc)), nil
+			}),
+		),
+		NewTool("query_memories_by_category",
+			WithDescription("Query memories by category and type."),
+			WithString("type",
+				Required(),
+				Description("The type of memories to query"),
+			),
+			WithString("category",
+				Required(),
+				Description("The category to filter memories by"),
+			),
+			WithToolHandler(func(ctx context.Context, request *Request) (*Result, error) {
+				memoryType, ok := request.Arguments["type"].(string)
+				if !ok {
+					return nil, fmt.Errorf("missing required parameter: type")
+				}
+				category, ok := request.Arguments["category"].(string)
+				if !ok {
+					return nil, fmt.Errorf("missing required parameter: category")
+				}
+
+				memories, err := store.FilterMemories(ctx, map[string]string{
+					types.MetadataMemoryType:     memoryType,
+					types.MetadataMemoryCategory: category,
+				})
+				if err != nil {
+					return NewToolResultError(err.Error()), nil
+				}
+
+				if len(memories) == 0 {
+					return NewToolResultError("no memories found"), nil
+				}
+
+				return NewToolResultText(utils.Res2Str(memories)), nil
+			}),
+		),
+	}
+}
+
+func vectorTools(store storehouse.Storehouse, vector storehouse.Vector, chunkTypes ...string) []*Tool {
 	matchChunkType := make(map[string]bool)
 	for _, chunkType := range chunkTypes {
 		matchChunkType[chunkType] = true
@@ -48,10 +134,6 @@ func baseKnowledgeTools(store storehouse.Storehouse, vector storehouse.Vector, c
 				query, ok := request.Arguments["query"].(string)
 				if !ok {
 					return nil, fmt.Errorf("missing required parameter: query")
-				}
-
-				if vector == nil {
-					return NewToolResultError("vector search not available"), nil
 				}
 
 				chunkList, err := vector.SemanticQuery(ctx, types.TypeAll, nil, query, 5)
@@ -120,55 +202,6 @@ func baseKnowledgeTools(store storehouse.Storehouse, vector storehouse.Vector, c
 					if idx >= startIdx && idx <= endIdx {
 						chunkList = append(chunkList, relatedChunk)
 					}
-				}
-
-				return NewToolResultText(utils.Res2Str(chunkList)), nil
-			}),
-		),
-	}
-}
-
-func vectorTools(store storehouse.Vector, chunkTypes ...string) []*Tool {
-	matchChunkType := make(map[string]bool)
-	for _, chunkType := range chunkTypes {
-		matchChunkType[chunkType] = true
-	}
-
-	return []*Tool{
-		NewTool("vector_query",
-			WithDescription("Query chunks by vector similarity. This tool uses vector embedding matching to find similar content."),
-			WithString("query",
-				Required(),
-				Description("The natural language query to convert to vector for similarity search"),
-			),
-			WithNumber("topK",
-				Description("Number of results to return"),
-			),
-			WithToolHandler(func(ctx context.Context, request *Request) (*Result, error) {
-				query, ok := request.Arguments["query"].(string)
-				if !ok {
-					return nil, fmt.Errorf("missing required parameter: query")
-				}
-
-				topK := 5
-				if n, ok := request.Arguments["topK"].(float64); ok {
-					topK = int(n)
-				}
-
-				chunkList, err := store.SemanticQuery(ctx, types.TypeAll, nil, query, topK)
-				if err != nil {
-					return NewToolResultError(err.Error()), nil
-				}
-
-				if len(matchChunkType) > 0 {
-					fc := make([]*types.Chunk, 0, len(chunkList))
-					for _, chunk := range chunkList {
-						if _, ok = matchChunkType[chunk.Type]; !ok {
-							continue
-						}
-						fc = append(fc, chunk)
-					}
-					chunkList = fc
 				}
 
 				return NewToolResultText(utils.Res2Str(chunkList)), nil

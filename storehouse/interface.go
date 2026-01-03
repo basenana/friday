@@ -16,11 +16,13 @@ type Storehouse interface {
 	CloseSession(ctx context.Context, sessionID string) error
 
 	GetMemory(ctx context.Context, memoryID string) (*types.Memory, error)
+	ListMemoryCategories(ctx context.Context, memoryType string) ([]string, error)
 	AppendMemories(ctx context.Context, memory ...*types.Memory) error
 	FilterMemories(ctx context.Context, filter map[string]string) ([]*types.Memory, error)
 	ForgetMemory(ctx context.Context, memoryID string) error
 	ForgetMemories(ctx context.Context, shouldForget func(*types.Memory) bool, lastUsedDaysAgo int) error
 
+	ListDocuments(ctx context.Context) ([]*types.Document, error)
 	GetDocument(ctx context.Context, docID string) (*types.Document, error)
 	CreateDocument(ctx context.Context, document *types.Document) error
 	UpdateDocument(ctx context.Context, document *types.Document) error

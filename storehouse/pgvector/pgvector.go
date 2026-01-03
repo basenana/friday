@@ -337,6 +337,19 @@ func (p *DB) ForgetMemories(ctx context.Context, shouldForget func(*types.Memory
 	return resultErr
 }
 
+func (p *DB) ListMemoryCategories(ctx context.Context, memoryType string) ([]string, error) {
+	var categories []string
+	err := p.dEntity.WithContext(ctx).
+		Model(&MemoryModel{}).
+		Where("type = ?", memoryType).
+		Distinct("category").
+		Pluck("category", &categories).Error
+	if err != nil {
+		return nil, err
+	}
+	return categories, nil
+}
+
 func (p *DB) GetDocument(ctx context.Context, docID string) (*types.Document, error) {
 	var (
 		model = &DocumentModel{}
@@ -495,6 +508,21 @@ func (p *DB) DeleteDocument(ctx context.Context, docID string) error {
 		return err
 	}
 	return nil
+}
+
+func (p *DB) ListDocuments(ctx context.Context) ([]*types.Document, error) {
+	var (
+		models []*DocumentModel
+		result []*types.Document
+	)
+	err := p.dEntity.WithContext(ctx).Find(&models).Error
+	if err != nil {
+		return nil, err
+	}
+	for _, model := range models {
+		result = append(result, model.To())
+	}
+	return result, nil
 }
 
 func (p *DB) SaveChunks(ctx context.Context, chunkList ...*types.Chunk) ([]*types.Chunk, error) {

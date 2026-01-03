@@ -37,7 +37,6 @@ type Chunk struct {
 const (
 	TypeAll      string = ""
 	TypeDocument string = "document" // deadly right things
-	TypeReview   string = "review"   // learned from final report/result
 	TypeMemory   string = "memory"   // learned from conversation
 
 	MetadataDocument       string = "friday.document"
