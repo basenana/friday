@@ -40,8 +40,10 @@ const (
 	TypeReview   string = "review"   // learned from final report/result
 	TypeMemory   string = "memory"   // learned from conversation
 
-	MetadataDocument      string = "friday.document"
-	MetadataChunkDocument string = "friday.chunk_document"
-	MetadataChunkIndex    string = "friday.chunk_index"
-	MetadataMemory        string = "friday.memory"
+	MetadataDocument       string = "friday.document"
+	MetadataChunkDocument  string = "friday.chunk_document"
+	MetadataChunkIndex     string = "friday.chunk_index"
+	MetadataMemory         string = "friday.memory"
+	MetadataMemoryType     string = "friday.memory_type"
+	MetadataMemoryCategory string = "friday.memory_category"
 )

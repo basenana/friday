@@ -274,8 +274,16 @@ func (p *DB) FilterMemories(ctx context.Context, filter map[string]string) ([]*t
 		models   []*MemoryModel
 		tx       = p.dEntity.WithContext(ctx)
 	)
+
 	for key, value := range filter {
-		tx = tx.Where(fmt.Sprintf("%s.metadata ->> '%s' = ?", (&MemoryModel{}).TableName(), key), value)
+		switch key {
+		case types.MetadataMemoryType:
+			tx = tx.Where("type = ?", value)
+		case types.MetadataMemoryCategory:
+			tx = tx.Where("category = ?", value)
+		default:
+			tx = tx.Where(fmt.Sprintf("%s.metadata ->> '%s' = ?", (&MemoryModel{}).TableName(), key), value)
+		}
 	}
 	err := tx.Find(&models).Error
 	if err != nil {

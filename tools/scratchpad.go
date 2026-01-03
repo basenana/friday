@@ -3,9 +3,10 @@ package tools
 import (
 	"context"
 	"fmt"
+	"sync"
+
 	"github.com/basenana/friday/utils"
 	"github.com/google/uuid"
-	"sync"
 )
 
 type Scratchpad interface {
@@ -84,14 +85,10 @@ func ScratchpadReadTools(sp Scratchpad) []*Tool {
 			}),
 		),
 		NewTool("read_note_from_scratchpad",
-			WithDescription("Use this tool to retrieve or grep notes in the scratchpad."),
+			WithDescription("Use this tool to retrieve the full content of a note from the scratchpad."),
 			WithString("note_id",
 				Required(),
 				Description("The id of note. If you don't know the id, you need to use `list_all_from_scratchpad` to find it."),
-			),
-			WithArray("filter_keywords",
-				Items(map[string]interface{}{"type": "string", "description": "Use the keyword to filter note content; only the selected lines and their context are returned."}),
-				Description("Keyword-based note searching is very useful for long texts. Keywords are related by \"or\". Get all content without setting keywords"),
 			),
 			WithToolHandler(func(ctx context.Context, request *Request) (*Result, error) {
 				noteId, ok := request.Arguments["note_id"].(string)
@@ -103,26 +100,47 @@ func ScratchpadReadTools(sp Scratchpad) []*Tool {
 					return NewToolResultError(err.Error()), nil
 				}
 
-				filters, ok := request.Arguments["filter_keywords"].([]any)
-				if ok && len(filters) > 0 {
-					var keywords []string
-					for _, f := range filters {
-						keyword, ok := f.(string)
-						if ok {
-							keywords = append(keywords, keyword)
-						}
-					}
-
-					note.Filtered = utils.CutToSafeLength(utils.GrepC(note.Content, 3, keywords...), 5000)
-					if note.Filtered == "" {
-						note.Filtered = "no filtered content"
-					}
-					note.Content = ""
+				return NewToolResultText(utils.Res2Str(note)), nil
+			}),
+		),
+		NewTool("grep_note_from_scratchpad",
+			WithDescription("Use this tool to grep/filter content from a note in the scratchpad based on keywords."),
+			WithString("note_id",
+				Required(),
+				Description("The id of note. If you don't know the id, you need to use `list_all_from_scratchpad` to find it."),
+			),
+			WithArray("keywords",
+				Required(),
+				Items(map[string]interface{}{"type": "string", "description": "Keyword to filter note content; only matching lines and their context are returned."}),
+				Description("Keywords are related by \"or\". Very useful for searching in long texts."),
+			),
+			WithToolHandler(func(ctx context.Context, request *Request) (*Result, error) {
+				noteId, ok := request.Arguments["note_id"].(string)
+				if !ok || noteId == "" {
+					return nil, fmt.Errorf("missing required parameter: note_id")
+				}
+				note, err := sp.ReadNote(ctx, noteId)
+				if err != nil {
+					return NewToolResultError(err.Error()), nil
 				}
 
-				if note.Content != "" {
-					note.Content = utils.CutToSafeLength(note.Content, 5000)
+				keywordsRaw, ok := request.Arguments["keywords"].([]any)
+				if !ok || len(keywordsRaw) == 0 {
+					return nil, fmt.Errorf("missing required parameter: keywords")
 				}
+				var keywords []string
+				for _, k := range keywordsRaw {
+					keyword, ok := k.(string)
+					if ok {
+						keywords = append(keywords, keyword)
+					}
+				}
+
+				note.Filtered = utils.CutToSafeLength(utils.GrepC(note.Content, 3, keywords...), 5000)
+				if note.Filtered == "" {
+					note.Filtered = "no filtered content"
+				}
+				note.Content = ""
 
 				return NewToolResultText(utils.Res2Str(note)), nil
 			}),
