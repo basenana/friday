@@ -116,14 +116,17 @@ func (m *MessageModel) To() *types.Message {
 }
 
 type MemoryModel struct {
-	ID        string `gorm:"column:id;primaryKey"`
-	Metadata  JSON   `gorm:"column:metadata"`
-	Overview  string `gorm:"column:overview"`
-	Details   string `gorm:"column:details"`
-	Relevant  string `gorm:"column:relevant"`
-	Comment   string `gorm:"column:comment"`
-	CreatedAt int64  `gorm:"column:created_at"`
-	ChangedAt int64  `gorm:"column:changed_at"`
+	ID         string `gorm:"column:id;primaryKey"`
+	Type       string `gorm:"column:type"`
+	Category   string `gorm:"column:category"`
+	Metadata   JSON   `gorm:"column:metadata"`
+	Overview   string `gorm:"column:overview"`
+	Details    string `gorm:"column:details"`
+	Relevant   string `gorm:"column:relevant"`
+	Comment    string `gorm:"column:comment"`
+	UsageCount int    `gorm:"column:usage_count"`
+	CreatedAt  int64  `gorm:"column:created_at"`
+	LastUsedAt int64  `gorm:"column:last_used_at"`
 }
 
 func (m *MemoryModel) TableName() string {
@@ -135,32 +138,40 @@ func (m *MemoryModel) From(memory *types.Memory) {
 		memory.Metadata = make(map[string]string)
 	}
 	m.ID = memory.ID
+	m.Type = memory.Type
+	m.Category = memory.Category
 	m.Metadata, _ = json.Marshal(memory.Metadata)
 	m.Overview = memory.Overview
 	m.Details = memory.Details
 	m.Relevant = memory.Relevant
 	m.Comment = memory.Comment
-	if memory.Time.IsZero() {
-		memory.Time = time.Now()
+	m.UsageCount = memory.UsageCount
+	if memory.CreatedAt.IsZero() {
+		memory.CreatedAt = time.Now()
 	}
-	m.ChangedAt = memory.Time.UnixNano()
-	if m.CreatedAt == 0 {
-		m.CreatedAt = m.ChangedAt
+	m.CreatedAt = memory.CreatedAt.UnixNano()
+	if memory.LastUsedAt.IsZero() {
+		memory.LastUsedAt = time.Now()
 	}
+	m.LastUsedAt = memory.LastUsedAt.UnixNano()
 }
 
 func (m *MemoryModel) To() *types.Memory {
 	memory := &types.Memory{
-		ID:       m.ID,
-		Metadata: make(map[string]string),
-		Overview: m.Overview,
-		Details:  m.Details,
-		Relevant: m.Relevant,
-		Comment:  m.Comment,
+		ID:         m.ID,
+		Type:       m.Type,
+		Category:   m.Category,
+		Metadata:   make(map[string]string),
+		Overview:   m.Overview,
+		Details:    m.Details,
+		Relevant:   m.Relevant,
+		Comment:    m.Comment,
+		UsageCount: m.UsageCount,
 	}
 
 	jsonData(string(m.Metadata), &memory.Metadata)
-	memory.Time = time.Unix(0, m.CreatedAt)
+	memory.CreatedAt = time.Unix(0, m.CreatedAt)
+	memory.LastUsedAt = time.Unix(0, m.LastUsedAt)
 	return memory
 }
 

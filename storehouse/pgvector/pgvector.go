@@ -209,13 +209,21 @@ func (p *DB) GetMemory(ctx context.Context, memoryID string) (*types.Memory, err
 		tx    = p.dEntity.WithContext(ctx)
 	)
 	tx = tx.Where("id = ?", memoryID)
-	err := tx.First(&model).Error
+	err := tx.First(model).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, types.ErrNotFound
 		}
 		return nil, err
 	}
+
+	now := time.Now()
+	model.UsageCount += 1
+	model.LastUsedAt = now.UnixNano()
+	if err := p.dEntity.WithContext(ctx).Save(model).Error; err != nil {
+		return nil, err
+	}
+
 	return model.To(), nil
 }
 

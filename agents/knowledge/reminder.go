@@ -85,13 +85,14 @@ func (r *Reminder) storehouseTools() []*tools.Tool {
 				}
 
 				err = r.store.AppendMemories(ctx, &types.Memory{
-					ID:       "",
-					Overview: overview,
-					Details:  details,
-					Relevant: relevant,
-					Comment:  comment,
-					Metadata: r.chunkMetadata,
-					Time:     memTime,
+					ID:        "",
+					Type:      types.TypeMemory,
+					Overview:  overview,
+					Details:   details,
+					Relevant:  relevant,
+					Comment:   comment,
+					Metadata:  r.chunkMetadata,
+					CreatedAt: memTime,
 				})
 
 				if err != nil {

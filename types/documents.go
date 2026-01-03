@@ -3,13 +3,17 @@ package types
 import "time"
 
 type Memory struct {
-	ID       string            `json:"id"`
-	Overview string            `json:"overview"`
-	Details  string            `json:"details"`  // Cause, Process, and Result
-	Relevant string            `json:"relevant"` // Related people or things
-	Comment  string            `json:"comment"`  // Subjective evaluation or remarks
-	Metadata map[string]string `json:"metadata"`
-	Time     time.Time         `json:"time"`
+	ID         string            `json:"id"`
+	Type       string            `json:"type"`
+	Category   string            `json:"category"`
+	Overview   string            `json:"overview"`
+	Details    string            `json:"details"`  // Cause, Process, and Result
+	Relevant   string            `json:"relevant"` // Related people or things
+	Comment    string            `json:"comment"`  // Subjective evaluation or remarks
+	Metadata   map[string]string `json:"metadata"`
+	UsageCount int               `json:"usage_count"`
+	CreatedAt  time.Time         `json:"created_at"`
+	LastUsedAt time.Time         `json:"last_used_at"`
 }
 
 type Document struct {
