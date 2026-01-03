@@ -54,7 +54,16 @@ func baseTools(store storehouse.Storehouse) []*Tool {
 					return NewToolResultError(err.Error()), nil
 				}
 
-				return NewToolResultText(utils.Res2Str(docs)), nil
+				result := make([]map[string]interface{}, 0, len(docs))
+				for _, doc := range docs {
+					result = append(result, map[string]interface{}{
+						"id":       doc.ID,
+						"title":    doc.Title,
+						"metadata": doc.Metadata,
+					})
+				}
+
+				return NewToolResultText(utils.Res2Str(result)), nil
 			}),
 		),
 		NewTool("get_document",
