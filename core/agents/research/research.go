@@ -6,15 +6,14 @@ import (
 	"time"
 
 	"github.com/basenana/friday/core/agents"
-	agtapi2 "github.com/basenana/friday/core/agents/agtapi"
 	"github.com/basenana/friday/core/agents/planning"
 	"github.com/basenana/friday/core/agents/react"
+	agtapi2 "github.com/basenana/friday/core/api"
+	"github.com/basenana/friday/core/logger"
 	"github.com/basenana/friday/core/memory"
 	"github.com/basenana/friday/core/providers/openai"
 	"github.com/basenana/friday/core/tools"
-	types2 "github.com/basenana/friday/core/types"
-	"github.com/basenana/friday/utils/logger"
-	"go.uber.org/zap"
+	"github.com/basenana/friday/core/types"
 )
 
 type Agent struct {
@@ -23,7 +22,7 @@ type Agent struct {
 	llm         openai.Client
 	opt         Option
 	leaderTools []*tools.Tool
-	logger      *zap.SugaredLogger
+	logger      logger.Logger
 }
 
 var _ agents.Agent = &Agent{}
@@ -43,7 +42,7 @@ func (a *Agent) Chat(ctx context.Context, req *agtapi2.Request) *agtapi2.Respons
 	)
 
 	if req.Session == nil {
-		req.Session = types2.NewDummySession()
+		req.Session = types.NewDummySession()
 	}
 
 	if req.Memory == nil {
@@ -55,7 +54,7 @@ func (a *Agent) Chat(ctx context.Context, req *agtapi2.Request) *agtapi2.Respons
 		agtapi2.WithResponse(resp),
 	)
 
-	req.Memory.AppendMessages(types2.Message{UserMessage: req.UserMessage})
+	req.Memory.AppendMessages(types.Message{UserMessage: req.UserMessage})
 
 	var leaderTools []*tools.Tool
 	leaderTools = append(leaderTools, planningAgt.PlanningTools()...)
@@ -95,7 +94,7 @@ Retry:
 	}
 
 	if len(planningAgt.TodoList()) == 0 {
-		req.Memory.AppendMessages(types2.Message{
+		req.Memory.AppendMessages(types.Message{
 			AgentMessage: "You haven't generated any to-do items, and you'll lose your job. You're being given one last chance."})
 		goto Retry
 	}
@@ -124,7 +123,7 @@ func (a *Agent) doPlanning(ctx context.Context, userMessage string, planningAgt 
 			}
 			if evt.Delta != nil && evt.Delta.Content != "" {
 				content += evt.Delta.Content
-				agtapi2.SendEventToResponse(ctx, types2.NewReasoningEvent(evt.Delta.Content))
+				agtapi2.SendEventToResponse(ctx, types.NewReasoningEvent(evt.Delta.Content))
 			}
 		case err := <-stream.Error():
 			if err != nil {
@@ -169,7 +168,7 @@ func (a *Agent) doResearch(ctx context.Context, leader *react.Agent, planningAgt
 
 		allFinish = planningAgt.AllFinish()
 		if !allFinish {
-			req.Memory.AppendMessages(types2.Message{AgentMessage: "Warning message: There are currently unfinished items in your todo list. " +
+			req.Memory.AppendMessages(types.Message{AgentMessage: "Warning message: There are currently unfinished items in your todo list. " +
 				"If you believe you have completed them, you need to use a tool to update the todo list status."})
 			a.logger.Infow("researching not finish, try again later", "researchTimes", runTaskCount, "researchLoopLimit", a.opt.MaxResearchLoopTimes)
 		}
@@ -203,7 +202,7 @@ func (a *Agent) runTask(ctx context.Context, leader *react.Agent, task string, r
 	a.logger.Infow("research finish", "task", task, "escape", time.Since(startAt).String())
 	if content != "" {
 		req.Memory.AppendMessages(
-			types2.Message{AssistantMessage: content},
+			types.Message{AssistantMessage: content},
 		)
 	}
 
@@ -235,7 +234,7 @@ func (a *Agent) doSummary(ctx context.Context, req *agtapi2.Request, resp *agtap
 				return nil
 			}
 			if evt.Delta != nil && evt.Delta.Content != "" {
-				agtapi2.SendEventToResponse(ctx, types2.NewAnsEvent(evt.Delta.Content))
+				agtapi2.SendEventToResponse(ctx, types.NewAnsEvent(evt.Delta.Content))
 			}
 		}
 	}
@@ -275,7 +274,7 @@ func New(name, desc string, llm openai.Client, opt Option) *Agent {
 		desc:   desc,
 		llm:    llm,
 		opt:    opt,
-		logger: logger.New("research").With(zap.String("name", name)),
+		logger: logger.New("research").With("name", name),
 	}
 	agt.leaderTools = append(agt.leaderTools, newLeaderTool(agt)...)
 

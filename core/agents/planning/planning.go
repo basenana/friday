@@ -7,12 +7,11 @@ import (
 	"sort"
 
 	"github.com/basenana/friday/core/agents"
-	"github.com/basenana/friday/core/agents/agtapi"
 	"github.com/basenana/friday/core/agents/react"
+	"github.com/basenana/friday/core/api"
+	"github.com/basenana/friday/core/logger"
 	"github.com/basenana/friday/core/providers/openai"
 	"github.com/basenana/friday/core/tools"
-	"github.com/basenana/friday/utils/logger"
-	"go.uber.org/zap"
 )
 
 type Agent struct {
@@ -23,7 +22,7 @@ type Agent struct {
 	opt    Option
 	todo   *TodoList
 	pt     []*tools.Tool
-	logger *zap.SugaredLogger
+	logger logger.Logger
 }
 
 var _ agents.Agent = &Agent{}
@@ -36,8 +35,8 @@ func (a *Agent) Describe() string {
 	return a.desc
 }
 
-func (a *Agent) Chat(ctx context.Context, req *agtapi.Request) *agtapi.Response {
-	return a.react.Chat(ctx, &agtapi.Request{
+func (a *Agent) Chat(ctx context.Context, req *api.Request) *api.Response {
+	return a.react.Chat(ctx, &api.Request{
 		Session:     req.Session,
 		UserMessage: fmt.Sprintf("%s\n%s", displayTodoList(a.todo), req.UserMessage),
 		Memory:      req.Memory,
@@ -87,7 +86,7 @@ func New(name, desc string, llm openai.Client, option Option) *Agent {
 		desc:   desc,
 		opt:    option,
 		todo:   emptyTodoList(),
-		logger: logger.New("planning").With(zap.String("name", name)),
+		logger: logger.New("planning").With("name", name),
 	}
 
 	option.Tools = append(option.Tools, agt.PlanningTools()...)

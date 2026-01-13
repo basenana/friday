@@ -10,15 +10,13 @@ import (
 	"sync"
 	"time"
 
-	agtapi2 "github.com/basenana/friday/core/agents/agtapi"
 	"github.com/basenana/friday/core/agents/react"
+	agtapi2 "github.com/basenana/friday/core/api"
+	"github.com/basenana/friday/core/logger"
 	"github.com/basenana/friday/core/memory"
 	"github.com/basenana/friday/core/providers/openai"
 	"github.com/basenana/friday/core/tools"
-	types2 "github.com/basenana/friday/core/types"
-	"go.uber.org/zap"
-
-	"github.com/basenana/friday/utils/logger"
+	"github.com/basenana/friday/core/types"
 )
 
 type Agent struct {
@@ -32,7 +30,7 @@ type Agent struct {
 	react *react.Agent
 
 	option Option
-	logger *zap.SugaredLogger
+	logger logger.Logger
 }
 
 func (a *Agent) Name() string {
@@ -49,7 +47,7 @@ func (a *Agent) Chat(ctx context.Context, req *agtapi2.Request) *agtapi2.Respons
 	)
 
 	if req.Session == nil {
-		req.Session = types2.NewDummySession()
+		req.Session = types.NewDummySession()
 	}
 
 	if req.Memory == nil {
@@ -104,9 +102,9 @@ func (a *Agent) runStep(ctx context.Context) (string, bool, error) {
 	for _, candidate := range candidates {
 		a.logger.Infow("[TREE] generated new reasoning step", "candidate", candidate)
 		n := newNode(candidate)
-		n.info = &types2.Stage{ID: n.id, Describe: candidate, Status: types2.Submitted}
+		n.info = &types.Stage{ID: n.id, Describe: candidate, Status: types.Submitted}
 		crtNode.Expend(n, nil)
-		agtapi2.SendEventToResponse(ctx, types2.NewStageUpdateEvent(*n.info))
+		agtapi2.SendEventToResponse(ctx, types.NewStageUpdateEvent(*n.info))
 		nextMove = append(nextMove, n)
 	}
 
@@ -141,20 +139,20 @@ func (a *Agent) runStep(ctx context.Context) (string, bool, error) {
 				wg.Done()
 			}()
 
-			node.info.Status = types2.Working
-			agtapi2.SendEventToResponse(ctx, types2.NewStageUpdateEvent(*node.info))
+			node.info.Status = types.Working
+			agtapi2.SendEventToResponse(ctx, types.NewStageUpdateEvent(*node.info))
 			defer func() {
-				agtapi2.SendEventToResponse(ctx, types2.NewStageUpdateEvent(*node.info))
+				agtapi2.SendEventToResponse(ctx, types.NewStageUpdateEvent(*node.info))
 			}()
 
 			reasoning, err := a.runCandidate(batchCtx, node)
 			if err != nil {
 				if errors.Is(err, context.Canceled) {
-					node.info.Status = types2.Canceled
+					node.info.Status = types.Canceled
 					return
 				}
 				if reasoning == "" {
-					node.info.Status = types2.Unknown
+					node.info.Status = types.Unknown
 					a.logger.Errorw("runCandidate failed", "err", "reasoning is empty")
 					return
 				}
@@ -165,15 +163,15 @@ func (a *Agent) runStep(ctx context.Context) (string, bool, error) {
 			e, err := a.evaluate(batchCtx, node, reasoning)
 			if err != nil {
 				if errors.Is(err, context.Canceled) {
-					node.info.Status = types2.Canceled
+					node.info.Status = types.Canceled
 					return
 				}
-				node.info.Status = types2.Failed
+				node.info.Status = types.Failed
 				node.info.Message = err.Error()
 				a.logger.Errorw("evaluate failed", "err", err)
 				return
 			}
-			agtapi2.SendEventToResponse(ctx, types2.NewReasoningEvent(""),
+			agtapi2.SendEventToResponse(ctx, types.NewReasoningEvent(""),
 				"evaluation", e.Reasoning,
 				"stage", node.info.ID, "score", fmt.Sprint(e.Score), "is_done", fmt.Sprint(e.IsDone))
 
@@ -189,7 +187,7 @@ func (a *Agent) runStep(ctx context.Context) (string, bool, error) {
 				}
 			}
 
-			node.info.Status = types2.Completed
+			node.info.Status = types.Completed
 		}(child)
 	}
 	wg.Wait()
@@ -281,7 +279,7 @@ WaitingRun:
 			}
 			if evt.Delta != nil {
 				if msg := evt.Delta; msg.Content != "" {
-					agtapi2.SendEventToResponse(ctx, types2.NewReasoningEvent(msg.Content), "stage", node.info.ID)
+					agtapi2.SendEventToResponse(ctx, types.NewReasoningEvent(msg.Content), "stage", node.info.ID)
 					reasoning += msg.Content
 				}
 				continue
@@ -342,9 +340,9 @@ func (a *Agent) evaluate(ctx context.Context, node *SearchNode, reasoning string
 }
 
 func (a *Agent) sendFinalAnswer(ctx context.Context, ans string, mem *memory.Memory) {
-	agtapi2.SendEventToResponse(ctx, types2.NewAnsEvent(ans))
+	agtapi2.SendEventToResponse(ctx, types.NewAnsEvent(ans))
 	if mem != nil {
-		mem.AppendMessages(types2.Message{AssistantMessage: ans})
+		mem.AppendMessages(types.Message{AssistantMessage: ans})
 	}
 }
 
@@ -378,7 +376,7 @@ func New(name, desc string, llm openai.Client, opt Option) *Agent {
 		react: react.New(name, desc, llm,
 			react.Option{SystemPrompt: opt.SystemPrompt, MaxLoopTimes: opt.MaxLoopTimes, MaxToolCalls: opt.MaxToolCalls, Tools: opt.Tools}),
 		option: opt,
-		logger: logger.New("lats").With(zap.String("name", name)),
+		logger: logger.New("lats").With("name", name),
 	}
 }
 

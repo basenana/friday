@@ -1,12 +1,11 @@
 module github.com/basenana/friday
 
-go 1.24.0
-
-toolchain go1.24.7
+go 1.24.7
 
 require (
 	github.com/JohannesKaufmann/html-to-markdown/v2 v2.5.0
 	github.com/PuerkitoBio/goquery v1.10.0
+	github.com/basenana/friday/core v0.0.0
 	github.com/basenana/go-flow v0.0.0-20230801131009-d05f1f41b706
 	github.com/blevesearch/bleve/v2 v2.4.0
 	github.com/blevesearch/upsidedown_store_api v1.0.2
@@ -18,8 +17,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/hyponet/eventbus v1.1.0
 	github.com/hyponet/jiebago v0.0.0-20240525141904-e34990856482
-	github.com/invopop/jsonschema v0.13.0
-	github.com/mark3labs/mcp-go v0.43.0
+	github.com/mark3labs/mcp-go v0.43.2
 	github.com/meilisearch/meilisearch-go v0.29.0
 	github.com/onsi/ginkgo v1.16.5
 	github.com/onsi/ginkgo/v2 v2.13.0
@@ -27,8 +25,8 @@ require (
 	github.com/openai/openai-go v1.12.0
 	github.com/redis/rueidis v1.0.0
 	github.com/spf13/cobra v1.7.0
-	go.uber.org/zap v1.27.0
-	golang.org/x/time v0.4.0
+	go.uber.org/zap v1.27.1
+	golang.org/x/time v0.14.0
 	gorm.io/driver/postgres v1.5.11
 	gorm.io/gorm v1.25.12
 )
@@ -79,6 +77,7 @@ require (
 	github.com/google/go-cmp v0.6.0 // indirect
 	github.com/google/pprof v0.0.0-20230207041349-798e818bf904 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
+	github.com/invopop/jsonschema v0.13.0 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/pgx/v5 v5.7.2 // indirect
@@ -125,3 +124,5 @@ require (
 	modernc.org/memory v1.5.0 // indirect
 	modernc.org/sqlite v1.23.1 // indirect
 )
+
+replace github.com/basenana/friday/core => ./core

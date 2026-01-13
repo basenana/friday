@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/basenana/friday/core/agents/agtapi"
 	"github.com/basenana/friday/core/agents/react"
+	"github.com/basenana/friday/core/api"
 	"github.com/basenana/friday/core/providers/openai"
 	tools2 "github.com/basenana/friday/core/tools"
 	"github.com/basenana/friday/storehouse"
@@ -24,13 +24,13 @@ type Learner struct {
 	logger        *zap.SugaredLogger
 }
 
-func (l *Learner) Chat(ctx context.Context, req *agtapi.Request) *agtapi.Response {
+func (l *Learner) Chat(ctx context.Context, req *api.Request) *api.Response {
 	buf := &bytes.Buffer{}
 	buf.WriteString("Instructions: Analyze the following text, break it down into different knowledge cards, and save them to the knowledge base using the save_knowledge_to_base tool.\n")
 	buf.WriteString("---\n")
 	buf.WriteString(req.UserMessage)
 
-	return l.react.Chat(ctx, &agtapi.Request{
+	return l.react.Chat(ctx, &api.Request{
 		Session:     req.Session,
 		UserMessage: buf.String(),
 		ImageURLs:   req.ImageURLs,

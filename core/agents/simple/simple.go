@@ -5,13 +5,11 @@ import (
 	"encoding/json"
 	"time"
 
-	agtapi2 "github.com/basenana/friday/core/agents/agtapi"
+	agtapi2 "github.com/basenana/friday/core/api"
+	"github.com/basenana/friday/core/logger"
 	"github.com/basenana/friday/core/memory"
 	"github.com/basenana/friday/core/providers/openai"
-	types2 "github.com/basenana/friday/core/types"
-	"go.uber.org/zap"
-
-	"github.com/basenana/friday/utils/logger"
+	"github.com/basenana/friday/core/types"
 )
 
 type Agent struct {
@@ -19,7 +17,7 @@ type Agent struct {
 	description string
 	llm         openai.Client
 	option      Option
-	logger      *zap.SugaredLogger
+	logger      logger.Logger
 }
 
 func (s *Agent) Name() string {
@@ -36,7 +34,7 @@ func (s *Agent) Chat(ctx context.Context, req *agtapi2.Request) *agtapi2.Respons
 	)
 
 	if req.Session == nil {
-		req.Session = types2.NewDummySession()
+		req.Session = types.NewDummySession()
 	}
 
 	if req.Memory == nil {
@@ -49,7 +47,7 @@ func (s *Agent) Chat(ctx context.Context, req *agtapi2.Request) *agtapi2.Respons
 	)
 
 	mem := req.Memory
-	mem.AppendMessages(types2.Message{UserMessage: req.UserMessage})
+	mem.AppendMessages(types.Message{UserMessage: req.UserMessage})
 
 	s.logger.Infow("handle request", "session", req.Session.ID, "userMessage", req.UserMessage)
 
@@ -94,9 +92,9 @@ WaitMessage:
 			msgCnt++ // check api hang
 			switch {
 			case len(msg.Content) > 0:
-				agtapi2.SendEvent(resp, types2.NewContentEvent(msg.Content))
+				agtapi2.SendEvent(resp, types.NewContentEvent(msg.Content))
 			case len(msg.Reasoning) > 0:
-				agtapi2.SendEvent(resp, types2.NewReasoningEvent(msg.Reasoning))
+				agtapi2.SendEvent(resp, types.NewReasoningEvent(msg.Reasoning))
 			}
 		}
 	}
@@ -120,7 +118,7 @@ func (s *Agent) handleStructLLMOutput(ctx context.Context, mem *memory.Memory, r
 		resp.Fail(err)
 		return
 	}
-	agtapi2.SendEvent(resp, types2.NewContentEvent(string(raw)))
+	agtapi2.SendEvent(resp, types.NewContentEvent(string(raw)))
 }
 
 func New(name, desc string, llm openai.Client, opt Option) *Agent {
@@ -129,7 +127,7 @@ func New(name, desc string, llm openai.Client, opt Option) *Agent {
 		description: desc,
 		llm:         llm,
 		option:      opt,
-		logger:      logger.New("simple").With(zap.String("name", name)),
+		logger:      logger.New("simple").With("name", name),
 	}
 }
 

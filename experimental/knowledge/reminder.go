@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/basenana/friday/core/agents/agtapi"
 	"github.com/basenana/friday/core/agents/react"
+	"github.com/basenana/friday/core/api"
 	"github.com/basenana/friday/core/providers/openai"
 	tools2 "github.com/basenana/friday/core/tools"
 	"github.com/basenana/friday/storehouse"
@@ -25,8 +25,8 @@ type Reminder struct {
 	logger        *zap.SugaredLogger
 }
 
-func (r *Reminder) Chat(ctx context.Context, req *agtapi.Request) *agtapi.Response {
-	return r.react.Chat(ctx, &agtapi.Request{
+func (r *Reminder) Chat(ctx context.Context, req *api.Request) *api.Response {
+	return r.react.Chat(ctx, &api.Request{
 		Session:     req.Session,
 		UserMessage: "Please actively organize and tidy up your memory cards based on historical messages, and save them using save_memory_card_to_base tool for quick recall later.",
 		ImageURLs:   req.ImageURLs,

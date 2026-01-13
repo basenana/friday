@@ -3,8 +3,8 @@ package knowledge
 import (
 	"context"
 
-	"github.com/basenana/friday/core/agents/agtapi"
 	"github.com/basenana/friday/core/agents/react"
+	"github.com/basenana/friday/core/api"
 	"github.com/basenana/friday/core/providers/openai"
 	tools2 "github.com/basenana/friday/core/tools"
 	"github.com/basenana/friday/storehouse"
@@ -28,7 +28,7 @@ func (q *Inquirer) Describe() string {
 	return q.desc
 }
 
-func (q *Inquirer) Chat(ctx context.Context, req *agtapi.Request) *agtapi.Response {
+func (q *Inquirer) Chat(ctx context.Context, req *api.Request) *api.Response {
 	return q.react.Chat(ctx, req)
 }
 

@@ -5,15 +5,13 @@ import (
 	"fmt"
 	"strings"
 
-	agtapi2 "github.com/basenana/friday/core/agents/agtapi"
 	"github.com/basenana/friday/core/agents/react"
+	agtapi2 "github.com/basenana/friday/core/api"
+	"github.com/basenana/friday/core/logger"
 	"github.com/basenana/friday/core/memory"
 	"github.com/basenana/friday/core/providers/openai"
 	"github.com/basenana/friday/core/tools"
-	types2 "github.com/basenana/friday/core/types"
-	"go.uber.org/zap"
-
-	"github.com/basenana/friday/utils/logger"
+	"github.com/basenana/friday/core/types"
 )
 
 type Agent struct {
@@ -21,7 +19,7 @@ type Agent struct {
 	summary   *react.Agent
 	subAgents []ExpertAgent
 	option    Option
-	logger    *zap.SugaredLogger
+	logger    logger.Logger
 }
 
 func (a *Agent) Name() string {
@@ -38,7 +36,7 @@ func (a *Agent) Chat(ctx context.Context, req *agtapi2.Request) *agtapi2.Respons
 	)
 
 	if req.Session == nil {
-		req.Session = types2.NewDummySession()
+		req.Session = types.NewDummySession()
 	}
 
 	if req.Memory == nil {
@@ -103,7 +101,7 @@ func (a *Agent) runReport(ctx context.Context, req *agtapi2.Request, resp *agtap
 				continue
 			}
 			if evt.Delta.Content != "" {
-				agtapi2.SendEvent(resp, types2.NewAnsEvent(evt.Delta.Content))
+				agtapi2.SendEvent(resp, types.NewAnsEvent(evt.Delta.Content))
 			}
 		}
 	}
@@ -249,7 +247,7 @@ func New(name, desc string, llm openai.Client, opt Option) *Agent {
 	agt := &Agent{
 		subAgents: opt.SubAgents,
 		option:    opt,
-		logger:    logger.New("coordinator").With(zap.String("name", name)),
+		logger:    logger.New("coordinator").With("name", name),
 	}
 
 	var agentTools []*tools.Tool

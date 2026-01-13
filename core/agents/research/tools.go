@@ -7,12 +7,11 @@ import (
 	"sync"
 	"time"
 
-	agtapi2 "github.com/basenana/friday/core/agents/agtapi"
 	"github.com/basenana/friday/core/agents/summarize"
+	agtapi2 "github.com/basenana/friday/core/api"
 	"github.com/basenana/friday/core/memory"
 	"github.com/basenana/friday/core/tools"
 	"github.com/basenana/friday/core/types"
-	"go.uber.org/zap"
 )
 
 func newLeaderTool(agt *Agent) []*tools.Tool {
@@ -124,7 +123,7 @@ func (a *Agent) setupSubagentMemory(ctx context.Context) *memory.Memory {
 	sum := summarize.New("stagesummary", "", a.llm, summarize.Option{})
 	summary, err := agtapi2.ReadAllContent(ctx, sum.Chat(ctx, &agtapi2.Request{Session: parentMem.Session(), Memory: parentMem.Copy()}))
 	if err != nil || summary == "" {
-		a.logger.Warn("failed to get stage summary, using origin memory", zap.Error(err))
+		a.logger.Warnw("failed to get stage summary, using origin memory", "err", err)
 		return parentMem
 	}
 
