@@ -6,7 +6,7 @@ import (
 	"sync"
 
 	tools2 "github.com/basenana/friday/core/tools"
-	"github.com/basenana/friday/types"
+	"github.com/basenana/friday/core/types"
 	"github.com/basenana/friday/utils/logger"
 	"go.uber.org/zap"
 )

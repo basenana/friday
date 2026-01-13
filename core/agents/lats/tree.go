@@ -5,7 +5,7 @@ import (
 	"math"
 
 	"github.com/basenana/friday/core/memory"
-	"github.com/basenana/friday/types"
+	types2 "github.com/basenana/friday/core/types"
 	"github.com/google/uuid"
 )
 
@@ -17,11 +17,11 @@ type SearchNode struct {
 	children   []*SearchNode
 	reasoning  []string
 	memory     *memory.Memory
-	info       *types.Stage
+	info       *types2.Stage
 }
 
 func newRoot(reasoning string, mem *memory.Memory) *SearchNode {
-	mem.AppendMessages(types.Message{AgentMessage: reasoning})
+	mem.AppendMessages(types2.Message{AgentMessage: reasoning})
 	return &SearchNode{
 		id:         uuid.New().String(),
 		evaluation: &Evaluation{Score: 1},
@@ -37,7 +37,7 @@ func newNode(reasoning string) *SearchNode {
 }
 
 func (n *SearchNode) Expend(node *SearchNode, evaluation *Evaluation) {
-	stage := &types.Stage{ID: node.id, Status: types.Submitted}
+	stage := &types2.Stage{ID: node.id, Status: types2.Submitted}
 
 	if evaluation == nil { // new candidate
 		stage.Describe = node.reasoning[len(node.reasoning)-1]
@@ -55,9 +55,9 @@ func (n *SearchNode) Expend(node *SearchNode, evaluation *Evaluation) {
 	n.children = append(n.children, node)
 	node.memory = n.memory.Copy()
 	if msg := node.Latest(); msg != "" {
-		node.memory.AppendMessages(types.Message{AssistantMessage: msg})
+		node.memory.AppendMessages(types2.Message{AssistantMessage: msg})
 	}
-	node.memory.AppendMessages(types.Message{AgentMessage: evaluation.Reasoning})
+	node.memory.AppendMessages(types2.Message{AgentMessage: evaluation.Reasoning})
 	node.evaluation = evaluation
 	node.info = stage
 	node.BackPropagate(evaluation.Score)

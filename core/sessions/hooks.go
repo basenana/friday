@@ -3,7 +3,7 @@ package sessions
 import (
 	"context"
 
-	"github.com/basenana/friday/types"
+	"github.com/basenana/friday/core/types"
 )
 
 type HookHandler func(ctx context.Context, payload *types.SessionPayload) error

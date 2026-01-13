@@ -2,22 +2,22 @@ package agtapi
 
 import (
 	"github.com/basenana/friday/core/memory"
-	"github.com/basenana/friday/types"
+	types2 "github.com/basenana/friday/core/types"
 )
 
 type Request struct {
-	Session     *types.Session
+	Session     *types2.Session
 	UserMessage string
 	ImageURLs   []string
 	Memory      *memory.Memory
 }
 
 type Response struct {
-	e   chan types.Event
+	e   chan types2.Event
 	err chan error
 }
 
-func (r *Response) Events() <-chan types.Event {
+func (r *Response) Events() <-chan types2.Event {
 	return r.e
 }
 
@@ -34,10 +34,10 @@ func (r *Response) Close() {
 }
 
 func NewResponse() *Response {
-	return &Response{e: make(chan types.Event, 5), err: make(chan error, 0)}
+	return &Response{e: make(chan types2.Event, 5), err: make(chan error, 0)}
 }
 
-func SendEvent(resp *Response, evt *types.Event, extraKV ...string) {
+func SendEvent(resp *Response, evt *types2.Event, extraKV ...string) {
 	var (
 		ev = make(map[string]string)
 	)

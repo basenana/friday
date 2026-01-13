@@ -12,8 +12,7 @@ import (
 	"github.com/basenana/friday/core/memory"
 	"github.com/basenana/friday/core/providers/openai"
 	"github.com/basenana/friday/core/tools"
-	"github.com/basenana/friday/storehouse"
-	"github.com/basenana/friday/types"
+	"github.com/basenana/friday/core/types"
 	"github.com/basenana/friday/utils/logger"
 	"go.uber.org/zap"
 )
@@ -34,7 +33,7 @@ func init() {
 type MemoryCompact struct {
 	summary    *summarize.Agent
 	session    *Descriptor
-	store      storehouse.Storehouse
+	store      SessionStore
 	scratchpad tools.Scratchpad
 	logger     *zap.SugaredLogger
 }

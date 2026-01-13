@@ -81,7 +81,7 @@ func ScratchpadReadTools(sp Scratchpad) []*Tool {
 					notes[i].Content = "" // hide content to save tokens
 				}
 
-				return NewToolResultText(utils.Res2Str(notes)), nil
+				return NewToolResultText(Res2Str(notes)), nil
 			}),
 		),
 		NewTool("read_note_from_scratchpad",
@@ -100,7 +100,7 @@ func ScratchpadReadTools(sp Scratchpad) []*Tool {
 					return NewToolResultError(err.Error()), nil
 				}
 
-				return NewToolResultText(utils.Res2Str(note)), nil
+				return NewToolResultText(Res2Str(note)), nil
 			}),
 		),
 		NewTool("grep_note_from_scratchpad",
@@ -142,7 +142,7 @@ func ScratchpadReadTools(sp Scratchpad) []*Tool {
 				}
 				note.Content = ""
 
-				return NewToolResultText(utils.Res2Str(note)), nil
+				return NewToolResultText(Res2Str(note)), nil
 			}),
 		),
 	}

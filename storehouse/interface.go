@@ -3,17 +3,12 @@ package storehouse
 import (
 	"context"
 
+	"github.com/basenana/friday/core/sessions"
 	"github.com/basenana/friday/types"
 )
 
 type Storehouse interface {
-	ListSessions(ctx context.Context, filter map[string]string, includesClosed bool) ([]*types.Session, error)
-	CreateSession(ctx context.Context, session *types.Session) (*types.Session, error)
-	UpdateSession(ctx context.Context, session *types.Session) error
-	OpenSession(ctx context.Context, sessionID string) (*types.Session, error)
-	AppendMessages(ctx context.Context, sessionID string, message ...*types.Message) error
-	ListMessages(ctx context.Context, sessionID string) ([]*types.Message, error)
-	CloseSession(ctx context.Context, sessionID string) error
+	sessions.SessionStore
 
 	GetMemory(ctx context.Context, memoryID string) (*types.Memory, error)
 	ListMemoryCategories(ctx context.Context, memoryType string) ([]string, error)

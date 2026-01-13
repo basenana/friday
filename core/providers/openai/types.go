@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"encoding/xml"
 
-	"github.com/basenana/friday/types"
+	"github.com/basenana/friday/core/types"
 	"github.com/openai/openai-go"
 )
 

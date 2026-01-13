@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/basenana/friday/utils"
 	"github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/client/transport"
 	"github.com/mark3labs/mcp-go/mcp"
@@ -68,7 +67,7 @@ func (s *MCPServer) mcpToolAdaptor(mcpTool *mcp.Tool) ToolHandlerFunc {
 		if err != nil {
 			return nil, err
 		}
-		return NewToolResultText(utils.Res2Str(result)), nil
+		return NewToolResultText(Res2Str(result)), nil
 	}
 }
 

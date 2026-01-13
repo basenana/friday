@@ -3,7 +3,7 @@ package tools
 import (
 	"context"
 
-	"github.com/basenana/friday/types"
+	"github.com/basenana/friday/core/types"
 )
 
 type ToolSet interface {

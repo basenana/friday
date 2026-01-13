@@ -10,55 +10,54 @@ import (
 	agtapi2 "github.com/basenana/friday/core/agents/agtapi"
 	"github.com/basenana/friday/core/agents/summarize"
 	"github.com/basenana/friday/core/memory"
-	tools2 "github.com/basenana/friday/core/tools"
-	"github.com/basenana/friday/types"
-	"github.com/basenana/friday/utils"
+	"github.com/basenana/friday/core/tools"
+	"github.com/basenana/friday/core/types"
 	"go.uber.org/zap"
 )
 
-func newLeaderTool(agt *Agent) []*tools2.Tool {
-	return []*tools2.Tool{
-		tools2.NewTool(
+func newLeaderTool(agt *Agent) []*tools.Tool {
+	return []*tools.Tool{
+		tools.NewTool(
 			"run_blocking_subagents",
-			tools2.WithDescription("Submit multiple independent tasks, each task will launch a subagent to conduct research in parallel."),
-			tools2.WithArray("task_describe_list",
-				tools2.Required(),
-				tools2.Items(map[string]interface{}{"type": "string", "description": "The item description must be specific, measurable, achievable, and strongly related to the goal."}),
-				tools2.Description("The task description needs to be executable and have assessable completion conditions."),
+			tools.WithDescription("Submit multiple independent tasks, each task will launch a subagent to conduct research in parallel."),
+			tools.WithArray("task_describe_list",
+				tools.Required(),
+				tools.Items(map[string]interface{}{"type": "string", "description": "The item description must be specific, measurable, achievable, and strongly related to the goal."}),
+				tools.Description("The task description needs to be executable and have assessable completion conditions."),
 			),
-			tools2.WithString("reasoning",
-				tools2.Required(),
-				tools2.Description("The reason and purpose of creating a sub-agent"),
+			tools.WithString("reasoning",
+				tools.Required(),
+				tools.Description("The reason and purpose of creating a sub-agent"),
 			),
-			tools2.WithToolHandler(agt.runBlockingsSubagentHandler),
+			tools.WithToolHandler(agt.runBlockingsSubagentHandler),
 		),
 	}
 }
 
-func (a *Agent) runBlockingsSubagentHandler(ctx context.Context, request *tools2.Request) (*tools2.Result, error) {
+func (a *Agent) runBlockingsSubagentHandler(ctx context.Context, request *tools.Request) (*tools.Result, error) {
 	tasks, ok := request.Arguments["task_describe_list"].([]any)
 	if !ok || len(tasks) == 0 {
-		return tools2.NewToolResultError("missing required parameter: task_describe_list"), nil
+		return tools.NewToolResultError("missing required parameter: task_describe_list"), nil
 	}
 	var taskDescList []string
 	for _, taskDescStr := range tasks {
 		taskDesc, ok := taskDescStr.(string)
 		if !ok {
-			return tools2.NewToolResultError("task_describe_list must be a string array"), nil
+			return tools.NewToolResultError("task_describe_list must be a string array"), nil
 		}
 		taskDescList = append(taskDescList, taskDesc)
 	}
 
 	var (
 		parentMem     = a.setupSubagentMemory(ctx)
-		subAgentTools []*tools2.Tool
+		subAgentTools []*tools.Tool
 	)
 	for _, t := range a.opt.Tools {
 		subAgentTools = append(subAgentTools, t)
 	}
 
 	if sp := parentMem.Scratchpad(); sp != nil {
-		subAgentTools = append(subAgentTools, tools2.ScratchpadWriteTools(sp)...)
+		subAgentTools = append(subAgentTools, tools.ScratchpadWriteTools(sp)...)
 	}
 
 	var (
@@ -101,7 +100,7 @@ func (a *Agent) runBlockingsSubagentHandler(ctx context.Context, request *tools2
 		reports = append(reports, content)
 	}
 
-	return tools2.NewToolResultText(utils.Res2Str(reports)), nil
+	return tools.NewToolResultText(tools.Res2Str(reports)), nil
 }
 
 func (a *Agent) setupSubagentMemory(ctx context.Context) *memory.Memory {

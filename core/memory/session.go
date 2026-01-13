@@ -4,7 +4,7 @@ import (
 	"context"
 
 	"github.com/basenana/friday/core/tools"
-	"github.com/basenana/friday/types"
+	"github.com/basenana/friday/core/types"
 )
 
 type Session interface {

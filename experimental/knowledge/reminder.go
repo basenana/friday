@@ -104,7 +104,7 @@ func (r *Reminder) storehouseTools() []*tools2.Tool {
 		),
 	}
 
-	common = append(common, tools2.SearchTools(r.store)...)
+	common = append(common, SearchTools(r.store)...)
 	return common
 }
 

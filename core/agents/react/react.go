@@ -11,7 +11,7 @@ import (
 	"github.com/basenana/friday/core/memory"
 	"github.com/basenana/friday/core/providers/openai"
 	"github.com/basenana/friday/core/tools"
-	"github.com/basenana/friday/types"
+	types2 "github.com/basenana/friday/core/types"
 	"github.com/basenana/friday/utils/logger"
 	"go.uber.org/zap"
 )
@@ -41,7 +41,7 @@ func (a *Agent) Chat(ctx context.Context, req *agtapi2.Request) *agtapi2.Respons
 		resp = agtapi2.NewResponse()
 	)
 	if req.Session == nil {
-		req.Session = types.NewDummySession()
+		req.Session = types2.NewDummySession()
 	}
 
 	if req.Memory == nil {
@@ -54,7 +54,7 @@ func (a *Agent) Chat(ctx context.Context, req *agtapi2.Request) *agtapi2.Respons
 	)
 
 	mem := req.Memory
-	mem.AppendMessages(types.Message{UserMessage: req.UserMessage})
+	mem.AppendMessages(types2.Message{UserMessage: req.UserMessage})
 
 	a.logger.Infow("handle request", "message", req.UserMessage, "session", req.Session.ID)
 	go a.reactLoop(ctx, mem, resp)
@@ -69,7 +69,7 @@ func (a *Agent) reactLoop(ctx context.Context, mem *memory.Memory, resp *agtapi2
 		startAt     = time.Now()
 		usage       = &loopUsage{Limit: a.option.MaxLoopTimes, ToolLimit: a.option.MaxToolCalls}
 		statusCode  code
-		supplements []types.Message
+		supplements []types2.Message
 		stream      openai.Response
 		err         error
 	)
@@ -132,14 +132,14 @@ func (a *Agent) reactLoop(ctx context.Context, mem *memory.Memory, resp *agtapi2
 		}
 		switch statusCode {
 		case 2:
-			mem.AppendMessages(types.Message{AgentMessage: `The tool is used in an incorrect format; please try using the tool again.`})
+			mem.AppendMessages(types2.Message{AgentMessage: `The tool is used in an incorrect format; please try using the tool again.`})
 		default:
-			mem.AppendMessages(types.Message{AgentMessage: "If you believe the conversation is complete, use the tool to end the conversation."})
+			mem.AppendMessages(types2.Message{AgentMessage: "If you believe the conversation is complete, use the tool to end the conversation."})
 		}
 	}
 }
 
-func (a *Agent) handleLLMStream(ctx context.Context, stream openai.Response, mem *memory.Memory, resp *agtapi2.Response, usage *loopUsage) ([]types.Message, code) {
+func (a *Agent) handleLLMStream(ctx context.Context, stream openai.Response, mem *memory.Memory, resp *agtapi2.Response, usage *loopUsage) ([]types2.Message, code) {
 	var (
 		content      string
 		reasoning    string
@@ -148,7 +148,7 @@ func (a *Agent) handleLLMStream(ctx context.Context, stream openai.Response, mem
 
 		session     = mem.Session().ID
 		statusCode  = code(0) // not finish
-		supplements []types.Message
+		supplements []types2.Message
 		warnTicker  = time.NewTicker(time.Minute)
 	)
 
@@ -177,7 +177,7 @@ WaitMessage:
 			switch {
 			case len(msg.Content) > 0:
 				content += msg.Content
-				agtapi2.SendEventToResponse(ctx, types.NewContentEvent(msg.Content))
+				agtapi2.SendEventToResponse(ctx, types2.NewContentEvent(msg.Content))
 
 			case len(msg.ToolUse) > 0:
 				for i := range msg.ToolUse {
@@ -191,7 +191,7 @@ WaitMessage:
 
 			case len(msg.Reasoning) > 0:
 				reasoning += msg.Reasoning
-				agtapi2.SendEventToResponse(ctx, types.NewReasoningEvent(msg.Reasoning))
+				agtapi2.SendEventToResponse(ctx, types2.NewReasoningEvent(msg.Reasoning))
 			}
 		}
 	}
@@ -221,7 +221,7 @@ WaitMessage:
 	}()
 
 	if reasoning != "" {
-		mem.AppendMessages(types.Message{AssistantReasoning: reasoning})
+		mem.AppendMessages(types2.Message{AssistantReasoning: reasoning})
 	}
 
 	if len(toolUse) > 0 {
@@ -232,15 +232,15 @@ WaitMessage:
 	}
 
 	if len(content) > 0 {
-		mem.AppendMessages(types.Message{AssistantMessage: content})
+		mem.AppendMessages(types2.Message{AssistantMessage: content})
 	}
 	return supplements, statusCode
 }
 
-func (a *Agent) doToolCalls(ctx context.Context, mem *memory.Memory, toolUses []openai.ToolUse, reasoning string, usage *loopUsage) []types.Message {
+func (a *Agent) doToolCalls(ctx context.Context, mem *memory.Memory, toolUses []openai.ToolUse, reasoning string, usage *loopUsage) []types2.Message {
 	var (
-		result       []types.Message
-		update       = make(chan []types.Message, len(toolUses))
+		result       []types2.Message
+		update       = make(chan []types2.Message, len(toolUses))
 		toolUseCount = usage.ToolUse // remind the usage
 		wg           = &sync.WaitGroup{}
 	)
@@ -266,9 +266,9 @@ func (a *Agent) doToolCalls(ctx context.Context, mem *memory.Memory, toolUses []
 	return result
 }
 
-func (a *Agent) tryToolCall(ctx context.Context, mem *memory.Memory, use openai.ToolUse, reasoning string, toolUseCount int) []types.Message {
+func (a *Agent) tryToolCall(ctx context.Context, mem *memory.Memory, use openai.ToolUse, reasoning string, toolUseCount int) []types2.Message {
 	var (
-		result    []types.Message
+		result    []types2.Message
 		extraArgs = agtapi2.OverwriteToolArgsFromContext(ctx)
 		useMark   = use.ID
 		session   = mem.Session().ID
@@ -280,20 +280,20 @@ func (a *Agent) tryToolCall(ctx context.Context, mem *memory.Memory, use openai.
 
 	// request a tool call message
 	// DeepSeek v3.2: if the model support using tool in reasoning, the reasoning need return
-	result = append(result, types.Message{ToolCallID: useMark, ToolName: use.Name, ToolArguments: use.Arguments, AssistantReasoning: reasoning})
+	result = append(result, types2.Message{ToolCallID: useMark, ToolName: use.Name, ToolArguments: use.Arguments, AssistantReasoning: reasoning})
 
 	td := a.getToolByName(mem, use.Name)
 	if td == nil {
 		msg := fmt.Sprintf("tool %s not found", use.Name)
-		result = append(result, types.Message{ToolCallID: useMark, ToolContent: msg})
-		agtapi2.SendEventToResponse(ctx, types.NewToolUseEvent(use.Name, use.Arguments, "", msg))
+		result = append(result, types2.Message{ToolCallID: useMark, ToolContent: msg})
+		agtapi2.SendEventToResponse(ctx, types2.NewToolUseEvent(use.Name, use.Arguments, "", msg))
 		a.logger.Warnw(msg, "tool", use.Name, "session", session)
 		return result
 	}
 
 	if use.Error != "" {
-		result = append(result, types.Message{ToolCallID: useMark, ToolContent: use.Error})
-		agtapi2.SendEventToResponse(ctx, types.NewToolUseEvent(use.Name, use.Arguments, td.Description, use.Error))
+		result = append(result, types2.Message{ToolCallID: useMark, ToolContent: use.Error})
+		agtapi2.SendEventToResponse(ctx, types2.NewToolUseEvent(use.Name, use.Arguments, td.Description, use.Error))
 		a.logger.Warnw("try tool call error", "tool", use.Name, "error", use.Error, "session", session)
 		return result
 	}
@@ -302,14 +302,14 @@ func (a *Agent) tryToolCall(ctx context.Context, mem *memory.Memory, use openai.
 	a.logger.Infow("父 using tool", "tool", toolUse.Name, "args", toolUse.Arguments, "session", session)
 	msg, err := toolCall(ctx, mem, toolUse, extraArgs, td, toolUseCount)
 	if err != nil {
-		result = append(result, types.Message{ToolCallID: toolUse.ID(), ToolContent: fmt.Sprintf("using tool failed: %s", err)})
-		agtapi2.SendEventToResponse(ctx, types.NewToolUseEvent(use.Name, use.Arguments, td.Description, err.Error()))
+		result = append(result, types2.Message{ToolCallID: toolUse.ID(), ToolContent: fmt.Sprintf("using tool failed: %s", err)})
+		agtapi2.SendEventToResponse(ctx, types2.NewToolUseEvent(use.Name, use.Arguments, td.Description, err.Error()))
 		a.logger.Warnw("using tool failed", "tool", use.Name, "error", err, "session", session)
 		return result
 	}
 
-	result = append(result, types.Message{ToolCallID: toolUse.ID(), ToolContent: msg})
-	agtapi2.SendEventToResponse(ctx, types.NewToolUseEvent(use.Name, use.Arguments, td.Description, ""))
+	result = append(result, types2.Message{ToolCallID: toolUse.ID(), ToolContent: msg})
+	agtapi2.SendEventToResponse(ctx, types2.NewToolUseEvent(use.Name, use.Arguments, td.Description, ""))
 
 	return result
 }

@@ -4,7 +4,7 @@ import (
 	"context"
 
 	"github.com/basenana/friday/core/memory"
-	"github.com/basenana/friday/types"
+	types2 "github.com/basenana/friday/core/types"
 	"github.com/basenana/friday/utils/logger"
 )
 
@@ -15,12 +15,12 @@ const (
 	ctxToolArgsKey = "friday.ctx.tool.args"
 )
 
-func SessionFromContext(ctx context.Context) *types.Session {
+func SessionFromContext(ctx context.Context) *types2.Session {
 	m := ctx.Value(ctxSessionKey)
 	if m == nil {
 		return nil
 	}
-	return m.(*types.Session)
+	return m.(*types2.Session)
 }
 
 func MemoryFromContext(ctx context.Context) *memory.Memory {
@@ -49,10 +49,10 @@ func OverwriteToolArgsFromContext(ctx context.Context) map[string]string {
 
 type ContextOption func(ctx context.Context) context.Context
 
-func NewContext(ctx context.Context, session *types.Session, options ...ContextOption) context.Context {
+func NewContext(ctx context.Context, session *types2.Session, options ...ContextOption) context.Context {
 	// ensure session id
 	s := ctx.Value(ctxSessionKey)
-	if s == nil || s.(*types.Session).ID != session.ID {
+	if s == nil || s.(*types2.Session).ID != session.ID {
 		ctx = context.WithValue(ctx, ctxSessionKey, session)
 	}
 
@@ -81,7 +81,7 @@ func WithResponse(resp *Response) ContextOption {
 	}
 }
 
-func SendEventToResponse(ctx context.Context, evt *types.Event, extraKV ...string) {
+func SendEventToResponse(ctx context.Context, evt *types2.Event, extraKV ...string) {
 	if evt == nil {
 		return
 	}

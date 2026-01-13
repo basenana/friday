@@ -10,8 +10,7 @@ import (
 	"github.com/basenana/friday/core/memory"
 	"github.com/basenana/friday/core/providers/openai"
 	"github.com/basenana/friday/core/tools"
-	"github.com/basenana/friday/types"
-
+	types2 "github.com/basenana/friday/core/types"
 	"go.uber.org/zap"
 
 	"github.com/basenana/friday/utils/logger"
@@ -39,7 +38,7 @@ func (a *Agent) Chat(ctx context.Context, req *agtapi2.Request) *agtapi2.Respons
 	)
 
 	if req.Session == nil {
-		req.Session = types.NewDummySession()
+		req.Session = types2.NewDummySession()
 	}
 
 	if req.Memory == nil {
@@ -104,7 +103,7 @@ func (a *Agent) runReport(ctx context.Context, req *agtapi2.Request, resp *agtap
 				continue
 			}
 			if evt.Delta.Content != "" {
-				agtapi2.SendEvent(resp, types.NewAnsEvent(evt.Delta.Content))
+				agtapi2.SendEvent(resp, types2.NewAnsEvent(evt.Delta.Content))
 			}
 		}
 	}

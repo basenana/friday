@@ -72,7 +72,7 @@ func (l *Learner) storehouseTools() []*tools2.Tool {
 		),
 	}
 
-	common = append(common, tools2.SearchTools(l.store, l.chunkType)...)
+	common = append(common, SearchTools(l.store, l.chunkType)...)
 	return common
 }
 

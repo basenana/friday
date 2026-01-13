@@ -6,14 +6,23 @@ import (
 	"time"
 
 	tools2 "github.com/basenana/friday/core/tools"
-	"github.com/basenana/friday/storehouse"
-	"github.com/basenana/friday/types"
+	"github.com/basenana/friday/core/types"
 	"github.com/basenana/friday/utils/logger"
 	"go.uber.org/zap"
 )
 
+type SessionStore interface {
+	ListSessions(ctx context.Context, filter map[string]string, includesClosed bool) ([]*types.Session, error)
+	CreateSession(ctx context.Context, session *types.Session) (*types.Session, error)
+	UpdateSession(ctx context.Context, session *types.Session) error
+	OpenSession(ctx context.Context, sessionID string) (*types.Session, error)
+	AppendMessages(ctx context.Context, sessionID string, message ...*types.Message) error
+	ListMessages(ctx context.Context, sessionID string) ([]*types.Message, error)
+	CloseSession(ctx context.Context, sessionID string) error
+}
+
 type Manager struct {
-	store  storehouse.Storehouse
+	store  SessionStore
 	logger *zap.SugaredLogger
 }
 
@@ -51,7 +60,7 @@ func (m *Manager) DeleteSession(ctx context.Context, sessionID string) error {
 	return m.store.CloseSession(ctx, sessionID)
 }
 
-func NewManager(store storehouse.Storehouse) *Manager {
+func NewManager(store SessionStore) *Manager {
 	return &Manager{
 		store:  store,
 		logger: logger.New("session.manager"),
@@ -60,14 +69,14 @@ func NewManager(store storehouse.Storehouse) *Manager {
 
 type Descriptor struct {
 	session    *types.Session
-	store      storehouse.Storehouse
+	store      SessionStore
 	hooks      map[string][]HookHandler
 	scratchpad tools2.Scratchpad
 	mux        sync.Mutex
 	logger     *zap.SugaredLogger
 }
 
-func newSessionDescriptor(s *types.Session, store storehouse.Storehouse) *Descriptor {
+func newSessionDescriptor(s *types.Session, store SessionStore) *Descriptor {
 	return &Descriptor{
 		session:    s,
 		store:      store,
