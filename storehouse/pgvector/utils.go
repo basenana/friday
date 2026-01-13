@@ -6,7 +6,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/basenana/friday/providers"
+	"github.com/basenana/friday/core/providers"
 	"github.com/basenana/friday/types"
 
 	"github.com/basenana/friday/utils/logger"

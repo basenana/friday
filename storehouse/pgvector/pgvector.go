@@ -24,7 +24,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/basenana/friday/providers"
+	"github.com/basenana/friday/core/providers"
 	"github.com/basenana/friday/storehouse"
 	"github.com/basenana/friday/storehouse/chunks"
 	"github.com/basenana/friday/types"
