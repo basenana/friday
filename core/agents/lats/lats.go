@@ -64,7 +64,7 @@ func (a *Agent) Chat(ctx context.Context, req *agtapi2.Request) *agtapi2.Respons
 		agtapi2.WithResponse(resp),
 	)
 
-	a.logger.Infow("handle request", "message", req.UserMessage, "session", req.Session.ID)
+	a.logger.Infow("handle request", "message", logger.FirstLine(req.UserMessage), "session", req.Session.ID)
 	go func() {
 		defer resp.Close()
 		for {

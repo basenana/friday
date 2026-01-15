@@ -49,7 +49,7 @@ func (s *Agent) Chat(ctx context.Context, req *agtapi2.Request) *agtapi2.Respons
 	mem := req.Memory
 	mem.AppendMessages(types.Message{UserMessage: req.UserMessage})
 
-	s.logger.Infow("handle request", "session", req.Session.ID, "userMessage", req.UserMessage)
+	s.logger.Infow("handle request", "session", req.Session.ID, "message", logger.FirstLine(req.UserMessage))
 
 	if s.option.NewOutputModel == nil {
 		go s.handleLLMStream(ctx, mem, resp)
