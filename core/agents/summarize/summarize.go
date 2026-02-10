@@ -35,7 +35,7 @@ func (a *Agent) Chat(ctx context.Context, req *api.Request) *api.Response {
 	})
 }
 
-func New(name, desc string, llm openai.Client, option Option) *Agent {
+func New(llm openai.Client, option Option) *Agent {
 	if option.SystemPrompt == "" {
 		option.SystemPrompt = DEFAULT_SUMMARIZE_PROMPT
 	}
@@ -43,7 +43,7 @@ func New(name, desc string, llm openai.Client, option Option) *Agent {
 		react:  react.New(llm, react.Option{SystemPrompt: option.SystemPrompt}),
 		llm:    llm,
 		option: option,
-		logger: logger.New("summarize").With("name", name),
+		logger: logger.New("summarize"),
 	}
 }
 
