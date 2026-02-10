@@ -20,14 +20,6 @@ type Agent struct {
 	logger      logger.Logger
 }
 
-func (s *Agent) Name() string {
-	return s.name
-}
-
-func (s *Agent) Describe() string {
-	return s.description
-}
-
 func (s *Agent) Chat(ctx context.Context, req *agtapi.Request) *agtapi.Response {
 	var (
 		resp = agtapi.NewResponse()
@@ -35,15 +27,10 @@ func (s *Agent) Chat(ctx context.Context, req *agtapi.Request) *agtapi.Response 
 
 	sess := req.Session
 	if sess == nil {
-		sess = session.New(generateID(), s.llm)
+		sess = session.New(types.NewID(), s.llm)
 	}
 
-	ctx = agtapi.NewContext(ctx, sess,
-		agtapi.WithResponse(resp),
-	)
-
 	sess.AppendMessage(&types.Message{UserMessage: req.UserMessage})
-
 	s.logger.Infow("handle request", "session", sess.ID, "message", logger.FirstLine(req.UserMessage))
 
 	if s.option.NewOutputModel == nil {
@@ -116,21 +103,15 @@ func (s *Agent) handleStructLLMOutput(ctx context.Context, sess *session.Session
 	agtapi.SendDelta(resp, types.Delta{Content: string(raw)})
 }
 
-func New(name, desc string, llm openai.Client, opt Option) *Agent {
+func New(llm openai.Client, opt Option) *Agent {
 	return &Agent{
-		name:        name,
-		description: desc,
-		llm:         llm,
-		option:      opt,
-		logger:      logger.New("simple").With("name", name),
+		llm:    llm,
+		option: opt,
+		logger: logger.New("simple"),
 	}
 }
 
 type Option struct {
 	SystemPrompt   string
 	NewOutputModel func() any
-}
-
-func generateID() string {
-	return "session-" + types.NewID()
 }

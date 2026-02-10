@@ -23,7 +23,7 @@ import (
 	"fmt"
 	"time"
 
-	types2 "github.com/basenana/friday/core/types"
+	coretypes "github.com/basenana/friday/core/types"
 	"github.com/basenana/friday/types"
 
 	"gorm.io/gorm"
@@ -48,7 +48,7 @@ func (s *SessionModel) TableName() string {
 	return "friday_sessions"
 }
 
-func (s *SessionModel) From(session *types2.Session) {
+func (s *SessionModel) From(session *types.Session) {
 	s.ID = session.ID
 	s.Type = string(session.Type)
 	if session.Metadata != nil {
@@ -66,10 +66,10 @@ func (s *SessionModel) From(session *types2.Session) {
 	}
 }
 
-func (s *SessionModel) To() *types2.Session {
-	session := &types2.Session{
+func (s *SessionModel) To() *types.Session {
+	session := &types.Session{
 		ID:       s.ID,
-		Type:     types2.SessionType(s.Type),
+		Type:     s.Type,
 		Metadata: make(map[string]string),
 		System:   s.System,
 		Purpose:  s.Purpose,
@@ -95,7 +95,7 @@ func (m *MessageModel) TableName() string {
 	return "friday_messages"
 }
 
-func (m *MessageModel) From(sessionID string, msg *types2.Message) {
+func (m *MessageModel) From(sessionID string, msg *coretypes.Message) {
 	m.SessionID = sessionID
 	if msg.Metadata == nil {
 		msg.Metadata = make(map[string]string)
@@ -108,8 +108,8 @@ func (m *MessageModel) From(sessionID string, msg *types2.Message) {
 	}
 }
 
-func (m *MessageModel) To() *types2.Message {
-	msg := &types2.Message{}
+func (m *MessageModel) To() *coretypes.Message {
+	msg := &coretypes.Message{}
 
 	jsonData(string(m.Content), &msg)
 	jsonData(string(m.Metadata), &msg.Metadata)

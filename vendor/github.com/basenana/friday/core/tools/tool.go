@@ -2,8 +2,6 @@ package tools
 
 import (
 	"context"
-
-	"github.com/basenana/friday/core/types"
 )
 
 type ToolSet interface {
@@ -46,9 +44,8 @@ type ToolInputSchema struct {
 }
 
 type Request struct {
-	Arguments  map[string]interface{} `json:"arguments"`
-	Session    *types.Session         `json:"session"`
-	Scratchpad Scratchpad             `json:"-"`
+	Arguments map[string]interface{} `json:"arguments"`
+	SessionID string                 `json:"sessionId"`
 }
 
 type Result struct {

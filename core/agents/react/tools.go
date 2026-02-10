@@ -21,10 +21,10 @@ var (
 )
 
 type ToolUse struct {
-	XMLName  xml.Name `xml:"tool_use"`
-	GenID    string   `xml:"id"`
-	Name     string   `xml:"name"`
-	Arguments string `xml:"arguments"`
+	XMLName   xml.Name `xml:"tool_use"`
+	GenID     string   `xml:"id"`
+	Name      string   `xml:"name"`
+	Arguments string   `xml:"arguments"`
 }
 
 func (t *ToolUse) ID() string {
@@ -39,18 +39,10 @@ func (t *ToolUse) ID() string {
 	return t.GenID
 }
 
-func toolCall(ctx context.Context, sess *session.Session, use *ToolUse, extraArgs map[string]string, td *tools.Tool, toolUsage int) (string, error) {
-	req := &tools.Request{Arguments: make(map[string]interface{})}
+func toolCall(ctx context.Context, sess *session.Session, use *ToolUse, td *tools.Tool, toolUsage int) (string, error) {
+	req := &tools.Request{Arguments: make(map[string]interface{}), SessionID: sess.ID}
 	if err := json.Unmarshal([]byte(use.Arguments), &req.Arguments); err != nil {
 		return "", fmt.Errorf("unmarshal json argument failed: %s", err)
-	}
-	if extraArgs != nil {
-		for k, v := range extraArgs {
-			if v == "" {
-				continue
-			}
-			req.Arguments[k] = v
-		}
 	}
 
 	result, err := td.Handler(ctx, req)

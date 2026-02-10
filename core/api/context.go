@@ -20,32 +20,3 @@ func SessionFromContext(ctx context.Context) *session.Session {
 	}
 	return s.(*session.Session)
 }
-
-func OverwriteToolArgsFromContext(ctx context.Context) map[string]string {
-	s := ctx.Value(ctxToolArgsKey)
-	if s == nil {
-		return map[string]string{}
-	}
-	return s.(map[string]string)
-}
-
-type ContextOption func(ctx context.Context) context.Context
-
-func NewContext(ctx context.Context, sess *session.Session, options ...ContextOption) context.Context {
-	s := ctx.Value(ctxSessionKey)
-	if s == nil || s.(*session.Session).ID != sess.ID {
-		ctx = context.WithValue(ctx, ctxSessionKey, sess)
-	}
-
-	for _, opt := range options {
-		ctx = opt(ctx)
-	}
-
-	return ctx
-}
-
-func WithResponse(resp *Response) ContextOption {
-	return func(ctx context.Context) context.Context {
-		return context.WithValue(ctx, ctxResponseKey, resp)
-	}
-}

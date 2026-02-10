@@ -27,25 +27,13 @@ type Agent struct {
 	logger logger.Logger
 }
 
-func (a *Agent) Name() string {
-	return a.name
-}
-
-func (a *Agent) Describe() string {
-	return a.desc
-}
-
 func (a *Agent) Chat(ctx context.Context, req *api.Request) *api.Response {
 	resp := api.NewResponse()
 
 	sess := req.Session
 	if sess == nil {
-		sess = session.New(generateID(), a.llm)
+		sess = session.New(types.NewID(), a.llm)
 	}
-
-	ctx = api.NewContext(ctx, sess,
-		api.WithResponse(resp),
-	)
 
 	sess.AppendMessage(&types.Message{UserMessage: req.UserMessage})
 
@@ -268,9 +256,8 @@ func (a *Agent) doToolCalls(ctx context.Context, sess *session.Session, toolUses
 
 func (a *Agent) tryToolCall(ctx context.Context, sess *session.Session, use openai.ToolUse, reasoning string, toolUseCount int, toolList []*tools.Tool) []types.Message {
 	var (
-		result    []types.Message
-		extraArgs = api.OverwriteToolArgsFromContext(ctx)
-		useMark   = use.ID
+		result  []types.Message
+		useMark = use.ID
 	)
 
 	if useMark == "" {
@@ -295,7 +282,7 @@ func (a *Agent) tryToolCall(ctx context.Context, sess *session.Session, use open
 
 	toolUse := &ToolUse{GenID: use.ID, Name: use.Name, Arguments: use.Arguments}
 	a.logger.Infow("using tool", "tool", toolUse.Name, "args", toolUse.Arguments, "session", sess.ID)
-	msg, err := toolCall(ctx, sess, toolUse, extraArgs, td, toolUseCount)
+	msg, err := toolCall(ctx, sess, toolUse, td, toolUseCount)
 	if err != nil {
 		result = append(result, types.Message{ToolCallID: toolUse.ID(), ToolContent: fmt.Sprintf("using tool failed: %s", err)})
 		a.logger.Warnw("using tool failed", "tool", use.Name, "error", err, "session", sess.ID)
@@ -315,7 +302,7 @@ func getToolByName(toolList []*tools.Tool, name string) *tools.Tool {
 	return nil
 }
 
-func New(name, desc string, llm openai.Client, option Option) *Agent {
+func New(llm openai.Client, option Option) *Agent {
 	if option.SystemPrompt == "" {
 		option.SystemPrompt = DEFAULT_SYSTEM_PROMPT
 	}
@@ -327,12 +314,10 @@ func New(name, desc string, llm openai.Client, option Option) *Agent {
 	}
 
 	agt := &Agent{
-		name:   name,
-		desc:   desc,
 		llm:    llm,
 		tools:  option.Tools,
 		option: option,
-		logger: logger.New("react").With("name", name),
+		logger: logger.New("react"),
 	}
 
 	return agt
@@ -362,8 +347,4 @@ type loopUsage struct {
 	Limit     int
 	ToolUse   int
 	ToolLimit int
-}
-
-func generateID() string {
-	return fmt.Sprintf("session-%d", time.Now().UnixNano())
 }

@@ -2,7 +2,6 @@ package coordinator
 
 import (
 	"bytes"
-	"fmt"
 )
 
 const (
@@ -77,17 +76,6 @@ Body: Problem Summary | Key Evidence Requirements | Acceptance Criteria.
 - **Optional**: Clarification requests, risk flags, dependency notes.
 </message_protocol>
 `
-
-	DEFAULT_SUMMARY_PROMPT = `Based on communication history with different agents, compile a complete report to answer the user's questions.
-
-Requirements:
-1. Use the same language as the user's question.
-2. Explain the user's question.
-3. Perform root cause analysis of the problem.
-4. Do not provide specific fixes.
-
-From now on, every word you write will become part of the final report.
-`
 )
 
 func initSystemPrompt(opt Option) string {
@@ -99,14 +87,5 @@ func initSystemPrompt(opt Option) string {
 		buf.WriteString("</user_requirements>\n")
 	}
 	buf.WriteString(opt.CoordinatePrompt)
-
-	buf.WriteString("<definition_of_expert_agents>\n")
-	buf.WriteString("Expert Agents who can currently send mails\n")
-	for _, agt := range opt.SubAgents {
-		buf.WriteString(fmt.Sprintf("- Name: %s\n", agt.Name()))
-		buf.WriteString(fmt.Sprintf("  Introduce: %s\n", agt.Describe()))
-		buf.WriteString("\n")
-	}
-	buf.WriteString("</definition_of_expert_agents>\n")
 	return buf.String()
 }

@@ -33,22 +33,3 @@ Waiting:
 
 	return contentBuf.String(), err
 }
-
-func CopyResponse(ctx context.Context, from *Response, to *Response) error {
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case delta, ok := <-from.Deltas():
-			if !ok {
-				return nil
-			}
-			SendDelta(to, delta)
-		case err := <-from.Error():
-			if err != nil {
-				to.Fail(err)
-				return err
-			}
-		}
-	}
-}

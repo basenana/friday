@@ -8,6 +8,7 @@ import (
 	"github.com/basenana/friday/core/logger"
 	"github.com/basenana/friday/core/providers/openai"
 	"github.com/basenana/friday/core/session"
+	"github.com/basenana/friday/core/types"
 )
 
 type Agent struct {
@@ -25,7 +26,7 @@ func (a *Agent) Chat(ctx context.Context, req *api.Request) *api.Response {
 
 	sess := req.Session
 	if sess == nil {
-		sess = session.New("", a.llm)
+		sess = session.New(types.NewID(), a.llm)
 	}
 
 	return a.react.Chat(ctx, &api.Request{
@@ -39,7 +40,7 @@ func New(name, desc string, llm openai.Client, option Option) *Agent {
 		option.SystemPrompt = DEFAULT_SUMMARIZE_PROMPT
 	}
 	return &Agent{
-		react:  react.New(name, desc, llm, react.Option{SystemPrompt: option.SystemPrompt}),
+		react:  react.New(llm, react.Option{SystemPrompt: option.SystemPrompt}),
 		llm:    llm,
 		option: option,
 		logger: logger.New("summarize").With("name", name),
