@@ -115,12 +115,12 @@ func (t *TodoList) append(actions ...string) {
 	}
 }
 
-func (t *TodoList) update(itemId int, status string) error {
-	if itemId < 1 || itemId-1 >= len(t.items) {
-		return fmt.Errorf("action %d not found", itemId)
+func (t *TodoList) update(itemID int, status string) error {
+	if itemID < 1 || itemID-1 >= len(t.items) {
+		return fmt.Errorf("action %d not found", itemID)
 	}
 
-	item := t.items[itemId-1]
+	item := t.items[itemID-1]
 	switch status {
 	case "done", "finish", "finished", "completed", "complete":
 		item.IsFinish = true

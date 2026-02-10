@@ -2,6 +2,7 @@ package research
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -10,8 +11,8 @@ import (
 	"github.com/basenana/friday/core/agents/react"
 	"github.com/basenana/friday/core/api"
 	"github.com/basenana/friday/core/logger"
-	"github.com/basenana/friday/core/memory"
 	"github.com/basenana/friday/core/providers/openai"
+	"github.com/basenana/friday/core/session"
 	"github.com/basenana/friday/core/tools"
 	"github.com/basenana/friday/core/types"
 )
@@ -41,20 +42,16 @@ func (a *Agent) Chat(ctx context.Context, req *api.Request) *api.Response {
 		planningAgt = planning.New("planning", "", a.llm, planning.Option{Tools: a.opt.PlanningTools})
 	)
 
-	if req.Session == nil {
-		req.Session = types.NewDummySession()
+	sess := req.Session
+	if sess == nil {
+		sess = session.New(generateID(), a.llm)
 	}
 
-	if req.Memory == nil {
-		req.Memory = memory.NewEmpty(req.Session.ID)
-	}
-
-	ctx = api.NewContext(ctx, req.Session,
-		api.WithMemory(req.Memory),
+	ctx = api.NewContext(ctx, sess,
 		api.WithResponse(resp),
 	)
 
-	req.Memory.AppendMessages(types.Message{UserMessage: req.UserMessage})
+	sess.AppendMessage(&types.Message{UserMessage: req.UserMessage})
 
 	var leaderTools []*tools.Tool
 	leaderTools = append(leaderTools, planningAgt.PlanningTools()...)
@@ -62,16 +59,16 @@ func (a *Agent) Chat(ctx context.Context, req *api.Request) *api.Response {
 	leader := a.newReAct("leader", "", promptWithMoreInfo(a.opt.LeaderPrompt), leaderTools)
 	go func() {
 		defer resp.Close()
-		if err := a.doPlanningWithCheck(ctx, planningAgt, req, resp); err != nil {
+		if err := a.doPlanningWithCheck(ctx, planningAgt, sess, resp); err != nil {
 			a.logger.Errorw("failed to planning", "error", err)
 			return
 		}
 
-		if err := a.doResearch(ctx, leader, planningAgt, req, resp); err != nil {
+		if err := a.doResearch(ctx, leader, planningAgt, sess, resp); err != nil {
 			a.logger.Errorw("do research failed", "err", err)
 			return
 		}
-		if err := a.doSummary(ctx, req, resp); err != nil {
+		if err := a.doSummary(ctx, sess, resp); err != nil {
 			a.logger.Errorw("do summary failed", "err", err)
 			return
 		}
@@ -80,35 +77,35 @@ func (a *Agent) Chat(ctx context.Context, req *api.Request) *api.Response {
 	return resp
 }
 
-func (a *Agent) doPlanningWithCheck(ctx context.Context, planningAgt *planning.Agent, req *api.Request, resp *api.Response) error {
-	req = &api.Request{
-		Session:     req.Session,
-		UserMessage: req.UserMessage,
-		Memory:      req.Memory.Copy(),
-	}
+func (a *Agent) doPlanningWithCheck(ctx context.Context, planningAgt *planning.Agent, sess *session.Session, resp *api.Response) error {
+	forkedSess := sess.Fork()
 
 Retry:
-	if err := a.doPlanning(ctx, FIRST_PLANNING_PROMPT, planningAgt, req, resp); err != nil {
+	if err := a.doPlanning(ctx, FIRST_PLANNING_PROMPT, planningAgt, forkedSess, resp); err != nil {
 		a.logger.Errorw("failed to planning", "error", err)
 		return err
 	}
 
 	if len(planningAgt.TodoList()) == 0 {
-		req.Memory.AppendMessages(types.Message{
+		forkedSess.AppendMessage(&types.Message{
 			AgentMessage: "You haven't generated any to-do items, and you'll lose your job. You're being given one last chance."})
 		goto Retry
 	}
 	return nil
 }
 
-func (a *Agent) doPlanning(ctx context.Context, userMessage string, planningAgt *planning.Agent, req *api.Request, resp *api.Response) error {
+func (a *Agent) doPlanning(ctx context.Context, userMessage string, planningAgt *planning.Agent, sess *session.Session, resp *api.Response) error {
 	var startAt = time.Now()
 	a.logger.Infow("run planning")
 
-	userMessage = strings.ReplaceAll(userMessage, "{user_task}", req.UserMessage)
+	history := sess.History
+	if len(history) == 0 {
+		return fmt.Errorf("session history is empty")
+	}
+	userMessage = strings.ReplaceAll(userMessage, "{user_task}", history[len(history)-1].UserMessage)
 	var (
 		content string
-		stream  = planningAgt.Chat(ctx, req)
+		stream  = planningAgt.Chat(ctx, &api.Request{Session: sess})
 		err     error
 	)
 
@@ -117,13 +114,13 @@ func (a *Agent) doPlanning(ctx context.Context, userMessage string, planningAgt 
 		case <-ctx.Done():
 			err = ctx.Err()
 			goto Finish
-		case evt, ok := <-stream.Events():
+		case delta, ok := <-stream.Deltas():
 			if !ok {
 				goto Finish
 			}
-			if evt.Delta != nil && evt.Delta.Content != "" {
-				content += evt.Delta.Content
-				api.SendEventToResponse(ctx, types.NewReasoningEvent(evt.Delta.Content))
+			if delta.Content != "" {
+				content += delta.Content
+				api.SendDelta(resp, types.Delta{Content: delta.Content, Reasoning: delta.Reasoning})
 			}
 		case err := <-stream.Error():
 			if err != nil {
@@ -142,7 +139,7 @@ Finish:
 	return err
 }
 
-func (a *Agent) doResearch(ctx context.Context, leader *react.Agent, planningAgt *planning.Agent, req *api.Request, resp *api.Response) error {
+func (a *Agent) doResearch(ctx context.Context, leader *react.Agent, planningAgt *planning.Agent, sess *session.Session, resp *api.Response) error {
 	var (
 		failCount    = 0
 		runTaskCount = 0
@@ -150,7 +147,7 @@ func (a *Agent) doResearch(ctx context.Context, leader *react.Agent, planningAgt
 	)
 	for !allFinish {
 		runTaskCount++
-		if err := a.runTask(ctx, leader, runTaskPrompt(planningAgt.TodoList()), req); err != nil {
+		if err := a.runTask(ctx, leader, runTaskPrompt(planningAgt.TodoList()), sess); err != nil {
 			a.logger.Warnw("run task failed, skip and next", "err", err)
 			if failCount += 1; failCount >= 5 {
 				return err
@@ -168,7 +165,7 @@ func (a *Agent) doResearch(ctx context.Context, leader *react.Agent, planningAgt
 
 		allFinish = planningAgt.AllFinish()
 		if !allFinish {
-			req.Memory.AppendMessages(types.Message{AgentMessage: "Warning message: There are currently unfinished items in your todo list. " +
+			sess.AppendMessage(&types.Message{AgentMessage: "Warning message: There are currently unfinished items in your todo list. " +
 				"If you believe you have completed them, you need to use a tool to update the todo list status."})
 			a.logger.Infow("researching not finish, try again later", "researchTimes", runTaskCount, "researchLoopLimit", a.opt.MaxResearchLoopTimes)
 		}
@@ -177,12 +174,11 @@ func (a *Agent) doResearch(ctx context.Context, leader *react.Agent, planningAgt
 	return nil
 }
 
-func (a *Agent) runTask(ctx context.Context, leader *react.Agent, task string, req *api.Request) error {
+func (a *Agent) runTask(ctx context.Context, leader *react.Agent, task string, sess *session.Session) error {
 	var (
 		stream = leader.Chat(ctx, &api.Request{
-			Session:     req.Session,
+			Session:     sess,
 			UserMessage: task,
-			Memory:      req.Memory,
 		})
 		content string
 		err     error
@@ -201,24 +197,25 @@ func (a *Agent) runTask(ctx context.Context, leader *react.Agent, task string, r
 	}
 	a.logger.Infow("research finish", "task", task, "escape", time.Since(startAt).String())
 	if content != "" {
-		req.Memory.AppendMessages(
-			types.Message{AssistantMessage: content},
-		)
+		sess.AppendMessage(&types.Message{AssistantMessage: content})
 	}
 
 	return err
 }
 
-func (a *Agent) doSummary(ctx context.Context, req *api.Request, resp *api.Response) error {
+func (a *Agent) doSummary(ctx context.Context, sess *session.Session, resp *api.Response) error {
 	a.logger.Infow("run summary")
 	agt := react.New("summary", "", a.llm, react.Option{SystemPrompt: a.opt.SummaryPrompt})
 	userMessage := SUMMARYRE_USER_PROMPT
 
-	userMessage = strings.ReplaceAll(userMessage, "{user_task}", req.UserMessage)
+	history := sess.History
+	if len(history) == 0 {
+		return fmt.Errorf("session history is empty")
+	}
+	userMessage = strings.ReplaceAll(userMessage, "{user_task}", history[0].UserMessage)
 	stream := agt.Chat(ctx, &api.Request{
-		Session:     req.Session,
+		Session:     sess,
 		UserMessage: userMessage,
-		Memory:      req.Memory,
 	})
 	for {
 		select {
@@ -229,12 +226,12 @@ func (a *Agent) doSummary(ctx context.Context, req *api.Request, resp *api.Respo
 				resp.Fail(err)
 				return err
 			}
-		case evt, ok := <-stream.Events():
+		case delta, ok := <-stream.Deltas():
 			if !ok {
 				return nil
 			}
-			if evt.Delta != nil && evt.Delta.Content != "" {
-				api.SendEventToResponse(ctx, types.NewAnsEvent(evt.Delta.Content))
+			if delta.Content != "" {
+				api.SendDelta(resp, delta)
 			}
 		}
 	}
@@ -289,4 +286,8 @@ type Option struct {
 	MaxResearchLoopTimes int
 	Tools                []*tools.Tool
 	PlanningTools        []*tools.Tool
+}
+
+func generateID() string {
+	return "session-" + types.NewID()
 }

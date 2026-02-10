@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"hash/fnv"
 
-	"github.com/basenana/friday/core/memory"
 	"github.com/basenana/friday/core/providers/openai"
+	"github.com/basenana/friday/core/session"
 	"github.com/basenana/friday/core/tools"
 )
 
@@ -21,10 +21,10 @@ var (
 )
 
 type ToolUse struct {
-	XMLName   xml.Name `xml:"tool_use"`
-	GenID     string   `xml:"id"`
-	Name      string   `xml:"name"`
-	Arguments string   `xml:"arguments"`
+	XMLName  xml.Name `xml:"tool_use"`
+	GenID    string   `xml:"id"`
+	Name     string   `xml:"name"`
+	Arguments string `xml:"arguments"`
 }
 
 func (t *ToolUse) ID() string {
@@ -39,8 +39,8 @@ func (t *ToolUse) ID() string {
 	return t.GenID
 }
 
-func toolCall(ctx context.Context, mem *memory.Memory, use *ToolUse, extraArgs map[string]string, td *tools.Tool, toolUsage int) (string, error) {
-	req := &tools.Request{Arguments: make(map[string]interface{}), Session: mem.Session(), Scratchpad: mem.Scratchpad()}
+func toolCall(ctx context.Context, sess *session.Session, use *ToolUse, extraArgs map[string]string, td *tools.Tool, toolUsage int) (string, error) {
+	req := &tools.Request{Arguments: make(map[string]interface{})}
 	if err := json.Unmarshal([]byte(use.Arguments), &req.Arguments); err != nil {
 		return "", fmt.Errorf("unmarshal json argument failed: %s", err)
 	}
@@ -67,17 +67,9 @@ func toolCall(ctx context.Context, mem *memory.Memory, use *ToolUse, extraArgs m
 	return string(content), nil
 }
 
-func newLLMRequest(systemMessage string, mem *memory.Memory, toolList []*tools.Tool) openai.Request {
+func newLLMRequest(systemMessage string, sess *session.Session, toolList []*tools.Tool) openai.Request {
 	var toolDef []openai.ToolDefine
 	for _, t := range toolList {
-		toolDef = append(toolDef, openai.ToolDefine{
-			Name:        t.Name,
-			Description: t.Description,
-			Parameters:  t.JsonSchema(),
-		})
-	}
-
-	for _, t := range mem.Tools() {
 		toolDef = append(toolDef, openai.ToolDefine{
 			Name:        t.Name,
 			Description: t.Description,
@@ -88,5 +80,5 @@ func newLLMRequest(systemMessage string, mem *memory.Memory, toolList []*tools.T
 	for _, t := range buildInTools {
 		toolDef = append(toolDef, t)
 	}
-	return openai.NewToolsRequest(openai.NewSimpleRequest(systemMessage, mem.History()...), toolDef)
+	return openai.NewToolsRequest(openai.NewSimpleRequest(systemMessage, sess.History...), toolDef)
 }

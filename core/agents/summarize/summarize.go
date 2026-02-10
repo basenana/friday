@@ -6,12 +6,13 @@ import (
 	"github.com/basenana/friday/core/agents/react"
 	"github.com/basenana/friday/core/api"
 	"github.com/basenana/friday/core/logger"
-	"github.com/basenana/friday/core/memory"
 	"github.com/basenana/friday/core/providers/openai"
+	"github.com/basenana/friday/core/session"
 )
 
 type Agent struct {
 	react  *react.Agent
+	llm    openai.Client
 	option Option
 	logger logger.Logger
 }
@@ -21,10 +22,15 @@ func (a *Agent) Chat(ctx context.Context, req *api.Request) *api.Response {
 	if userMessage == "" {
 		userMessage = DEFAULT_USER_MESSAGE
 	}
+
+	sess := req.Session
+	if sess == nil {
+		sess = session.New("", a.llm)
+	}
+
 	return a.react.Chat(ctx, &api.Request{
-		Session:     req.Session,
+		Session:     sess,
 		UserMessage: userMessage,
-		Memory:      memory.NewEmpty(req.Session.ID, memory.WithHistory(req.Memory.History()...), memory.WithUnlimitedSession()),
 	})
 }
 
@@ -34,6 +40,7 @@ func New(name, desc string, llm openai.Client, option Option) *Agent {
 	}
 	return &Agent{
 		react:  react.New(name, desc, llm, react.Option{SystemPrompt: option.SystemPrompt}),
+		llm:    llm,
 		option: option,
 		logger: logger.New("summarize").With("name", name),
 	}

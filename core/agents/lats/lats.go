@@ -11,10 +11,10 @@ import (
 	"time"
 
 	"github.com/basenana/friday/core/agents/react"
-	agtapi2 "github.com/basenana/friday/core/api"
+	agtapi "github.com/basenana/friday/core/api"
 	"github.com/basenana/friday/core/logger"
-	"github.com/basenana/friday/core/memory"
 	"github.com/basenana/friday/core/providers/openai"
+	"github.com/basenana/friday/core/session"
 	"github.com/basenana/friday/core/tools"
 	"github.com/basenana/friday/core/types"
 )
@@ -41,30 +41,26 @@ func (a *Agent) Describe() string {
 	return a.desc
 }
 
-func (a *Agent) Chat(ctx context.Context, req *agtapi2.Request) *agtapi2.Response {
+func (a *Agent) Chat(ctx context.Context, req *agtapi.Request) *agtapi.Response {
 	var (
-		resp = agtapi2.NewResponse()
+		resp = agtapi.NewResponse()
 	)
 
-	if req.Session == nil {
-		req.Session = types.NewDummySession()
-	}
-
-	if req.Memory == nil {
-		req.Memory = memory.NewEmpty(req.Session.ID)
+	sess := req.Session
+	if sess == nil {
+		sess = session.New("", a.llm)
 	}
 
 	if a.root == nil {
 		a.task = req.UserMessage
-		a.root = newRoot(a.task, req.Memory.Copy())
+		a.root = newRoot(a.task, sess)
 	}
 
-	ctx = agtapi2.NewContext(ctx, req.Session,
-		agtapi2.WithMemory(req.Memory),
-		agtapi2.WithResponse(resp),
+	ctx = agtapi.NewContext(ctx, sess,
+		agtapi.WithResponse(resp),
 	)
 
-	a.logger.Infow("handle request", "message", logger.FirstLine(req.UserMessage), "session", req.Session.ID)
+	a.logger.Infow("handle request", "message", logger.FirstLine(req.UserMessage), "session", sess.ID)
 	go func() {
 		defer resp.Close()
 		for {
@@ -75,7 +71,7 @@ func (a *Agent) Chat(ctx context.Context, req *agtapi2.Request) *agtapi2.Respons
 			}
 
 			if finish {
-				a.sendFinalAnswer(ctx, ans, req.Memory)
+				a.sendFinalAnswer(ctx, ans, sess)
 				return
 			}
 		}
@@ -102,9 +98,7 @@ func (a *Agent) runStep(ctx context.Context) (string, bool, error) {
 	for _, candidate := range candidates {
 		a.logger.Infow("[TREE] generated new reasoning step", "candidate", candidate)
 		n := newNode(candidate)
-		n.info = &types.Stage{ID: n.id, Describe: candidate, Status: types.Submitted}
 		crtNode.Expend(n, nil)
-		agtapi2.SendEventToResponse(ctx, types.NewStageUpdateEvent(*n.info))
 		nextMove = append(nextMove, n)
 	}
 
@@ -139,41 +133,26 @@ func (a *Agent) runStep(ctx context.Context) (string, bool, error) {
 				wg.Done()
 			}()
 
-			node.info.Status = types.Working
-			agtapi2.SendEventToResponse(ctx, types.NewStageUpdateEvent(*node.info))
-			defer func() {
-				agtapi2.SendEventToResponse(ctx, types.NewStageUpdateEvent(*node.info))
-			}()
-
 			reasoning, err := a.runCandidate(batchCtx, node)
 			if err != nil {
 				if errors.Is(err, context.Canceled) {
-					node.info.Status = types.Canceled
 					return
 				}
 				if reasoning == "" {
-					node.info.Status = types.Unknown
 					a.logger.Errorw("runCandidate failed", "err", "reasoning is empty")
 					return
 				}
-				node.info.Message = err.Error()
 				a.logger.Infow("[TREE] run candidate failed, but got part reasoning", "err", err, "reasoning", reasoning)
 			}
 
 			e, err := a.evaluate(batchCtx, node, reasoning)
 			if err != nil {
 				if errors.Is(err, context.Canceled) {
-					node.info.Status = types.Canceled
 					return
 				}
-				node.info.Status = types.Failed
-				node.info.Message = err.Error()
 				a.logger.Errorw("evaluate failed", "err", err)
 				return
 			}
-			agtapi2.SendEventToResponse(ctx, types.NewReasoningEvent(""),
-				"evaluation", e.Reasoning,
-				"stage", node.info.ID, "score", fmt.Sprint(e.Score), "is_done", fmt.Sprint(e.IsDone))
 
 			a.logger.Infow("[TREE] node evaluate finish", "score", e.Score, "isDone", e.IsDone, "reasoning", e.Reasoning)
 			nn := newNode(reasoning)
@@ -186,8 +165,6 @@ func (a *Agent) runStep(ctx context.Context) (string, bool, error) {
 					cancelBatch()
 				}
 			}
-
-			node.info.Status = types.Completed
 		}(child)
 	}
 	wg.Wait()
@@ -258,11 +235,10 @@ func (a *Agent) runCandidate(ctx context.Context, node *SearchNode) (string, err
 		a.logger.Infow("[TREE-NODE] run candidate finish", "cost", time.Since(nowAt))
 	}()
 
-	nextReq := &agtapi2.Request{
+	stream := a.react.Chat(runCtx, &agtapi.Request{
+		Session:     node.sess,
 		UserMessage: message,
-		Memory:      node.memory.Copy(),
-	}
-	stream := a.react.Chat(runCtx, nextReq)
+	})
 
 WaitingRun:
 	for {
@@ -273,19 +249,12 @@ WaitingRun:
 			if err != nil {
 				return reasoning, err
 			}
-		case evt, ok := <-stream.Events():
+		case delta, ok := <-stream.Deltas():
 			if !ok {
 				break WaitingRun
 			}
-			if evt.Delta != nil {
-				if msg := evt.Delta; msg.Content != "" {
-					agtapi2.SendEventToResponse(ctx, types.NewReasoningEvent(msg.Content), "stage", node.info.ID)
-					reasoning += msg.Content
-				}
-				continue
-			}
-			if evt.Data != nil {
-				agtapi2.SendEventToResponse(ctx, &evt, "stage", node.info.ID)
+			if delta.Content != "" {
+				reasoning += delta.Content
 			}
 		}
 	}
@@ -339,10 +308,9 @@ func (a *Agent) evaluate(ctx context.Context, node *SearchNode, reasoning string
 	return eva, nil
 }
 
-func (a *Agent) sendFinalAnswer(ctx context.Context, ans string, mem *memory.Memory) {
-	agtapi2.SendEventToResponse(ctx, types.NewAnsEvent(ans))
-	if mem != nil {
-		mem.AppendMessages(types.Message{AssistantMessage: ans})
+func (a *Agent) sendFinalAnswer(ctx context.Context, ans string, sess *session.Session) {
+	if sess != nil {
+		sess.AppendMessage(&types.Message{AssistantMessage: ans})
 	}
 }
 
@@ -397,6 +365,9 @@ type Option struct {
 
 func conversationHistoryMessages(messages ...string) string {
 	ch := &ConversationHistory{Messages: messages}
-	content, _ := xml.Marshal(ch)
+	content, err := xml.Marshal(ch)
+	if err != nil {
+		return "<error>failed to marshal conversation history</error>"
+	}
 	return string(content)
 }

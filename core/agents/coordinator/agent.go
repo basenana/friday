@@ -6,10 +6,10 @@ import (
 	"strings"
 
 	"github.com/basenana/friday/core/agents/react"
-	agtapi2 "github.com/basenana/friday/core/api"
+	agtapi "github.com/basenana/friday/core/api"
 	"github.com/basenana/friday/core/logger"
-	"github.com/basenana/friday/core/memory"
 	"github.com/basenana/friday/core/providers/openai"
+	"github.com/basenana/friday/core/session"
 	"github.com/basenana/friday/core/tools"
 	"github.com/basenana/friday/core/types"
 )
@@ -17,6 +17,7 @@ import (
 type Agent struct {
 	react     *react.Agent
 	summary   *react.Agent
+	llm       openai.Client
 	subAgents []ExpertAgent
 	option    Option
 	logger    logger.Logger
@@ -30,22 +31,16 @@ func (a *Agent) Describe() string {
 	return a.react.Describe()
 }
 
-func (a *Agent) Chat(ctx context.Context, req *agtapi2.Request) *agtapi2.Response {
-	var (
-		resp = agtapi2.NewResponse()
-	)
+func (a *Agent) Chat(ctx context.Context, req *agtapi.Request) *agtapi.Response {
+	resp := agtapi.NewResponse()
 
-	if req.Session == nil {
-		req.Session = types.NewDummySession()
+	sess := req.Session
+	if sess == nil {
+		sess = session.New(types.NewID(), a.llm)
 	}
 
-	if req.Memory == nil {
-		req.Memory = memory.NewEmpty(req.Session.ID)
-	}
-
-	ctx = agtapi2.NewContext(ctx, req.Session,
-		agtapi2.WithMemory(req.Memory),
-		agtapi2.WithResponse(resp),
+	ctx = agtapi.NewContext(ctx, sess,
+		agtapi.WithResponse(resp),
 	)
 
 	go func() {
@@ -63,24 +58,23 @@ func (a *Agent) Chat(ctx context.Context, req *agtapi2.Request) *agtapi2.Respons
 	return resp
 }
 
-func (a *Agent) runSocialContact(ctx context.Context, req *agtapi2.Request, resp *agtapi2.Response) error {
-	nextReq := &agtapi2.Request{
+func (a *Agent) runSocialContact(ctx context.Context, req *agtapi.Request, resp *agtapi.Response) error {
+	nextReq := &agtapi.Request{
+		Session:     req.Session,
 		UserMessage: req.UserMessage,
-		Memory:      req.Memory,
 	}
 	stream := a.react.Chat(ctx, nextReq)
-	if err := agtapi2.CopyResponse(ctx, stream, resp); err != nil {
+	if err := agtapi.CopyResponse(ctx, stream, resp); err != nil {
 		a.logger.Warnw("merge contact response error", "error", err)
 		return err
 	}
 	return nil
 }
 
-func (a *Agent) runReport(ctx context.Context, req *agtapi2.Request, resp *agtapi2.Response) error {
-	nextReq := &agtapi2.Request{
+func (a *Agent) runReport(ctx context.Context, req *agtapi.Request, resp *agtapi.Response) error {
+	nextReq := &agtapi.Request{
 		Session:     req.Session,
 		UserMessage: a.option.SummaryReportPrompt,
-		Memory:      req.Memory,
 	}
 	a.logger.Infow("start summary report", "sessionID", req.Session.ID)
 	stream := a.summary.Chat(ctx, nextReq)
@@ -93,15 +87,12 @@ func (a *Agent) runReport(ctx context.Context, req *agtapi2.Request, resp *agtap
 				resp.Fail(err)
 				return err
 			}
-		case evt, ok := <-stream.Events():
+		case delta, ok := <-stream.Deltas():
 			if !ok {
 				return nil
 			}
-			if evt.Delta == nil {
-				continue
-			}
-			if evt.Delta.Content != "" {
-				agtapi2.SendEvent(resp, types.NewAnsEvent(evt.Delta.Content))
+			if delta.Content != "" {
+				agtapi.SendDelta(resp, delta)
 			}
 		}
 	}
@@ -152,10 +143,14 @@ func (a *Agent) handleMailWithSubAgentsTool(ctx context.Context, request *tools.
 
 func (a *Agent) mailWithSubAgent(ctx context.Context, agentName, title, text string) string {
 	var (
-		agt             ExpertAgent
-		answer, content string
-		mem             = agtapi2.MemoryFromContext(ctx).Copy() // fork memory for subagents
+		agt        ExpertAgent
+		answer     string
+		parentSess = agtapi.SessionFromContext(ctx)
 	)
+	if parentSess == nil {
+		return "Error: no session found in context"
+	}
+	sess := parentSess.Fork() // fork session for subagents
 
 	for i, ea := range a.subAgents {
 		if fuzzyMatching(ea.Name(), agentName) {
@@ -168,14 +163,13 @@ func (a *Agent) mailWithSubAgent(ctx context.Context, agentName, title, text str
 		return fmt.Sprintf("Agent %s not found", agentName)
 	}
 
-	stream := agt.Chat(ctx, &agtapi2.Request{
-		Session: mem.Session(),
+	stream := agt.Chat(ctx, &agtapi.Request{
+		Session: sess,
 		UserMessage: strings.Join(
 			[]string{
 				"Title: " + title,
 				text,
 			}, "\n"),
-		Memory: mem,
 	})
 
 WaitReply:
@@ -183,18 +177,13 @@ WaitReply:
 		select {
 		case <-ctx.Done():
 			break WaitReply
-		case evt, ok := <-stream.Events():
+		case delta, ok := <-stream.Deltas():
 			if !ok {
 				break WaitReply
 			}
-			if evt.Answer != nil {
-				answer += evt.Answer.Report
-				continue // ignore sub answer
+			if delta.Content != "" {
+				answer += delta.Content
 			}
-			if evt.Delta != nil && evt.Delta.Content != "" {
-				content = evt.Delta.Content
-			}
-			agtapi2.SendEventToResponse(ctx, &evt, "subagent", agentName)
 		case err := <-stream.Error():
 			if err != nil {
 				return fmt.Sprintf("Agent: %s: failed to read content: %s", agentName, err)
@@ -203,8 +192,7 @@ WaitReply:
 	}
 
 	if answer == "" {
-		a.logger.Warnw("no answer reply, using content")
-		answer = content
+		a.logger.Warnw("no answer reply")
 	}
 
 	return strings.Join([]string{
@@ -245,6 +233,7 @@ func New(name, desc string, llm openai.Client, opt Option) *Agent {
 	}
 
 	agt := &Agent{
+		llm:       llm,
 		subAgents: opt.SubAgents,
 		option:    opt,
 		logger:    logger.New("coordinator").With("name", name),
@@ -275,5 +264,5 @@ type Option struct {
 type ExpertAgent interface {
 	Name() string
 	Describe() string
-	Chat(ctx context.Context, req *agtapi2.Request) *agtapi2.Response
+	Chat(ctx context.Context, req *agtapi.Request) *agtapi.Response
 }

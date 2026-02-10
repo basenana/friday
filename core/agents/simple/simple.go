@@ -5,10 +5,10 @@ import (
 	"encoding/json"
 	"time"
 
-	agtapi2 "github.com/basenana/friday/core/api"
+	agtapi "github.com/basenana/friday/core/api"
 	"github.com/basenana/friday/core/logger"
-	"github.com/basenana/friday/core/memory"
 	"github.com/basenana/friday/core/providers/openai"
+	"github.com/basenana/friday/core/session"
 	"github.com/basenana/friday/core/types"
 )
 
@@ -28,43 +28,38 @@ func (s *Agent) Describe() string {
 	return s.description
 }
 
-func (s *Agent) Chat(ctx context.Context, req *agtapi2.Request) *agtapi2.Response {
+func (s *Agent) Chat(ctx context.Context, req *agtapi.Request) *agtapi.Response {
 	var (
-		resp = agtapi2.NewResponse()
+		resp = agtapi.NewResponse()
 	)
 
-	if req.Session == nil {
-		req.Session = types.NewDummySession()
+	sess := req.Session
+	if sess == nil {
+		sess = session.New(generateID(), s.llm)
 	}
 
-	if req.Memory == nil {
-		req.Memory = memory.NewEmpty(req.Session.ID)
-	}
-
-	ctx = agtapi2.NewContext(ctx, req.Session,
-		agtapi2.WithMemory(req.Memory),
-		agtapi2.WithResponse(resp),
+	ctx = agtapi.NewContext(ctx, sess,
+		agtapi.WithResponse(resp),
 	)
 
-	mem := req.Memory
-	mem.AppendMessages(types.Message{UserMessage: req.UserMessage})
+	sess.AppendMessage(&types.Message{UserMessage: req.UserMessage})
 
-	s.logger.Infow("handle request", "session", req.Session.ID, "message", logger.FirstLine(req.UserMessage))
+	s.logger.Infow("handle request", "session", sess.ID, "message", logger.FirstLine(req.UserMessage))
 
 	if s.option.NewOutputModel == nil {
-		go s.handleLLMStream(ctx, mem, resp)
+		go s.handleLLMStream(ctx, sess, resp)
 	} else {
-		go s.handleStructLLMOutput(ctx, mem, resp)
+		go s.handleStructLLMOutput(ctx, sess, resp)
 	}
 
 	return resp
 }
 
-func (s *Agent) handleLLMStream(ctx context.Context, mem *memory.Memory, resp *agtapi2.Response) {
+func (s *Agent) handleLLMStream(ctx context.Context, sess *session.Session, resp *agtapi.Response) {
 	defer resp.Close()
 	var (
 		msgCnt     int
-		llmReq     = openai.NewSimpleRequest(s.option.SystemPrompt, mem.History()...)
+		llmReq     = openai.NewSimpleRequest(s.option.SystemPrompt, sess.History...)
 		stream     = s.llm.Completion(ctx, llmReq)
 		warnTicker = time.NewTicker(time.Minute)
 	)
@@ -92,18 +87,18 @@ WaitMessage:
 			msgCnt++ // check api hang
 			switch {
 			case len(msg.Content) > 0:
-				agtapi2.SendEvent(resp, types.NewContentEvent(msg.Content))
+				agtapi.SendDelta(resp, types.Delta{Content: msg.Content})
 			case len(msg.Reasoning) > 0:
-				agtapi2.SendEvent(resp, types.NewReasoningEvent(msg.Reasoning))
+				agtapi.SendDelta(resp, types.Delta{Reasoning: msg.Reasoning})
 			}
 		}
 	}
 }
 
-func (s *Agent) handleStructLLMOutput(ctx context.Context, mem *memory.Memory, resp *agtapi2.Response) {
+func (s *Agent) handleStructLLMOutput(ctx context.Context, sess *session.Session, resp *agtapi.Response) {
 	defer resp.Close()
 	var (
-		llmReq = openai.NewSimpleRequest(s.option.SystemPrompt, mem.History()...)
+		llmReq = openai.NewSimpleRequest(s.option.SystemPrompt, sess.History...)
 		model  = s.option.NewOutputModel()
 		err    = s.llm.StructuredPredict(ctx, llmReq, model)
 	)
@@ -118,7 +113,7 @@ func (s *Agent) handleStructLLMOutput(ctx context.Context, mem *memory.Memory, r
 		resp.Fail(err)
 		return
 	}
-	agtapi2.SendEvent(resp, types.NewContentEvent(string(raw)))
+	agtapi.SendDelta(resp, types.Delta{Content: string(raw)})
 }
 
 func New(name, desc string, llm openai.Client, opt Option) *Agent {
@@ -134,4 +129,8 @@ func New(name, desc string, llm openai.Client, opt Option) *Agent {
 type Option struct {
 	SystemPrompt   string
 	NewOutputModel func() any
+}
+
+func generateID() string {
+	return "session-" + types.NewID()
 }

@@ -39,7 +39,6 @@ func (a *Agent) Chat(ctx context.Context, req *api.Request) *api.Response {
 	return a.react.Chat(ctx, &api.Request{
 		Session:     req.Session,
 		UserMessage: fmt.Sprintf("%s\n%s", displayTodoList(a.todo), req.UserMessage),
-		Memory:      req.Memory,
 	})
 }
 

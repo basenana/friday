@@ -4,7 +4,7 @@ import (
 	"encoding/xml"
 	"math"
 
-	"github.com/basenana/friday/core/memory"
+	"github.com/basenana/friday/core/session"
 	"github.com/basenana/friday/core/types"
 	"github.com/google/uuid"
 )
@@ -16,19 +16,18 @@ type SearchNode struct {
 	parent     *SearchNode
 	children   []*SearchNode
 	reasoning  []string
-	memory     *memory.Memory
-	info       *types.Stage
+	sess      *session.Session
 }
 
-func newRoot(reasoning string, mem *memory.Memory) *SearchNode {
-	mem.AppendMessages(types.Message{AgentMessage: reasoning})
+func newRoot(reasoning string, sess *session.Session) *SearchNode {
+	sess.AppendMessage(&types.Message{AgentMessage: reasoning})
 	return &SearchNode{
 		id:         uuid.New().String(),
 		evaluation: &Evaluation{Score: 1},
 		parent:     nil,
 		children:   make([]*SearchNode, 0, 2),
 		reasoning:  []string{reasoning},
-		memory:     mem,
+		sess:       sess,
 	}
 }
 
@@ -37,10 +36,7 @@ func newNode(reasoning string) *SearchNode {
 }
 
 func (n *SearchNode) Expend(node *SearchNode, evaluation *Evaluation) {
-	stage := &types.Stage{ID: node.id, Status: types.Submitted}
-
 	if evaluation == nil { // new candidate
-		stage.Describe = node.reasoning[len(node.reasoning)-1]
 		evaluation = &Evaluation{Score: 1}
 	}
 
@@ -53,13 +49,12 @@ func (n *SearchNode) Expend(node *SearchNode, evaluation *Evaluation) {
 
 	node.parent = n
 	n.children = append(n.children, node)
-	node.memory = n.memory.Copy()
+	node.sess = n.sess.Fork()
 	if msg := node.Latest(); msg != "" {
-		node.memory.AppendMessages(types.Message{AssistantMessage: msg})
+		node.sess.AppendMessage(&types.Message{AssistantMessage: msg})
 	}
-	node.memory.AppendMessages(types.Message{AgentMessage: evaluation.Reasoning})
+	node.sess.AppendMessage(&types.Message{AgentMessage: evaluation.Reasoning})
 	node.evaluation = evaluation
-	node.info = stage
 	node.BackPropagate(evaluation.Score)
 }
 

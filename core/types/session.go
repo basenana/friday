@@ -2,23 +2,14 @@ package types
 
 import (
 	"fmt"
-
-	"github.com/google/uuid"
+	"time"
 )
 
 type SessionType string
 
 const (
-	SessionTypeChat    SessionType = "Chat"
-	SessionTypeAgentic SessionType = "Agentic"
-
-	MetadataSessionState       = "friday.state"
-	MetadataSessionStateOpen   = "open"
-	MetadataSessionStateClosed = "closed"
-
-	SessionHookBeforeModel  = "before_model"
-	SessionHookAfterModel   = "after_model"
-	SessionHookBeforeClosed = "before_closed"
+	SessionHookBeforeModel = "before_model"
+	SessionHookAfterModel  = "after_model"
 )
 
 type Message struct {
@@ -69,17 +60,13 @@ type Session struct {
 	Summary  string            `json:"summary"`            // summary for quick restart
 	Report   string            `json:"report,omitempty"`   // for Agentic final report
 	Feedback string            `json:"feedback,omitempty"` // user feedback on the report
+
+	// Tree structure support
+	ParentID   string    `json:"parent_id,omitempty"`   // parent session ID
+	ForkedFrom string    `json:"forked_from,omitempty"` // forked from session ID
+	CreatedAt  time.Time `json:"created_at"`
 }
 
-func NewDummySession() *Session {
-	return &Session{
-		ID:       fmt.Sprintf("dummy-%s", uuid.New()),
-		Type:     SessionTypeChat,
-		Metadata: map[string]string{},
-	}
-}
-
-type SessionPayload struct {
-	ContextID string
-	History   []Message
+func NewID() string {
+	return fmt.Sprintf("%d", time.Now().UnixNano())
 }
