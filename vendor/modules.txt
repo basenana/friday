@@ -15,7 +15,7 @@ github.com/JohannesKaufmann/html-to-markdown/v2/plugin/commonmark
 # github.com/bahlo/generic-list-go v0.2.0
 ## explicit; go 1.18
 github.com/bahlo/generic-list-go
-# github.com/basenana/friday/core v0.0.0 => ./core
+# github.com/basenana/friday/core v0.0.0-00010101000000-000000000000 => ./core
 ## explicit; go 1.24.7
 github.com/basenana/friday/core/agents
 github.com/basenana/friday/core/agents/react
@@ -193,4 +193,3 @@ gorm.io/gorm/migrator
 gorm.io/gorm/schema
 gorm.io/gorm/utils
 # github.com/basenana/friday/core => ./core
-# github.com/basenana/friday/deprecated => ./deprecated

@@ -4,7 +4,7 @@ go 1.24.7
 
 require (
 	github.com/JohannesKaufmann/html-to-markdown/v2 v2.5.0
-	github.com/basenana/friday/core v0.0.0
+	github.com/basenana/friday/core v0.0.0-00010101000000-000000000000
 	github.com/davecgh/go-spew v1.1.1
 	github.com/go-gormigrate/gormigrate/v2 v2.1.1
 	github.com/google/uuid v1.6.0
@@ -46,6 +46,4 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
-replace (
-	github.com/basenana/friday/core => ./core
-)
+replace github.com/basenana/friday/core => ./core
