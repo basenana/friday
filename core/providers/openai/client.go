@@ -121,7 +121,7 @@ Retry:
 }
 
 func (c *client) StructuredPredict(ctx context.Context, request Request, model any) error {
-	messages := request.History()
+	messages := request.Messages()
 	if len(messages) == 0 || messages[0].SystemMessage == "" {
 		return fmt.Errorf("user request is empty")
 	}
@@ -162,8 +162,8 @@ func (c *client) chatCompletionNewParams(request Request) *openai.ChatCompletion
 		p.PresencePenalty = param.NewOpt(*c.model.PresencePenalty)
 	}
 
-	history := request.History()
-	for _, msg := range history {
+	messages := request.Messages()
+	for _, msg := range messages {
 		switch {
 		case msg.SystemMessage != "":
 			p.Messages = append(p.Messages,

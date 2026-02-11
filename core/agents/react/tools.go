@@ -72,5 +72,8 @@ func newLLMRequest(systemMessage string, sess *session.Session, toolList []*tool
 	for _, t := range buildInTools {
 		toolDef = append(toolDef, t)
 	}
-	return openai.NewToolsRequest(openai.NewSimpleRequest(systemMessage, sess.History...), toolDef)
+
+	req := openai.NewSimpleRequest(systemMessage, sess.History...)
+	req.SetToolDefines(toolDef)
+	return req
 }

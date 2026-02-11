@@ -52,6 +52,16 @@ func (s *Agent) handleLLMStream(ctx context.Context, sess *session.Session, resp
 	)
 
 	defer warnTicker.Stop()
+
+	// before_model hooks
+	if err := sess.RunHooks(ctx, types.SessionHookBeforeModel, llmReq); err != nil {
+		resp.Fail(err)
+		return
+	}
+
+	// Re-create stream after hooks may have modified the request
+	stream = s.llm.Completion(ctx, llmReq)
+
 WaitMessage:
 	for {
 		select {
@@ -80,6 +90,9 @@ WaitMessage:
 			}
 		}
 	}
+
+	// after_model hooks
+	_ = sess.RunHooks(ctx, types.SessionHookAfterModel, llmReq)
 }
 
 func (s *Agent) handleStructLLMOutput(ctx context.Context, sess *session.Session, resp *agtapi.Response) {
@@ -87,13 +100,22 @@ func (s *Agent) handleStructLLMOutput(ctx context.Context, sess *session.Session
 	var (
 		llmReq = openai.NewSimpleRequest(s.option.SystemPrompt, sess.History...)
 		model  = s.option.NewOutputModel()
-		err    = s.llm.StructuredPredict(ctx, llmReq, model)
 	)
 
+	// before_model hooks
+	if err := sess.RunHooks(ctx, types.SessionHookBeforeModel, llmReq); err != nil {
+		resp.Fail(err)
+		return
+	}
+
+	err := s.llm.StructuredPredict(ctx, llmReq, model)
 	if err != nil {
 		resp.Fail(err)
 		return
 	}
+
+	// after_model hooks
+	_ = sess.RunHooks(ctx, types.SessionHookAfterModel, llmReq)
 
 	raw, err := json.Marshal(model)
 	if err != nil {

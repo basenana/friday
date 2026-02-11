@@ -89,8 +89,8 @@ func (c *CompatibleClient) chatCompletionNewParams(request Request) *openai.Chat
 		p.PresencePenalty = param.NewOpt(*c.model.PresencePenalty)
 	}
 
-	history := request.History()
-	for _, msg := range history {
+	messages := request.Messages()
+	for _, msg := range messages {
 		switch {
 		case msg.SystemMessage != "":
 			p.Messages = append(p.Messages,
@@ -153,7 +153,7 @@ func (c *CompatibleClient) chatCompletionNewParams(request Request) *openai.Chat
 		p.Tools = nil
 
 		buf := &bytes.Buffer{}
-		messages := request.History()
+		messages = request.Messages()
 		if len(messages) == 0 || messages[0].SystemMessage == "" {
 			c.logger.Warnw("no system prompt found")
 			return p

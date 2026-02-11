@@ -77,24 +77,24 @@ func (s *Session) RegisterHook(name string, handler HookHandler) {
 	s.hooks[name] = append(s.hooks[name], handler)
 }
 
-func (s *Session) RunHooks(ctx context.Context, hookName string) error {
-	s.mu.Lock()
+func (s *Session) RunHooks(ctx context.Context, hookName string, req openai.Request) error {
+	s.mu.RLock()
 	hooks, ok := s.hooks[hookName]
+	s.mu.RUnlock()
 	if !ok || len(hooks) == 0 {
-		s.mu.Unlock()
 		return nil
 	}
 
+	if hookName == types.SessionHookBeforeModel {
+		return s.checkAndCompactHistory(ctx, req)
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	for _, h := range hooks {
-		if err := h(ctx, s); err != nil {
-			s.mu.Unlock()
+		if err := h(ctx, s, req); err != nil {
 			return err
 		}
-	}
-	s.mu.Unlock()
-
-	if hookName == types.SessionHookBeforeModel {
-		return s.checkAndCompactHistory(ctx)
 	}
 
 	return nil

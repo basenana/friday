@@ -85,14 +85,20 @@ func (a *Agent) reactLoop(ctx context.Context, sess *session.Session, resp *api.
 		case <-ctx.Done():
 			return
 		default:
-			err = sess.RunHooks(ctx, types.SessionHookBeforeModel)
+			// Build request first so hooks can modify it
+			llmReq := newLLMRequest(a.option.SystemPrompt, sess, mergedTools)
+
+			// before_model hooks
+			err = sess.RunHooks(ctx, types.SessionHookBeforeModel, llmReq)
 			if err != nil {
 				resp.Fail(err)
 				return
 			}
-			stream = a.llm.Completion(ctx, newLLMRequest(a.option.SystemPrompt, sess, mergedTools))
 
-			err = sess.RunHooks(ctx, types.SessionHookAfterModel)
+			stream = a.llm.Completion(ctx, llmReq)
+
+			// after_model hooks
+			err = sess.RunHooks(ctx, types.SessionHookAfterModel, llmReq)
 			if err != nil {
 				resp.Fail(err)
 				return
