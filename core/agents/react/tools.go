@@ -61,16 +61,12 @@ func toolCall(ctx context.Context, sess *session.Session, use *ToolUse, td *tool
 
 func newLLMRequest(systemMessage string, sess *session.Session, toolList []*tools.Tool) openai.Request {
 	var toolDef []openai.ToolDefine
-	for _, t := range toolList {
-		toolDef = append(toolDef, openai.ToolDefine{
-			Name:        t.Name,
-			Description: t.Description,
-			Parameters:  t.JsonSchema(),
-		})
-	}
-
 	for _, t := range buildInTools {
 		toolDef = append(toolDef, t)
+	}
+
+	for _, t := range toolList {
+		toolDef = append(toolDef, t.Define())
 	}
 
 	req := openai.NewSimpleRequest(systemMessage, sess.History...)

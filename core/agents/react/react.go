@@ -66,8 +66,6 @@ func (a *Agent) reactLoop(ctx context.Context, sess *session.Session, resp *api.
 		usage       = &loopUsage{Limit: a.option.MaxLoopTimes, ToolLimit: a.option.MaxToolCalls}
 		statusCode  code
 		supplements []types.Message
-		stream      openai.Response
-		err         error
 	)
 
 	defer func() {
@@ -85,26 +83,7 @@ func (a *Agent) reactLoop(ctx context.Context, sess *session.Session, resp *api.
 		case <-ctx.Done():
 			return
 		default:
-			// Build request first so hooks can modify it
-			llmReq := newLLMRequest(a.option.SystemPrompt, sess, mergedTools)
-
-			// before_model hooks
-			err = sess.RunHooks(ctx, types.SessionHookBeforeModel, llmReq)
-			if err != nil {
-				resp.Fail(err)
-				return
-			}
-
-			stream = a.llm.Completion(ctx, llmReq)
-
-			// after_model hooks
-			err = sess.RunHooks(ctx, types.SessionHookAfterModel, llmReq)
-			if err != nil {
-				resp.Fail(err)
-				return
-			}
-
-			supplements, statusCode = a.handleLLMStream(ctx, stream, sess, resp, usage, mergedTools)
+			supplements, statusCode = a.handleLLMStream(ctx, sess, resp, usage, mergedTools)
 		}
 
 		if statusCode == 1 {
@@ -140,30 +119,40 @@ func (a *Agent) reactLoop(ctx context.Context, sess *session.Session, resp *api.
 	}
 }
 
-func (a *Agent) handleLLMStream(ctx context.Context, stream openai.Response, sess *session.Session, resp *api.Response, usage *loopUsage, toolList []*tools.Tool) ([]types.Message, code) {
+func (a *Agent) handleLLMStream(ctx context.Context, sess *session.Session, resp *api.Response, usage *loopUsage, toolList []*tools.Tool) ([]types.Message, code) {
 	var (
 		content      string
 		reasoning    string
 		messageCount int
 		toolUse      []openai.ToolUse
+		err          error
 
 		statusCode  = code(0)
 		supplements []types.Message
+		llmReq      = newLLMRequest(a.option.SystemPrompt, sess, toolList)
 		warnTicker  = time.NewTicker(time.Minute)
 	)
 
 	defer warnTicker.Stop()
+
+	// before_model hooks
+	err = sess.RunHooks(ctx, types.SessionHookBeforeModel, llmReq, nil)
+	if err != nil {
+		resp.Fail(err)
+		return supplements, 1
+	}
+	stream := a.llm.Completion(ctx, llmReq)
 
 WaitMessage:
 	for {
 		select {
 		case <-ctx.Done():
 			resp.Fail(ctx.Err())
-			return supplements, 0
-		case err := <-stream.Error():
+			return supplements, 1
+		case err = <-stream.Error():
 			if err != nil {
 				resp.Fail(err)
-				return supplements, 0
+				return supplements, 1
 			}
 		case <-warnTicker.C:
 			a.logger.Warnw("still waiting llm completed", "receivedMessage", messageCount, "session", sess.ID)
@@ -203,10 +192,6 @@ WaitMessage:
 	content = strings.TrimSpace(content)
 	reasoning = strings.TrimSpace(reasoning)
 
-	if content == "" {
-		return supplements, statusCode
-	}
-
 	if strings.Contains(content, "topic_finish_") {
 		a.logger.Warnw("topic_finish tool use incorrect", "content", content, "session", sess.ID)
 		statusCode.update(1)
@@ -219,15 +204,24 @@ WaitMessage:
 		sess.AppendMessage(&types.Message{AssistantReasoning: reasoning})
 	}
 
+	if len(content) > 0 {
+		sess.AppendMessage(&types.Message{AssistantMessage: content})
+	}
+
+	// after_model hooks
+	appl := &openai.Apply{ToolUse: toolUse}
+	err = sess.RunHooks(ctx, types.SessionHookAfterModel, llmReq, appl)
+	if err != nil {
+		resp.Fail(err)
+		return supplements, 1
+	}
+	toolUse = appl.ToolUse
+
 	if len(toolUse) > 0 {
 		toolCallMessages := a.doToolCalls(ctx, sess, toolUse, reasoning, usage, toolList)
 		if len(toolCallMessages) > 0 {
 			supplements = append(supplements, toolCallMessages...)
 		}
-	}
-
-	if len(content) > 0 {
-		sess.AppendMessage(&types.Message{AssistantMessage: content})
 	}
 	return supplements, statusCode
 }

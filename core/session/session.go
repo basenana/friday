@@ -17,7 +17,7 @@ type Session struct {
 	History   []types.Message
 	CreatedAt time.Time
 
-	hooks map[string][]HookHandler
+	hooks []Hook
 	llm   openai.Client
 	mu    sync.RWMutex
 }
@@ -26,7 +26,7 @@ func New(id string, llm openai.Client) *Session {
 	s := &Session{
 		ID:        id,
 		History:   make([]types.Message, 0, 10),
-		hooks:     make(map[string][]HookHandler),
+		hooks:     make([]Hook, 0),
 		CreatedAt: time.Now(),
 		llm:       llm,
 	}
@@ -68,32 +68,43 @@ func (s *Session) Tokens() int64 {
 	return total
 }
 
-func (s *Session) RegisterHook(name string, handler HookHandler) {
-	if handler == nil {
-		return
-	}
+func (s *Session) RegisterHook(handler Hook) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.hooks[name] = append(s.hooks[name], handler)
+	s.hooks = append(s.hooks, handler)
 }
 
-func (s *Session) RunHooks(ctx context.Context, hookName string, req openai.Request) error {
-	s.mu.RLock()
-	hooks, ok := s.hooks[hookName]
-	s.mu.RUnlock()
-	if !ok || len(hooks) == 0 {
+func (s *Session) RunHooks(ctx context.Context, hookName string, req openai.Request, apply *openai.Apply) error {
+	if len(s.hooks) == 0 {
 		return nil
 	}
 
-	if hookName == types.SessionHookBeforeModel {
-		return s.checkAndCompactHistory(ctx, req)
-	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for _, h := range hooks {
-		if err := h(ctx, s, req); err != nil {
+	switch hookName {
+	case types.SessionHookBeforeModel:
+		if err := s.checkAndCompactHistory(ctx, req); err != nil {
 			return err
+		}
+
+		for _, hook := range s.hooks {
+			handler, ok := hook.(BeforeModelHook)
+			if !ok {
+				continue
+			}
+			if err := handler.BeforeModel(ctx, s, req); err != nil {
+				return err
+			}
+		}
+
+	case types.SessionHookAfterModel:
+
+		for _, hook := range s.hooks {
+			handler, ok := hook.(AfterModelHook)
+			if !ok {
+				continue
+			}
+			if err := handler.AfterModel(ctx, s, req, apply); err != nil {
+				return err
+			}
 		}
 	}
 

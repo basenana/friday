@@ -2,6 +2,8 @@ package tools
 
 import (
 	"context"
+
+	"github.com/basenana/friday/core/providers/openai"
 )
 
 type ToolSet interface {
@@ -23,6 +25,14 @@ func (t *Tool) JsonSchema() map[string]interface{} {
 		t.InputSchema.Required = make([]string, 0)
 	}
 	return map[string]interface{}{"type": "object", "properties": t.InputSchema.Properties, "required": t.InputSchema.Required}
+}
+
+func (t *Tool) Define() openai.ToolDefine {
+	return openai.ToolDefine{
+		Name:        t.Name,
+		Description: t.Description,
+		Parameters:  t.JsonSchema(),
+	}
 }
 
 func NewTool(name string, options ...ToolOption) *Tool {

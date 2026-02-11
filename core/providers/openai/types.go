@@ -73,6 +73,13 @@ type ToolUse struct {
 	Reasoning string `xml:"-" json:"-"` // tool use in reasoning like deepseek v3.2
 }
 
+type Apply struct {
+	ToolUse []ToolUse
+
+	Continue bool
+	Abort    bool
+}
+
 type Reasoning struct {
 	XMLName xml.Name `xml:"think"`
 	Content string   `xml:",chardata"`
@@ -225,11 +232,12 @@ func (s *simpleRequest) AppendHistory(messages ...types.Message) {
 }
 
 func (s *simpleRequest) AppendToolDefines(tools ...ToolDefine) {
-	for _, t := range tools {
+	for i, t := range tools {
 		var exists bool
 		for _, existing := range s.tools {
 			if existing.Name == t.Name {
 				exists = true
+				s.tools[i] = t // override
 				break
 			}
 		}
