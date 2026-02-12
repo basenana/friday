@@ -19,22 +19,19 @@ type Subagents struct {
 }
 
 var _ session.BeforeModelHook = &Subagents{}
-var _ session.AfterModelHook = &Subagents{}
+var _ session.BeforeAgentHook = &Subagents{}
+
+func (a *Subagents) BeforeAgent(ctx context.Context, sess *session.Session, req session.AgentRequest) error {
+	req.AppendTools(a.buildMainAgentTools(sess)...)
+	return nil
+}
 
 func (a *Subagents) BeforeModel(ctx context.Context, sess *session.Session, req openai.Request) error {
-	req.AppendToolDefines(a.buildMainAgentTools(sess)...)
 	req.AppendSystemPrompt(initSystemPrompt(a.option))
 	return nil
 }
 
-func (a *Subagents) AfterModel(ctx context.Context, sess *session.Session, req openai.Request, apply *openai.Apply) error {
-	//TODO implement me
-	panic("implement me")
-
-	// HOW TO Continue?
-}
-
-func (a *Subagents) buildMainAgentTools(sess *session.Session) []openai.ToolDefine {
+func (a *Subagents) buildMainAgentTools(sess *session.Session) []*tools.Tool {
 	subAgentTools := make([]*tools.Tool, 0)
 	subAgentTools = append(subAgentTools,
 		tools.NewTool(fmt.Sprintf("run_task"),
@@ -51,16 +48,15 @@ func (a *Subagents) buildMainAgentTools(sess *session.Session) []openai.ToolDefi
 		),
 	)
 
-	result := make([]openai.ToolDefine, 0, len(subAgentTools))
-	for _, tool := range subAgentTools {
-		result = append(result, tool.Define())
-	}
-	return result
+	return subAgentTools
 }
 
 func NewHook(llm openai.Client, opt Option) *Subagents {
 	if opt.SystemPrompt == "" {
 		opt.SystemPrompt = RUN_TASK_PROMPT
+	}
+	if opt.TaskDescribePrompt == "" {
+		opt.TaskDescribePrompt = SUBAGENT_TASK_DESC_PROMPT
 	}
 
 	return &Subagents{
@@ -72,9 +68,10 @@ func NewHook(llm openai.Client, opt Option) *Subagents {
 }
 
 type Option struct {
-	SystemPrompt string
-	Tools        []*tools.Tool
-	SubAgents    []ExpertAgent
+	SystemPrompt       string
+	TaskDescribePrompt string
+	Tools              []*tools.Tool
+	SubAgents          []ExpertAgent
 }
 
 type ExpertAgent struct {

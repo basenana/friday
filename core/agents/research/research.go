@@ -1,15 +1,16 @@
 package research
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/basenana/friday/core/agents"
-	"github.com/basenana/friday/core/agents/react"
 	"github.com/basenana/friday/core/api"
 	"github.com/basenana/friday/core/logger"
+	"github.com/basenana/friday/core/planning"
 	"github.com/basenana/friday/core/providers/openai"
 	"github.com/basenana/friday/core/session"
 	"github.com/basenana/friday/core/tools"
@@ -18,7 +19,6 @@ import (
 
 type Agent struct {
 	llm    openai.Client
-	leader agents.Agent
 	worker agents.Agent
 	opt    Option
 	logger logger.Logger
@@ -34,14 +34,22 @@ func (a *Agent) Chat(ctx context.Context, req *api.Request) *api.Response {
 
 	if sess == nil {
 		sess = session.New(types.NewID(), a.llm)
+		sess.RegisterHook(planning.New(a.llm, planning.Option{}))
+	}
+
+	mergedTools := make([]*tools.Tool, 0)
+	for _, t := range a.opt.ResearchTools {
+		mergedTools = append(mergedTools, t)
+	}
+	for _, t := range req.Tools {
+		mergedTools = append(mergedTools, t)
 	}
 
 	sess.AppendMessage(&types.Message{UserMessage: req.UserMessage})
-
-	leader := newResearchLeader(a, req.Session)
+	leader := newResearchLeader(a, req.Session, mergedTools)
 	go func() {
 		defer resp.Close()
-		if err := a.leaderRun(ctx, leader, req.UserMessage, sess); err != nil {
+		if err := a.leaderRun(ctx, leader, req.UserMessage, sess, resp); err != nil {
 			a.logger.Warnw("run task failed, skip and next", "err", err)
 		}
 		if err := a.doSummary(ctx, sess, resp); err != nil {
@@ -53,20 +61,36 @@ func (a *Agent) Chat(ctx context.Context, req *api.Request) *api.Response {
 	return resp
 }
 
-func (a *Agent) leaderRun(ctx context.Context, leader agents.Agent, task string, sess *session.Session) error {
+func (a *Agent) leaderRun(ctx context.Context, leader agents.Agent, task string, sess *session.Session, resp *api.Response) error {
 	var (
-		stream = leader.Chat(ctx, &api.Request{
-			Session:     sess,
-			UserMessage: task,
-		})
-		content string
-		err     error
-		startAt = time.Now()
+		stream     = leader.Chat(ctx, &api.Request{Session: sess, UserMessage: task})
+		contentBuf = &bytes.Buffer{}
+		startAt    = time.Now()
+		err        error
 	)
 	a.logger.Infow("run research", "task", task)
 
-	content, err = api.ReadAllContent(ctx, stream)
-	content = strings.TrimSpace(content)
+Waiting:
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case err = <-stream.Error():
+			if err != nil {
+				return err
+			}
+		case delta, ok := <-stream.Deltas():
+			if !ok {
+				break Waiting
+			}
+			if delta.Content != "" {
+				api.SendDelta(resp, types.Delta{Reasoning: delta.Content})
+				contentBuf.WriteString(delta.Content)
+			}
+		}
+	}
+
+	content := strings.TrimSpace(contentBuf.String())
 	if err != nil {
 		if content == "" {
 			content = "Error: " + err.Error()
@@ -84,7 +108,7 @@ func (a *Agent) leaderRun(ctx context.Context, leader agents.Agent, task string,
 
 func (a *Agent) doSummary(ctx context.Context, sess *session.Session, resp *api.Response) error {
 	a.logger.Infow("run summary")
-	agt := react.New(a.llm, react.Option{SystemPrompt: a.opt.SummaryPrompt})
+	agt := agents.New(a.llm, agents.Option{SystemPrompt: a.opt.SummaryPrompt})
 	userMessage := SUMMARYRE_USER_PROMPT
 
 	history := sess.History
@@ -116,7 +140,7 @@ func (a *Agent) doSummary(ctx context.Context, sess *session.Session, resp *api.
 	}
 }
 
-func NewLeader(llm openai.Client, worker agents.Agent, opt Option) *Agent {
+func New(llm openai.Client, opt Option) *Agent {
 	if opt.LeaderPrompt == "" {
 		opt.LeaderPrompt = LEAD_PROMPT
 	}
@@ -124,7 +148,7 @@ func NewLeader(llm openai.Client, worker agents.Agent, opt Option) *Agent {
 		opt.SummaryPrompt = SUMMARYRE_SYSTEM_PROMPT
 	}
 	if opt.MaxResearchLoopTimes == 0 {
-		opt.MaxResearchLoopTimes = 5
+		opt.MaxResearchLoopTimes = 50
 	}
 
 	if opt.SystemPrompt != "" {
@@ -132,13 +156,13 @@ func NewLeader(llm openai.Client, worker agents.Agent, opt Option) *Agent {
 		opt.SummaryPrompt = promptWithUserRequirements(opt.SystemPrompt, opt.SummaryPrompt)
 	}
 
-	if worker == nil {
-		worker = NewDefaultWorker(llm, opt)
+	if opt.Worker == nil {
+		opt.Worker = NewDefaultWorker(llm, opt)
 	}
 
 	agt := &Agent{
 		llm:    llm,
-		worker: worker,
+		worker: opt.Worker,
 		opt:    opt,
 		logger: logger.New("research"),
 	}
@@ -151,5 +175,6 @@ type Option struct {
 	SummaryPrompt        string
 	SystemPrompt         string
 	MaxResearchLoopTimes int
-	Tools                []*tools.Tool
+	Worker               agents.Agent
+	ResearchTools        []*tools.Tool
 }

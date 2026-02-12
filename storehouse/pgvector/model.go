@@ -23,7 +23,6 @@ import (
 	"fmt"
 	"time"
 
-	coretypes "github.com/basenana/friday/core/types"
 	"github.com/basenana/friday/types"
 
 	"gorm.io/gorm"
@@ -95,7 +94,7 @@ func (m *MessageModel) TableName() string {
 	return "friday_messages"
 }
 
-func (m *MessageModel) From(sessionID string, msg *coretypes.Message) {
+func (m *MessageModel) From(sessionID string, msg *types.Message) {
 	m.SessionID = sessionID
 	if msg.Metadata == nil {
 		msg.Metadata = make(map[string]string)
@@ -108,8 +107,8 @@ func (m *MessageModel) From(sessionID string, msg *coretypes.Message) {
 	}
 }
 
-func (m *MessageModel) To() *coretypes.Message {
-	msg := &coretypes.Message{}
+func (m *MessageModel) To() *types.Message {
+	msg := &types.Message{}
 
 	jsonData(string(m.Content), &msg)
 	jsonData(string(m.Metadata), &msg.Metadata)

@@ -1,10 +1,10 @@
 package session
 
 import (
-	"context"
 	"sync"
 	"time"
 
+	"github.com/basenana/friday/core/fs"
 	"github.com/basenana/friday/core/providers/openai"
 	"github.com/basenana/friday/core/types"
 )
@@ -15,22 +15,31 @@ type Session struct {
 	Parent    *Session
 	Children  []*Session
 	History   []types.Message
+	Workdir   fs.FileSystem
 	CreatedAt time.Time
 
-	hooks map[string][]HookHandler
+	hooks []Hook
 	llm   openai.Client
 	mu    sync.RWMutex
 }
 
-func New(id string, llm openai.Client) *Session {
+func New(id string, llm openai.Client, options ...Option) *Session {
 	s := &Session{
 		ID:        id,
 		History:   make([]types.Message, 0, 10),
-		hooks:     make(map[string][]HookHandler),
+		hooks:     make([]Hook, 0),
 		CreatedAt: time.Now(),
 		llm:       llm,
 	}
 	s.Root = s
+
+	for _, option := range options {
+		option(s)
+	}
+
+	if s.Workdir == nil {
+		s.Workdir = fs.NewInMemory()
+	}
 	return s
 }
 
@@ -41,9 +50,11 @@ func (s *Session) Fork() *Session {
 		Root:      s.Root,
 		Parent:    s,
 		History:   make([]types.Message, len(s.History)),
-		hooks:     s.hooks,
+		Workdir:   s.Workdir,
 		CreatedAt: time.Now(),
-		llm:       s.llm,
+
+		hooks: s.hooks,
+		llm:   s.llm,
 	}
 	copy(fork.History, s.History)
 	s.Children = append(s.Children, fork)
@@ -52,10 +63,12 @@ func (s *Session) Fork() *Session {
 	return fork
 }
 
-func (s *Session) AppendMessage(msg *types.Message) {
+func (s *Session) AppendMessage(msgList ...*types.Message) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.History = append(s.History, *msg)
+	for _, msg := range msgList {
+		s.History = append(s.History, *msg)
+	}
 }
 
 func (s *Session) Tokens() int64 {
@@ -68,34 +81,22 @@ func (s *Session) Tokens() int64 {
 	return total
 }
 
-func (s *Session) RegisterHook(name string, handler HookHandler) {
-	if handler == nil {
-		return
+type Option func(*Session)
+
+func WithHistory(messages ...types.Message) Option {
+	return func(s *Session) {
+		s.History = messages
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.hooks[name] = append(s.hooks[name], handler)
 }
 
-func (s *Session) RunHooks(ctx context.Context, hookName string) error {
-	s.mu.Lock()
-	hooks, ok := s.hooks[hookName]
-	if !ok || len(hooks) == 0 {
-		s.mu.Unlock()
-		return nil
+func WithHooks(hooks ...Hook) Option {
+	return func(s *Session) {
+		s.hooks = append(s.hooks, hooks...)
 	}
+}
 
-	for _, h := range hooks {
-		if err := h(ctx, s); err != nil {
-			s.mu.Unlock()
-			return err
-		}
+func WithWorkdirFS(wfs fs.FileSystem) Option {
+	return func(s *Session) {
+		s.Workdir = wfs
 	}
-	s.mu.Unlock()
-
-	if hookName == types.SessionHookBeforeModel {
-		return s.checkAndCompactHistory(ctx)
-	}
-
-	return nil
 }

@@ -18,9 +18,11 @@ github.com/bahlo/generic-list-go
 # github.com/basenana/friday/core v0.0.0-00010101000000-000000000000 => ./core
 ## explicit; go 1.24.7
 github.com/basenana/friday/core/agents
-github.com/basenana/friday/core/agents/react
+github.com/basenana/friday/core/agents/research
 github.com/basenana/friday/core/api
+github.com/basenana/friday/core/fs
 github.com/basenana/friday/core/logger
+github.com/basenana/friday/core/planning
 github.com/basenana/friday/core/providers
 github.com/basenana/friday/core/providers/openai
 github.com/basenana/friday/core/session

@@ -7,6 +7,7 @@ import (
 type SessionType string
 
 const (
+	SessionHookBeforeAgent = "before_agent"
 	SessionHookBeforeModel = "before_model"
 	SessionHookAfterModel  = "after_model"
 )

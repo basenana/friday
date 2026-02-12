@@ -6,27 +6,27 @@ import (
 	"sync"
 
 	"github.com/basenana/friday/core/agents"
-	"github.com/basenana/friday/core/agents/react"
 	agtapi "github.com/basenana/friday/core/api"
 	"github.com/basenana/friday/core/providers/openai"
 	"github.com/basenana/friday/core/session"
 	"github.com/basenana/friday/core/tools"
 )
 
-func newResearchLeader(agt *Agent, sess *session.Session) *react.Agent {
-	return react.New(agt.llm, react.Option{
+func newResearchLeader(agt *Agent, sess *session.Session, agentTools []*tools.Tool) agents.Agent {
+	leaderTools := newLeaderTool(agt.worker, sess, agentTools)
+	leaderTools = append(leaderTools, agentTools...)
+	return agents.New(agt.llm, agents.Option{
 		SystemPrompt: promptWithMoreInfo(agt.opt.LeaderPrompt),
-		MaxLoopTimes: 4,
-		MaxToolCalls: 30,
-		Tools:        newLeaderTool(agt, sess),
+		MaxLoopTimes: agt.opt.MaxResearchLoopTimes,
+		Tools:        leaderTools,
 	})
 }
 
-func newLeaderTool(agt *Agent, sess *session.Session) []*tools.Tool {
+func newLeaderTool(worker agents.Agent, sess *session.Session, agentTools []*tools.Tool) []*tools.Tool {
 	return []*tools.Tool{
 		tools.NewTool(
 			"run_blocking_subagents",
-			tools.WithDescription("Submit multiple independent tasks, each task will launch a subagent to conduct research in parallel."),
+			tools.WithDescription(DEFAULT_TASK_DESC_PROMPT),
 			tools.WithArray("task_describe_list",
 				tools.Required(),
 				tools.Items(map[string]interface{}{"type": "string", "description": "The item description must be specific, measurable, achievable, and strongly related to the goal."}),
@@ -36,12 +36,12 @@ func newLeaderTool(agt *Agent, sess *session.Session) []*tools.Tool {
 				tools.Required(),
 				tools.Description("The reason and purpose of creating a sub-agent"),
 			),
-			tools.WithToolHandler(blockingSubagentTool(agt, sess)),
+			tools.WithToolHandler(blockingSubagentTool(worker, sess, agentTools)),
 		),
 	}
 }
 
-func blockingSubagentTool(worker agents.Agent, sess *session.Session) tools.ToolHandlerFunc {
+func blockingSubagentTool(worker agents.Agent, sess *session.Session, agentTools []*tools.Tool) tools.ToolHandlerFunc {
 	return func(ctx context.Context, request *tools.Request) (*tools.Result, error) {
 		tasks, ok := request.Arguments["task_describe_list"].([]any)
 		if !ok || len(tasks) == 0 {
@@ -72,6 +72,7 @@ func blockingSubagentTool(worker agents.Agent, sess *session.Session) tools.Tool
 				content, err := agtapi.ReadAllContent(ctx, worker.Chat(ctx, &agtapi.Request{
 					Session:     subSuss,
 					UserMessage: task,
+					Tools:       agentTools,
 				}))
 				if err != nil {
 					result <- strings.Join(
@@ -94,10 +95,9 @@ func blockingSubagentTool(worker agents.Agent, sess *session.Session) tools.Tool
 }
 
 func NewDefaultWorker(llm openai.Client, opt Option) agents.Agent {
-	return react.New(llm, react.Option{
+	return agents.New(llm, agents.Option{
 		SystemPrompt: SUBAGENT_PROMPT,
-		MaxLoopTimes: 4,
-		MaxToolCalls: 30,
-		Tools:        opt.Tools,
+		MaxLoopTimes: 30,
+		Tools:        opt.ResearchTools,
 	})
 }

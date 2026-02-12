@@ -1,5 +1,11 @@
 package subagents
 
+import (
+	"bytes"
+	"fmt"
+	"strings"
+)
+
 const (
 	RUN_TASK_PROMPT = `<run_task>
 You have access to a "run_task" tool to launch short-lived subagents that handle isolated tasks. These agents are ephemeral — they live only for the duration of the task and return a single result.
@@ -30,7 +36,7 @@ When NOT to use the task tool:
 </run_task>
 `
 
-	SUBAGENT_TASK_PROMPT = `Launch an ephemeral subagent to handle complex, multi-step independent tasks with isolated context windows.
+	SUBAGENT_TASK_DESC_PROMPT = `Launch an ephemeral subagent to handle complex, multi-step independent tasks with isolated context windows.
 
 Available agent types and the tools they have access to:
 {available_agents}
@@ -147,5 +153,15 @@ func initSystemPrompt(opt Option) string {
 }
 
 func initTaskDescribePrompt(opt Option) string {
-	return SUBAGENT_TASK_PROMPT
+	buf := &bytes.Buffer{}
+	buf.WriteString("<available_agents>\n")
+
+	for _, agt := range opt.SubAgents {
+		buf.WriteString(fmt.Sprintf("<agent_name>%s</agent_name>\n", agt.Name))
+		buf.WriteString(fmt.Sprintf("<describe>\n%s\n</describe>\n", agt.Describe))
+	}
+
+	buf.WriteString("</available_agents>\n")
+
+	return strings.ReplaceAll(opt.TaskDescribePrompt, "{available_agents}", buf.String())
 }

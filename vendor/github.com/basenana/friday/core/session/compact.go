@@ -25,13 +25,20 @@ func init() {
 		}
 	}
 }
-func (s *Session) checkAndCompactHistory(ctx context.Context) error {
+
+func (s *Session) checkAndCompactHistory(ctx context.Context, req openai.Request) error {
 	beforeTokens := tokenCount(s.History)
 	if beforeTokens < CompactThreshold {
 		return nil
 	}
 
-	return s.CompactHistory(ctx)
+	err := s.CompactHistory(ctx)
+	if err != nil {
+		return err
+	}
+
+	req.SetHistory(s.History)
+	return nil
 }
 
 func (s *Session) CompactHistory(ctx context.Context) error {

@@ -29,7 +29,7 @@ func callSubagentTool(agents []ExpertAgent, sess *session.Session, subagentTools
 		}
 
 		for _, agt := range agents {
-			if agt.Name == agentName {
+			if fuzzyMatching(agt.Name, agentName) {
 				req := &api.Request{
 					Session:     sess.Fork(),
 					UserMessage: userMessage,

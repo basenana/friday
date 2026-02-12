@@ -25,6 +25,10 @@ func (t *Tool) JsonSchema() map[string]interface{} {
 	return map[string]interface{}{"type": "object", "properties": t.InputSchema.Properties, "required": t.InputSchema.Required}
 }
 
+func (t *Tool) GetName() string               { return t.Name }
+func (t *Tool) GetDescription() string        { return t.Description }
+func (t *Tool) GetParameters() map[string]any { return t.JsonSchema() }
+
 func NewTool(name string, options ...ToolOption) *Tool {
 	t := &Tool{
 		Name:        name,
@@ -49,9 +53,8 @@ type Request struct {
 }
 
 type Result struct {
-	Content      []Content `json:"content"`
-	ToolUseTimes int       `json:"toolUsedTimes,omitempty"`
-	IsError      bool      `json:"isError,omitempty"`
+	Content []Content `json:"content"`
+	IsError bool      `json:"isError,omitempty"`
 }
 
 // NewToolResultText creates a new CallToolResult with a text content

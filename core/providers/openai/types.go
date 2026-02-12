@@ -36,6 +36,7 @@ type Delta struct {
 
 type Request interface {
 	Messages() []types.Message
+
 	History() []types.Message
 	ToolDefines() []ToolDefine
 	SystemPrompt() string
@@ -57,10 +58,24 @@ func NewSimpleRequest(systemMessage string, history ...types.Message) Request {
 	return &simpleRequest{systemPrompts: []string{systemMessage}, history: history}
 }
 
-type ToolDefine struct {
-	Name        string
-	Description string
-	Parameters  map[string]any
+type ToolDefine interface {
+	GetName() string
+	GetDescription() string
+	GetParameters() map[string]any
+}
+
+type simpleToolDefine struct {
+	name        string
+	description string
+	parameters  map[string]any
+}
+
+func (s simpleToolDefine) GetName() string               { return s.name }
+func (s simpleToolDefine) GetDescription() string        { return s.description }
+func (s simpleToolDefine) GetParameters() map[string]any { return s.parameters }
+
+func NewToolDefine(name, description string, parameters map[string]any) ToolDefine {
+	return simpleToolDefine{name: name, description: description, parameters: parameters}
 }
 
 type ToolUse struct {
@@ -213,12 +228,12 @@ func (s *simpleRequest) SetToolDefines(tools []ToolDefine) {
 	)
 
 	for _, t := range tools {
-		_, exists := existedTool[t.Name]
+		_, exists := existedTool[t.GetName()]
 		if exists {
 			continue
 		}
 		filtered = append(filtered, t)
-		existedTool[t.Name] = struct{}{}
+		existedTool[t.GetName()] = struct{}{}
 	}
 	s.tools = filtered
 }
@@ -235,7 +250,7 @@ func (s *simpleRequest) AppendToolDefines(tools ...ToolDefine) {
 	for i, t := range tools {
 		var exists bool
 		for _, existing := range s.tools {
-			if existing.Name == t.Name {
+			if existing.GetName() == t.GetName() {
 				exists = true
 				s.tools[i] = t // override
 				break

@@ -3,7 +3,7 @@ package summarize
 import (
 	"context"
 
-	"github.com/basenana/friday/core/agents/react"
+	"github.com/basenana/friday/core/agents"
 	"github.com/basenana/friday/core/api"
 	"github.com/basenana/friday/core/logger"
 	"github.com/basenana/friday/core/providers/openai"
@@ -12,7 +12,7 @@ import (
 )
 
 type Agent struct {
-	react  *react.Agent
+	react  *agents.Agent
 	llm    openai.Client
 	option Option
 	logger logger.Logger
@@ -40,7 +40,7 @@ func New(llm openai.Client, option Option) *Agent {
 		option.SystemPrompt = DEFAULT_SUMMARIZE_PROMPT
 	}
 	return &Agent{
-		react:  react.New(llm, react.Option{SystemPrompt: option.SystemPrompt}),
+		react:  agents.New(llm, agents.Option{SystemPrompt: option.SystemPrompt}),
 		llm:    llm,
 		option: option,
 		logger: logger.New("summarize"),

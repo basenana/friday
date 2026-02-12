@@ -1,4 +1,4 @@
-package react
+package agents
 
 const (
 	DEFAULT_SYSTEM_PROMPT = `<executive_capability>

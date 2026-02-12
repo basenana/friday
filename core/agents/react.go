@@ -1,4 +1,4 @@
-package react
+package agents
 
 import (
 	"context"
@@ -15,19 +15,14 @@ import (
 	"github.com/basenana/friday/core/types"
 )
 
-type Agent struct {
-	name string
-	desc string
-	llm  openai.Client
-
-	tools      []*tools.Tool
-	toolCalled int
-
+type react struct {
+	llm    openai.Client
+	tools  []*tools.Tool
 	option Option
 	logger logger.Logger
 }
 
-func (a *Agent) Chat(ctx context.Context, req *api.Request) *api.Response {
+func (a *react) Chat(ctx context.Context, req *api.Request) *api.Response {
 	resp := api.NewResponse()
 
 	sess := req.Session
@@ -35,14 +30,19 @@ func (a *Agent) Chat(ctx context.Context, req *api.Request) *api.Response {
 		sess = session.New(types.NewID(), a.llm)
 	}
 
-	sess.AppendMessage(&types.Message{UserMessage: req.UserMessage})
+	err := sess.RunHooks(ctx, types.SessionHookBeforeAgent, session.HookPayload{AgentRequest: req})
+	if err != nil {
+		resp.Fail(err)
+		return resp
+	}
 
+	sess.AppendMessage(&types.Message{UserMessage: req.UserMessage})
 	a.logger.Infow("handle request", "message", logger.FirstLine(req.UserMessage), "session", sess.ID)
 	go a.reactLoop(ctx, sess, resp, req.Tools)
 	return resp
 }
 
-func (a *Agent) reactLoop(ctx context.Context, sess *session.Session, resp *api.Response, reqTools []*tools.Tool) {
+func (a *react) reactLoop(ctx context.Context, sess *session.Session, resp *api.Response, reqTools []*tools.Tool) {
 	defer resp.Close()
 
 	// Merge agent tools with request tools (request tools take precedence)
@@ -62,84 +62,62 @@ func (a *Agent) reactLoop(ctx context.Context, sess *session.Session, resp *api.
 	}
 
 	var (
-		startAt     = time.Now()
-		usage       = &loopUsage{Limit: a.option.MaxLoopTimes, ToolLimit: a.option.MaxToolCalls}
-		statusCode  code
-		supplements []types.Message
+		startAt   = time.Now()
+		loopTimes = 0
+		keepRun   bool
+		err       error
 	)
 
 	defer func() {
 		a.logger.Infow("react loop finish",
-			"toolUse", usage.ToolUse, "extraTry", usage.Try, "session", sess.ID, "elapsed", time.Since(startAt).String())
+			"loopTimes", loopTimes, "maxLoopTimes", a.option.MaxLoopTimes, "session", sess.ID, "elapsed", time.Since(startAt).String())
 	}()
 
 	for {
-		if usage.ToolUse >= usage.ToolLimit {
-			a.logger.Warnw("too many tool calls exceeded", "session", sess.ID)
-			return
-		}
-
 		select {
 		case <-ctx.Done():
 			return
 		default:
-			supplements, statusCode = a.handleLLMStream(ctx, sess, resp, usage, mergedTools)
+			keepRun, err = a.doAct(ctx, sess, resp, mergedTools)
 		}
 
-		if statusCode == 1 {
+		if err != nil {
+			resp.Fail(err)
 			return
 		}
 
-		if len(supplements) > 0 {
-			for _, supplement := range supplements {
-				if supplement.ToolContent != "" {
-					usage.ToolUse++
-				}
-			}
-			for i := range supplements {
-				sess.AppendMessage(&supplements[i])
-			}
-			continue
+		if !keepRun {
+			return
 		}
 
-		usage.Try++
-		if usage.Try >= usage.Limit {
+		loopTimes++
+		if loopTimes > a.option.MaxLoopTimes {
 			a.logger.Warnw("too many loop times exceeded", "session", sess.ID)
 			return
-		}
-		if usage.Try > 3 {
-			a.logger.Warnw("the LLM did not terminate the loop as expected", "status", statusCode, "extraTry", usage.Try, "session", sess.ID)
-		}
-		switch statusCode {
-		case 2:
-			sess.AppendMessage(&types.Message{AgentMessage: `The tool is used in an incorrect format; please try using the tool again.`})
-		default:
-			sess.AppendMessage(&types.Message{AgentMessage: "If you believe the conversation is complete, use the tool to end the conversation."})
 		}
 	}
 }
 
-func (a *Agent) handleLLMStream(ctx context.Context, sess *session.Session, resp *api.Response, usage *loopUsage, toolList []*tools.Tool) ([]types.Message, code) {
+func (a *react) doAct(ctx context.Context, sess *session.Session, resp *api.Response, toolList []*tools.Tool) (bool, error) {
 	var (
 		content      string
 		reasoning    string
+		agentMessage string
 		messageCount int
 		toolUse      []openai.ToolUse
 		err          error
 
-		statusCode  = code(0)
-		supplements []types.Message
-		llmReq      = newLLMRequest(a.option.SystemPrompt, sess, toolList)
-		warnTicker  = time.NewTicker(time.Minute)
+		keepRun    = false
+		llmReq     = newLLMRequest(a.option.SystemPrompt, sess, toolList)
+		warnTicker = time.NewTicker(time.Minute)
 	)
 
 	defer warnTicker.Stop()
 
 	// before_model hooks
-	err = sess.RunHooks(ctx, types.SessionHookBeforeModel, llmReq, nil)
+	err = sess.RunHooks(ctx, types.SessionHookBeforeModel, session.HookPayload{ModelRequest: llmReq})
 	if err != nil {
-		resp.Fail(err)
-		return supplements, 1
+		return false, err
 	}
 	stream := a.llm.Completion(ctx, llmReq)
 
@@ -147,12 +125,10 @@ WaitMessage:
 	for {
 		select {
 		case <-ctx.Done():
-			resp.Fail(ctx.Err())
-			return supplements, 1
+			return false, ctx.Err()
 		case err = <-stream.Error():
 			if err != nil {
-				resp.Fail(err)
-				return supplements, 1
+				return false, err
 			}
 		case <-warnTicker.C:
 			a.logger.Warnw("still waiting llm completed", "receivedMessage", messageCount, "session", sess.ID)
@@ -172,7 +148,7 @@ WaitMessage:
 				for i := range msg.ToolUse {
 					tool := msg.ToolUse[i]
 					if strings.HasPrefix(tool.Name, "topic_finish_") {
-						statusCode.update(1)
+						keepRun = false
 						continue WaitMessage
 					}
 					toolUse = append(toolUse, tool)
@@ -194,53 +170,52 @@ WaitMessage:
 
 	if strings.Contains(content, "topic_finish_") {
 		a.logger.Warnw("topic_finish tool use incorrect", "content", content, "session", sess.ID)
-		statusCode.update(1)
+		agentMessage += "If you believe the conversation is complete, use the tool to end the conversation.\n"
 	} else if strings.Contains(content, "<tool_use") {
 		a.logger.Warnw("tool use incorrect", "content", content, "session", sess.ID)
-		statusCode.update(2)
+		agentMessage += "The tool is used in an incorrect format; please try using the tool again.\n"
 	}
 
 	if reasoning != "" {
 		sess.AppendMessage(&types.Message{AssistantReasoning: reasoning})
 	}
-
 	if len(content) > 0 {
 		sess.AppendMessage(&types.Message{AssistantMessage: content})
+	}
+	if agentMessage != "" {
+		keepRun = true
+		sess.AppendMessage(&types.Message{AgentMessage: agentMessage})
 	}
 
 	// after_model hooks
 	appl := &openai.Apply{ToolUse: toolUse}
-	err = sess.RunHooks(ctx, types.SessionHookAfterModel, llmReq, appl)
+	err = sess.RunHooks(ctx, types.SessionHookAfterModel, session.HookPayload{ModelRequest: llmReq, ModelApply: appl})
 	if err != nil {
-		resp.Fail(err)
-		return supplements, 1
+		return false, err
 	}
 	toolUse = appl.ToolUse
 
 	if len(toolUse) > 0 {
-		toolCallMessages := a.doToolCalls(ctx, sess, toolUse, reasoning, usage, toolList)
-		if len(toolCallMessages) > 0 {
-			supplements = append(supplements, toolCallMessages...)
-		}
+		keepRun = true
+		a.doToolCalls(ctx, sess, toolUse, reasoning, toolList)
 	}
-	return supplements, statusCode
+	return keepRun, nil
 }
 
-func (a *Agent) doToolCalls(ctx context.Context, sess *session.Session, toolUses []openai.ToolUse, reasoning string, usage *loopUsage, toolList []*tools.Tool) []types.Message {
+func (a *react) doToolCalls(ctx context.Context, sess *session.Session, toolUses []openai.ToolUse, reasoning string, toolList []*tools.Tool) {
 	var (
-		result       []types.Message
-		update       = make(chan []types.Message, len(toolUses))
-		toolUseCount = usage.ToolUse
-		wg           = &sync.WaitGroup{}
+		result []*types.Message
+		update = make(chan []*types.Message, len(toolUses))
+		wg     = &sync.WaitGroup{}
 	)
 
 	for i := range toolUses {
 		use := toolUses[i]
 		wg.Add(1)
-		go func(tc int) {
+		go func() {
 			defer wg.Done()
-			update <- a.tryToolCall(ctx, sess, use, reasoning, tc, toolList)
-		}(toolUseCount + i + 1)
+			update <- a.tryToolCall(ctx, sess, use, reasoning, toolList)
+		}()
 	}
 	wg.Wait()
 	close(update)
@@ -251,12 +226,13 @@ func (a *Agent) doToolCalls(ctx context.Context, sess *session.Session, toolUses
 		}
 		result = append(result, message...)
 	}
-	return result
+
+	sess.AppendMessage(result...)
 }
 
-func (a *Agent) tryToolCall(ctx context.Context, sess *session.Session, use openai.ToolUse, reasoning string, toolUseCount int, toolList []*tools.Tool) []types.Message {
+func (a *react) tryToolCall(ctx context.Context, sess *session.Session, use openai.ToolUse, reasoning string, toolList []*tools.Tool) []*types.Message {
 	var (
-		result  []types.Message
+		result  []*types.Message
 		useMark = use.ID
 	)
 
@@ -264,32 +240,32 @@ func (a *Agent) tryToolCall(ctx context.Context, sess *session.Session, use open
 		useMark = use.Name
 	}
 
-	result = append(result, types.Message{ToolCallID: useMark, ToolName: use.Name, ToolArguments: use.Arguments, AssistantReasoning: reasoning})
+	result = append(result, &types.Message{ToolCallID: useMark, ToolName: use.Name, ToolArguments: use.Arguments, AssistantReasoning: reasoning})
 
 	td := getToolByName(toolList, use.Name)
 	if td == nil {
 		msg := fmt.Sprintf("tool %s not found", use.Name)
-		result = append(result, types.Message{ToolCallID: useMark, ToolContent: msg})
+		result = append(result, &types.Message{ToolCallID: useMark, ToolContent: msg})
 		a.logger.Warnw(msg, "tool", use.Name, "session", sess.ID)
 		return result
 	}
 
 	if use.Error != "" {
-		result = append(result, types.Message{ToolCallID: useMark, ToolContent: use.Error})
+		result = append(result, &types.Message{ToolCallID: useMark, ToolContent: use.Error})
 		a.logger.Warnw("try tool call error", "tool", use.Name, "error", use.Error, "session", sess.ID)
 		return result
 	}
 
 	toolUse := &ToolUse{GenID: use.ID, Name: use.Name, Arguments: use.Arguments}
 	a.logger.Infow("using tool", "tool", toolUse.Name, "args", toolUse.Arguments, "session", sess.ID)
-	msg, err := toolCall(ctx, sess, toolUse, td, toolUseCount)
+	msg, err := toolCall(ctx, sess, toolUse, td)
 	if err != nil {
-		result = append(result, types.Message{ToolCallID: toolUse.ID(), ToolContent: fmt.Sprintf("using tool failed: %s", err)})
+		result = append(result, &types.Message{ToolCallID: toolUse.ID(), ToolContent: fmt.Sprintf("using tool failed: %s", err)})
 		a.logger.Warnw("using tool failed", "tool", use.Name, "error", err, "session", sess.ID)
 		return result
 	}
 
-	result = append(result, types.Message{ToolCallID: toolUse.ID(), ToolContent: msg})
+	result = append(result, &types.Message{ToolCallID: toolUse.ID(), ToolContent: msg})
 	return result
 }
 
@@ -302,18 +278,15 @@ func getToolByName(toolList []*tools.Tool, name string) *tools.Tool {
 	return nil
 }
 
-func New(llm openai.Client, option Option) *Agent {
+func New(llm openai.Client, option Option) Agent {
 	if option.SystemPrompt == "" {
 		option.SystemPrompt = DEFAULT_SYSTEM_PROMPT
 	}
 	if option.MaxLoopTimes == 0 {
-		option.MaxLoopTimes = 5
-	}
-	if option.MaxToolCalls == 0 {
-		option.MaxToolCalls = 20
+		option.MaxLoopTimes = 50
 	}
 
-	agt := &Agent{
+	agt := &react{
 		llm:    llm,
 		tools:  option.Tools,
 		option: option,
@@ -326,25 +299,6 @@ func New(llm openai.Client, option Option) *Agent {
 type Option struct {
 	SystemPrompt string
 	MaxLoopTimes int
-	MaxToolCalls int
 
 	Tools []*tools.Tool
-}
-
-type code int32
-
-func (c *code) update(n int32) {
-	if c == nil {
-		return
-	}
-	if n > int32(*c) {
-		*c = code(n)
-	}
-}
-
-type loopUsage struct {
-	Try       int
-	Limit     int
-	ToolUse   int
-	ToolLimit int
 }

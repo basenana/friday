@@ -13,6 +13,22 @@ type Request struct {
 	Tools       []*tools.Tool
 }
 
+func (r *Request) GetUserMessage() string {
+	return r.UserMessage
+}
+
+func (r *Request) SetUserMessage(msg string) {
+	r.UserMessage = msg
+}
+
+func (r *Request) GetTools() []*tools.Tool {
+	return r.Tools
+}
+
+func (r *Request) AppendTools(tool ...*tools.Tool) {
+	r.Tools = append(r.Tools, tool...)
+}
+
 type Response struct {
 	delta chan types.Delta
 	err   chan error

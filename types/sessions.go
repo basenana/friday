@@ -1,6 +1,25 @@
 package types
 
-import "time"
+import (
+	"time"
+
+	coretypes "github.com/basenana/friday/core/types"
+)
+
+type SessionType string
+
+const (
+	SessionTypeChat    SessionType = "Chat"
+	SessionTypeAgentic SessionType = "Agentic"
+
+	MetadataSessionState       = "friday.state"
+	MetadataSessionStateOpen   = "open"
+	MetadataSessionStateClosed = "closed"
+
+	SessionHookBeforeModel  = "before_model"
+	SessionHookAfterModel   = "after_model"
+	SessionHookBeforeClosed = "before_closed"
+)
 
 type Session struct {
 	ID       string            `json:"id"`
@@ -17,3 +36,5 @@ type Session struct {
 	ForkedFrom string    `json:"forked_from,omitempty"` // forked from session ID
 	CreatedAt  time.Time `json:"created_at"`
 }
+
+type Message coretypes.Message

@@ -3,7 +3,6 @@ package storehouse
 import (
 	"context"
 
-	coretypes "github.com/basenana/friday/core/types"
 	"github.com/basenana/friday/types"
 )
 
@@ -12,8 +11,8 @@ type Storehouse interface {
 	CreateSession(ctx context.Context, session *types.Session) (*types.Session, error)
 	UpdateSession(ctx context.Context, session *types.Session) error
 	OpenSession(ctx context.Context, sessionID string) (*types.Session, error)
-	AppendMessages(ctx context.Context, sessionID string, message ...*coretypes.Message) error
-	ListMessages(ctx context.Context, sessionID string) ([]*coretypes.Message, error)
+	AppendMessages(ctx context.Context, sessionID string, message ...*types.Message) error
+	ListMessages(ctx context.Context, sessionID string) ([]*types.Message, error)
 	CloseSession(ctx context.Context, sessionID string) error
 
 	GetMemory(ctx context.Context, memoryID string) (*types.Memory, error)

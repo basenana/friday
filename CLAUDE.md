@@ -4,9 +4,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Friday is an intelligent QA system using RAG (Retrieval-Augmented Generation) that matches user queries against a
-vectorized knowledge base and summarizes responses via LLMs (OpenAI, Gemini, GLM-6B). It includes a multi-agent
-framework with tool-calling capabilities.
+Friday is a multi-agent AI system with RAG capabilities. Core architecture includes:
+- ReAct-style agents with tool-calling (max 5 loop iterations, 20 tool calls)
+- LATS (Language Agent Tree Search) for structured reasoning with tree exploration
+- Sub-agent orchestration for expert task delegation
 
 ## Commands
 
@@ -17,41 +18,75 @@ make test     # Run all unit tests (go test ./...)
 
 ## Architecture
 
-### Entry Points
+### Entry Point
 
 - `cmd/main.go` - Cobra CLI with `serve` (HTTP API) and `agent` commands
-- `api/server.go` - Gin-based HTTP server with document/namespace endpoints
 
 ### Agent System (`agents/`)
 
-- `react/` - ReAct-style agent with tool loop (max 5 iterations, 20 tool calls)
-- `coordinator/` - Orchestrates expert sub-agents, generates summary reports
-- `knowledge/` - Vector-based knowledge retrieval
-- `research/`, `planning/`, `summarize/` - Specialized agents
+The `agents/` package defines the `Agent` interface (`agents/interface.go:9-11`):
+```go
+type Agent interface {
+    Chat(ctx context.Context, req *api.Request) *api.Response
+}
+```
 
-### Deprecated Packages (`pkg/`)
+- `react.go` - ReAct-style agent implementation with thought/action/observation loop
+- `lats/` - LATS (Language Agent Tree Search) for tree-based reasoning with parallel node evaluation
+- `summarize/` - Specialized agent for response synthesis
 
-Everything defined in the `pkg/` belongs to previous versions
-and contains many implementations that can be referenced, but should no longer be used in the current version.
+### Session System (`session/`)
 
-### Storage (`storehouse/`)
+Session manages conversation state and tool execution context:
+- `session.go` - Core session with message history, token tracking, and workdir filesystem
+- `hooks.go` - Hook system: `BeforeAgent`, `BeforeModel`, `AfterModel` lifecycle hooks
+- `compact.go` - Conversation compaction/shortening utilities
 
-- Session management and message storage
-- Vector search (Redis, PostgreSQL, PGVector)
-- Document stores (MeiliSearch, PostgreSQL)
+Sessions support forking for sub-agent execution (`session/session.go:46-64`).
 
-### Key Types (`types/`)
+### Subagents (`subagents/`)
 
-- `Message` - Conversation messages with tool calls
-- `Session` - Chat or Agentic sessions with purpose/summary
-- `Document`/`Chunk` - Knowledge base entries with vectors
+Orchestrates expert sub-agents:
+- `hook.go` - Registers `BeforeAgent` and `BeforeModel` hooks to inject subagent tools
+- Main agent tool `run_task` delegates to registered expert agents
 
-### Memory System (`memory/`)
+### Planning (`planning/`)
 
-- Conversation history with token tracking
-- Supports memory forks for sub-agents
-- Session hooks: before_model, after_model, before_closed
+- `lats/` - LATS reasoning tree with candidate generation, parallel execution, and evaluation
+- `todo/` - TODO-based planning with hook integration
 
-## Configuration (`config/`)
+### Providers (`providers/openai/`)
 
-Configures LLM providers, embedding models, vector stores, document stores, text splitters, and thread pool size.
+- `client.go` - OpenAI-compatible API client with streaming support, rate limiting, and retry logic
+- `types.go` - Request/Response models for LLM interactions
+- `embedding.go` - Vector embedding generation
+
+### Tools (`tools/`)
+
+- `tool.go` - Tool definition with JSON Schema, handlers, and property builders
+- Tools are composable with options pattern (WithDescription, WithString, etc.)
+
+### API (`api/`)
+
+- `requests.go` - Request/Response types for agent chat
+- `context.go`, `stream.go` - HTTP context and streaming utilities
+
+### Core Types (`types/`)
+
+- `Message` - Conversation messages (system/user/assistant/agent/tool roles)
+- `SessionType` - Hook type constants (`BeforeAgent`, `BeforeModel`, `AfterModel`)
+
+### Filesystem (`fs/`)
+
+- `inmemory.go` - In-memory filesystem for session workdir (default)
+
+## Deprecated (`pkg/`)
+
+Previous version implementations. Reference only - do not use in new code.
+
+## Provider Interface (`providers/interface.go`)
+
+LLM clients implement `Client` interface with:
+- `Completion(ctx, Request) Response` - Streaming chat completion
+- `CompletionNonStreaming(ctx, Request) (string, error)`
+- `StructuredPredict(ctx, Request, model any) error` - Structured output

@@ -1,4 +1,4 @@
-package react
+package agents
 
 import (
 	"context"
@@ -14,9 +14,9 @@ import (
 
 var (
 	buildInTools = []openai.ToolDefine{
-		{Name: "topic_finish_close", Description: "If you believe the question has been resolved and has an ultimate answer, " +
+		openai.NewToolDefine("topic_finish_close", "If you believe the question has been resolved and has an ultimate answer, "+
 			"you must execute the tool to end the topic, otherwise the topic will not end, and the tool does not require input parameters",
-			Parameters: map[string]any{"properties": map[string]any{}, "type": "object"}},
+			map[string]any{"properties": map[string]any{}, "type": "object"}),
 	}
 )
 
@@ -39,7 +39,7 @@ func (t *ToolUse) ID() string {
 	return t.GenID
 }
 
-func toolCall(ctx context.Context, sess *session.Session, use *ToolUse, td *tools.Tool, toolUsage int) (string, error) {
+func toolCall(ctx context.Context, sess *session.Session, use *ToolUse, td *tools.Tool) (string, error) {
 	req := &tools.Request{Arguments: make(map[string]interface{}), SessionID: sess.ID}
 	if err := json.Unmarshal([]byte(use.Arguments), &req.Arguments); err != nil {
 		return "", fmt.Errorf("unmarshal json argument failed: %s", err)
@@ -50,8 +50,7 @@ func toolCall(ctx context.Context, sess *session.Session, use *ToolUse, td *tool
 		return "", err
 	}
 
-	result.ToolUseTimes = toolUsage
-	content, err := json.MarshalIndent(result, "", "  ")
+	content, err := json.Marshal(result)
 	if err != nil {
 		return "", fmt.Errorf("marshal tool %s result failed: %s", use.Name, err)
 	}
@@ -61,16 +60,15 @@ func toolCall(ctx context.Context, sess *session.Session, use *ToolUse, td *tool
 
 func newLLMRequest(systemMessage string, sess *session.Session, toolList []*tools.Tool) openai.Request {
 	var toolDef []openai.ToolDefine
-	for _, t := range toolList {
-		toolDef = append(toolDef, openai.ToolDefine{
-			Name:        t.Name,
-			Description: t.Description,
-			Parameters:  t.JsonSchema(),
-		})
-	}
-
 	for _, t := range buildInTools {
 		toolDef = append(toolDef, t)
 	}
-	return openai.NewToolsRequest(openai.NewSimpleRequest(systemMessage, sess.History...), toolDef)
+
+	for _, t := range toolList {
+		toolDef = append(toolDef, t)
+	}
+
+	req := openai.NewSimpleRequest(systemMessage, sess.History...)
+	req.SetToolDefines(toolDef)
+	return req
 }

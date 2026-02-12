@@ -25,7 +25,6 @@ import (
 	"time"
 
 	"github.com/basenana/friday/core/providers"
-	coretypes "github.com/basenana/friday/core/types"
 	"github.com/basenana/friday/storehouse"
 	"github.com/basenana/friday/storehouse/chunks"
 	"github.com/basenana/friday/types"
@@ -76,9 +75,9 @@ func New(postgresUrl string, embedding providers.Embedding) (*DB, error) {
 	}, nil
 }
 
-func (p *DB) ListSessions(ctx context.Context, filter map[string]string, includesClosed bool) ([]*coretypes.Session, error) {
+func (p *DB) ListSessions(ctx context.Context, filter map[string]string, includesClosed bool) ([]*types.Session, error) {
 	var (
-		sessions []*coretypes.Session
+		sessions []*types.Session
 		models   []*SessionModel
 		tx       = p.dEntity.WithContext(ctx)
 	)
@@ -87,7 +86,7 @@ func (p *DB) ListSessions(ctx context.Context, filter map[string]string, include
 		filter = map[string]string{}
 	}
 	if !includesClosed {
-		filter[coretypes.MetadataSessionState] = coretypes.MetadataSessionStateOpen
+		filter[types.MetadataSessionState] = types.MetadataSessionStateOpen
 	}
 
 	for key, value := range filter {
@@ -103,7 +102,7 @@ func (p *DB) ListSessions(ctx context.Context, filter map[string]string, include
 	return sessions, nil
 }
 
-func (p *DB) CreateSession(ctx context.Context, session *coretypes.Session) (*coretypes.Session, error) {
+func (p *DB) CreateSession(ctx context.Context, session *types.Session) (*types.Session, error) {
 	if session.ID == "" {
 		session.ID = newRecordID()
 	}
@@ -116,7 +115,7 @@ func (p *DB) CreateSession(ctx context.Context, session *coretypes.Session) (*co
 	return session, nil
 }
 
-func (p *DB) UpdateSession(ctx context.Context, session *coretypes.Session) error {
+func (p *DB) UpdateSession(ctx context.Context, session *types.Session) error {
 	err := p.dEntity.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		model := &SessionModel{}
 		res := tx.WithContext(ctx).Where("id = ?", session.ID).Find(model)
@@ -133,8 +132,8 @@ func (p *DB) UpdateSession(ctx context.Context, session *coretypes.Session) erro
 	return nil
 }
 
-func (p *DB) OpenSession(ctx context.Context, sessionID string) (*coretypes.Session, error) {
-	var session *coretypes.Session
+func (p *DB) OpenSession(ctx context.Context, sessionID string) (*types.Session, error) {
+	var session *types.Session
 	err := p.dEntity.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		model := &SessionModel{}
 		res := tx.WithContext(ctx).Where("id = ?", sessionID).Find(model)
@@ -157,7 +156,7 @@ func (p *DB) OpenSession(ctx context.Context, sessionID string) (*coretypes.Sess
 	return session, nil
 }
 
-func (p *DB) AppendMessages(ctx context.Context, sessionID string, messages ...*coretypes.Message) error {
+func (p *DB) AppendMessages(ctx context.Context, sessionID string, messages ...*types.Message) error {
 	return p.dEntity.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		for _, message := range messages {
 			model := &MessageModel{}
@@ -170,9 +169,9 @@ func (p *DB) AppendMessages(ctx context.Context, sessionID string, messages ...*
 	})
 }
 
-func (p *DB) ListMessages(ctx context.Context, sessionID string) ([]*coretypes.Message, error) {
+func (p *DB) ListMessages(ctx context.Context, sessionID string) ([]*types.Message, error) {
 	var (
-		messages []*coretypes.Message
+		messages []*types.Message
 		models   []*MessageModel
 		tx       = p.dEntity.WithContext(ctx)
 	)
@@ -196,8 +195,8 @@ func (p *DB) CloseSession(ctx context.Context, sessionID string) error {
 
 		metadata := make(map[string]string)
 		_ = json.Unmarshal(model.Metadata, &metadata)
-		if len(metadata) == 0 || metadata[coretypes.MetadataSessionState] != coretypes.MetadataSessionStateClosed {
-			metadata[coretypes.MetadataSessionState] = coretypes.MetadataSessionStateClosed
+		if len(metadata) == 0 || metadata[types.MetadataSessionState] != types.MetadataSessionStateClosed {
+			metadata[types.MetadataSessionState] = types.MetadataSessionStateClosed
 		}
 		model.Metadata, _ = json.Marshal(metadata)
 		return tx.Save(model).Error
