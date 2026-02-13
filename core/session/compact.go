@@ -144,13 +144,14 @@ func updateHistoryWithAbstract(history []types.Message, abstract string) []types
 
 	effectiveHistory := make([]types.Message, 0, len(history))
 	for _, msg := range history {
-		if msg.UserMessage != "" || msg.AssistantMessage != "" {
+		if msg.UserMessage != "" || msg.AssistantMessage != "" || msg.AssistantReasoning != "" {
 			effectiveHistory = append(effectiveHistory, msg)
 		}
 	}
 
+	abstractMessage := types.Message{AgentMessage: summaryPrefix + abstract}
 	if len(effectiveHistory) == 0 {
-		return history
+		return []types.Message{abstractMessage}
 	}
 
 	var (
@@ -161,14 +162,16 @@ func updateHistoryWithAbstract(history []types.Message, abstract string) []types
 	if cutAt < 0 {
 		cutAt = 0
 	}
-	keep := effectiveHistory[cutAt:]
 
-	if cutAt > 0 {
-		newHistory = append(newHistory, effectiveHistory[0])
+	if cutAt == 0 {
+		// keep all and append abstracts
+		effectiveHistory = append(effectiveHistory, abstractMessage)
+		return effectiveHistory
 	}
 
-	newHistory = append(newHistory, types.Message{AgentMessage: summaryPrefix + abstract})
+	keep := effectiveHistory[cutAt:]
+	newHistory = append(newHistory, effectiveHistory[0])
+	newHistory = append(newHistory, abstractMessage)
 	newHistory = append(newHistory, keep...)
-
 	return newHistory
 }
