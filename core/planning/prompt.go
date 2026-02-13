@@ -69,6 +69,7 @@ This tool is very helpful for planning complex objectives, and for breaking down
 
 It is critical that you mark todos as completed as soon as you are done with a step. Do not batch up multiple steps before marking them as completed.
 For simple objectives that only require a few steps, it is better to just complete the objective directly and NOT use this tool.
+However, for tasks with vague goals that require numerous steps, especially if each step is time-consuming, it is RECOMMENDED to create a to-do list using the "write_todos" tool before starting the work.
 Writing todos takes time and tokens, use it when it is helpful for managing complex many-step problems! But not for simple few-step requests.
 
 ## Important To-Do List Usage Notes to Remember

@@ -3,7 +3,6 @@ package research
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"strings"
 	"time"
 
@@ -45,14 +44,13 @@ func (a *Agent) Chat(ctx context.Context, req *api.Request) *api.Response {
 		mergedTools = append(mergedTools, t)
 	}
 
-	sess.AppendMessage(&types.Message{UserMessage: req.UserMessage})
 	leader := newResearchLeader(a, req.Session, mergedTools)
 	go func() {
 		defer resp.Close()
 		if err := a.leaderRun(ctx, leader, req.UserMessage, sess, resp); err != nil {
 			a.logger.Warnw("run task failed, skip and next", "err", err)
 		}
-		if err := a.doSummary(ctx, sess, resp); err != nil {
+		if err := a.doSummary(ctx, req.UserMessage, sess, resp); err != nil {
 			a.logger.Errorw("do summary failed", "err", err)
 			return
 		}
@@ -63,13 +61,13 @@ func (a *Agent) Chat(ctx context.Context, req *api.Request) *api.Response {
 
 func (a *Agent) leaderRun(ctx context.Context, leader agents.Agent, task string, sess *session.Session, resp *api.Response) error {
 	var (
-		stream     = leader.Chat(ctx, &api.Request{Session: sess, UserMessage: task})
 		contentBuf = &bytes.Buffer{}
 		startAt    = time.Now()
 		err        error
 	)
 	a.logger.Infow("run research", "task", task)
 
+	stream := leader.Chat(ctx, &api.Request{Session: sess, UserMessage: task})
 Waiting:
 	for {
 		select {
@@ -106,16 +104,12 @@ Waiting:
 	return err
 }
 
-func (a *Agent) doSummary(ctx context.Context, sess *session.Session, resp *api.Response) error {
+func (a *Agent) doSummary(ctx context.Context, task string, sess *session.Session, resp *api.Response) error {
 	a.logger.Infow("run summary")
 	agt := agents.New(a.llm, agents.Option{SystemPrompt: a.opt.SummaryPrompt})
 	userMessage := SUMMARYRE_USER_PROMPT
+	userMessage = strings.ReplaceAll(userMessage, "{user_task}", task)
 
-	history := sess.History
-	if len(history) == 0 {
-		return fmt.Errorf("session history is empty")
-	}
-	userMessage = strings.ReplaceAll(userMessage, "{user_task}", history[0].UserMessage)
 	stream := agt.Chat(ctx, &api.Request{
 		Session:     sess,
 		UserMessage: userMessage,
