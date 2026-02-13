@@ -6,6 +6,7 @@ import (
 	"github.com/basenana/friday/core/providers/openai"
 	"github.com/basenana/friday/core/session"
 	"github.com/basenana/friday/core/tools"
+	"github.com/basenana/friday/core/types"
 )
 
 type Report struct {
@@ -16,6 +17,7 @@ type Report struct {
 
 var _ session.BeforeAgentHook = (*Report)(nil)
 var _ session.BeforeModelHook = (*Report)(nil)
+var _ session.AfterModelHook = (*Report)(nil)
 
 func (r *Report) BeforeAgent(ctx context.Context, sess *session.Session, req session.AgentRequest) error {
 	if r.mainSession == "" {
@@ -36,6 +38,25 @@ func (r *Report) BeforeModel(ctx context.Context, sess *session.Session, req ope
 	}
 
 	req.AppendSystemPrompt(FINAL_REPORT_PROMPT)
+	return nil
+}
+
+func (r *Report) AfterModel(ctx context.Context, sess *session.Session, req openai.Request, apply *openai.Apply) error {
+	if r.mainSession != sess.ID {
+		return nil
+	}
+
+	if len(apply.ToolUse) > 0 {
+		return nil
+	}
+
+	if r.title != "" {
+		return nil
+	}
+
+	sess.AppendMessage(&types.Message{AgentMessage: "The final report has not been submitted. " +
+		"If you believe the task is complete, please use the \"submit_final_report\" tool to submit the final report."})
+	apply.Continue = true
 	return nil
 }
 

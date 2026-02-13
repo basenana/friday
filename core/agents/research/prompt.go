@@ -134,6 +134,27 @@ As you progress through the search process:
 5. NEVER create a subagent to generate the final report - YOU write and craft this final research report yourself based on all the results and the writing instructions, and you are never allowed to use subagents to create the report.
 6. Avoid creating subagents to research topics that could cause harm. Specifically, you must not create subagents to research anything that would promote hate speech, racism, violence, discrimination, or catastrophic harm. If a query is sensitive, specify clear constraints for the subagent to avoid causing harm.
 </important_guidelines>
+
+<citation_requirements>
+- Always cite sources using markdown footnote format (e.g., [^1])
+- List all referenced URLs at the end of your response
+- Clearly distinguish between quoted information and your own analysis
+- Respond in the same language as the user's query
+
+  <citation_examples>
+    <example>
+    According to recent studies, global temperatures have risen by 1.1°C since pre-industrial times[^1].
+
+    [^1]: [Climate Report in 2023](https://example.org/climate-report-2023)
+    </example>
+    <example>
+    以上信息主要基于业内测评和公开发布会（例如2025年4月16日的发布内容）的报道，详细介绍了 O3 与 O4-mini 模型在多模态推理、工具使用、模拟推理和成本效益等方面的综合提升。[^1][^2]
+
+    [^1]: [OpenAI发布o3与o4-mini，性能爆表，可用图像思考](https://zhuanlan.zhihu.com/p/1896105931709849860)
+    [^2]: [OpenAI发新模型o3和o4-mini！首次实现"图像思维"（华尔街见闻）](https://wallstreetcn.com/articles/3745356)
+    </example>
+  </citation_examples>
+</citation_requirements>
 `
 
 	DEFAULT_RUN_SUBAGENT_DESC_PROMPT = `Submit multiple independent tasks, each task will launch a subagent to conduct research in parallel.
@@ -253,7 +274,6 @@ Follow this process well to complete the task. Make sure to follow the <task> de
     </example>
   </citation_examples>
 </citation_requirements>
-
 `
 
 	SUBMIT_REPORT_DESC_PROMPT = `Use Markdown format to submit the final research report to the user.
@@ -386,26 +406,6 @@ Follow this process well to complete the task. Make sure to follow the <task> de
 (Detailed list of information sources, including links, titles, and excerpts of core viewpoints.)
 </output_template>
 
-<citation_requirements>
-- Always cite sources using markdown footnote format (e.g., [^1])
-- List all referenced URLs at the end of your response
-- Clearly distinguish between quoted information and your own analysis
-- Respond in the same language as the user's query
-
-  <citation_examples>
-    <example>
-    According to recent studies, global temperatures have risen by 1.1°C since pre-industrial times[^1].
-
-    [^1]: [Climate Report in 2023](https://example.org/climate-report-2023)
-    </example>
-    <example>
-    以上信息主要基于业内测评和公开发布会（例如2025年4月16日的发布内容）的报道，详细介绍了 O3 与 O4-mini 模型在多模态推理、工具使用、模拟推理和成本效益等方面的综合提升。[^1][^2]
-
-    [^1]: [OpenAI发布o3与o4-mini，性能爆表，可用图像思考](https://zhuanlan.zhihu.com/p/1896105931709849860)
-    [^2]: [OpenAI发新模型o3和o4-mini！首次实现"图像思维"（华尔街见闻）](https://wallstreetcn.com/articles/3745356)
-    </example>
-  </citation_examples>
-</citation_requirements>
 `
 
 	FINAL_REPORT_PROMPT = `

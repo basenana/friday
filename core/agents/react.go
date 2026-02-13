@@ -199,6 +199,12 @@ WaitMessage:
 		keepRun = true
 		a.doToolCalls(ctx, sess, toolUse, reasoning, toolList)
 	}
+	if appl.Continue {
+		keepRun = true
+	}
+	if appl.Abort {
+		keepRun = false
+	}
 	return keepRun, nil
 }
 
