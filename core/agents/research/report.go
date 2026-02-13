@@ -3,6 +3,7 @@ package research
 import (
 	"context"
 
+	"github.com/basenana/friday/core/providers/openai"
 	"github.com/basenana/friday/core/session"
 	"github.com/basenana/friday/core/tools"
 )
@@ -12,6 +13,9 @@ type Report struct {
 	title       string
 	report      string
 }
+
+var _ session.BeforeAgentHook = (*Report)(nil)
+var _ session.BeforeModelHook = (*Report)(nil)
 
 func (r *Report) BeforeAgent(ctx context.Context, sess *session.Session, req session.AgentRequest) error {
 	if r.mainSession == "" {
@@ -23,6 +27,15 @@ func (r *Report) BeforeAgent(ctx context.Context, sess *session.Session, req ses
 	}
 
 	req.AppendTools(r.submitReportTool())
+	return nil
+}
+
+func (r *Report) BeforeModel(ctx context.Context, sess *session.Session, req openai.Request) error {
+	if r.mainSession != sess.ID {
+		return nil
+	}
+
+	req.AppendSystemPrompt(FINAL_REPORT_PROMPT)
 	return nil
 }
 
@@ -59,4 +72,8 @@ func (r *Report) submitReportTool() *tools.Tool {
 			return tools.NewToolResultText("submitted"), nil
 		}),
 	)
+}
+
+func NewReport() *Report {
+	return &Report{}
 }

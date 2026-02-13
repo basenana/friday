@@ -70,7 +70,7 @@ WaitMessage:
 				return
 			}
 		case <-warnTicker.C:
-			s.logger.Warnw("still waiting llm completed", "receivedMessage", msgCnt)
+			s.logger.Warnw("still waiting llm completed", "receivedMessage", msgCnt, "session", sess.ID)
 
 		case msg, ok := <-stream.Message():
 			if !ok {

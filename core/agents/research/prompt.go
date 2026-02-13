@@ -257,7 +257,6 @@ Follow this process well to complete the task. Make sure to follow the <task> de
 `
 
 	SUBMIT_REPORT_DESC_PROMPT = `Use Markdown format to submit the final research report to the user.
-You must actively use this tool to submit the final report after all tasks are completed. If the tool is not invoked, the user will not be able to obtain the final report.
 
 <core_objective>
 - Strictly based on all provided source materials, generate a professional, well-structured, objective, and neutral summary report.
@@ -407,7 +406,12 @@ You must actively use this tool to submit the final report after all tasks are c
     </example>
   </citation_examples>
 </citation_requirements>
+`
 
+	FINAL_REPORT_PROMPT = `
+<final_report>
+You must actively use "submit_final_report" tool to submit the final report after all tasks are completed. If the tool is not invoked, the user will not be able to obtain the final report.
+</final_report>
 `
 )
 
