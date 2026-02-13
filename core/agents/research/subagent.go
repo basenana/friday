@@ -13,7 +13,7 @@ import (
 )
 
 func newResearchLeader(agt *Agent, sess *session.Session, agentTools []*tools.Tool) agents.Agent {
-	leaderTools := newLeaderTool(agt.worker, sess, agentTools)
+	leaderTools := newLeaderTool(agt.worker, sess, agentTools, agt.opt)
 	leaderTools = append(leaderTools, agentTools...)
 	return agents.New(agt.llm, agents.Option{
 		SystemPrompt: promptWithMoreInfo(agt.opt.LeaderPrompt),
@@ -22,11 +22,11 @@ func newResearchLeader(agt *Agent, sess *session.Session, agentTools []*tools.To
 	})
 }
 
-func newLeaderTool(worker agents.Agent, sess *session.Session, agentTools []*tools.Tool) []*tools.Tool {
+func newLeaderTool(worker agents.Agent, sess *session.Session, agentTools []*tools.Tool, option Option) []*tools.Tool {
 	return []*tools.Tool{
 		tools.NewTool(
 			"run_blocking_subagents",
-			tools.WithDescription(DEFAULT_TASK_DESC_PROMPT),
+			tools.WithDescription(DEFAULT_RUN_SUBAGENT_DESC_PROMPT),
 			tools.WithArray("task_describe_list",
 				tools.Required(),
 				tools.Items(map[string]interface{}{"type": "string", "description": "The item description must be specific, measurable, achievable, and strongly related to the goal."}),

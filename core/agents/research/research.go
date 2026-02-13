@@ -47,19 +47,15 @@ func (a *Agent) Chat(ctx context.Context, req *api.Request) *api.Response {
 	leader := newResearchLeader(a, req.Session, mergedTools)
 	go func() {
 		defer resp.Close()
-		if err := a.leaderRun(ctx, leader, req.UserMessage, sess, resp); err != nil {
+		if err := a.doResearch(ctx, leader, req.UserMessage, sess, resp); err != nil {
 			a.logger.Warnw("run task failed, skip and next", "err", err)
-		}
-		if err := a.doSummary(ctx, req.UserMessage, sess, resp); err != nil {
-			a.logger.Errorw("do summary failed", "err", err)
-			return
 		}
 	}()
 
 	return resp
 }
 
-func (a *Agent) leaderRun(ctx context.Context, leader agents.Agent, task string, sess *session.Session, resp *api.Response) error {
+func (a *Agent) doResearch(ctx context.Context, leader agents.Agent, task string, sess *session.Session, resp *api.Response) error {
 	var (
 		contentBuf = &bytes.Buffer{}
 		startAt    = time.Now()
@@ -82,7 +78,7 @@ Waiting:
 				break Waiting
 			}
 			if delta.Content != "" {
-				api.SendDelta(resp, types.Delta{Reasoning: delta.Content})
+				api.SendDelta(resp, types.Delta{Content: delta.Content})
 				contentBuf.WriteString(delta.Content)
 			}
 		}
@@ -104,42 +100,9 @@ Waiting:
 	return err
 }
 
-func (a *Agent) doSummary(ctx context.Context, task string, sess *session.Session, resp *api.Response) error {
-	a.logger.Infow("run summary")
-	agt := agents.New(a.llm, agents.Option{SystemPrompt: a.opt.SummaryPrompt})
-	userMessage := SUMMARYRE_USER_PROMPT
-	userMessage = strings.ReplaceAll(userMessage, "{user_task}", task)
-
-	stream := agt.Chat(ctx, &api.Request{
-		Session:     sess,
-		UserMessage: userMessage,
-	})
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case err := <-stream.Error():
-			if err != nil {
-				resp.Fail(err)
-				return err
-			}
-		case delta, ok := <-stream.Deltas():
-			if !ok {
-				return nil
-			}
-			if delta.Content != "" {
-				api.SendDelta(resp, delta)
-			}
-		}
-	}
-}
-
 func New(llm openai.Client, opt Option) *Agent {
 	if opt.LeaderPrompt == "" {
 		opt.LeaderPrompt = LEAD_PROMPT
-	}
-	if opt.SummaryPrompt == "" {
-		opt.SummaryPrompt = SUMMARYRE_SYSTEM_PROMPT
 	}
 	if opt.MaxResearchLoopTimes == 0 {
 		opt.MaxResearchLoopTimes = 50
@@ -147,7 +110,6 @@ func New(llm openai.Client, opt Option) *Agent {
 
 	if opt.SystemPrompt != "" {
 		opt.LeaderPrompt = promptWithUserRequirements(opt.SystemPrompt, opt.LeaderPrompt)
-		opt.SummaryPrompt = promptWithUserRequirements(opt.SystemPrompt, opt.SummaryPrompt)
 	}
 
 	if opt.Worker == nil {
@@ -165,9 +127,8 @@ func New(llm openai.Client, opt Option) *Agent {
 }
 
 type Option struct {
-	LeaderPrompt         string
-	SummaryPrompt        string
 	SystemPrompt         string
+	LeaderPrompt         string
 	MaxResearchLoopTimes int
 	Worker               agents.Agent
 	ResearchTools        []*tools.Tool

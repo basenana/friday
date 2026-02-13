@@ -136,7 +136,7 @@ As you progress through the search process:
 </important_guidelines>
 `
 
-	DEFAULT_TASK_DESC_PROMPT = `Submit multiple independent tasks, each task will launch a subagent to conduct research in parallel.
+	DEFAULT_RUN_SUBAGENT_DESC_PROMPT = `Submit multiple independent tasks, each task will launch a subagent to conduct research in parallel.
 
 ## Delegation Instructions
 Use subagents as your primary research team - they should perform all major research tasks:
@@ -256,9 +256,8 @@ Follow this process well to complete the task. Make sure to follow the <task> de
 
 `
 
-	SUMMARYRE_SYSTEM_PROMPT = `<background>
-You are a professional report writing specialist, skilled in deeply integrating and concisely summarizing information from multiple sources. Your task is to synthesize information based on user requirements to produce a final document.
-</background>
+	SUBMIT_REPORT_DESC_PROMPT = `Use Markdown format to submit the final research report to the user.
+You must actively use this tool to submit the final report after all tasks are completed. If the tool is not invoked, the user will not be able to obtain the final report.
 
 <core_objective>
 - Strictly based on all provided source materials, generate a professional, well-structured, objective, and neutral summary report.
@@ -270,7 +269,6 @@ You are a professional report writing specialist, skilled in deeply integrating 
 2. **Comprehensive Coverage**: Ensure integration of all relevant information from the provided materials, aiming for thoroughness within the scope of the query.
 3. **Clear Structure**: The report must be logically organized for quick user comprehension and subsequent use.
 4. **High Information Density**: Avoid any filler content, such as excessive lists of headings or other low-information-density text.
-5. **Follow the template requirements**: The article structure should follow the structure defined in "output_template", but the specific chapter and title names can be defined according to the content.
 </report_principles>
 
 <important_information>
@@ -278,29 +276,8 @@ You are a professional report writing specialist, skilled in deeply integrating 
 2.  All content must be grounded in the provided source materials. Do not simulate, fabricate, or assume any data or descriptions.
 3.  Do not reveal any intermediate information from the task execution process.
 4.  **The report's language must match the user's requested language or the primary language of the source materials.** (Adapted from original requirement for flexibility).
+5. The output_template is for example. The final report structure can be adjusted according to specific questions to better answer user tasks.
 </important_information>
-
-<workflow>
-Follow these steps to generate the final report:
-
-1.  **Step 1: Analyze the Query**
-    - Carefully read the user's original question to identify the **core keywords** and **primary request** (e.g., overview, conceptual, working process, pros/cons analysis, information synthesis).
-
-2.  **Step 2: Analyze Materials & Extract Information**
-    - Read and analyze each provided material.
-    - Identify and mark key information, data, viewpoints, and arguments **directly relevant** to the original query.
-    - Note **commonalities, complementary points, or contradictions** across different materials.
-    - Establish citation relationships for content with data sources.
-
-3.  **Step 3: Synthesize & Structure Information**
-    - Categorize and organize all extracted key information.
-    - Construct the most logical report framework based on the nature of the query (e.g., for a conceptual summary: "Definition - Core Characteristics - Main Types - Applications").
-
-4.  **Step 4: Write & Verify**
-    - Draft the report body using concise, accurate, and objective language within the established framework.
-    - **Self-verify**: Does the draft answer all aspects of the original query? Does it utilize key information from all materials?
-    - Final check for typos, logical flow, and readability.
-</workflow>
 
 <output_template>
 # Research Report (Based on the research content, select a reasonable title and chapter title.)
@@ -431,26 +408,6 @@ Follow these steps to generate the final report:
   </citation_examples>
 </citation_requirements>
 
-`
-	LEADER_USER_PROMPT = `The user's original task currently being addressed is:
-{user_task}
-
-
-`
-
-	SUMMARYRE_USER_PROMPT = `After much effort, the answer may now be clear.
-Please summarize the discussion content from the history and the user's initial task.
-You can then optimize the report structure based on the template and ultimately summarize it into a logically clear, accurate, and well-organized report.
-
-The user's original task currently being addressed is:
-{user_task}
-
-REMEMBER: 
-- The report needs to have a clear purpose, and its **main goal** is to **systematically answer** the user’s questions; any content that does not align with the article’s purpose should **not appear** in the report.  
-- Citations and annotations from the original material must be **retained** and organized into the report; they **cannot be omitted**.  
-- The execution process of problem‑solving in historical messages should **not be included** in the report.  
-
-From now on, every word you write will become part of the final report.
 `
 )
 
