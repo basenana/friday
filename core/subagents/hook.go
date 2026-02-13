@@ -12,21 +12,31 @@ import (
 )
 
 type Subagents struct {
-	llm       openai.Client
-	subAgents []ExpertAgent
-	option    Option
-	logger    logger.Logger
+	llm         openai.Client
+	subAgents   []ExpertAgent
+	option      Option
+	mainSession string
+	logger      logger.Logger
 }
 
 var _ session.BeforeModelHook = &Subagents{}
 var _ session.BeforeAgentHook = &Subagents{}
 
 func (a *Subagents) BeforeAgent(ctx context.Context, sess *session.Session, req session.AgentRequest) error {
+	if a.mainSession == "" {
+		a.mainSession = sess.Root.ID
+	}
+	if a.mainSession != sess.ID {
+		return nil
+	}
 	req.AppendTools(a.buildMainAgentTools(sess)...)
 	return nil
 }
 
 func (a *Subagents) BeforeModel(ctx context.Context, sess *session.Session, req openai.Request) error {
+	if a.mainSession != sess.ID {
+		return nil
+	}
 	req.AppendSystemPrompt(initSystemPrompt(a.option))
 	return nil
 }

@@ -21,7 +21,7 @@ var _ session.AfterModelHook = (*Report)(nil)
 
 func (r *Report) BeforeAgent(ctx context.Context, sess *session.Session, req session.AgentRequest) error {
 	if r.mainSession == "" {
-		r.mainSession = sess.ID
+		r.mainSession = sess.Root.ID
 	}
 
 	if r.mainSession != sess.ID {
