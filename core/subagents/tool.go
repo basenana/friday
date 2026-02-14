@@ -8,6 +8,7 @@ import (
 	"github.com/basenana/friday/core/api"
 	"github.com/basenana/friday/core/session"
 	"github.com/basenana/friday/core/tools"
+	"github.com/basenana/friday/core/types"
 )
 
 func fuzzyMatching(s1, s2 string) bool {
@@ -28,10 +29,16 @@ func callSubagentTool(agents []ExpertAgent, sess *session.Session, subagentTools
 			return nil, fmt.Errorf("missing required parameter: task_describe")
 		}
 
+		subSession := sess.Fork()
+		if err := subSession.CompactHistory(ctx); err != nil {
+			return nil, err
+		}
+		subSession.History[0] = types.Message{UserMessage: userMessage}
+
 		for _, agt := range agents {
 			if fuzzyMatching(agt.Name, agentName) {
 				req := &api.Request{
-					Session:     sess.Fork(),
+					Session:     subSession,
 					UserMessage: userMessage,
 					Tools:       subagentTools,
 				}

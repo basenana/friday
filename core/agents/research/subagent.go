@@ -10,6 +10,7 @@ import (
 	"github.com/basenana/friday/core/providers/openai"
 	"github.com/basenana/friday/core/session"
 	"github.com/basenana/friday/core/tools"
+	"github.com/basenana/friday/core/types"
 )
 
 func newResearchLeader(agt *Agent, sess *session.Session, agentTools []*tools.Tool) agents.Agent {
@@ -62,15 +63,18 @@ func blockingSubagentTool(worker agents.Agent, sess *session.Session, agentTools
 			reports []string
 		)
 
+		subRoot := sess.Fork()
+		_ = subRoot.CompactHistory(ctx)
+
 		for _, t := range taskDescList {
 			wg.Add(1)
 			go func(task string) {
 				defer wg.Done()
 
-				subSuss := sess.Fork()
-				_ = subSuss.CompactHistory(ctx)
+				subSession := subRoot.Fork()
+				subSession.History[0] = types.Message{UserMessage: task} // reset task
 				content, err := agtapi.ReadAllContent(ctx, worker.Chat(ctx, &agtapi.Request{
-					Session:     subSuss,
+					Session:     subRoot,
 					UserMessage: task,
 					Tools:       agentTools,
 				}))
