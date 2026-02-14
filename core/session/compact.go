@@ -14,7 +14,7 @@ import (
 var (
 	// CompactThreshold is the token limit that triggers compaction.
 	// Can be overridden via FRIDAY_COMPACT_THRESHOLD environment variable.
-	CompactThreshold int64 = 100 * 1000 // 200K tokens default
+	CompactThreshold int64 = 128 * 1000 // 128K tokens default
 )
 
 func init() {
