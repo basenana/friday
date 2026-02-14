@@ -14,7 +14,7 @@ import (
 var (
 	// CompactThreshold is the token limit that triggers compaction.
 	// Can be overridden via FRIDAY_COMPACT_THRESHOLD environment variable.
-	CompactThreshold int64 = 60 * 1000 // 60K tokens default
+	CompactThreshold int64 = 100 * 1000 // 200K tokens default
 )
 
 func init() {
@@ -26,9 +26,14 @@ func init() {
 	}
 }
 
-func (s *Session) checkAndCompactHistory(ctx context.Context, req openai.Request) error {
+func (s *Session) autoCompactHistory(ctx context.Context, req openai.Request) error {
+	if s.compactThreshold < 0 {
+		// disable compact
+		return nil
+	}
+
 	beforeTokens := tokenCount(s.History)
-	if beforeTokens < CompactThreshold {
+	if beforeTokens < s.compactThreshold {
 		return nil
 	}
 
@@ -64,7 +69,7 @@ func (s *Session) CompactHistory(ctx context.Context) error {
 		return fmt.Errorf("summary is empty")
 	}
 
-	s.History = updateHistoryWithAbstract(s.History, abstract)
+	s.History = RebuildHistoryWithAbstract(s.History, abstract)
 	return nil
 }
 
@@ -136,8 +141,8 @@ func filterEmpty(lines []string, minLen int) []string {
 const summaryPrefix = `Several lengthy dialogues have already taken place. The following is a condensed summary of the progress of these historical dialogues:
 `
 
-// updateHistoryWithAbstract replaces old history with a summary.
-func updateHistoryWithAbstract(history []types.Message, abstract string) []types.Message {
+// RebuildHistoryWithAbstract replaces old history with a summary.
+func RebuildHistoryWithAbstract(history []types.Message, abstract string) []types.Message {
 	if abstract == "" || len(history) == 0 {
 		return history
 	}

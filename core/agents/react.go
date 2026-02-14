@@ -80,8 +80,14 @@ func (a *react) reactLoop(ctx context.Context, sess *session.Session, resp *api.
 		default:
 			keepRun, err = a.doAct(ctx, sess, resp, mergedTools)
 		}
-
 		if err != nil {
+			if strings.Contains(strings.ToLower(err.Error()), "exceed max message tokens") {
+				compactErr := sess.CompactHistory(ctx)
+				if compactErr == nil {
+					continue
+				}
+				a.logger.Warnw("failed to compact history", "error", compactErr.Error())
+			}
 			resp.Fail(err)
 			return
 		}

@@ -18,6 +18,8 @@ type Session struct {
 	Workdir   fs.FileSystem
 	CreatedAt time.Time
 
+	compactThreshold int64
+
 	hooks []Hook
 	llm   openai.Client
 	mu    sync.RWMutex
@@ -25,11 +27,12 @@ type Session struct {
 
 func New(id string, llm openai.Client, options ...Option) *Session {
 	s := &Session{
-		ID:        id,
-		History:   make([]types.Message, 0, 10),
-		hooks:     make([]Hook, 0),
-		CreatedAt: time.Now(),
-		llm:       llm,
+		ID:               id,
+		History:          make([]types.Message, 0, 10),
+		compactThreshold: CompactThreshold,
+		hooks:            make([]Hook, 0),
+		CreatedAt:        time.Now(),
+		llm:              llm,
 	}
 	s.Root = s
 
@@ -46,15 +49,15 @@ func New(id string, llm openai.Client, options ...Option) *Session {
 func (s *Session) Fork() *Session {
 	s.mu.Lock()
 	fork := &Session{
-		ID:        types.NewID(),
-		Root:      s.Root,
-		Parent:    s,
-		History:   make([]types.Message, len(s.History)),
-		Workdir:   s.Workdir,
-		CreatedAt: time.Now(),
-
-		hooks: s.hooks,
-		llm:   s.llm,
+		ID:               types.NewID(),
+		Root:             s.Root,
+		Parent:           s,
+		History:          make([]types.Message, len(s.History)),
+		Workdir:          s.Workdir,
+		CreatedAt:        time.Now(),
+		compactThreshold: s.compactThreshold,
+		hooks:            s.hooks,
+		llm:              s.llm,
 	}
 	copy(fork.History, s.History)
 	s.Children = append(s.Children, fork)
@@ -98,5 +101,11 @@ func WithHooks(hooks ...Hook) Option {
 func WithWorkdirFS(wfs fs.FileSystem) Option {
 	return func(s *Session) {
 		s.Workdir = wfs
+	}
+}
+
+func WithCompactThreshold(ct int64) Option {
+	return func(s *Session) {
+		s.compactThreshold = ct
 	}
 }

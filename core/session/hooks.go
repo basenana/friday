@@ -46,6 +46,10 @@ func (s *Session) RegisterHook(handler Hook) {
 	s.hooks = append(s.hooks, handler)
 }
 
+func (s *Session) CleanHooks() {
+	s.hooks = nil
+}
+
 func (s *Session) RunHooks(ctx context.Context, hookName string, payload HookPayload) error {
 	if len(s.hooks) == 0 {
 		return nil
@@ -65,7 +69,7 @@ func (s *Session) RunHooks(ctx context.Context, hookName string, payload HookPay
 		}
 
 	case types.SessionHookBeforeModel:
-		if err := s.checkAndCompactHistory(ctx, payload.ModelRequest); err != nil {
+		if err := s.autoCompactHistory(ctx, payload.ModelRequest); err != nil {
 			return err
 		}
 
