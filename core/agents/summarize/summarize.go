@@ -12,7 +12,7 @@ import (
 )
 
 type Agent struct {
-	react  *agents.Agent
+	react  agents.Agent
 	llm    openai.Client
 	option Option
 	logger logger.Logger
