@@ -74,7 +74,7 @@ func blockingSubagentTool(worker agents.Agent, sess *session.Session, agentTools
 				subSession := subRoot.Fork()
 				subSession.History[0] = types.Message{UserMessage: task} // reset task
 				content, err := agtapi.ReadAllContent(ctx, worker.Chat(ctx, &agtapi.Request{
-					Session:     subRoot,
+					Session:     subSession,
 					UserMessage: task,
 					Tools:       agentTools,
 				}))
