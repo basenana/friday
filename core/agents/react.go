@@ -78,7 +78,7 @@ func (a *react) reactLoop(ctx context.Context, sess *session.Session, resp *api.
 		case <-ctx.Done():
 			return
 		default:
-			keepRun, err = a.doAct(ctx, sess, resp, mergedTools)
+			keepRun, err = a.doAct(ctx, sess, resp, mergedTools, a.option.MaxLoopTimes-loopTimes)
 		}
 		if err != nil {
 			if strings.Contains(strings.ToLower(err.Error()), "exceed max message tokens") {
@@ -104,7 +104,7 @@ func (a *react) reactLoop(ctx context.Context, sess *session.Session, resp *api.
 	}
 }
 
-func (a *react) doAct(ctx context.Context, sess *session.Session, resp *api.Response, toolList []*tools.Tool) (bool, error) {
+func (a *react) doAct(ctx context.Context, sess *session.Session, resp *api.Response, toolList []*tools.Tool, budget int) (bool, error) {
 	var (
 		content      string
 		reasoning    string
@@ -124,6 +124,12 @@ func (a *react) doAct(ctx context.Context, sess *session.Session, resp *api.Resp
 	err = sess.RunHooks(ctx, types.SessionHookBeforeModel, session.HookPayload{ModelRequest: llmReq})
 	if err != nil {
 		return false, err
+	}
+
+	if budget == 0 {
+		llmReq.AppendHistory(types.Message{AgentMessage: "You have used up all your execution budget. " +
+			"Please summarize your work and produce the final report as soon as possible. " +
+			"After your output, you will be stopped. From now on, every word you output is part of the report:"})
 	}
 	stream := a.llm.Completion(ctx, llmReq)
 
@@ -165,7 +171,7 @@ WaitMessage:
 
 	a.logger.Infow("message finish",
 		"fuzzyTokens", sess.Tokens(), "promptTokens", stream.Tokens().PromptTokens,
-		"completionTokens", stream.Tokens().CompletionTokens, "session", sess.ID)
+		"completionTokens", stream.Tokens().CompletionTokens, "budget", budget, "session", sess.ID)
 
 	content = strings.TrimSpace(content)
 	reasoning = strings.TrimSpace(reasoning)
