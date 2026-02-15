@@ -153,10 +153,6 @@ WaitMessage:
 			case len(msg.ToolUse) > 0:
 				for i := range msg.ToolUse {
 					tool := msg.ToolUse[i]
-					if strings.HasPrefix(tool.Name, "topic_finish_") {
-						keepRun = false
-						continue WaitMessage
-					}
 					toolUse = append(toolUse, tool)
 				}
 
@@ -174,10 +170,7 @@ WaitMessage:
 	content = strings.TrimSpace(content)
 	reasoning = strings.TrimSpace(reasoning)
 
-	if strings.Contains(content, "topic_finish_") {
-		a.logger.Warnw("topic_finish tool use incorrect", "content", content, "session", sess.ID)
-		agentMessage += "If you believe the conversation is complete, use the tool to end the conversation.\n"
-	} else if strings.Contains(content, "<tool_use") {
+	if strings.Contains(content, "<tool_use") {
 		a.logger.Warnw("tool use incorrect", "content", content, "session", sess.ID)
 		agentMessage += "The tool is used in an incorrect format; please try using the tool again.\n"
 	}

@@ -3,7 +3,6 @@ package research
 import (
 	"context"
 	"strings"
-	"sync"
 
 	"github.com/basenana/friday/core/agents"
 	agtapi "github.com/basenana/friday/core/api"
@@ -58,7 +57,6 @@ func blockingSubagentTool(worker agents.Agent, sess *session.Session, agentTools
 		}
 
 		var (
-			wg      = sync.WaitGroup{}
 			result  = make(chan string, len(tasks))
 			reports []string
 		)
@@ -67,10 +65,7 @@ func blockingSubagentTool(worker agents.Agent, sess *session.Session, agentTools
 		_ = subRoot.CompactHistory(ctx)
 
 		for _, t := range taskDescList {
-			wg.Add(1)
-			go func(task string) {
-				defer wg.Done()
-
+			func(task string) {
 				subSession := subRoot.Fork()
 				subSession.History[0] = types.Message{UserMessage: task} // reset task
 				content, err := agtapi.ReadAllContent(ctx, worker.Chat(ctx, &agtapi.Request{
@@ -87,7 +82,6 @@ func blockingSubagentTool(worker agents.Agent, sess *session.Session, agentTools
 				result <- strings.Join([]string{"Subagent Task:", task, task, "Report:", content}, "\n")
 			}(t)
 		}
-		wg.Wait()
 		close(result)
 
 		for content := range result {

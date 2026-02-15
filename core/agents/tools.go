@@ -13,11 +13,7 @@ import (
 )
 
 var (
-	buildInTools = []openai.ToolDefine{
-		openai.NewToolDefine("topic_finish_close", "If you believe the question has been resolved and has an ultimate answer, "+
-			"you must execute the tool to end the topic, otherwise the topic will not end, and the tool does not require input parameters",
-			map[string]any{"properties": map[string]any{}, "type": "object"}),
-	}
+	buildInTools []openai.ToolDefine
 )
 
 type ToolUse struct {
