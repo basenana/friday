@@ -127,9 +127,10 @@ func (a *react) doAct(ctx context.Context, sess *session.Session, resp *api.Resp
 	}
 
 	if budget == 0 {
-		llmReq.AppendHistory(types.Message{AgentMessage: "You have used up all your execution budget. " +
-			"Please summarize your work and produce the final report as soon as possible. " +
-			"After your output, you will be stopped. From now on, every word you output is part of the report:"})
+		llmReq.AppendHistory(types.Message{AgentMessage: "Your execution budget is exhausted. " +
+			"This is your final response. Please provide a comprehensive summary including: " +
+			"1) Task objective, 2) Progress made, 3) Key findings, 4) Remaining issues. " +
+			"After this response, the session will end. From now on, every character you output will become part of the final report:"})
 	}
 	stream := a.llm.Completion(ctx, llmReq)
 
