@@ -6,10 +6,12 @@ import (
 	"encoding/xml"
 	"fmt"
 	"hash/fnv"
+	"time"
 
 	"github.com/basenana/friday/core/providers/openai"
 	"github.com/basenana/friday/core/session"
 	"github.com/basenana/friday/core/tools"
+	"github.com/basenana/friday/core/types"
 )
 
 var (
@@ -41,8 +43,10 @@ func toolCall(ctx context.Context, sess *session.Session, use *ToolUse, td *tool
 		return "", fmt.Errorf("unmarshal json argument failed: %s", err)
 	}
 
+	session.SendEvent(sess.Root.ID, NewToolUseEvent("react", use))
 	result, err := td.Handler(ctx, req)
 	if err != nil {
+		session.SendEvent(sess.Root.ID, NewToolUseResultEvent("react", use, err.Error()))
 		return "", err
 	}
 
@@ -51,6 +55,7 @@ func toolCall(ctx context.Context, sess *session.Session, use *ToolUse, td *tool
 		return "", fmt.Errorf("marshal tool %s result failed: %s", use.Name, err)
 	}
 
+	session.SendEvent(sess.Root.ID, NewToolUseResultEvent("react", use, string(content)))
 	return string(content), nil
 }
 
@@ -67,4 +72,34 @@ func newLLMRequest(systemMessage string, sess *session.Session, toolList []*tool
 	req := openai.NewSimpleRequest(systemMessage, sess.History...)
 	req.SetToolDefines(toolDef)
 	return req
+}
+
+func NewToolUseEvent(source string, use *ToolUse) *types.Event {
+	data, _ := json.Marshal(use)
+	return &types.Event{
+		Id:              types.NewID(),
+		Type:            "tool_use",
+		Source:          source,
+		SpecVersion:     "1.0",
+		DataContentType: "application/json",
+		Data:            string(data),
+		Time:            time.Now(),
+	}
+}
+
+func NewToolUseResultEvent(source string, use *ToolUse, result string) *types.Event {
+	data, _ := json.Marshal(map[string]interface{}{
+		"id":     use.ID(),
+		"result": result,
+	})
+
+	return &types.Event{
+		Id:              types.NewID(),
+		Type:            "tool_use_result",
+		Source:          source,
+		SpecVersion:     "1.0",
+		DataContentType: "application/json",
+		Data:            string(data),
+		Time:            time.Now(),
+	}
 }
