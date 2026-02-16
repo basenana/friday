@@ -22,5 +22,14 @@ func (s *Session) SubjectEvents() (chan *types.Event, func()) {
 
 	return result, func() {
 		eventbus.Unsubscribe(sid)
+		for {
+			select {
+			case _ = <-result:
+				// discard
+			default:
+				close(result)
+				return
+			}
+		}
 	}
 }
