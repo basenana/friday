@@ -6,13 +6,13 @@ import (
 
 	"github.com/basenana/friday/core/agents"
 	"github.com/basenana/friday/core/logger"
-	"github.com/basenana/friday/core/providers/openai"
+	"github.com/basenana/friday/core/providers"
 	"github.com/basenana/friday/core/session"
 	"github.com/basenana/friday/core/tools"
 )
 
 type Subagents struct {
-	llm         openai.Client
+	llm         providers.Client
 	subAgents   []ExpertAgent
 	option      Option
 	mainSession string
@@ -33,7 +33,7 @@ func (a *Subagents) BeforeAgent(ctx context.Context, sess *session.Session, req 
 	return nil
 }
 
-func (a *Subagents) BeforeModel(ctx context.Context, sess *session.Session, req openai.Request) error {
+func (a *Subagents) BeforeModel(ctx context.Context, sess *session.Session, req providers.Request) error {
 	if a.mainSession != sess.ID {
 		return nil
 	}
@@ -61,7 +61,7 @@ func (a *Subagents) buildMainAgentTools(sess *session.Session) []*tools.Tool {
 	return subAgentTools
 }
 
-func NewHook(llm openai.Client, opt Option) *Subagents {
+func NewHook(llm providers.Client, opt Option) *Subagents {
 	if opt.SystemPrompt == "" {
 		opt.SystemPrompt = RUN_TASK_PROMPT
 	}

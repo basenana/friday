@@ -6,7 +6,7 @@ import (
 
 	"github.com/basenana/friday/core/agents"
 	"github.com/basenana/friday/core/logger"
-	"github.com/basenana/friday/core/providers/openai"
+	"github.com/basenana/friday/core/providers"
 	"github.com/basenana/friday/core/session"
 	"github.com/basenana/friday/core/tools"
 	"github.com/basenana/friday/core/types"
@@ -28,7 +28,7 @@ func (a *Todo) BeforeAgent(ctx context.Context, sess *session.Session, req sessi
 	return nil
 }
 
-func (a *Todo) BeforeModel(ctx context.Context, sess *session.Session, req openai.Request) error {
+func (a *Todo) BeforeModel(ctx context.Context, sess *session.Session, req providers.Request) error {
 	req.AppendSystemPrompt(a.opt.SystemPrompt)
 
 	todo := &TodoList{}
@@ -86,7 +86,7 @@ func (a *Todo) planningTools(sess *session.Session) []*tools.Tool {
 	}
 }
 
-func New(llm openai.Client, option Option) *Todo {
+func New(llm providers.Client, option Option) *Todo {
 	if option.SystemPrompt == "" {
 		option.SystemPrompt = DEFAULT_PLANNING_PROMPT
 	}

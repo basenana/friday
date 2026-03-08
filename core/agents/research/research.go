@@ -10,14 +10,14 @@ import (
 	"github.com/basenana/friday/core/api"
 	"github.com/basenana/friday/core/logger"
 	"github.com/basenana/friday/core/planning"
-	"github.com/basenana/friday/core/providers/openai"
+	"github.com/basenana/friday/core/providers"
 	"github.com/basenana/friday/core/session"
 	"github.com/basenana/friday/core/tools"
 	"github.com/basenana/friday/core/types"
 )
 
 type Agent struct {
-	llm    openai.Client
+	llm    providers.Client
 	worker agents.Agent
 	opt    Option
 	logger logger.Logger
@@ -100,7 +100,7 @@ Waiting:
 	return err
 }
 
-func New(llm openai.Client, opt Option) *Agent {
+func New(llm providers.Client, opt Option) *Agent {
 	if opt.LeaderPrompt == "" {
 		opt.LeaderPrompt = LEAD_PROMPT
 	}

@@ -19,14 +19,66 @@ package providers
 import (
 	"context"
 
-	"github.com/basenana/friday/core/providers/openai"
+	"github.com/basenana/friday/core/types"
 )
 
-type OpenAICompatibilityClient interface {
-	Completion(ctx context.Context, request openai.Request) openai.Response
-	CompletionNonStreaming(ctx context.Context, request openai.Request) (string, error)
+type Client interface {
+	Completion(ctx context.Context, request Request) Response
+	CompletionNonStreaming(ctx context.Context, request Request) (string, error)
+	StructuredPredict(ctx context.Context, request Request, model any) error
 }
 
 type Embedding interface {
 	Vectorization(ctx context.Context, content string) ([]float64, error)
+}
+
+type Request interface {
+	Messages() []types.Message
+	History() []types.Message
+	ToolDefines() []ToolDefine
+	SystemPrompt() string
+
+	SetHistory([]types.Message)
+	SetToolDefines([]ToolDefine)
+	SetSystemPrompt(string)
+	AppendHistory(...types.Message)
+	AppendToolDefines(...ToolDefine)
+	AppendSystemPrompt(...string)
+}
+
+type Response interface {
+	Message() <-chan Delta
+	Error() <-chan error
+	Tokens() Tokens
+}
+
+type Delta struct {
+	Content   string
+	Reasoning string
+	ToolUse   []ToolCall
+}
+
+type ToolCall struct {
+	ID        string
+	Name      string
+	Arguments string
+	Error     string
+}
+
+type ToolDefine interface {
+	GetName() string
+	GetDescription() string
+	GetParameters() map[string]any
+}
+
+type Tokens struct {
+	CompletionTokens int64
+	PromptTokens     int64
+	TotalTokens      int64
+}
+
+type Apply struct {
+	ToolUse  []ToolCall
+	Continue bool
+	Abort    bool
 }

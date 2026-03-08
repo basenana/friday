@@ -6,14 +6,14 @@ import (
 	"github.com/basenana/friday/core/agents"
 	"github.com/basenana/friday/core/api"
 	"github.com/basenana/friday/core/logger"
-	"github.com/basenana/friday/core/providers/openai"
+	"github.com/basenana/friday/core/providers"
 	"github.com/basenana/friday/core/session"
 	"github.com/basenana/friday/core/types"
 )
 
 type Agent struct {
 	react  agents.Agent
-	llm    openai.Client
+	llm    providers.Client
 	option Option
 	logger logger.Logger
 }
@@ -35,7 +35,7 @@ func (a *Agent) Chat(ctx context.Context, req *api.Request) *api.Response {
 	})
 }
 
-func New(llm openai.Client, option Option) *Agent {
+func New(llm providers.Client, option Option) *Agent {
 	if option.SystemPrompt == "" {
 		option.SystemPrompt = DEFAULT_SUMMARIZE_PROMPT
 	}

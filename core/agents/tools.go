@@ -8,14 +8,14 @@ import (
 	"hash/fnv"
 	"time"
 
-	"github.com/basenana/friday/core/providers/openai"
+	"github.com/basenana/friday/core/providers"
 	"github.com/basenana/friday/core/session"
 	"github.com/basenana/friday/core/tools"
 	"github.com/basenana/friday/core/types"
 )
 
 var (
-	buildInTools []openai.ToolDefine
+	buildInTools []providers.ToolDefine
 )
 
 type ToolUse struct {
@@ -56,8 +56,8 @@ func toolCall(ctx context.Context, sess *session.Session, use *ToolUse, td *tool
 	return string(content), nil
 }
 
-func newLLMRequest(systemMessage string, sess *session.Session, toolList []*tools.Tool) openai.Request {
-	var toolDef []openai.ToolDefine
+func newLLMRequest(systemMessage string, sess *session.Session, toolList []*tools.Tool) providers.Request {
+	var toolDef []providers.ToolDefine
 	for _, t := range buildInTools {
 		toolDef = append(toolDef, t)
 	}
@@ -66,7 +66,7 @@ func newLLMRequest(systemMessage string, sess *session.Session, toolList []*tool
 		toolDef = append(toolDef, t)
 	}
 
-	req := openai.NewSimpleRequest(systemMessage, sess.History...)
+	req := providers.NewRequest(systemMessage, sess.History...)
 	req.SetToolDefines(toolDef)
 	return req
 }

@@ -1,11 +1,12 @@
 package session
 
 import (
+	"context"
 	"sync"
 	"time"
 
 	"github.com/basenana/friday/core/fs"
-	"github.com/basenana/friday/core/providers/openai"
+	"github.com/basenana/friday/core/providers"
 	"github.com/basenana/friday/core/types"
 )
 
@@ -21,11 +22,11 @@ type Session struct {
 	compactThreshold int64
 
 	hooks []Hook
-	llm   openai.Client
+	llm   providers.Client
 	mu    sync.RWMutex
 }
 
-func New(id string, llm openai.Client, options ...Option) *Session {
+func New(id string, llm providers.Client, options ...Option) *Session {
 	s := &Session{
 		ID:               id,
 		History:          make([]types.Message, 0, 10),
@@ -82,6 +83,45 @@ func (s *Session) Tokens() int64 {
 		total += msg.FuzzyTokens()
 	}
 	return total
+}
+
+func (s *Session) RegisterHook(handler Hook) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.hooks = append(s.hooks, handler)
+}
+
+func (s *Session) CleanHooks() {
+	s.hooks = nil
+}
+
+func (s *Session) RunHooks(ctx context.Context, hookType types.SessionType, payload HookPayload) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	for _, h := range s.hooks {
+		switch hookType {
+		case types.SessionHookBeforeAgent:
+			if bh, ok := h.(BeforeAgentHook); ok {
+				if err := bh.BeforeAgent(ctx, s, payload.AgentRequest); err != nil {
+					return err
+				}
+			}
+		case types.SessionHookBeforeModel:
+			if bh, ok := h.(BeforeModelHook); ok {
+				if err := bh.BeforeModel(ctx, s, payload.ModelRequest); err != nil {
+					return err
+				}
+			}
+		case types.SessionHookAfterModel:
+			if ah, ok := h.(AfterModelHook); ok {
+				if err := ah.AfterModel(ctx, s, payload.ModelRequest, payload.ModelApply); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
 }
 
 type Option func(*Session)

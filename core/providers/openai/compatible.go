@@ -7,18 +7,19 @@ import (
 	"encoding/xml"
 	"time"
 
+	"github.com/basenana/friday/core/providers"
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/packages/param"
 
 	"github.com/basenana/friday/core/logger"
 )
 
-type CompatibleClient struct {
+type compatibleClient struct {
 	*client
 	logger logger.Logger
 }
 
-func (c *CompatibleClient) Completion(ctx context.Context, request Request) Response {
+func (c *compatibleClient) Completion(ctx context.Context, request providers.Request) providers.Response {
 	resp := newCompatibleResponse()
 	go func() {
 		defer resp.close()
@@ -71,7 +72,7 @@ func (c *CompatibleClient) Completion(ctx context.Context, request Request) Resp
 	return resp
 }
 
-func (c *CompatibleClient) chatCompletionNewParams(request Request) *openai.ChatCompletionNewParams {
+func (c *compatibleClient) chatCompletionNewParams(request providers.Request) *openai.ChatCompletionNewParams {
 	p := &openai.ChatCompletionNewParams{
 		Messages: []openai.ChatCompletionMessageParamUnion{},
 		Model:    c.model.Name,
@@ -186,8 +187,8 @@ func (c *CompatibleClient) chatCompletionNewParams(request Request) *openai.Chat
 	return p
 }
 
-func NewCompatible(host, apiKey string, model Model) Client {
-	return &CompatibleClient{
+func NewCompatible(host, apiKey string, model Model) providers.Client {
+	return &compatibleClient{
 		client: newClient(host, apiKey, model),
 		logger: logger.New("openai.compatible"),
 	}

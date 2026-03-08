@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/basenana/friday/core/logger"
+	"github.com/basenana/friday/core/providers"
 	"github.com/invopop/jsonschema"
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
@@ -26,8 +27,8 @@ type client struct {
 	logger     logger.Logger
 }
 
-func (c *client) Completion(ctx context.Context, request Request) Response {
-	resp := newSimpleResponse()
+func (c *client) Completion(ctx context.Context, request providers.Request) providers.Response {
+	resp := newResponse()
 	go func() {
 		defer resp.close()
 		var (
@@ -60,7 +61,6 @@ func (c *client) Completion(ctx context.Context, request Request) Response {
 				continue
 			}
 
-			//c.logger.Infow("new choices found", "chunk", chunk)
 			ch := chunk.Choices[0]
 			resp.nextChoice(ch)
 		}
@@ -79,7 +79,7 @@ func (c *client) Completion(ctx context.Context, request Request) Response {
 	return resp
 }
 
-func (c *client) CompletionNonStreaming(ctx context.Context, request Request) (string, error) {
+func (c *client) CompletionNonStreaming(ctx context.Context, request providers.Request) (string, error) {
 	var (
 		p       = c.chatCompletionNewParams(request)
 		startAt = time.Now()
@@ -120,7 +120,7 @@ Retry:
 	return response.Choices[0].Message.Content, nil
 }
 
-func (c *client) StructuredPredict(ctx context.Context, request Request, model any) error {
+func (c *client) StructuredPredict(ctx context.Context, request providers.Request, model any) error {
 	messages := request.Messages()
 	if len(messages) == 0 || messages[0].SystemMessage == "" {
 		return fmt.Errorf("user request is empty")
@@ -130,7 +130,7 @@ func (c *client) StructuredPredict(ctx context.Context, request Request, model a
 	schemaRaw, _ := json.Marshal(jsonschema.Reflect(model))
 	prompt = strings.ReplaceAll(prompt, "{insert_json_schema_here}", string(schemaRaw))
 
-	jsonbody, err := c.CompletionNonStreaming(ctx, NewSimpleRequest(prompt))
+	jsonbody, err := c.CompletionNonStreaming(ctx, providers.NewRequest(prompt))
 	if err != nil {
 		c.logger.Errorw("get completion error", "err", err)
 		return err
@@ -144,7 +144,7 @@ func (c *client) StructuredPredict(ctx context.Context, request Request, model a
 	return nil
 }
 
-func (c *client) chatCompletionNewParams(request Request) *openai.ChatCompletionNewParams {
+func (c *client) chatCompletionNewParams(request providers.Request) *openai.ChatCompletionNewParams {
 	p := openai.ChatCompletionNewParams{
 		Messages: []openai.ChatCompletionMessageParamUnion{},
 		Model:    c.model.Name,
@@ -226,7 +226,8 @@ func (c *client) chatCompletionNewParams(request Request) *openai.ChatCompletion
 
 	return &p
 }
-func New(host, apiKey string, model Model) Client {
+
+func New(host, apiKey string, model Model) providers.Client {
 	return newClient(host, apiKey, model)
 }
 
@@ -260,3 +261,73 @@ func newClient(host, apiKey string, model Model) *client {
 		logger:     logger.New("openai"),
 	}
 }
+
+var _ providers.Client = (*client)(nil)
+
+type response struct {
+	*providers.CommonResponse
+
+	incompleteTool struct {
+		ID        string
+		Name      string
+		Arguments string
+	}
+}
+
+func (r *response) nextChoice(chunk openai.ChatCompletionChunkChoice) {
+	if len(chunk.Delta.ToolCalls) > 0 {
+		for _, tc := range chunk.Delta.ToolCalls {
+			if tc.ID != "" {
+				if r.incompleteTool.ID != "" {
+					r.flushToolUse()
+				}
+				r.incompleteTool.ID = tc.ID
+				r.incompleteTool.Name = tc.Function.Name
+			}
+			r.incompleteTool.Arguments += tc.Function.Arguments
+		}
+		return
+	}
+
+	if chunk.Delta.Content != "" {
+		r.Stream <- providers.Delta{Content: chunk.Delta.Content}
+	}
+}
+
+func (r *response) flushToolUse() {
+	if r.incompleteTool.ID == "" {
+		return
+	}
+	r.Stream <- providers.Delta{
+		ToolUse: []providers.ToolCall{{
+			ID:        r.incompleteTool.ID,
+			Name:      r.incompleteTool.Name,
+			Arguments: r.incompleteTool.Arguments,
+		}},
+	}
+	r.incompleteTool = struct {
+		ID        string
+		Name      string
+		Arguments string
+	}{}
+}
+
+func (r *response) updateUsage(chunk openai.CompletionUsage) {
+	r.Token.CompletionTokens += chunk.CompletionTokens
+	r.Token.PromptTokens += chunk.PromptTokens
+	r.Token.TotalTokens += chunk.TotalTokens
+}
+
+func (r *response) fail(err error) { r.Err <- err }
+
+func (r *response) close() {
+	r.flushToolUse()
+	close(r.Stream)
+	close(r.Err)
+}
+
+func newResponse() *response {
+	return &response{CommonResponse: providers.NewCommonResponse()}
+}
+
+var _ providers.Response = (*response)(nil)

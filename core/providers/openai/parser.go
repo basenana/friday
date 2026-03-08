@@ -6,6 +6,8 @@ import (
 	"encoding/xml"
 	"fmt"
 	"strings"
+
+	"github.com/basenana/friday/core/providers"
 )
 
 type xmlParser struct {
@@ -16,9 +18,9 @@ func newXmlParser() *xmlParser {
 	return &xmlParser{}
 }
 
-func (p *xmlParser) write(s string) []Delta {
+func (p *xmlParser) write(s string) []providers.Delta {
 	var (
-		result  []Delta
+		result  []providers.Delta
 		content string
 	)
 	for _, r := range s {
@@ -37,7 +39,7 @@ func (p *xmlParser) write(s string) []Delta {
 		if r == '<' {
 			// before xml block content
 			if content != "" {
-				result = append(result, Delta{Content: content})
+				result = append(result, providers.Delta{Content: content})
 				content = ""
 			}
 
@@ -50,7 +52,7 @@ func (p *xmlParser) write(s string) []Delta {
 	}
 
 	if content != "" {
-		result = append(result, Delta{Content: content})
+		result = append(result, providers.Delta{Content: content})
 	}
 
 	if len(result) > 5 {
@@ -60,11 +62,11 @@ func (p *xmlParser) write(s string) []Delta {
 	return result
 }
 
-func (p *xmlParser) flush() []Delta {
+func (p *xmlParser) flush() []providers.Delta {
 	if p.buf != nil {
 		d := p.buf.flush()
 		if d != nil {
-			return []Delta{*d}
+			return []providers.Delta{*d}
 		}
 	}
 	return nil
@@ -80,7 +82,7 @@ type xmlBuffer struct {
 	thinking bool
 }
 
-func (l *xmlBuffer) write(r rune) (*Delta, bool) {
+func (l *xmlBuffer) write(r rune) (*providers.Delta, bool) {
 
 	l.content = append(l.content, r)
 
@@ -114,7 +116,7 @@ func (l *xmlBuffer) write(r rune) (*Delta, bool) {
 	default:
 		l.start = false
 		if l.thinking && l.bracket == 0 {
-			return &Delta{Reasoning: string(r)}, false
+			return &providers.Delta{Reasoning: string(r)}, false
 		}
 	}
 
@@ -129,7 +131,7 @@ func (l *xmlBuffer) write(r rune) (*Delta, bool) {
 	return nil, false
 }
 
-func (l *xmlBuffer) flush() *Delta {
+func (l *xmlBuffer) flush() *providers.Delta {
 	if l.thinking {
 		return nil
 	}
@@ -141,7 +143,7 @@ func (l *xmlBuffer) flush() *Delta {
 	return xmlBodyToMessage(content)
 }
 
-func xmlBodyToMessage(body string) *Delta {
+func xmlBodyToMessage(body string) *providers.Delta {
 	switch {
 	case strings.HasPrefix(body, "<ToolUse>"):
 		body = strings.ReplaceAll(body, "<ToolUse>", "<tool_use>")
@@ -159,7 +161,12 @@ func xmlBodyToMessage(body string) *Delta {
 			}
 		}
 
-		return &Delta{ToolUse: []ToolUse{use}}
+		return &providers.Delta{ToolUse: []providers.ToolCall{{
+			ID:        use.ID,
+			Name:      use.Name,
+			Arguments: use.Arguments,
+			Error:     use.Error,
+		}}}
 	case strings.Contains(body, "<thinking>"):
 		body = strings.ReplaceAll(body, "<thinking>", "<think>")
 		body = strings.ReplaceAll(body, "</thinking>", "</think>")
@@ -168,18 +175,18 @@ func xmlBodyToMessage(body string) *Delta {
 		r := Reasoning{}
 		err := xml.Unmarshal([]byte(body), &r)
 		if err == nil && r.Content != "" {
-			return &Delta{Reasoning: r.Content}
+			return &providers.Delta{Reasoning: r.Content}
 		}
-		return &Delta{Reasoning: body}
+		return &providers.Delta{Reasoning: body}
 	}
-	return &Delta{Content: body}
+	return &providers.Delta{Content: body}
 }
 
-func compactMessages(messages []Delta) []Delta {
+func compactMessages(messages []providers.Delta) []providers.Delta {
 	var (
 		reasoning string
 		content   string
-		result    []Delta
+		result    []providers.Delta
 	)
 
 	for i, d := range messages {
@@ -188,7 +195,7 @@ func compactMessages(messages []Delta) []Delta {
 		case d.Content != "":
 
 			if reasoning != "" {
-				result = append(result, Delta{Reasoning: reasoning})
+				result = append(result, providers.Delta{Reasoning: reasoning})
 				reasoning = ""
 			}
 
@@ -197,7 +204,7 @@ func compactMessages(messages []Delta) []Delta {
 		case d.Reasoning != "":
 
 			if content != "" {
-				result = append(result, Delta{Content: content})
+				result = append(result, providers.Delta{Content: content})
 				content = ""
 			}
 
@@ -206,12 +213,12 @@ func compactMessages(messages []Delta) []Delta {
 		default:
 
 			if reasoning != "" {
-				result = append(result, Delta{Reasoning: reasoning})
+				result = append(result, providers.Delta{Reasoning: reasoning})
 				reasoning = ""
 			}
 
 			if content != "" {
-				result = append(result, Delta{Content: content})
+				result = append(result, providers.Delta{Content: content})
 				content = ""
 			}
 
@@ -221,10 +228,10 @@ func compactMessages(messages []Delta) []Delta {
 	}
 
 	if reasoning != "" {
-		result = append(result, Delta{Reasoning: reasoning})
+		result = append(result, providers.Delta{Reasoning: reasoning})
 	}
 	if content != "" {
-		result = append(result, Delta{Content: content})
+		result = append(result, providers.Delta{Content: content})
 	}
 
 	return result
@@ -243,3 +250,31 @@ func extractJSON(jsonContent string, model any) error {
 func isTooManyError(err error) bool {
 	return strings.Contains(err.Error(), "429 Too Many Requests")
 }
+
+type compatibleResponse struct {
+	*providers.CommonResponse
+	buf *xmlParser
+}
+
+func (r *compatibleResponse) nextChoice(chunk interface{}) {}
+
+func (r *compatibleResponse) updateUsage(chunk interface{}) {}
+
+func (r *compatibleResponse) fail(err error) {
+	r.Err <- err
+}
+
+func (r *compatibleResponse) close() {
+	msgList := r.buf.flush()
+	for _, msg := range msgList {
+		r.Stream <- msg
+	}
+	close(r.Stream)
+	close(r.Err)
+}
+
+func newCompatibleResponse() *compatibleResponse {
+	return &compatibleResponse{CommonResponse: providers.NewCommonResponse(), buf: newXmlParser()}
+}
+
+var _ providers.Response = (*compatibleResponse)(nil)

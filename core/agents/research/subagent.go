@@ -6,7 +6,7 @@ import (
 
 	"github.com/basenana/friday/core/agents"
 	agtapi "github.com/basenana/friday/core/api"
-	"github.com/basenana/friday/core/providers/openai"
+	"github.com/basenana/friday/core/providers"
 	"github.com/basenana/friday/core/session"
 	"github.com/basenana/friday/core/tools"
 	"github.com/basenana/friday/core/types"
@@ -92,7 +92,7 @@ func blockingSubagentTool(worker agents.Agent, sess *session.Session, agentTools
 	}
 }
 
-func NewDefaultWorker(llm openai.Client, opt Option) agents.Agent {
+func NewDefaultWorker(llm providers.Client, opt Option) agents.Agent {
 	return agents.New(llm, agents.Option{
 		SystemPrompt: SUBAGENT_PROMPT,
 		MaxLoopTimes: 30,

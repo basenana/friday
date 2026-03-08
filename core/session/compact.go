@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/basenana/friday/core/providers/openai"
+	"github.com/basenana/friday/core/providers"
 	"github.com/basenana/friday/core/types"
 )
 
@@ -26,7 +26,7 @@ func init() {
 	}
 }
 
-func (s *Session) autoCompactHistory(ctx context.Context, req openai.Request) error {
+func (s *Session) autoCompactHistory(ctx context.Context, req providers.Request) error {
 	if s.compactThreshold < 0 {
 		// disable compact
 		return nil
@@ -59,7 +59,7 @@ func (s *Session) CompactHistory(ctx context.Context) error {
 	defer s.mu.Unlock()
 
 	prompt := compactPrompt(s.History)
-	req := openai.NewSimpleRequest("", types.Message{UserMessage: prompt})
+	req := providers.NewRequest("", types.Message{UserMessage: prompt})
 	abstract, err := s.llm.CompletionNonStreaming(ctx, req)
 	if err != nil {
 		return fmt.Errorf("failed to generate summary: %w", err)

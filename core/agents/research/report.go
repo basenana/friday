@@ -3,7 +3,7 @@ package research
 import (
 	"context"
 
-	"github.com/basenana/friday/core/providers/openai"
+	"github.com/basenana/friday/core/providers"
 	"github.com/basenana/friday/core/session"
 	"github.com/basenana/friday/core/tools"
 	"github.com/basenana/friday/core/types"
@@ -32,7 +32,7 @@ func (r *Report) BeforeAgent(ctx context.Context, sess *session.Session, req ses
 	return nil
 }
 
-func (r *Report) BeforeModel(ctx context.Context, sess *session.Session, req openai.Request) error {
+func (r *Report) BeforeModel(ctx context.Context, sess *session.Session, req providers.Request) error {
 	if r.mainSession != sess.ID {
 		return nil
 	}
@@ -41,7 +41,7 @@ func (r *Report) BeforeModel(ctx context.Context, sess *session.Session, req ope
 	return nil
 }
 
-func (r *Report) AfterModel(ctx context.Context, sess *session.Session, req openai.Request, apply *openai.Apply) error {
+func (r *Report) AfterModel(ctx context.Context, sess *session.Session, req providers.Request, apply *providers.Apply) error {
 	if r.mainSession != sess.ID {
 		return nil
 	}

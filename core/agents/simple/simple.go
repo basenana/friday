@@ -7,7 +7,7 @@ import (
 
 	agtapi "github.com/basenana/friday/core/api"
 	"github.com/basenana/friday/core/logger"
-	"github.com/basenana/friday/core/providers/openai"
+	"github.com/basenana/friday/core/providers"
 	"github.com/basenana/friday/core/session"
 	"github.com/basenana/friday/core/types"
 )
@@ -15,7 +15,7 @@ import (
 type Agent struct {
 	name        string
 	description string
-	llm         openai.Client
+	llm         providers.Client
 	option      Option
 	logger      logger.Logger
 }
@@ -52,7 +52,7 @@ func (s *Agent) handleLLMStream(ctx context.Context, sess *session.Session, resp
 	defer resp.Close()
 	var (
 		msgCnt     int
-		llmReq     = openai.NewSimpleRequest(s.option.SystemPrompt, sess.History...)
+		llmReq     = providers.NewRequest(s.option.SystemPrompt, sess.History...)
 		stream     = s.llm.Completion(ctx, llmReq)
 		warnTicker = time.NewTicker(time.Minute)
 	)
@@ -91,7 +91,7 @@ WaitMessage:
 func (s *Agent) handleStructLLMOutput(ctx context.Context, sess *session.Session, resp *agtapi.Response) {
 	defer resp.Close()
 	var (
-		llmReq = openai.NewSimpleRequest(s.option.SystemPrompt, sess.History...)
+		llmReq = providers.NewRequest(s.option.SystemPrompt, sess.History...)
 		model  = s.option.NewOutputModel()
 		err    = s.llm.StructuredPredict(ctx, llmReq, model)
 	)
@@ -109,7 +109,7 @@ func (s *Agent) handleStructLLMOutput(ctx context.Context, sess *session.Session
 	agtapi.SendDelta(resp, types.Delta{Content: string(raw)})
 }
 
-func New(llm openai.Client, opt Option) *Agent {
+func New(llm providers.Client, opt Option) *Agent {
 	return &Agent{
 		llm:    llm,
 		option: opt,

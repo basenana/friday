@@ -9,14 +9,14 @@ import (
 
 	"github.com/basenana/friday/core/api"
 	"github.com/basenana/friday/core/logger"
-	"github.com/basenana/friday/core/providers/openai"
+	"github.com/basenana/friday/core/providers"
 	"github.com/basenana/friday/core/session"
 	"github.com/basenana/friday/core/tools"
 	"github.com/basenana/friday/core/types"
 )
 
 type react struct {
-	llm    openai.Client
+	llm    providers.Client
 	tools  []*tools.Tool
 	option Option
 	logger logger.Logger
@@ -110,7 +110,7 @@ func (a *react) doAct(ctx context.Context, sess *session.Session, resp *api.Resp
 		reasoning    string
 		agentMessage string
 		messageCount int
-		toolUse      []openai.ToolUse
+		toolUse      []providers.ToolCall
 		err          error
 
 		keepRun    = false
@@ -194,7 +194,7 @@ WaitMessage:
 	}
 
 	// after_model hooks
-	appl := &openai.Apply{ToolUse: toolUse}
+	appl := &providers.Apply{ToolUse: toolUse}
 	err = sess.RunHooks(ctx, types.SessionHookAfterModel, session.HookPayload{ModelRequest: llmReq, ModelApply: appl})
 	if err != nil {
 		return false, err
@@ -214,7 +214,7 @@ WaitMessage:
 	return keepRun, nil
 }
 
-func (a *react) doToolCalls(ctx context.Context, sess *session.Session, toolUses []openai.ToolUse, reasoning string, toolList []*tools.Tool) {
+func (a *react) doToolCalls(ctx context.Context, sess *session.Session, toolUses []providers.ToolCall, reasoning string, toolList []*tools.Tool) {
 	var (
 		result []*types.Message
 		update = make(chan []*types.Message, len(toolUses))
@@ -242,7 +242,7 @@ func (a *react) doToolCalls(ctx context.Context, sess *session.Session, toolUses
 	sess.AppendMessage(result...)
 }
 
-func (a *react) tryToolCall(ctx context.Context, sess *session.Session, use openai.ToolUse, reasoning string, toolList []*tools.Tool) []*types.Message {
+func (a *react) tryToolCall(ctx context.Context, sess *session.Session, use providers.ToolCall, reasoning string, toolList []*tools.Tool) []*types.Message {
 	var (
 		result  []*types.Message
 		useMark = use.ID
@@ -290,7 +290,7 @@ func getToolByName(toolList []*tools.Tool, name string) *tools.Tool {
 	return nil
 }
 
-func New(llm openai.Client, option Option) Agent {
+func New(llm providers.Client, option Option) Agent {
 	if option.SystemPrompt == "" {
 		option.SystemPrompt = DEFAULT_SYSTEM_PROMPT
 	}

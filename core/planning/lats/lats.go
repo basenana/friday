@@ -13,7 +13,7 @@ import (
 	"github.com/basenana/friday/core/agents"
 	agtapi "github.com/basenana/friday/core/api"
 	"github.com/basenana/friday/core/logger"
-	"github.com/basenana/friday/core/providers/openai"
+	"github.com/basenana/friday/core/providers"
 	"github.com/basenana/friday/core/session"
 	"github.com/basenana/friday/core/tools"
 	"github.com/basenana/friday/core/types"
@@ -23,7 +23,7 @@ type Agent struct {
 	task string
 	root *SearchNode
 
-	llm    openai.Client
+	llm    providers.Client
 	worker agents.Agent
 
 	option Option
@@ -189,7 +189,7 @@ func (a *Agent) extendCandidates(ctx context.Context, node *SearchNode) ([]strin
 	)
 	defer canF()
 	for i := 0; i < 3; i++ {
-		err = a.llm.StructuredPredict(runCtx, openai.NewSimpleRequest(buf.String()), cand)
+		err = a.llm.StructuredPredict(runCtx, providers.NewRequest(buf.String()), cand)
 		if err == nil {
 			break
 		}
@@ -279,7 +279,7 @@ func (a *Agent) evaluate(ctx context.Context, node *SearchNode, reasoning string
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		default:
-			err = a.llm.StructuredPredict(ctx, openai.NewSimpleRequest(prompt), eva)
+			err = a.llm.StructuredPredict(ctx, providers.NewRequest(prompt), eva)
 		}
 		if err == nil {
 			break
@@ -299,7 +299,7 @@ func (a *Agent) sendFinalAnswer(ctx context.Context, ans string, sess *session.S
 	}
 }
 
-func New(llm openai.Client, worker agents.Agent, opt Option) *Agent {
+func New(llm providers.Client, worker agents.Agent, opt Option) *Agent {
 	if opt.Expansions == 0 {
 		opt.Expansions = 2
 	}
