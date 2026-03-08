@@ -10,6 +10,7 @@ import (
 	"github.com/basenana/friday/config"
 	"github.com/basenana/friday/core/agents"
 	"github.com/basenana/friday/core/api"
+	_ "github.com/basenana/friday/core/providers/anthropics"
 	"github.com/basenana/friday/core/providers/openai"
 	"github.com/basenana/friday/core/session"
 	"github.com/basenana/friday/core/types"
