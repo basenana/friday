@@ -295,7 +295,7 @@ func (a *Agent) evaluate(ctx context.Context, node *SearchNode, reasoning string
 
 func (a *Agent) sendFinalAnswer(ctx context.Context, ans string, sess *session.Session) {
 	if sess != nil {
-		sess.AppendMessage(&types.Message{AssistantMessage: ans})
+		sess.AppendMessage(&types.Message{Role: types.RoleAssistant, Content: ans})
 	}
 }
 

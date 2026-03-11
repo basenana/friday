@@ -36,7 +36,7 @@ func (s *Agent) Chat(ctx context.Context, req *agtapi.Request) *agtapi.Response 
 		return resp
 	}
 
-	sess.AppendMessage(&types.Message{UserMessage: req.UserMessage})
+	sess.AppendMessage(&types.Message{Role: types.RoleUser, Content: req.UserMessage})
 	s.logger.Infow("handle request", "session", req.Session.ID, "userMessage", req.UserMessage)
 
 	if s.option.NewOutputModel == nil {

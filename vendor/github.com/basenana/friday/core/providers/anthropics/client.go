@@ -14,17 +14,18 @@ import (
 	"github.com/anthropics/anthropic-sdk-go/option"
 	"github.com/basenana/friday/core/logger"
 	"github.com/basenana/friday/core/providers"
+	"github.com/basenana/friday/core/types"
 	"github.com/invopop/jsonschema"
 	"golang.org/x/time/rate"
 )
 
 type Model struct {
-	Name             string
-	Temperature      *float64
-	MaxTokens        *int64
-	StrictMode       bool
-	QPM              int64
-	Proxy            string
+	Name        string
+	Temperature *float64
+	MaxTokens   *int64
+	StrictMode  bool
+	QPM         int64
+	Proxy       string
 }
 
 type client struct {
@@ -39,7 +40,7 @@ func (c *client) Completion(ctx context.Context, request providers.Request) prov
 	go func() {
 		defer resp.close()
 		var (
-			params = c.messageCreateParams(request)
+			params  = c.messageCreateParams(request)
 			startAt = time.Now()
 			err     error
 		)
@@ -81,7 +82,7 @@ func (c *client) Completion(ctx context.Context, request providers.Request) prov
 
 func (c *client) CompletionNonStreaming(ctx context.Context, request providers.Request) (string, error) {
 	var (
-		params = c.messageCreateParams(request)
+		params  = c.messageCreateParams(request)
 		startAt = time.Now()
 		err     error
 	)
@@ -125,11 +126,11 @@ Retry:
 
 func (c *client) StructuredPredict(ctx context.Context, request providers.Request, model any) error {
 	messages := request.Messages()
-	if len(messages) == 0 || messages[0].SystemMessage == "" {
+	if len(messages) == 0 || messages[0].Content == "" {
 		return fmt.Errorf("user request is empty")
 	}
 	prompt := DEFAULT_STRUCTURED_PREDICT_PROMPT
-	prompt = strings.ReplaceAll(prompt, "{insert_user_request_here}", messages[0].SystemMessage)
+	prompt = strings.ReplaceAll(prompt, "{insert_user_request_here}", messages[0].Content)
 	schemaRaw, _ := json.Marshal(jsonschema.Reflect(model))
 	prompt = strings.ReplaceAll(prompt, "{insert_json_schema_here}", string(schemaRaw))
 
@@ -164,59 +165,83 @@ func (c *client) messageCreateParams(request providers.Request) *anthropic.Messa
 
 	messages := request.Messages()
 	for _, msg := range messages {
-		switch {
-		case msg.SystemMessage != "":
+		switch msg.Role {
+		case types.RoleSystem:
 			params.System = append(params.System, anthropic.TextBlockParam{
-				Text: msg.SystemMessage,
+				Text: msg.Content,
 			})
 
-		case msg.UserMessage != "":
+		case types.RoleUser:
 			params.Messages = append(params.Messages, anthropic.MessageParam{
 				Role:    anthropic.MessageParamRoleUser,
-				Content: []anthropic.ContentBlockParamUnion{anthropic.NewTextBlock(msg.UserMessage)},
+				Content: []anthropic.ContentBlockParamUnion{anthropic.NewTextBlock(msg.Content)},
 			})
 
-		case msg.AgentMessage != "":
+		case types.RoleAgent:
 			params.Messages = append(params.Messages, anthropic.MessageParam{
 				Role:    anthropic.MessageParamRoleUser,
-				Content: []anthropic.ContentBlockParamUnion{anthropic.NewTextBlock(msg.AgentMessage)},
+				Content: []anthropic.ContentBlockParamUnion{anthropic.NewTextBlock(msg.Content)},
 			})
 
-		case msg.AssistantMessage != "":
-			params.Messages = append(params.Messages, anthropic.MessageParam{
-				Role:    anthropic.MessageParamRoleAssistant,
-				Content: []anthropic.ContentBlockParamUnion{anthropic.NewTextBlock(msg.AssistantMessage)},
-			})
-
-		case msg.ToolName != "":
-			toolUse := anthropic.ToolUseBlockParam{
-				ID:   msg.ToolCallID,
-				Name: msg.ToolName,
-			}
-			if msg.ToolArguments != "" {
-				var args any
-				if err := json.Unmarshal([]byte(msg.ToolArguments), &args); err == nil {
-					toolUse.Input = args
+		case types.RoleAssistant:
+			if len(msg.ToolCalls) > 0 {
+				for _, tc := range msg.ToolCalls {
+					toolUse := anthropic.ToolUseBlockParam{
+						ID:   tc.ID,
+						Name: tc.Name,
+					}
+					if tc.Arguments != "" {
+						var args any
+						if err := json.Unmarshal([]byte(tc.Arguments), &args); err == nil {
+							toolUse.Input = args
+						}
+					}
+					params.Messages = append(params.Messages, anthropic.MessageParam{
+						Role:    anthropic.MessageParamRoleAssistant,
+						Content: []anthropic.ContentBlockParamUnion{{OfToolUse: &toolUse}},
+					})
 				}
+			} else {
+				params.Messages = append(params.Messages, anthropic.MessageParam{
+					Role:    anthropic.MessageParamRoleAssistant,
+					Content: []anthropic.ContentBlockParamUnion{anthropic.NewTextBlock(msg.Content)},
+				})
 			}
-			params.Messages = append(params.Messages, anthropic.MessageParam{
-				Role:    anthropic.MessageParamRoleAssistant,
-				Content: []anthropic.ContentBlockParamUnion{{OfToolUse: &toolUse}},
-			})
 
-		case msg.ToolContent != "":
-			params.Messages = append(params.Messages, anthropic.MessageParam{
-				Role:    anthropic.MessageParamRoleUser,
-				Content: []anthropic.ContentBlockParamUnion{anthropic.NewToolResultBlock(msg.ToolCallID, msg.ToolContent, false)},
-			})
+		case types.RoleTool:
+			if msg.ToolResult != nil {
+				params.Messages = append(params.Messages, anthropic.MessageParam{
+					Role:    anthropic.MessageParamRoleUser,
+					Content: []anthropic.ContentBlockParamUnion{anthropic.NewToolResultBlock(msg.ToolResult.CallID, msg.ToolResult.Content, false)},
+				})
+			}
 		}
 	}
 
 	tools := request.ToolDefines()
 	for _, t := range tools {
+		// GetParameters returns full schema with type/properties/required
+		// Anthropic SDK expects just the properties part
+		paramsMap := t.GetParameters()
+		properties := make(map[string]any)
+		var required []string
+		
+		if props, ok := paramsMap["properties"].(map[string]any); ok {
+			properties = props
+		}
+		if req, ok := paramsMap["required"].([]any); ok {
+			required = make([]string, len(req))
+			for i, r := range req {
+				if s, ok := r.(string); ok {
+					required[i] = s
+				}
+			}
+		}
+		
 		inputSchema := anthropic.ToolInputSchemaParam{
-			Properties: t.GetParameters(),
-			Type:        "object",
+			Properties: properties,
+			Required:   required,
+			Type:       "object",
 		}
 		toolUnion := anthropic.ToolUnionParamOfTool(inputSchema, t.GetName())
 		toolUnion.OfTool.Description = anthropic.String(t.GetDescription())
@@ -232,7 +257,9 @@ func New(host, apiKey string, model Model) providers.Client {
 
 func newClient(host, apiKey string, model Model) *client {
 	tp := &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}
-	if model.Proxy != "" {
+	if model.Proxy == "" {
+		tp.Proxy = http.ProxyFromEnvironment
+	} else {
 		proxyUrl, err := url.Parse(model.Proxy)
 		if err == nil {
 			tp.Proxy = http.ProxyURL(proxyUrl)

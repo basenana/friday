@@ -1,19 +1,22 @@
 package config
 
 type Config struct {
-	API      APIConfig      `yaml:"api"`
-	DataDir  string         `yaml:"data_dir"`
+	Model     ModelConfig   `yaml:"model"`
+	DataDir   string        `yaml:"data_dir"`
 	Workspace string        `yaml:"workspace"`
-	Memory   MemoryConfig  `yaml:"memory"`
-	Session  SessionConfig `yaml:"session"`
+	Memory    MemoryConfig  `yaml:"memory"`
+	Session   SessionConfig `yaml:"session"`
 }
 
-type APIConfig struct {
-	Provider  string `yaml:"provider"`
-	BaseURL   string `yaml:"base_url"`
-	Key       string `yaml:"key"`
-	Model     string `yaml:"model"`
-	MaxTokens int    `yaml:"max_tokens"`
+type ModelConfig struct {
+	Provider    string  `yaml:"provider" json:"provider"` // "openai" or "anthropic"
+	BaseURL     string  `yaml:"base_url" json:"base_url"`
+	Key         string  `yaml:"key" json:"key"`
+	Model       string  `yaml:"model" json:"model"`
+	MaxTokens   int     `yaml:"max_tokens" json:"max_tokens"`
+	Temperature float64 `yaml:"temperature" json:"temperature"`
+	QPM         int64   `yaml:"qpm" json:"qpm"`
+	Proxy       string  `yaml:"proxy" json:"proxy"`
 }
 
 type MemoryConfig struct {
@@ -22,18 +25,19 @@ type MemoryConfig struct {
 }
 
 type SessionConfig struct {
-	CompactThreshold int64  `yaml:"compact_threshold"`
-	DefaultAgent     string `yaml:"default_agent"`
+	DefaultAgent string `yaml:"default_agent"`
 }
 
 func DefaultConfig() *Config {
 	return &Config{
-		API: APIConfig{
-			Provider:  "openai",
-			BaseURL:   "",
-			Key:       "",
-			Model:     "gpt-4o",
-			MaxTokens: 4096,
+		Model: ModelConfig{
+			Provider:    "openai",
+			BaseURL:     "",
+			Key:         "",
+			Model:       "gpt-4o",
+			MaxTokens:   4096,
+			Temperature: 0.7,
+			QPM:         60,
 		},
 		DataDir:   "~/.friday",
 		Workspace: "~/.friday/workspace",
@@ -42,8 +46,7 @@ func DefaultConfig() *Config {
 			Days:    2,
 		},
 		Session: SessionConfig{
-			CompactThreshold: 3000,
-			DefaultAgent:     "react",
+			DefaultAgent: "react",
 		},
 	}
 }

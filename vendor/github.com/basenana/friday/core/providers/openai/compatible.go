@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/basenana/friday/core/providers"
+	"github.com/basenana/friday/core/types"
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/packages/param"
 
@@ -92,59 +93,72 @@ func (c *compatibleClient) chatCompletionNewParams(request providers.Request) *o
 
 	messages := request.Messages()
 	for _, msg := range messages {
-		switch {
-		case msg.SystemMessage != "":
+		switch msg.Role {
+		case types.RoleSystem:
 			p.Messages = append(p.Messages,
-				openai.SystemMessage(msg.SystemMessage),
+				openai.SystemMessage(msg.Content),
 			)
 
-		case msg.UserMessage != "":
-			p.Messages = append(p.Messages,
-				openai.UserMessage(msg.UserMessage),
-			)
-
-		case msg.AgentMessage != "":
-			p.Messages = append(p.Messages,
-				openai.UserMessage(msg.AgentMessage),
-			)
-
-		case msg.AssistantMessage != "":
-			p.Messages = append(p.Messages,
-				openai.AssistantMessage(msg.AssistantMessage),
-			)
-
-		case msg.ToolName != "": // tool call
-			tmsg := &openai.ChatCompletionAssistantMessageParam{
-				ToolCalls: []openai.ChatCompletionMessageToolCallParam{
-					{ID: msg.ToolCallID, Function: openai.ChatCompletionMessageToolCallFunctionParam{Arguments: msg.ToolArguments, Name: msg.ToolName}, Type: "function"},
-				},
-			}
-			if msg.AssistantReasoning != "" {
-				tmsg.SetExtraFields(map[string]any{"reasoning_content": msg.AssistantReasoning})
-			}
-			p.Messages = append(p.Messages,
-				openai.ChatCompletionMessageParamUnion{OfAssistant: tmsg},
-			)
-
-		case msg.ToolContent != "":
-			tur := &ToolUseResult{Name: msg.ToolCallID, Result: msg.ToolContent}
-			content, err := xml.Marshal(tur)
-			if err == nil {
+		case types.RoleUser:
+			if msg.ImageURL != "" {
 				p.Messages = append(p.Messages,
-					openai.ToolMessage(string(content), msg.ToolCallID),
+					openai.UserMessage([]openai.ChatCompletionContentPartUnionParam{
+						openai.ImageContentPart(openai.ChatCompletionContentPartImageImageURLParam{URL: msg.ImageURL}),
+					}),
 				)
 			} else {
 				p.Messages = append(p.Messages,
-					openai.ToolMessage(msg.ToolContent, msg.ToolCallID),
+					openai.UserMessage(msg.Content),
 				)
 			}
 
-		case msg.ImageURL != "":
+		case types.RoleAgent:
 			p.Messages = append(p.Messages,
-				openai.UserMessage([]openai.ChatCompletionContentPartUnionParam{
-					openai.ImageContentPart(openai.ChatCompletionContentPartImageImageURLParam{URL: msg.ImageURL}),
-				}),
+				openai.UserMessage(msg.Content),
 			)
+
+		case types.RoleAssistant:
+			if len(msg.ToolCalls) > 0 {
+				toolCalls := make([]openai.ChatCompletionMessageToolCallParam, len(msg.ToolCalls))
+				for i, tc := range msg.ToolCalls {
+					toolCalls[i] = openai.ChatCompletionMessageToolCallParam{
+						ID:   tc.ID,
+						Type: "function",
+						Function: openai.ChatCompletionMessageToolCallFunctionParam{
+							Name:      tc.Name,
+							Arguments: tc.Arguments,
+						},
+					}
+				}
+				tmsg := &openai.ChatCompletionAssistantMessageParam{
+					ToolCalls: toolCalls,
+				}
+				if msg.Reasoning != "" {
+					tmsg.SetExtraFields(map[string]any{"reasoning_content": msg.Reasoning})
+				}
+				p.Messages = append(p.Messages,
+					openai.ChatCompletionMessageParamUnion{OfAssistant: tmsg},
+				)
+			} else {
+				p.Messages = append(p.Messages,
+					openai.AssistantMessage(msg.Content),
+				)
+			}
+
+		case types.RoleTool:
+			if msg.ToolResult != nil {
+				tur := &ToolUseResult{Name: msg.ToolResult.CallID, Result: msg.ToolResult.Content}
+				content, err := xml.Marshal(tur)
+				if err == nil {
+					p.Messages = append(p.Messages,
+						openai.ToolMessage(string(content), msg.ToolResult.CallID),
+					)
+				} else {
+					p.Messages = append(p.Messages,
+						openai.ToolMessage(msg.ToolResult.Content, msg.ToolResult.CallID),
+					)
+				}
+			}
 		}
 	}
 
@@ -155,13 +169,13 @@ func (c *compatibleClient) chatCompletionNewParams(request providers.Request) *o
 
 		buf := &bytes.Buffer{}
 		messages = request.Messages()
-		if len(messages) == 0 || messages[0].SystemMessage == "" {
+		if len(messages) == 0 || messages[0].Role != types.RoleSystem {
 			c.logger.Warnw("no system prompt found")
 			return p
 		}
 
 		system := messages[0]
-		buf.WriteString(system.SystemMessage)
+		buf.WriteString(system.Content)
 		buf.WriteString("\n")
 
 		buf.WriteString(DEFAULT_TOOL_USE_PROMPT)

@@ -36,7 +36,7 @@ func (a *react) Chat(ctx context.Context, req *api.Request) *api.Response {
 		return resp
 	}
 
-	sess.AppendMessage(&types.Message{UserMessage: req.UserMessage})
+	sess.AppendMessage(&types.Message{Role: types.RoleUser, Content: req.UserMessage})
 	a.logger.Infow("handle request", "message", logger.FirstLine(req.UserMessage), "session", sess.ID)
 	go a.reactLoop(ctx, sess, resp, req.Tools)
 	return resp
@@ -127,7 +127,7 @@ func (a *react) doAct(ctx context.Context, sess *session.Session, resp *api.Resp
 	}
 
 	if budget == 0 {
-		llmReq.AppendHistory(types.Message{AgentMessage: "Your execution budget is exhausted. " +
+		llmReq.AppendHistory(types.Message{Role: types.RoleAgent, Content: "Your execution budget is exhausted. " +
 			"This is your final response. Please provide a comprehensive summary including: " +
 			"1) Task objective, 2) Progress made, 3) Key findings, 4) Remaining issues. " +
 			"After this response, the session will end. From now on, every character you output will become part of the final report:"})
@@ -182,15 +182,13 @@ WaitMessage:
 		agentMessage += "The tool is used in an incorrect format; please try using the tool again.\n"
 	}
 
-	if reasoning != "" {
-		sess.AppendMessage(&types.Message{AssistantReasoning: reasoning})
-	}
-	if len(content) > 0 {
-		sess.AppendMessage(&types.Message{AssistantMessage: content})
+	if reasoning != "" || len(content) > 0 {
+		msg := &types.Message{Role: types.RoleAssistant, Content: content, Reasoning: reasoning}
+		sess.AppendMessage(msg)
 	}
 	if agentMessage != "" {
 		keepRun = true
-		sess.AppendMessage(&types.Message{AgentMessage: agentMessage})
+		sess.AppendMessage(&types.Message{Role: types.RoleAgent, Content: agentMessage})
 	}
 
 	// after_model hooks
@@ -252,18 +250,23 @@ func (a *react) tryToolCall(ctx context.Context, sess *session.Session, use prov
 		useMark = use.Name
 	}
 
-	result = append(result, &types.Message{ToolCallID: useMark, ToolName: use.Name, ToolArguments: use.Arguments, AssistantReasoning: reasoning})
+	// Tool call message (assistant role with tool calls)
+	result = append(result, &types.Message{
+		Role:      types.RoleAssistant,
+		Reasoning: reasoning,
+		ToolCalls: []types.ToolCall{{ID: useMark, Name: use.Name, Arguments: use.Arguments}},
+	})
 
 	td := getToolByName(toolList, use.Name)
 	if td == nil {
 		msg := fmt.Sprintf("tool %s not found", use.Name)
-		result = append(result, &types.Message{ToolCallID: useMark, ToolContent: msg})
+		result = append(result, &types.Message{Role: types.RoleTool, ToolResult: &types.ToolResult{CallID: useMark, Content: msg}})
 		a.logger.Warnw(msg, "tool", use.Name, "session", sess.ID)
 		return result
 	}
 
 	if use.Error != "" {
-		result = append(result, &types.Message{ToolCallID: useMark, ToolContent: use.Error})
+		result = append(result, &types.Message{Role: types.RoleTool, ToolResult: &types.ToolResult{CallID: useMark, Content: use.Error}})
 		a.logger.Warnw("try tool call error", "tool", use.Name, "error", use.Error, "session", sess.ID)
 		return result
 	}
@@ -272,12 +275,12 @@ func (a *react) tryToolCall(ctx context.Context, sess *session.Session, use prov
 	a.logger.Infow("using tool", "tool", toolUse.Name, "args", toolUse.Arguments, "session", sess.ID)
 	msg, err := toolCall(ctx, sess, toolUse, td)
 	if err != nil {
-		result = append(result, &types.Message{ToolCallID: toolUse.ID(), ToolContent: fmt.Sprintf("using tool failed: %s", err)})
+		result = append(result, &types.Message{Role: types.RoleTool, ToolResult: &types.ToolResult{CallID: toolUse.ID(), Content: fmt.Sprintf("using tool failed: %s", err)}})
 		a.logger.Warnw("using tool failed", "tool", use.Name, "error", err, "session", sess.ID)
 		return result
 	}
 
-	result = append(result, &types.Message{ToolCallID: toolUse.ID(), ToolContent: msg})
+	result = append(result, &types.Message{Role: types.RoleTool, ToolResult: &types.ToolResult{CallID: toolUse.ID(), Content: msg}})
 	return result
 }
 

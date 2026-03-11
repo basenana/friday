@@ -59,7 +59,7 @@ func (s *Session) CompactHistory(ctx context.Context) error {
 	defer s.mu.Unlock()
 
 	prompt := compactPrompt(s.History)
-	req := providers.NewRequest("", types.Message{UserMessage: prompt})
+	req := providers.NewRequest("", types.Message{Role: types.RoleUser, Content: prompt})
 	abstract, err := s.llm.CompletionNonStreaming(ctx, req)
 	if err != nil {
 		return fmt.Errorf("failed to generate summary: %w", err)
@@ -112,16 +112,23 @@ SUMMARY:`, formatHistoryForPrompt(history))
 func formatHistoryForPrompt(history []types.Message) string {
 	var lines []string
 	for i, msg := range history {
-		switch {
-		case msg.UserMessage != "":
-			lines = append(lines, fmt.Sprintf("[User %d] %s", i+1, msg.UserMessage))
-		case msg.AssistantMessage != "":
-			lines = append(lines, fmt.Sprintf("[Assistant %d] %s", i+1, msg.AssistantMessage))
-		case msg.AgentMessage != "":
-			lines = append(lines, fmt.Sprintf("[Note %d] %s", i+1, msg.AgentMessage))
-		case msg.ToolCallID != "":
-			lines = append(lines, fmt.Sprintf("[Tool %d] %s(%s) -> %s",
-				i+1, msg.ToolName, msg.ToolArguments, msg.ToolContent))
+		switch msg.Role {
+		case types.RoleUser:
+			lines = append(lines, fmt.Sprintf("[User %d] %s", i+1, msg.Content))
+		case types.RoleAgent:
+			lines = append(lines, fmt.Sprintf("[Agent %d] %s", i+1, msg.Content))
+		case types.RoleAssistant:
+			if len(msg.ToolCalls) > 0 {
+				for _, tc := range msg.ToolCalls {
+					lines = append(lines, fmt.Sprintf("[ToolCall %d] %s(%s)", i+1, tc.Name, tc.Arguments))
+				}
+			} else {
+				lines = append(lines, fmt.Sprintf("[Assistant %d] %s", i+1, msg.Content))
+			}
+		case types.RoleTool:
+			if msg.ToolResult != nil {
+				lines = append(lines, fmt.Sprintf("[ToolResult %d] %s", i+1, msg.ToolResult.Content))
+			}
 		}
 	}
 	return strings.Join(filterEmpty(lines, 3), "\n")
@@ -149,12 +156,12 @@ func RebuildHistoryWithAbstract(history []types.Message, abstract string) []type
 
 	effectiveHistory := make([]types.Message, 0, len(history))
 	for _, msg := range history {
-		if msg.UserMessage != "" || msg.AssistantMessage != "" || msg.AssistantReasoning != "" {
+		if msg.Role == types.RoleUser || msg.Role == types.RoleAgent || msg.Role == types.RoleAssistant {
 			effectiveHistory = append(effectiveHistory, msg)
 		}
 	}
 
-	abstractMessage := types.Message{AgentMessage: summaryPrefix + abstract}
+	abstractMessage := types.Message{Role: types.RoleAgent, Content: summaryPrefix + abstract}
 	if len(effectiveHistory) == 0 {
 		return []types.Message{abstractMessage}
 	}

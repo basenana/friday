@@ -12,6 +12,7 @@ import (
 
 	"github.com/basenana/friday/core/logger"
 	"github.com/basenana/friday/core/providers"
+	"github.com/basenana/friday/core/types"
 	"github.com/invopop/jsonschema"
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
@@ -122,11 +123,11 @@ Retry:
 
 func (c *client) StructuredPredict(ctx context.Context, request providers.Request, model any) error {
 	messages := request.Messages()
-	if len(messages) == 0 || messages[0].SystemMessage == "" {
+	if len(messages) == 0 || messages[0].Content == "" {
 		return fmt.Errorf("user request is empty")
 	}
 	prompt := DEFAULT_STRUCTURED_PREDICT_PROMPT
-	prompt = strings.ReplaceAll(prompt, "{insert_user_request_here}", messages[0].SystemMessage)
+	prompt = strings.ReplaceAll(prompt, "{insert_user_request_here}", messages[0].Content)
 	schemaRaw, _ := json.Marshal(jsonschema.Reflect(model))
 	prompt = strings.ReplaceAll(prompt, "{insert_json_schema_here}", string(schemaRaw))
 
@@ -164,50 +165,64 @@ func (c *client) chatCompletionNewParams(request providers.Request) *openai.Chat
 
 	messages := request.Messages()
 	for _, msg := range messages {
-		switch {
-		case msg.SystemMessage != "":
+		switch msg.Role {
+		case types.RoleSystem:
 			p.Messages = append(p.Messages,
-				openai.SystemMessage(msg.SystemMessage),
+				openai.SystemMessage(msg.Content),
 			)
 
-		case msg.UserMessage != "":
-			p.Messages = append(p.Messages,
-				openai.UserMessage(msg.UserMessage),
-			)
-
-		case msg.AgentMessage != "":
-			p.Messages = append(p.Messages,
-				openai.UserMessage(msg.AgentMessage),
-			)
-
-		case msg.AssistantMessage != "":
-			p.Messages = append(p.Messages,
-				openai.AssistantMessage(msg.AssistantMessage),
-			)
-
-		case msg.ToolName != "": // tool call
-			tmsg := &openai.ChatCompletionAssistantMessageParam{
-				ToolCalls: []openai.ChatCompletionMessageToolCallParam{
-					{ID: msg.ToolCallID, Function: openai.ChatCompletionMessageToolCallFunctionParam{Arguments: msg.ToolArguments, Name: msg.ToolName}, Type: "function"},
-				},
+		case types.RoleUser:
+			if msg.ImageURL != "" {
+				p.Messages = append(p.Messages,
+					openai.UserMessage([]openai.ChatCompletionContentPartUnionParam{
+						openai.ImageContentPart(openai.ChatCompletionContentPartImageImageURLParam{URL: msg.ImageURL}),
+					}),
+				)
+			} else {
+				p.Messages = append(p.Messages,
+					openai.UserMessage(msg.Content),
+				)
 			}
-			if msg.AssistantReasoning != "" {
-				tmsg.SetExtraFields(map[string]any{"reasoning_content": msg.AssistantReasoning})
-			}
+
+		case types.RoleAgent:
 			p.Messages = append(p.Messages,
-				openai.ChatCompletionMessageParamUnion{OfAssistant: tmsg},
+				openai.UserMessage(msg.Content),
 			)
 
-		case msg.ToolContent != "":
-			p.Messages = append(p.Messages,
-				openai.ToolMessage(msg.ToolContent, msg.ToolCallID),
-			)
-		case msg.ImageURL != "":
-			p.Messages = append(p.Messages,
-				openai.UserMessage([]openai.ChatCompletionContentPartUnionParam{
-					openai.ImageContentPart(openai.ChatCompletionContentPartImageImageURLParam{URL: msg.ImageURL}),
-				}),
-			)
+		case types.RoleAssistant:
+			if len(msg.ToolCalls) > 0 {
+				toolCalls := make([]openai.ChatCompletionMessageToolCallParam, len(msg.ToolCalls))
+				for i, tc := range msg.ToolCalls {
+					toolCalls[i] = openai.ChatCompletionMessageToolCallParam{
+						ID:   tc.ID,
+						Type: "function",
+						Function: openai.ChatCompletionMessageToolCallFunctionParam{
+							Name:      tc.Name,
+							Arguments: tc.Arguments,
+						},
+					}
+				}
+				tmsg := &openai.ChatCompletionAssistantMessageParam{
+					ToolCalls: toolCalls,
+				}
+				if msg.Reasoning != "" {
+					tmsg.SetExtraFields(map[string]any{"reasoning_content": msg.Reasoning})
+				}
+				p.Messages = append(p.Messages,
+					openai.ChatCompletionMessageParamUnion{OfAssistant: tmsg},
+				)
+			} else {
+				p.Messages = append(p.Messages,
+					openai.AssistantMessage(msg.Content),
+				)
+			}
+
+		case types.RoleTool:
+			if msg.ToolResult != nil {
+				p.Messages = append(p.Messages,
+					openai.ToolMessage(msg.ToolResult.Content, msg.ToolResult.CallID),
+				)
+			}
 		}
 	}
 
@@ -233,7 +248,10 @@ func New(host, apiKey string, model Model) providers.Client {
 
 func newClient(host, apiKey string, model Model) *client {
 	tp := &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}
-	if model.Proxy != "" {
+	// Use system proxy by default if no explicit proxy is configured
+	if model.Proxy == "" {
+		tp.Proxy = http.ProxyFromEnvironment
+	} else {
 		proxyUrl, err := url.Parse(model.Proxy)
 		if err == nil {
 			tp.Proxy = http.ProxyURL(proxyUrl)

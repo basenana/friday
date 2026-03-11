@@ -28,7 +28,7 @@ func NewRequest(systemMessage string, history ...types.Message) Request {
 
 func (s *commonRequest) Messages() []types.Message {
 	result := make([]types.Message, 0, len(s.history)+1)
-	result = append(result, types.Message{SystemMessage: s.SystemPrompt()})
+	result = append(result, types.Message{Role: types.RoleSystem, Content: s.SystemPrompt()})
 	result = append(result, s.history...)
 	return result
 }

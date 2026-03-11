@@ -44,14 +44,14 @@ func (a *Todo) BeforeModel(ctx context.Context, sess *session.Session, req provi
 
 	messages := req.History()
 	lastMessage := messages[len(messages)-1]
-	if lastMessage.ToolName != "" || lastMessage.ToolCallID != "" || lastMessage.ToolContent != "" {
-		messages = append(messages, types.Message{AgentMessage: displayTodoList(todo)})
+	if lastMessage.Role == types.RoleTool || lastMessage.IsToolCall() {
+		messages = append(messages, types.Message{Role: types.RoleAgent, Content: displayTodoList(todo)})
 		req.SetHistory(messages)
 		return nil
 	}
 
 	newMessage := messages[:len(messages)-1]
-	newMessage = append(newMessage, types.Message{AgentMessage: displayTodoList(todo)})
+	newMessage = append(newMessage, types.Message{Role: types.RoleAgent, Content: displayTodoList(todo)})
 	newMessage = append(newMessage, lastMessage)
 	req.SetHistory(newMessage)
 	return nil

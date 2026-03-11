@@ -20,7 +20,7 @@ type SearchNode struct {
 }
 
 func newRoot(reasoning string, sess *session.Session) *SearchNode {
-	sess.AppendMessage(&types.Message{AgentMessage: reasoning})
+	sess.AppendMessage(&types.Message{Role: types.RoleAgent, Content: reasoning})
 	return &SearchNode{
 		id:         uuid.New().String(),
 		evaluation: &Evaluation{Score: 1},
@@ -51,9 +51,9 @@ func (n *SearchNode) Expend(node *SearchNode, evaluation *Evaluation) {
 	n.children = append(n.children, node)
 	node.sess = n.sess.Fork()
 	if msg := node.Latest(); msg != "" {
-		node.sess.AppendMessage(&types.Message{AssistantMessage: msg})
+		node.sess.AppendMessage(&types.Message{Role: types.RoleAssistant, Content: msg})
 	}
-	node.sess.AppendMessage(&types.Message{AgentMessage: evaluation.Reasoning})
+	node.sess.AppendMessage(&types.Message{Role: types.RoleAgent, Content: evaluation.Reasoning})
 	node.evaluation = evaluation
 	node.BackPropagate(evaluation.Score)
 }

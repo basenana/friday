@@ -19,81 +19,73 @@ const (
 	RoleUser      MessageRole = "user"
 	RoleAssistant MessageRole = "assistant"
 	RoleTool      MessageRole = "tool"
+	RoleAgent     MessageRole = "agent"
 )
 
-type Message struct {
-	Role              MessageRole `json:"role,omitempty"`
-	SystemMessage      string      `json:"system_message,omitempty"`
-	UserMessage        string      `json:"user_message,omitempty"`
-	AgentMessage       string      `json:"agent_message,omitempty"`
-	AssistantMessage   string      `json:"assistant_message,omitempty"`
-	AssistantReasoning string      `json:"assistant_reasoning,omitempty"`
+// ToolCall represents a tool call request from the assistant
+type ToolCall struct {
+	ID        string `json:"id,omitempty"`
+	Name      string `json:"name,omitempty"`
+	Arguments string `json:"arguments,omitempty"`
+}
 
+// ToolResult represents the result of a tool execution
+type ToolResult struct {
+	CallID  string `json:"call_id,omitempty"`
+	Content string `json:"content,omitempty"`
+}
+
+// Message represents a single message in the conversation
+// Role determines the type of message, Content is the main text.
+// For assistant messages with reasoning, Reasoning contains the thought process.
+// ToolCalls contains tool call requests (assistant role).
+// ToolResult contains tool execution results (tool role).
+type Message struct {
+	Role      MessageRole `json:"role"`
+	Content   string      `json:"content,omitempty"`
+	Reasoning string      `json:"reasoning,omitempty"`
+
+	// Multimedia content
 	ImageURL string `json:"image_url,omitempty"`
 
-	ToolCallID    string `json:"tool_call_id,omitempty"`
-	ToolName      string `json:"tool_name,omitempty"`
-	ToolArguments string `json:"tool_arguments,omitempty"`
-	ToolContent   string `json:"tool_content,omitempty"`
+	// Tool interaction
+	ToolCalls  []ToolCall  `json:"tool_calls,omitempty"`
+	ToolResult *ToolResult `json:"tool_result,omitempty"`
 
 	Metadata map[string]string `json:"-"`
 	Time     string            `json:"time,omitempty"`
 }
 
 func (m Message) GetRole() MessageRole {
-	if m.Role != "" {
-		return m.Role
-	}
-	if m.SystemMessage != "" {
-		return RoleSystem
-	}
-	if m.ToolCallID != "" || m.ToolName != "" {
-		return RoleTool
-	}
-	if m.AssistantMessage != "" || m.AssistantReasoning != "" || len(m.ToolContent) > 0 {
-		return RoleAssistant
-	}
-	return RoleUser
+	return m.Role
 }
 
 func (m Message) IsToolCall() bool {
-	return m.ToolCallID != "" || m.ToolName != ""
+	return len(m.ToolCalls) > 0
+}
+
+func (m Message) IsToolResult() bool {
+	return m.ToolResult != nil
 }
 
 func (m Message) GetContent() string {
-	switch m.GetRole() {
-	case RoleSystem:
-		return m.SystemMessage
-	case RoleUser:
-		return m.UserMessage
-	case RoleAssistant:
-		return m.AssistantMessage
-	case RoleTool:
-		return m.ToolContent
-	default:
-		return m.UserMessage
+	if m.IsToolResult() {
+		return m.ToolResult.Content
 	}
+	return m.Content
 }
 
 func (m Message) FuzzyTokens() int64 {
-	counter := []int{
-		len([]rune(m.SystemMessage)),
-		len([]rune(m.UserMessage)),
-		len([]rune(m.AgentMessage)),
-		len([]rune(m.AssistantMessage)),
-		len([]rune(m.ImageURL)),
-		len([]rune(m.ToolCallID)),
-		len([]rune(m.ToolName)),
-		len([]rune(m.ToolArguments)),
-		len([]rune(m.ToolContent)),
+	total := len([]rune(m.Content)) + len([]rune(m.Reasoning)) + len([]rune(m.ImageURL))
+
+	for _, tc := range m.ToolCalls {
+		total += len([]rune(tc.ID)) + len([]rune(tc.Name)) + len([]rune(tc.Arguments))
+	}
+	if m.ToolResult != nil {
+		total += len([]rune(m.ToolResult.CallID)) + len([]rune(m.ToolResult.Content))
 	}
 
-	var total float64
-	for _, c := range counter {
-		total += float64(c)
-	}
-
-	return int64(total * 0.6)
+	return int64(float64(total) * 0.6)
 }
 
 func NewID() string {

@@ -8,32 +8,18 @@ import (
 	"strings"
 	"time"
 
-	"github.com/basenana/friday/core/session"
+	coresession "github.com/basenana/friday/core/session"
 	"github.com/basenana/friday/core/types"
-	f "github.com/basenana/friday/fs"
+	"github.com/basenana/friday/session"
 )
-
-type SessionMeta struct {
-	ID           string    `json:"id"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
-	MessageCount int       `json:"message_count"`
-	Summary      string    `json:"summary,omitempty"`
-	SystemPrompt string    `json:"system_prompt,omitempty"`
-}
 
 type FileSessionStore struct {
 	basePath string
-	sessions map[string]*session.Session
-	llm      interface {
-		Completion(ctx interface{}, req interface{}) interface{}
-	}
 }
 
 func NewFileSessionStore(basePath string) *FileSessionStore {
 	return &FileSessionStore{
 		basePath: basePath,
-		sessions: make(map[string]*session.Session),
 	}
 }
 
@@ -41,23 +27,35 @@ func (s *FileSessionStore) EnsureDir() error {
 	return os.MkdirAll(s.basePath, 0755)
 }
 
-func (s *FileSessionStore) MetaPath(sessionID string) string {
-	return filepath.Join(s.basePath, fmt.Sprintf("%s.json", sessionID))
+// Private methods - internal paths
+
+func (s *FileSessionStore) sessionDir(id string) string {
+	return filepath.Join(s.basePath, id)
 }
 
-func (s *FileSessionStore) historyPath(sessionID string) string {
-	return filepath.Join(s.basePath, fmt.Sprintf("%s.jsonl", sessionID))
+func (s *FileSessionStore) metaPath(id string) string {
+	return filepath.Join(s.sessionDir(id), "session.json")
 }
 
-func (s *FileSessionStore) Create(sessionID string, llm interface {
-	Completion(ctx interface{}, req interface{}) interface{}
-}, opts ...session.Option) (*session.Session, error) {
+func (s *FileSessionStore) historyPath(id string) string {
+	return filepath.Join(s.sessionDir(id), "history.jsonl")
+}
+
+// Store interface implementation
+
+func (s *FileSessionStore) Create(sessionID string, opts ...coresession.Option) (*coresession.Session, error) {
 	if err := s.EnsureDir(); err != nil {
 		return nil, err
 	}
 
+	// Create session directory
+	sessionDir := s.sessionDir(sessionID)
+	if err := os.MkdirAll(sessionDir, 0755); err != nil {
+		return nil, err
+	}
+
 	now := time.Now()
-	meta := SessionMeta{
+	meta := session.SessionMeta{
 		ID:           sessionID,
 		CreatedAt:    now,
 		UpdatedAt:    now,
@@ -69,7 +67,7 @@ func (s *FileSessionStore) Create(sessionID string, llm interface {
 		return nil, err
 	}
 
-	if err := os.WriteFile(s.MetaPath(sessionID), metaData, 0644); err != nil {
+	if err := os.WriteFile(s.metaPath(sessionID), metaData, 0644); err != nil {
 		return nil, err
 	}
 
@@ -77,17 +75,12 @@ func (s *FileSessionStore) Create(sessionID string, llm interface {
 		return nil, err
 	}
 
-	workdir := f.NewFileSystem("")
-	sess := session.New(sessionID, nil, append(opts, session.WithWorkdirFS(workdir))...)
-	s.sessions[sessionID] = sess
-
+	sess := coresession.New(sessionID, nil, append(opts, coresession.WithMessageWriter(s))...)
 	return sess, nil
 }
 
-func (s *FileSessionStore) Load(sessionID string, llm interface {
-	Completion(ctx interface{}, req interface{}) interface{}
-}, opts ...session.Option) (*session.Session, error) {
-	metaPath := s.MetaPath(sessionID)
+func (s *FileSessionStore) Load(sessionID string, opts ...coresession.Option) (*coresession.Session, error) {
+	metaPath := s.metaPath(sessionID)
 	data, err := os.ReadFile(metaPath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -96,59 +89,105 @@ func (s *FileSessionStore) Load(sessionID string, llm interface {
 		return nil, err
 	}
 
-	var meta SessionMeta
+	var meta session.SessionMeta
 	if err := json.Unmarshal(data, &meta); err != nil {
 		return nil, err
 	}
-
-	workdir := f.NewFileSystem("")
-	sess := session.New(sessionID, nil, append(opts, session.WithWorkdirFS(workdir))...)
 
 	messages, err := s.LoadMessages(sessionID)
 	if err != nil {
 		return nil, err
 	}
-	var msgPtrs []*types.Message
-	for i := range messages {
-		msgPtrs = append(msgPtrs, &messages[i])
-	}
-	sess.AppendMessage(msgPtrs...)
 
-	s.sessions[sessionID] = sess
+	sess := coresession.New(sessionID, nil, append(opts,
+		coresession.WithHistory(messages...),
+		coresession.WithMessageWriter(s),
+	)...)
+
 	return sess, nil
 }
 
-func (s *FileSessionStore) List() ([]SessionMeta, error) {
+func (s *FileSessionStore) Delete(sessionID string) error {
+	sessionDir := s.sessionDir(sessionID)
+	return os.RemoveAll(sessionDir)
+}
+
+func (s *FileSessionStore) List() ([]session.SessionMeta, error) {
+	return s.listFiltered(false)
+}
+
+func (s *FileSessionStore) ListActive() ([]session.SessionMeta, error) {
+	return s.listFiltered(true)
+}
+
+func (s *FileSessionStore) listFiltered(activeOnly bool) ([]session.SessionMeta, error) {
 	entries, err := os.ReadDir(s.basePath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return []SessionMeta{}, nil
+			return []session.SessionMeta{}, nil
 		}
 		return nil, err
 	}
 
-	var result []SessionMeta
+	var result []session.SessionMeta
 	for _, entry := range entries {
-		if !strings.HasSuffix(entry.Name(), ".json") {
+		// Only process directories
+		if !entry.IsDir() {
 			continue
 		}
 
-		sessionID := strings.TrimSuffix(entry.Name(), ".json")
-		metaPath := s.MetaPath(sessionID)
+		sessionID := entry.Name()
+		metaPath := s.metaPath(sessionID)
 
 		data, err := os.ReadFile(metaPath)
 		if err != nil {
 			continue
 		}
 
-		var meta SessionMeta
+		var meta session.SessionMeta
 		if err := json.Unmarshal(data, &meta); err != nil {
+			continue
+		}
+
+		// Filter archived sessions for ListActive
+		if activeOnly && meta.Archived {
 			continue
 		}
 		result = append(result, meta)
 	}
 
 	return result, nil
+}
+
+func (s *FileSessionStore) GetMeta(sessionID string) (*session.SessionMeta, error) {
+	return s.loadMeta(sessionID)
+}
+
+func (s *FileSessionStore) UpdateAlias(sessionID, alias string) error {
+	meta, err := s.loadMeta(sessionID)
+	if err != nil {
+		return err
+	}
+	meta.Alias = alias
+	return s.saveMeta(sessionID, meta)
+}
+
+func (s *FileSessionStore) Archive(sessionID string) error {
+	meta, err := s.loadMeta(sessionID)
+	if err != nil {
+		return err
+	}
+	meta.Archived = true
+	return s.saveMeta(sessionID, meta)
+}
+
+func (s *FileSessionStore) Unarchive(sessionID string) error {
+	meta, err := s.loadMeta(sessionID)
+	if err != nil {
+		return err
+	}
+	meta.Archived = false
+	return s.saveMeta(sessionID, meta)
 }
 
 func (s *FileSessionStore) AppendMessages(sessionID string, msgs ...types.Message) error {
@@ -161,8 +200,7 @@ func (s *FileSessionStore) AppendMessages(sessionID string, msgs ...types.Messag
 	defer file.Close()
 
 	for _, msg := range msgs {
-		record := toRecord(msg)
-		data, err := json.Marshal(record)
+		data, err := json.Marshal(msg)
 		if err != nil {
 			continue
 		}
@@ -188,31 +226,73 @@ func (s *FileSessionStore) LoadMessages(sessionID string) ([]types.Message, erro
 	}
 
 	var messages []types.Message
-	lines := strings.Split(string(data), "\n")
-	for _, line := range lines {
+	for _, line := range strings.Split(string(data), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}
 
-		var rec messageRecord
-		if err := json.Unmarshal([]byte(line), &rec); err != nil {
+		var msg types.Message
+		if err := json.Unmarshal([]byte(line), &msg); err != nil {
 			continue
 		}
-		messages = append(messages, rec.toMessage())
+		messages = append(messages, msg)
 	}
 
 	return messages, nil
 }
 
+func (s *FileSessionStore) ReplaceMessages(sessionID string, msgs ...types.Message) error {
+	historyPath := s.historyPath(sessionID)
+
+	// 1. Backup original file if exists
+	if _, err := os.Stat(historyPath); err == nil {
+		timestamp := time.Now().Format("20060102_150405")
+		backupPath := filepath.Join(s.sessionDir(sessionID), fmt.Sprintf("history_origin_%s.jsonl", timestamp))
+		if err := os.Rename(historyPath, backupPath); err != nil {
+			return fmt.Errorf("failed to backup history: %w", err)
+		}
+	}
+
+	// 2. Write new content
+	file, err := os.OpenFile(historyPath, os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	for _, msg := range msgs {
+		data, err := json.Marshal(msg)
+		if err != nil {
+			continue
+		}
+		if _, err := file.Write(append(data, '\n')); err != nil {
+			return err
+		}
+	}
+
+	// 3. Update metadata
+	return s.updateMetaCount(sessionID, len(msgs))
+}
+
+func (s *FileSessionStore) updateMetaCount(sessionID string, count int) error {
+	meta, err := s.loadMeta(sessionID)
+	if err != nil {
+		return err
+	}
+	meta.UpdatedAt = time.Now()
+	meta.MessageCount = count
+	return s.saveMeta(sessionID, meta)
+}
+
 func (s *FileSessionStore) updateMeta(sessionID string, added int) error {
-	metaPath := s.MetaPath(sessionID)
+	metaPath := s.metaPath(sessionID)
 	data, err := os.ReadFile(metaPath)
 	if err != nil {
 		return err
 	}
 
-	var meta SessionMeta
+	var meta session.SessionMeta
 	if err := json.Unmarshal(data, &meta); err != nil {
 		return err
 	}
@@ -228,59 +308,24 @@ func (s *FileSessionStore) updateMeta(sessionID string, added int) error {
 	return os.WriteFile(metaPath, metaData, 0644)
 }
 
-type messageRecord struct {
-	Role               string `json:"role"`
-	SystemMessage      string `json:"system_message,omitempty"`
-	UserMessage        string `json:"user_message,omitempty"`
-	AgentMessage       string `json:"agent_message,omitempty"`
-	AssistantMessage   string `json:"assistant_message,omitempty"`
-	AssistantReasoning string `json:"assistant_reasoning,omitempty"`
-	ImageURL           string `json:"image_url,omitempty"`
-	ToolCallID         string `json:"tool_call_id,omitempty"`
-	ToolName           string `json:"tool_name,omitempty"`
-	ToolArguments      string `json:"tool_arguments,omitempty"`
-	ToolContent        string `json:"tool_content,omitempty"`
-	Time               string `json:"time,omitempty"`
+func (s *FileSessionStore) loadMeta(sessionID string) (*session.SessionMeta, error) {
+	metaPath := s.metaPath(sessionID)
+	data, err := os.ReadFile(metaPath)
+	if err != nil {
+		return nil, err
+	}
+	var meta session.SessionMeta
+	if err := json.Unmarshal(data, &meta); err != nil {
+		return nil, err
+	}
+	return &meta, nil
 }
 
-func toRecord(msg types.Message) messageRecord {
-	role := "user"
-	if msg.SystemMessage != "" {
-		role = "system"
-	} else if msg.AgentMessage != "" || msg.AssistantMessage != "" {
-		role = "assistant"
-	} else if msg.ToolName != "" {
-		role = "tool"
+func (s *FileSessionStore) saveMeta(sessionID string, meta *session.SessionMeta) error {
+	metaPath := s.metaPath(sessionID)
+	metaData, err := json.MarshalIndent(meta, "", "  ")
+	if err != nil {
+		return err
 	}
-
-	return messageRecord{
-		Role:               role,
-		SystemMessage:      msg.SystemMessage,
-		UserMessage:        msg.UserMessage,
-		AgentMessage:       msg.AgentMessage,
-		AssistantMessage:   msg.AssistantMessage,
-		AssistantReasoning: msg.AssistantReasoning,
-		ImageURL:           msg.ImageURL,
-		ToolCallID:         msg.ToolCallID,
-		ToolName:           msg.ToolName,
-		ToolArguments:      msg.ToolArguments,
-		ToolContent:        msg.ToolContent,
-		Time:               msg.Time,
-	}
-}
-
-func (r messageRecord) toMessage() types.Message {
-	return types.Message{
-		SystemMessage:      r.SystemMessage,
-		UserMessage:        r.UserMessage,
-		AgentMessage:       r.AgentMessage,
-		AssistantMessage:   r.AssistantMessage,
-		AssistantReasoning: r.AssistantReasoning,
-		ImageURL:           r.ImageURL,
-		ToolCallID:         r.ToolCallID,
-		ToolName:           r.ToolName,
-		ToolArguments:      r.ToolArguments,
-		ToolContent:        r.ToolContent,
-		Time:               r.Time,
-	}
+	return os.WriteFile(metaPath, metaData, 0644)
 }

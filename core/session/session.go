@@ -10,6 +10,12 @@ import (
 	"github.com/basenana/friday/core/types"
 )
 
+// MessageWriter defines the interface for persisting messages
+type MessageWriter interface {
+	AppendMessages(sessionID string, msgs ...types.Message) error
+	ReplaceMessages(sessionID string, msgs ...types.Message) error
+}
+
 type Session struct {
 	ID        string
 	Root      *Session
@@ -21,9 +27,10 @@ type Session struct {
 
 	compactThreshold int64
 
-	hooks []Hook
-	llm   providers.Client
-	mu    sync.RWMutex
+	hooks  []Hook
+	llm    providers.Client
+	writer MessageWriter // for auto-persisting messages
+	mu     sync.RWMutex
 }
 
 func New(id string, llm providers.Client, options ...Option) *Session {
@@ -68,10 +75,18 @@ func (s *Session) Fork() *Session {
 }
 
 func (s *Session) AppendMessage(msgList ...*types.Message) {
+	var toPersist []types.Message
+
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	for _, msg := range msgList {
 		s.History = append(s.History, *msg)
+		toPersist = append(toPersist, *msg)
+	}
+	s.mu.Unlock()
+
+	// Persist messages outside the lock to avoid potential deadlocks
+	if s.writer != nil && len(toPersist) > 0 {
+		s.writer.AppendMessages(s.ID, toPersist...)
 	}
 }
 
@@ -148,4 +163,21 @@ func WithCompactThreshold(ct int64) Option {
 	return func(s *Session) {
 		s.compactThreshold = ct
 	}
+}
+
+func WithMessageWriter(w MessageWriter) Option {
+	return func(s *Session) {
+		s.writer = w
+	}
+}
+
+func (s *Session) ReplaceHistory(msgs ...types.Message) error {
+	s.mu.Lock()
+	s.History = msgs
+	s.mu.Unlock()
+
+	if s.writer != nil {
+		return s.writer.ReplaceMessages(s.ID, msgs...)
+	}
+	return nil
 }

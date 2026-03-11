@@ -94,7 +94,7 @@ Waiting:
 	}
 	a.logger.Infow("research finish", "task", task, "escape", time.Since(startAt).String())
 	if content != "" {
-		sess.AppendMessage(&types.Message{AssistantMessage: content})
+		sess.AppendMessage(&types.Message{Role: types.RoleAssistant, Content: content})
 	}
 
 	return err

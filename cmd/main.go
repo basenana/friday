@@ -9,7 +9,7 @@ import (
 )
 
 var (
-	configPath  string
+	configPath    string
 	workspacePath string
 )
 
@@ -36,7 +36,7 @@ func main() {
 
 	switch args[0] {
 	case "chat":
-		runChat(cfg)
+		runChat(cfg, args[1:])
 	case "session":
 		runSession(cfg, args[1:])
 	default:
@@ -51,9 +51,17 @@ func printUsage() {
 	fmt.Println("")
 	fmt.Println("Commands:")
 	fmt.Println("  chat                  start interactive chat")
-	fmt.Println("  session list          list all sessions")
-	fmt.Println("  session new          create new session")
-	fmt.Println("  session show <id>    show session details")
+	fmt.Println("  chat --session <id>  start chat with specified session")
+	fmt.Println("  session list          list active sessions")
+	fmt.Println("  session new           create new session")
+	fmt.Println("  session use <id>      switch to session")
+	fmt.Println("  session current       show current session")
+	fmt.Println("  session show <id>     show session details")
+	fmt.Println("  session alias <id> <name>  set session alias")
+	fmt.Println("  session archive <id>  archive session")
+	fmt.Println("  session unarchive <id>  unarchive session")
+	fmt.Println("  session archived      list archived sessions")
+	fmt.Println("  session delete <id>   delete session")
 	fmt.Println("")
 	fmt.Println("Options:")
 	fmt.Println("  -c <path>    config file path")

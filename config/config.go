@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,7 +17,17 @@ func Load(configPath string) (*Config, error) {
 		if err != nil {
 			home = os.Getenv("HOME")
 		}
-		configPath = filepath.Join(home, ".friday", "friday.yaml")
+		// Try JSON first, then YAML
+		jsonPath := filepath.Join(home, ".friday", "config.json")
+		yamlPath := filepath.Join(home, ".friday", "friday.yaml")
+
+		if _, err := os.Stat(jsonPath); err == nil {
+			configPath = jsonPath
+		} else if _, err := os.Stat(yamlPath); err == nil {
+			configPath = yamlPath
+		} else {
+			return cfg, nil // use default
+		}
 	}
 
 	data, err := os.ReadFile(configPath)
@@ -27,8 +38,15 @@ func Load(configPath string) (*Config, error) {
 		return nil, err
 	}
 
-	if err := yaml.Unmarshal(data, cfg); err != nil {
-		return nil, err
+	// Support both JSON and YAML
+	if strings.HasSuffix(configPath, ".json") {
+		if err := json.Unmarshal(data, cfg); err != nil {
+			return nil, err
+		}
+	} else {
+		if err := yaml.Unmarshal(data, cfg); err != nil {
+			return nil, err
+		}
 	}
 
 	cfg.expandEnv()
@@ -37,10 +55,11 @@ func Load(configPath string) (*Config, error) {
 }
 
 func (c *Config) expandEnv() {
-	c.API.Key = expandEnvStr(c.API.Key)
-	c.API.BaseURL = expandEnvStr(c.API.BaseURL)
+	c.Model.Key = expandEnvStr(c.Model.Key)
+	c.Model.BaseURL = expandEnvStr(c.Model.BaseURL)
 	c.DataDir = expandEnvStr(c.DataDir)
 	c.Workspace = expandEnvStr(c.Workspace)
+	c.Model.Model = expandEnvStr(c.Model.Model)
 }
 
 func expandEnvStr(s string) string {

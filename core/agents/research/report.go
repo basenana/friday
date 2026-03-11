@@ -54,7 +54,7 @@ func (r *Report) AfterModel(ctx context.Context, sess *session.Session, req prov
 		return nil
 	}
 
-	sess.AppendMessage(&types.Message{AgentMessage: "The final report has not been submitted. " +
+	sess.AppendMessage(&types.Message{Role: types.RoleAgent, Content: "The final report has not been submitted. " +
 		"If you believe the task is complete, please use the \"submit_final_report\" tool to submit the final report."})
 	apply.Continue = true
 	return nil
