@@ -49,14 +49,9 @@ func DefaultConfig() *Config {
 		Workspace: "~/.friday/workspace",
 		Memory: MemoryConfig{
 			Enabled: true,
-			Days:    2,
 		},
 		Session: SessionConfig{
 			DefaultAgent: "react",
-		},
-		Log: LogConfig{
-			Enabled: true,
-			MaxDays: 7,
 		},
 	}
 }

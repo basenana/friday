@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
-	"io"
+	"os"
 
 	"github.com/basenana/friday/config"
 	"github.com/basenana/friday/core/agents"
@@ -29,8 +29,8 @@ type AgentContext struct {
 type AgentOption func(*agentOptions)
 
 type agentOptions struct {
-	sessionID    string
-	verbose      bool
+	sessionID string
+	verbose   bool
 }
 
 // WithSessionID specifies a specific session to use
@@ -118,11 +118,9 @@ func SetupAgent(ctx context.Context, cfg *config.Config, sessMgr *session.Manage
 
 	// Ensure memory log exists
 	memSys := memory.NewMemorySystem(cfg.MemoryPath(), cfg.Memory.Days)
-	if cfg.Memory.Enabled {
-		if err := memSys.EnsureTodayLog(); err != nil {
-			// Non-fatal, just log
-			fmt.Printf("Warning: failed to ensure memory log: %v\n", err)
-		}
+	if err = memSys.EnsureTodayMemory(); err != nil {
+		// Non-fatal, just log
+		fmt.Fprintf(os.Stderr, "Warning: failed to ensure memory log: %v\n", err)
 	}
 
 	return &AgentContext{
@@ -149,12 +147,4 @@ func PrintResponse(resp *api.Response) {
 		fmt.Print(delta.Content)
 	}
 	fmt.Println()
-}
-
-// PrintResponseTo streams the response to a writer
-func PrintResponseTo(resp *api.Response, w io.Writer) {
-	for delta := range resp.Deltas() {
-		w.Write([]byte(delta.Content))
-	}
-	w.Write([]byte("\n"))
 }

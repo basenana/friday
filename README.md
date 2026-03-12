@@ -12,7 +12,7 @@ Text in, text out. Pipe-friendly. No GUI, no cloud dependency, no account requir
 ## Features
 
 - **Pipeline-first design** — `cat log.txt | friday chat "summarize errors" | mail -s "Report" team@company.com`
-- **Multiple input modes** — Arguments, stdin, or combine both with `-m` flag
+- **Multiple input modes** — Arguments, stdin, or combine both
 - **Local data** — Everything stored in `~/.friday/`, portable and private
 - **Session management** — Persistent conversations with history and memory
 - **Multi-provider support** — OpenAI, Anthropic, Ollama, Google Gemini
@@ -117,10 +117,10 @@ friday chat "Explain this error: connection refused"
 friday chat < todolist.txt
 
 # From stdin pipe
-cat error.log | friday chat -m "What's the root cause?"
+cat error.log | friday chat "What's the root cause?"
 
 # Combine message with stdin
-cat error.log | friday chat -m "Analyze this error log"
+cat error.log | friday chat "Analyze this error log"
 ```
 
 ### Pipeline Composition

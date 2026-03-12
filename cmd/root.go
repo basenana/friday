@@ -2,13 +2,11 @@ package main
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 
 	"github.com/spf13/cobra"
 
 	"github.com/basenana/friday/config"
-	corelogger "github.com/basenana/friday/core/logger"
 	"github.com/basenana/friday/session"
 	"github.com/basenana/friday/session/file"
 	"github.com/basenana/friday/utils/logger"
@@ -37,15 +35,6 @@ Text in, text out. Pipe-friendly. No GUI, no cloud dependency.`,
 			cfg.Workspace = workspaceDir
 		}
 
-		// Initialize logger
-		if cfg.Log.Enabled {
-			logger.InitWithFile(cfg.LogPath(), cfg.Log.MaxDays)
-		} else {
-			logger.Init()
-		}
-		// Set core logger root to use our logger
-		corelogger.SetRoot(logger.CoreLogger())
-
 		// Initialize session manager
 		store := file.NewFileSessionStore(cfg.SessionsPath())
 		currentFile := filepath.Join(cfg.DataDirPath(), "current")
@@ -57,13 +46,6 @@ Text in, text out. Pipe-friendly. No GUI, no cloud dependency.`,
 		logger.Sync()
 		logger.Close()
 	},
-}
-
-func Execute() {
-	if err := rootCmd.Execute(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
-	}
 }
 
 func init() {

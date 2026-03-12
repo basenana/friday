@@ -32,14 +32,14 @@ func (m *MemorySystem) EnsureDir() error {
 }
 
 func (m *MemorySystem) todayFilename() string {
-	return time.Now().Format("2006-01-02") + ".md"
+	return time.Now().Format(time.DateOnly) + ".md"
 }
 
 func (m *MemorySystem) todayPath() string {
 	return filepath.Join(m.basePath, m.todayFilename())
 }
 
-func (m *MemorySystem) EnsureTodayLog() error {
+func (m *MemorySystem) EnsureTodayMemory() error {
 	if err := m.EnsureDir(); err != nil {
 		return err
 	}
@@ -121,13 +121,11 @@ func (m *MemorySystem) Write(content string, memType MemoryType) error {
 	}
 
 	if memType == MemoryTypeDaily {
-		if err := m.EnsureTodayLog(); err != nil {
+		if err := m.EnsureTodayMemory(); err != nil {
 			return err
 		}
 
-		timestamp := time.Now().Format("15:04")
-		entry := fmt.Sprintf("## %s\n\n%s\n\n", timestamp, content)
-
+		entry := fmt.Sprintf("## %s\n\n%s\n\n", time.Now().Format(time.RFC3339), content)
 		fs, err := os.OpenFile(m.todayPath(), os.O_APPEND|os.O_WRONLY, 0644)
 		if err != nil {
 			return err

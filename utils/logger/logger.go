@@ -70,6 +70,7 @@ func Sync() {
 
 // Close closes the rotating file writer
 func Close() {
+	Sync()
 	if rotatingWriter != nil {
 		rotatingWriter.Close()
 	}

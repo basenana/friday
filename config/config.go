@@ -2,9 +2,11 @@ package config
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -98,6 +100,6 @@ func (c *Config) MemoryPath() string {
 	return filepath.Join(c.DataDirPath(), "memory")
 }
 
-func (c *Config) LogPath() string {
-	return filepath.Join(c.DataDirPath(), "log")
+func LogPath() string {
+	return filepath.Join(os.TempDir(), fmt.Sprintf("friday-%s.log", time.Now().Format(time.DateOnly)))
 }
