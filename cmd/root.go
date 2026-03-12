@@ -1,0 +1,72 @@
+package main
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+
+	"github.com/spf13/cobra"
+
+	"github.com/basenana/friday/config"
+	corelogger "github.com/basenana/friday/core/logger"
+	"github.com/basenana/friday/session"
+	"github.com/basenana/friday/session/file"
+	"github.com/basenana/friday/utils/logger"
+)
+
+var (
+	cfgFile      string
+	workspaceDir string
+	cfg          *config.Config
+	sessMgr      *session.Manager
+)
+
+var rootCmd = &cobra.Command{
+	Use:   "friday",
+	Short: "A Unix-philosophy AI Agent for your terminal",
+	Long: `Friday - A Unix-philosophy AI Agent for your terminal.
+
+Text in, text out. Pipe-friendly. No GUI, no cloud dependency.`,
+	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+		var err error
+		cfg, err = config.Load(cfgFile)
+		if err != nil {
+			return fmt.Errorf("failed to load config: %w", err)
+		}
+		if workspaceDir != "" {
+			cfg.Workspace = workspaceDir
+		}
+
+		// Initialize logger
+		if cfg.Log.Enabled {
+			logger.InitWithFile(cfg.LogPath(), cfg.Log.MaxDays)
+		} else {
+			logger.Init()
+		}
+		// Set core logger root to use our logger
+		corelogger.SetRoot(logger.CoreLogger())
+
+		// Initialize session manager
+		store := file.NewFileSessionStore(cfg.SessionsPath())
+		currentFile := filepath.Join(cfg.DataDirPath(), "current")
+		sessMgr = session.NewManager(store, currentFile)
+
+		return nil
+	},
+	PersistentPostRun: func(cmd *cobra.Command, args []string) {
+		logger.Sync()
+		logger.Close()
+	},
+}
+
+func Execute() {
+	if err := rootCmd.Execute(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}
+
+func init() {
+	rootCmd.PersistentFlags().StringVarP(&cfgFile, "config", "c", "", "config file path")
+	rootCmd.PersistentFlags().StringVarP(&workspaceDir, "workspace", "w", "", "workspace directory")
+}

@@ -1,331 +1,334 @@
 package main
 
 import (
-	"flag"
 	"fmt"
 	"os"
 	"strings"
 	"time"
 
-	"github.com/basenana/friday/config"
+	"github.com/spf13/cobra"
+
 	"github.com/basenana/friday/core/types"
 	"github.com/basenana/friday/session"
-	"github.com/basenana/friday/session/file"
 )
 
-func runSession(cfg *config.Config, args []string) {
-	if len(args) == 0 {
-		printSessionUsage()
-		os.Exit(1)
-	}
+// sessionCmd represents the session command
+var sessionCmd = &cobra.Command{
+	Use:   "session",
+	Short: "Manage chat sessions",
+	Long:  `Manage chat sessions for the Friday AI assistant.`,
+}
 
-	store := file.NewFileSessionStore(cfg.SessionsPath())
-	if err := store.EnsureDir(); err != nil {
-		fmt.Fprintf(os.Stderr, "failed to create session dir: %v\n", err)
-		os.Exit(1)
-	}
-
-	switch args[0] {
-	case "list":
-		listSessions(store, cfg)
-	case "new":
-		newSession(store, cfg)
-	case "show":
-		if len(args) < 2 {
-			fmt.Println("session show requires <id>")
+// sessionListCmd represents the session list command
+var sessionListCmd = &cobra.Command{
+	Use:   "list",
+	Short: "List active sessions",
+	Long:  `List all active chat sessions. The current session is marked with '*'.`,
+	Run: func(cmd *cobra.Command, args []string) {
+		store := sessMgr.GetStore()
+		metas, err := store.ListActive()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "failed to list sessions: %v\n", err)
 			os.Exit(1)
 		}
-		showSession(store, args[1])
-	case "use":
-		if len(args) < 2 {
-			fmt.Println("session use requires <id>")
+
+		if len(metas) == 0 {
+			fmt.Println("No sessions found")
+			return
+		}
+
+		currentID, _ := sessMgr.GetCurrentID()
+
+		fmt.Println("Sessions:")
+		for _, meta := range metas {
+			marker := " "
+			if meta.ID == currentID {
+				marker = "*"
+			}
+			alias := meta.Alias
+			if alias == "" {
+				alias = meta.CreatedAt.Format("2006-01-02")
+			}
+			fmt.Printf("  %s %s  %s (messages: %d)\n",
+				marker, meta.ID[:8], alias, meta.MessageCount)
+		}
+	},
+}
+
+// sessionNewCmd represents the session new command
+var sessionNewCmd = &cobra.Command{
+	Use:   "new",
+	Short: "Create a new session",
+	Long:  `Create a new chat session with today's date as default alias.`,
+	Run: func(cmd *cobra.Command, args []string) {
+		store := sessMgr.GetStore()
+		sessionID := types.NewID()
+		now := time.Now()
+		alias := now.Format("2006-01-02")
+
+		_, err := store.Create(sessionID)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "failed to create session: %v\n", err)
 			os.Exit(1)
 		}
-		useSession(store, cfg, args[1])
-	case "current":
-		showCurrent(cfg)
-	case "delete", "rm":
-		if len(args) < 2 {
-			fmt.Println("session delete requires <id>")
+
+		// Set default alias to today's date
+		if err := store.UpdateAlias(sessionID, alias); err != nil {
+			fmt.Fprintf(os.Stderr, "failed to set alias: %v\n", err)
 			os.Exit(1)
 		}
-		deleteSession(store, cfg, args[1])
-	case "alias":
-		if len(args) < 3 {
-			fmt.Println("session alias <id> <name>")
+
+		if err := sessMgr.SetCurrentID(sessionID); err != nil {
+			fmt.Fprintf(os.Stderr, "failed to set current session: %v\n", err)
 			os.Exit(1)
 		}
-		setAlias(store, cfg, args[1], args[2])
-	case "archive":
-		if len(args) < 2 {
-			fmt.Println("session archive <id>")
+
+		fmt.Printf("Created session: %s (alias: %s)\n", sessionID[:8], alias)
+	},
+}
+
+// sessionCurrentCmd represents the session current command
+var sessionCurrentCmd = &cobra.Command{
+	Use:   "current",
+	Short: "Show current session",
+	Long:  `Display the ID of the current session.`,
+	Run: func(cmd *cobra.Command, args []string) {
+		id, err := sessMgr.GetCurrentID()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "failed to get current session: %v\n", err)
 			os.Exit(1)
 		}
-		archiveSession(store, cfg, args[1])
-	case "unarchive":
-		if len(args) < 2 {
-			fmt.Println("session unarchive <id>")
+		if id == "" {
+			fmt.Println("No current session")
+			return
+		}
+		fmt.Printf("Current session: %s\n", id)
+	},
+}
+
+// sessionUseCmd represents the session use command
+var sessionUseCmd = &cobra.Command{
+	Use:   "use <id>",
+	Short: "Switch to a session",
+	Long:  `Switch to the specified session by ID.`,
+	Args:  cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		store := sessMgr.GetStore()
+		sessionID := args[0]
+
+		metas, err := store.List()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "failed to list sessions: %v\n", err)
 			os.Exit(1)
 		}
-		unarchiveSession(store, cfg, args[1])
-	case "archived":
-		listArchived(store)
-	default:
-		fmt.Printf("unknown session command: %s\n", args[0])
-		printSessionUsage()
-		os.Exit(1)
-	}
-}
 
-// Current session management
-
-func currentSessionFile(cfg *config.Config) string {
-	return cfg.DataDirPath() + "/current"
-}
-
-func GetCurrentSession(cfg *config.Config) (string, error) {
-	path := currentSessionFile(cfg)
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return "", nil
+		found := false
+		for _, meta := range metas {
+			if meta.ID == sessionID {
+				found = true
+				break
+			}
 		}
-		return "", err
-	}
-	id := strings.TrimSpace(string(data))
-	return id, nil
-}
 
-func SetCurrentSession(cfg *config.Config, sessionID string) error {
-	path := currentSessionFile(cfg)
-	return os.WriteFile(path, []byte(sessionID+"\n"), 0644)
-}
-
-func showCurrent(cfg *config.Config) {
-	id, err := GetCurrentSession(cfg)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to get current session: %v\n", err)
-		os.Exit(1)
-	}
-	if id == "" {
-		fmt.Println("No current session")
-		return
-	}
-	fmt.Printf("Current session: %s\n", id)
-}
-
-func useSession(store session.Store, cfg *config.Config, sessionID string) error {
-	metas, err := store.List()
-	if err != nil {
-		return err
-	}
-
-	found := false
-	for _, meta := range metas {
-		if meta.ID == sessionID {
-			found = true
-			break
+		if !found {
+			fmt.Printf("Session not found: %s\n", sessionID)
+			os.Exit(1)
 		}
-	}
 
-	if !found {
-		fmt.Printf("Session not found: %s\n", sessionID)
-		os.Exit(1)
-	}
-
-	if err := SetCurrentSession(cfg, sessionID); err != nil {
-		fmt.Fprintf(os.Stderr, "failed to set current session: %v\n", err)
-		os.Exit(1)
-	}
-
-	fmt.Printf("Switched to session: %s\n", sessionID)
-	return nil
-}
-
-func deleteSession(store session.Store, cfg *config.Config, sessionID string) error {
-	metas, err := store.List()
-	if err != nil {
-		return err
-	}
-
-	found := false
-	for _, meta := range metas {
-		if meta.ID == sessionID {
-			found = true
-			break
+		if err := sessMgr.SetCurrentID(sessionID); err != nil {
+			fmt.Fprintf(os.Stderr, "failed to set current session: %v\n", err)
+			os.Exit(1)
 		}
-	}
 
-	if !found {
-		fmt.Printf("Session not found: %s\n", sessionID)
-		os.Exit(1)
-	}
-
-	if err := store.Delete(sessionID); err != nil {
-		fmt.Fprintf(os.Stderr, "failed to delete session: %v\n", err)
-		os.Exit(1)
-	}
-
-	currentID, _ := GetCurrentSession(cfg)
-	if currentID == sessionID {
-		os.Remove(currentSessionFile(cfg))
-	}
-
-	fmt.Printf("Deleted session: %s\n", sessionID)
-	return nil
+		fmt.Printf("Switched to session: %s\n", sessionID)
+	},
 }
 
-func setAlias(store session.Store, cfg *config.Config, sessionID, alias string) error {
-	if err := store.UpdateAlias(sessionID, alias); err != nil {
-		fmt.Fprintf(os.Stderr, "failed to set alias: %v\n", err)
-		os.Exit(1)
-	}
-	fmt.Printf("Set alias '%s' for session: %s\n", alias, sessionID)
-	return nil
-}
+// sessionShowCmd represents the session show command
+var sessionShowCmd = &cobra.Command{
+	Use:   "show <id>",
+	Short: "Show session details",
+	Long:  `Display details and message history of a session.`,
+	Args:  cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		store := sessMgr.GetStore()
+		sessionID := args[0]
 
-func archiveSession(store session.Store, cfg *config.Config, sessionID string) error {
-	if err := store.Archive(sessionID); err != nil {
-		fmt.Fprintf(os.Stderr, "failed to archive: %v\n", err)
-		os.Exit(1)
-	}
-	fmt.Printf("Archived session: %s\n", sessionID)
-
-	// If current session, clear it
-	currentID, _ := GetCurrentSession(cfg)
-	if currentID == sessionID {
-		os.Remove(currentSessionFile(cfg))
-	}
-	return nil
-}
-
-func unarchiveSession(store session.Store, cfg *config.Config, sessionID string) error {
-	if err := store.Unarchive(sessionID); err != nil {
-		fmt.Fprintf(os.Stderr, "failed to unarchive: %v\n", err)
-		os.Exit(1)
-	}
-	fmt.Printf("Unarchived session: %s\n", sessionID)
-	return nil
-}
-
-func listArchived(store session.Store) {
-	metas, err := store.List()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to list sessions: %v\n", err)
-		os.Exit(1)
-	}
-
-	var archived []session.SessionMeta
-	for _, meta := range metas {
-		if meta.Archived {
-			archived = append(archived, meta)
+		messages, err := store.LoadMessages(sessionID)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "failed to load session: %v\n", err)
+			os.Exit(1)
 		}
-	}
 
-	if len(archived) == 0 {
-		fmt.Println("No archived sessions")
-		return
-	}
-
-	fmt.Println("Archived sessions:")
-	for _, meta := range archived {
-		alias := meta.Alias
-		if alias == "" {
-			alias = meta.CreatedAt.Format("2006-01-02")
+		meta, err := store.GetMeta(sessionID)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "failed to get meta: %v\n", err)
+			os.Exit(1)
 		}
-		fmt.Printf("  %s  %s (archived, messages: %d)\n",
-			meta.ID, alias, meta.MessageCount)
-	}
+
+		fmt.Printf("Session: %s\n", sessionID)
+		fmt.Printf("Created: %s\n", meta.CreatedAt.Format("2006-01-02 15:04:05"))
+
+		// Count visible messages (exclude agent internal messages)
+		visibleCount := 0
+		for _, msg := range messages {
+			if msg.Role != types.RoleAgent {
+				visibleCount++
+			}
+		}
+		fmt.Printf("Messages: %d\n", visibleCount)
+		fmt.Println("")
+
+		idx := 0
+		for _, msg := range messages {
+			if msg.Role == types.RoleAgent {
+				continue // skip agent internal messages
+			}
+			idx++
+			fmt.Printf("[%d] %s\n", idx, formatMessage(msg))
+		}
+	},
 }
 
-func listSessions(store session.Store, cfg *config.Config) {
-	metas, err := store.ListActive()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to list sessions: %v\n", err)
-		os.Exit(1)
-	}
+// sessionAliasCmd represents the session alias command
+var sessionAliasCmd = &cobra.Command{
+	Use:   "alias <id> <name>",
+	Short: "Set session alias",
+	Long:  `Set an alias name for a session.`,
+	Args:  cobra.ExactArgs(2),
+	Run: func(cmd *cobra.Command, args []string) {
+		store := sessMgr.GetStore()
+		sessionID := args[0]
+		alias := args[1]
 
-	if len(metas) == 0 {
-		fmt.Println("No sessions found")
-		return
-	}
-
-	currentID, _ := GetCurrentSession(cfg)
-
-	fmt.Println("Sessions:")
-	for _, meta := range metas {
-		marker := " "
-		if meta.ID == currentID {
-			marker = "*"
+		if err := store.UpdateAlias(sessionID, alias); err != nil {
+			fmt.Fprintf(os.Stderr, "failed to set alias: %v\n", err)
+			os.Exit(1)
 		}
-		alias := meta.Alias
-		if alias == "" {
-			alias = meta.CreatedAt.Format("2006-01-02")
-		}
-		fmt.Printf("  %s %s  %s (messages: %d)\n",
-			marker, meta.ID[:8], alias, meta.MessageCount)
-	}
+		fmt.Printf("Set alias '%s' for session: %s\n", alias, sessionID)
+	},
 }
 
-func newSession(store session.Store, cfg *config.Config) {
-	sessionID := types.NewID()
-	now := time.Now()
-	alias := now.Format("2006-01-02")
+// sessionArchiveCmd represents the session archive command
+var sessionArchiveCmd = &cobra.Command{
+	Use:   "archive <id>",
+	Short: "Archive a session",
+	Long:  `Archive a session to hide it from the active list.`,
+	Args:  cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		store := sessMgr.GetStore()
+		sessionID := args[0]
 
-	_, err := store.Create(sessionID)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to create session: %v\n", err)
-		os.Exit(1)
-	}
+		if err := store.Archive(sessionID); err != nil {
+			fmt.Fprintf(os.Stderr, "failed to archive: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("Archived session: %s\n", sessionID)
 
-	// Set default alias to today's date
-	if err := store.UpdateAlias(sessionID, alias); err != nil {
-		fmt.Fprintf(os.Stderr, "failed to set alias: %v\n", err)
-		os.Exit(1)
-	}
-
-	if err := SetCurrentSession(cfg, sessionID); err != nil {
-		fmt.Fprintf(os.Stderr, "failed to set current session: %v\n", err)
-		os.Exit(1)
-	}
-
-	fmt.Printf("Created session: %s (alias: %s)\n", sessionID[:8], alias)
+		// If current session, clear it
+		currentID, _ := sessMgr.GetCurrentID()
+		if currentID == sessionID {
+			os.Remove(cfg.DataDirPath() + "/current")
+		}
+	},
 }
 
-func showSession(store session.Store, sessionID string) {
-	messages, err := store.LoadMessages(sessionID)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to load session: %v\n", err)
-		os.Exit(1)
-	}
+// sessionUnarchiveCmd represents the session unarchive command
+var sessionUnarchiveCmd = &cobra.Command{
+	Use:   "unarchive <id>",
+	Short: "Unarchive a session",
+	Long:  `Unarchive a session to restore it to the active list.`,
+	Args:  cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		store := sessMgr.GetStore()
+		sessionID := args[0]
 
-	meta, err := store.GetMeta(sessionID)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to get meta: %v\n", err)
-		os.Exit(1)
-	}
-
-	fmt.Printf("Session: %s\n", sessionID)
-	fmt.Printf("Created: %s\n", meta.CreatedAt.Format("2006-01-02 15:04:05"))
-
-	// Count visible messages (exclude agent internal messages)
-	visibleCount := 0
-	for _, msg := range messages {
-		if msg.Role != types.RoleAgent {
-			visibleCount++
+		if err := store.Unarchive(sessionID); err != nil {
+			fmt.Fprintf(os.Stderr, "failed to unarchive: %v\n", err)
+			os.Exit(1)
 		}
-	}
-	fmt.Printf("Messages: %d\n", visibleCount)
-	fmt.Println("")
+		fmt.Printf("Unarchived session: %s\n", sessionID)
+	},
+}
 
-	idx := 0
-	for _, msg := range messages {
-		if msg.Role == types.RoleAgent {
-			continue // skip agent internal messages
+// sessionArchivedCmd represents the session archived command
+var sessionArchivedCmd = &cobra.Command{
+	Use:   "archived",
+	Short: "List archived sessions",
+	Long:  `List all archived sessions.`,
+	Run: func(cmd *cobra.Command, args []string) {
+		store := sessMgr.GetStore()
+		metas, err := store.List()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "failed to list sessions: %v\n", err)
+			os.Exit(1)
 		}
-		idx++
-		fmt.Printf("[%d] %s\n", idx, formatMessage(msg))
-	}
+
+		var archived []session.SessionMeta
+		for _, meta := range metas {
+			if meta.Archived {
+				archived = append(archived, meta)
+			}
+		}
+
+		if len(archived) == 0 {
+			fmt.Println("No archived sessions")
+			return
+		}
+
+		fmt.Println("Archived sessions:")
+		for _, meta := range archived {
+			alias := meta.Alias
+			if alias == "" {
+				alias = meta.CreatedAt.Format("2006-01-02")
+			}
+			fmt.Printf("  %s  %s (archived, messages: %d)\n",
+				meta.ID, alias, meta.MessageCount)
+		}
+	},
+}
+
+// sessionDeleteCmd represents the session delete command
+var sessionDeleteCmd = &cobra.Command{
+	Use:   "delete <id>",
+	Short: "Delete a session",
+	Long:  `Delete a session permanently.`,
+	Args:  cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		store := sessMgr.GetStore()
+		sessionID := args[0]
+
+		metas, err := store.List()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "failed to list sessions: %v\n", err)
+			os.Exit(1)
+		}
+
+		found := false
+		for _, meta := range metas {
+			if meta.ID == sessionID {
+				found = true
+				break
+			}
+		}
+
+		if !found {
+			fmt.Printf("Session not found: %s\n", sessionID)
+			os.Exit(1)
+		}
+
+		if err := store.Delete(sessionID); err != nil {
+			fmt.Fprintf(os.Stderr, "failed to delete session: %v\n", err)
+			os.Exit(1)
+		}
+
+		currentID, _ := sessMgr.GetCurrentID()
+		if currentID == sessionID {
+			os.Remove(cfg.DataDirPath() + "/current")
+		}
+
+		fmt.Printf("Deleted session: %s\n", sessionID)
+	},
 }
 
 func formatMessage(msg types.Message) string {
@@ -353,19 +356,16 @@ func formatMessage(msg types.Message) string {
 	}
 }
 
-func printSessionUsage() {
-	flag.Usage = func() {}
-	fmt.Println("Usage: friday session <command>")
-	fmt.Println("")
-	fmt.Println("Commands:")
-	fmt.Println("  list                list active sessions (* = current)")
-	fmt.Println("  new                 create new session (alias = today's date)")
-	fmt.Println("  use <id>            switch to session")
-	fmt.Println("  current             show current session")
-	fmt.Println("  show <id>           show session details")
-	fmt.Println("  alias <id> <name>   set session alias")
-	fmt.Println("  archive <id>        archive session")
-	fmt.Println("  unarchive <id>     unarchive session")
-	fmt.Println("  archived            list archived sessions")
-	fmt.Println("  delete <id>         delete session")
+func init() {
+	rootCmd.AddCommand(sessionCmd)
+	sessionCmd.AddCommand(sessionListCmd)
+	sessionCmd.AddCommand(sessionNewCmd)
+	sessionCmd.AddCommand(sessionCurrentCmd)
+	sessionCmd.AddCommand(sessionUseCmd)
+	sessionCmd.AddCommand(sessionShowCmd)
+	sessionCmd.AddCommand(sessionAliasCmd)
+	sessionCmd.AddCommand(sessionArchiveCmd)
+	sessionCmd.AddCommand(sessionUnarchiveCmd)
+	sessionCmd.AddCommand(sessionArchivedCmd)
+	sessionCmd.AddCommand(sessionDeleteCmd)
 }

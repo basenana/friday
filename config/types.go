@@ -1,11 +1,17 @@
 package config
 
 type Config struct {
-	Model     ModelConfig   `yaml:"model"`
-	DataDir   string        `yaml:"data_dir"`
-	Workspace string        `yaml:"workspace"`
-	Memory    MemoryConfig  `yaml:"memory"`
-	Session   SessionConfig `yaml:"session"`
+	Model     ModelConfig   `yaml:"model" json:"model"`
+	DataDir   string        `yaml:"data_dir" json:"data_dir"`
+	Workspace string        `yaml:"workspace" json:"workspace"`
+	Memory    MemoryConfig  `yaml:"memory" json:"memory"`
+	Session   SessionConfig `yaml:"session" json:"session"`
+	Log       LogConfig     `yaml:"log" json:"log"`
+}
+
+type LogConfig struct {
+	Enabled bool `yaml:"enabled" json:"enabled"`
+	MaxDays int  `yaml:"max_days" json:"max_days"`
 }
 
 type ModelConfig struct {
@@ -20,12 +26,12 @@ type ModelConfig struct {
 }
 
 type MemoryConfig struct {
-	Enabled bool `yaml:"enabled"`
-	Days    int  `yaml:"days"`
+	Enabled bool `yaml:"enabled" json:"enabled"`
+	Days    int  `yaml:"days" json:"days"`
 }
 
 type SessionConfig struct {
-	DefaultAgent string `yaml:"default_agent"`
+	DefaultAgent string `yaml:"default_agent" json:"default_agent"`
 }
 
 func DefaultConfig() *Config {
@@ -47,6 +53,10 @@ func DefaultConfig() *Config {
 		},
 		Session: SessionConfig{
 			DefaultAgent: "react",
+		},
+		Log: LogConfig{
+			Enabled: true,
+			MaxDays: 7,
 		},
 	}
 }

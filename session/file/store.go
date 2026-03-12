@@ -199,6 +199,7 @@ func (s *FileSessionStore) AppendMessages(sessionID string, msgs ...types.Messag
 	}
 	defer file.Close()
 
+	appendedCount := 0
 	for _, msg := range msgs {
 		data, err := json.Marshal(msg)
 		if err != nil {
@@ -207,9 +208,12 @@ func (s *FileSessionStore) AppendMessages(sessionID string, msgs ...types.Messag
 		if _, err := file.Write(append(data, '\n')); err != nil {
 			continue
 		}
+		appendedCount++
 	}
 
-	s.updateMeta(sessionID, len(msgs))
+	if appendedCount > 0 {
+		s.updateMeta(sessionID, appendedCount)
+	}
 
 	return nil
 }

@@ -97,3 +97,7 @@ func (c *Config) SessionsPath() string {
 func (c *Config) MemoryPath() string {
 	return filepath.Join(c.DataDirPath(), "memory")
 }
+
+func (c *Config) LogPath() string {
+	return filepath.Join(c.DataDirPath(), "log")
+}
