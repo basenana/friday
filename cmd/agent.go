@@ -12,6 +12,8 @@ import (
 	"github.com/basenana/friday/core/providers"
 	coreSession "github.com/basenana/friday/core/session"
 	"github.com/basenana/friday/memory"
+	"github.com/basenana/friday/sandbox"
+	"github.com/basenana/friday/skills"
 	"github.com/basenana/friday/session"
 	"github.com/basenana/friday/workspace"
 )
@@ -95,6 +97,23 @@ func SetupAgent(ctx context.Context, cfg *config.Config, sessMgr *session.Manage
 	compactHook := summarize.NewCompactHook(client, compactThreshold)
 	sess.RegisterHook(compactHook)
 
+	// Initialize skills
+	skillLoader := skills.NewLoader(ws.SkillsPath())
+	if err := skillLoader.Load(); err != nil {
+		// Non-fatal, just log
+		fmt.Fprintf(os.Stderr, "Warning: failed to load skills: %v\n", err)
+	} else if options.verbose {
+		skillCount := len(skillLoader.List())
+		if skillCount > 0 {
+			fmt.Printf("Loaded %d skills\n", skillCount)
+		}
+	}
+
+	// Register skill hook
+	skillRegistry := skills.NewRegistry(skillLoader)
+	skillHook := skills.NewHook(skillRegistry)
+	sess.RegisterHook(skillHook)
+
 	// Load workspace content
 	wsContent, err := ws.Load()
 	if err != nil {
@@ -109,11 +128,19 @@ func SetupAgent(ctx context.Context, cfg *config.Config, sessMgr *session.Manage
 		}
 	}
 
+	// Initialize sandbox and bash tool
+	sandboxCfg := sandbox.DefaultConfig()
+	sandboxExec := sandbox.NewExecutor(sandboxCfg)
+	bashTool := sandbox.NewBashTool(sandboxExec)
+
+	// Collect all tools
+	allTools := append(ws.FsTools(), bashTool)
+
 	// Create agent
 	systemPrompt := workspace.ComposeSystemPrompt(wsContent, agents.DEFAULT_SYSTEM_PROMPT)
 	agent := agents.New(client, agents.Option{
 		SystemPrompt: systemPrompt,
-		Tools:        ws.FsTools(),
+		Tools:        allTools,
 	})
 
 	// Ensure memory log exists

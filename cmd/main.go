@@ -10,7 +10,9 @@ import (
 )
 
 func main() {
-	logger.InitWithFile(config.LogPath(), cfg.Log.MaxDays)
+	// Initialize with default config first, will be updated after config is loaded
+	defaultCfg := config.DefaultConfig()
+	logger.InitWithFile(config.LogPath(), defaultCfg.Log.MaxDays)
 	defer logger.Close()
 
 	// Set core logger root to use our logger

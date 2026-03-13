@@ -20,6 +20,8 @@ make build    # Build for darwin/arm64, darwin/amd64, linux/arm64, linux/amd64
 make test     # Run all unit tests (go test ./...)
 ```
 
+When executing commands, keep them simple and easy to audit. For example, if you need to execute `cmd1 && cmd2`, please use the tool twice, executing `cmd1` and `cmd2` respectively.
+
 ## Architecture
 
 ### Entry Point (`cmd/`)
@@ -161,25 +163,3 @@ LLM clients implement `Client` interface with:
 6. Create agent with system prompt and tools
 7. Ensure memory log exists for today
 
-## CLI Usage Examples
-
-```bash
-# Initialize workspace
-friday init
-
-# Direct message
-friday chat "Explain this error"
-
-# From stdin pipe
-cat error.log | friday chat -m "What's the root cause?"
-
-# Session management
-friday session list
-friday session new
-friday session use <id>
-friday session show <id>
-friday session archive <id>
-
-# Periodic heartbeat
-friday heartbeat
-```

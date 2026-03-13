@@ -88,6 +88,11 @@ func (w *Workspace) MemoryPath() string {
 	return w.memPath
 }
 
+// SkillsPath returns the skills directory path
+func (w *Workspace) SkillsPath() string {
+	return filepath.Join(w.basePath, "skills")
+}
+
 // ========================================
 // core/fs.FileSystem interface implementation
 // ========================================
