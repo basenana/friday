@@ -3,7 +3,6 @@ package sessions
 import (
 	"os"
 	"strings"
-	"time"
 
 	coresession "github.com/basenana/friday/core/session"
 	"github.com/basenana/friday/core/types"
@@ -14,13 +13,15 @@ import (
 type Manager struct {
 	store       Store
 	currentFile string
+	tty         string
 }
 
 // NewManager creates a new session manager
-func NewManager(store Store, currentFile string) *Manager {
+func NewManager(store Store, currentFile string, tty string) *Manager {
 	return &Manager{
 		store:       store,
 		currentFile: currentFile,
+		tty:         tty,
 	}
 }
 
@@ -73,7 +74,7 @@ func (m *Manager) GetOrCreateCurrent(opts ...coresession.Option) (*coresession.S
 
 	// Create new session
 	sessionID := types.NewID()
-	alias := time.Now().Format("2006-01-02")
+	alias := m.generateAlias()
 
 	sess, err := m.store.Create(sessionID, opts...)
 	if err != nil {
@@ -91,6 +92,19 @@ func (m *Manager) GetOrCreateCurrent(opts ...coresession.Option) (*coresession.S
 	return sess, sessionID, true, nil
 }
 
+// Alias returns the session alias based on current tty
+func (m *Manager) Alias() string {
+	if m.tty != "" {
+		return "sess_" + m.tty
+	}
+	return ""
+}
+
+// generateAlias creates a session alias based on tty (internal use)
+func (m *Manager) generateAlias() string {
+	return m.Alias()
+}
+
 // GetOrCreateByID gets a session by ID, or creates it if it doesn't exist.
 // Returns the session and whether it was newly created.
 func (m *Manager) GetOrCreateByID(sessionID string, opts ...coresession.Option) (*coresession.Session, bool, error) {
@@ -105,7 +119,7 @@ func (m *Manager) GetOrCreateByID(sessionID string, opts ...coresession.Option) 
 	}
 
 	// Create new session
-	alias := time.Now().Format("2006-01-02")
+	alias := m.generateAlias()
 
 	sess, err = m.store.Create(sessionID, opts...)
 	if err != nil {

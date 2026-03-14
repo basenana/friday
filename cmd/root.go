@@ -2,7 +2,10 @@ package main
 
 import (
 	"fmt"
+	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -17,7 +20,47 @@ var (
 	workspaceDir string
 	cfg          *config.Config
 	sessMgr      *sessions.Manager
+	currentTTY   string
 )
+
+func getTTYName() string {
+	// 1. Environment variable takes precedence
+	if envTTY := os.Getenv("FRIDAY_TTY"); envTTY != "" {
+		return envTTY
+	}
+
+	// 2. Get TTY name via tty command
+	cmd := exec.Command("tty")
+	output, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+
+	ttyPath := strings.TrimSpace(string(output))
+	if ttyPath == "" || ttyPath == "not a tty" {
+		return ""
+	}
+
+	// /dev/ttys000 -> ttys000, /dev/pts/0 -> pts_0
+	ttyName := strings.TrimPrefix(ttyPath, "/dev/")
+	ttyName = strings.ReplaceAll(ttyName, "/", "_")
+	return ttyName
+}
+
+func currentFilePath(cfg *config.Config) string {
+	// 1. Environment variable takes precedence
+	if envPath := os.Getenv("FRIDAY_CURRENT_FILE"); envPath != "" {
+		return envPath
+	}
+
+	// 2. Based on tty name
+	if currentTTY != "" {
+		return filepath.Join(cfg.DataDirPath(), "current_"+currentTTY)
+	}
+
+	// 3. Fallback to default
+	return filepath.Join(cfg.DataDirPath(), "current")
+}
 
 var rootCmd = &cobra.Command{
 	Use:   "friday",
@@ -35,10 +78,12 @@ Text in, text out. Pipe-friendly. No GUI, no cloud dependency.`,
 			cfg.Workspace = workspaceDir
 		}
 
-		// Initialize session manager
+		// Get TTY name for session isolation
+		currentTTY = getTTYName()
+
+		// Initialize session manager with tty-aware current file
 		store := file.NewFileSessionStore(cfg.SessionsPath())
-		currentFile := filepath.Join(cfg.DataDirPath(), "current")
-		sessMgr = sessions.NewManager(store, currentFile)
+		sessMgr = sessions.NewManager(store, currentFilePath(cfg), currentTTY)
 
 		return nil
 	},

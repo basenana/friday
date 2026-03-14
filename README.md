@@ -137,19 +137,19 @@ friday chat "Generate a random UUID" | xargs -I {} curl "https://api.example.com
 
 ```bash
 # List sessions
-friday session list
+friday sessions list
 
 # Create new session
-friday session new
+friday sessions new
 
 # Switch session
-friday session use <id>
+friday sessions use <id>
 
 # Show session history
-friday session show <id>
+friday sessions show <id>
 
 # Archive old session
-friday session archive <id>
+friday sessions archive <id>
 ```
 
 ### Heartbeat

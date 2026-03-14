@@ -1,6 +1,7 @@
 package sandbox
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"strings"
@@ -29,8 +30,28 @@ Usage notes:
 
 // NewBashTool creates a new bash tool
 func NewBashTool(exec *Executor) *tools.Tool {
+	permissionBuf := bytes.NewBuffer(nil)
+
+	if len(exec.config.Permissions.Allow) > 0 {
+		permissionBuf.WriteString("Allowed commands:\n")
+		for _, cmd := range exec.config.Permissions.Allow {
+			permissionBuf.WriteString("- " + cmd + "\n")
+		}
+	}
+	if len(exec.config.Permissions.Deny) > 0 {
+		permissionBuf.WriteString("Denied commands:\n")
+		for _, cmd := range exec.config.Permissions.Deny {
+			permissionBuf.WriteString("- " + cmd + "\n")
+		}
+	}
+
+	desc := bashToolDescription
+	if permissionBuf.Len() > 0 {
+		desc = bashToolDescription + "\n\n" + permissionBuf.String()
+	}
+
 	return tools.NewTool(bashToolName,
-		tools.WithDescription(bashToolDescription),
+		tools.WithDescription(desc),
 		tools.WithString("command", tools.Required(), tools.Description("The bash command to execute")),
 		tools.WithString("timeout", tools.Description("Timeout duration (e.g. '30s', '5m'). Default is from config.")),
 		tools.WithString("workdir", tools.Description("Working directory. Default is current directory.")),

@@ -103,44 +103,39 @@ func TestWorkspaceLoad(t *testing.T) {
 
 func TestComposeSystemPrompt(t *testing.T) {
 	tests := []struct {
-		name          string
-		content       *LoadedContent
-		defaultPrompt string
-		expected      string
+		name     string
+		content  *LoadedContent
+		expected string
 	}{
 		{
-			name:          "nil content",
-			content:       nil,
-			defaultPrompt: "default",
-			expected:      "default",
+			name:     "nil content",
+			content:  nil,
+			expected: "default",
 		},
 		{
-			name:          "empty content",
-			content:       &LoadedContent{},
-			defaultPrompt: "default",
-			expected:      "default",
+			name:     "empty content",
+			content:  &LoadedContent{},
+			expected: "default",
 		},
 		{
 			name: "with system prompts",
 			content: &LoadedContent{
 				SystemPrompts: []string{"prompt1", "prompt2"},
 			},
-			defaultPrompt: "default",
-			expected:      "default\n\nprompt1\n\nprompt2",
+			expected: "default\n\nprompt1\n\nprompt2",
 		},
 		{
 			name: "empty prompts filtered",
 			content: &LoadedContent{
 				SystemPrompts: []string{"", "prompt1", "   ", "prompt2"},
 			},
-			defaultPrompt: "default",
-			expected:      "default\n\nprompt1\n\nprompt2",
+			expected: "default\n\nprompt1\n\nprompt2",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := ComposeSystemPrompt(tt.content, tt.defaultPrompt)
+			result := ComposeSystemPrompt(tt.content)
 			if result != tt.expected {
 				t.Errorf("expected %q, got %q", tt.expected, result)
 			}

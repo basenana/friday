@@ -79,6 +79,9 @@ func (s *Session) AppendMessage(msgList ...*types.Message) {
 
 	s.mu.Lock()
 	for _, msg := range msgList {
+		if msg.Time.IsZero() {
+			msg.Time = time.Now()
+		}
 		s.History = append(s.History, *msg)
 		toPersist = append(toPersist, *msg)
 	}

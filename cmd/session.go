@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/spf13/cobra"
 
@@ -14,7 +13,7 @@ import (
 
 // sessionCmd represents the session command
 var sessionCmd = &cobra.Command{
-	Use:   "session",
+	Use:   "sessions",
 	Short: "Manage chat sessions",
 	Long:  `Manage chat sessions for the Friday AI assistant.`,
 }
@@ -47,10 +46,10 @@ var sessionListCmd = &cobra.Command{
 			}
 			alias := meta.Alias
 			if alias == "" {
-				alias = meta.CreatedAt.Format("2006-01-02")
+				alias = "-"
 			}
-			fmt.Printf("  %s %s  %s (messages: %d)\n",
-				marker, meta.ID[:8], alias, meta.MessageCount)
+			fmt.Printf("  %s  %s %s %s (messages: %d)\n",
+				marker, meta.ID, meta.CreatedAt.Format("2006-01-02 15:04"), alias, meta.MessageCount)
 		}
 	},
 }
@@ -59,12 +58,10 @@ var sessionListCmd = &cobra.Command{
 var sessionNewCmd = &cobra.Command{
 	Use:   "new",
 	Short: "Create a new session",
-	Long:  `Create a new chat session with today's date as default alias.`,
+	Long:  `Create a new chat session.`,
 	Run: func(cmd *cobra.Command, args []string) {
 		store := sessMgr.GetStore()
 		sessionID := types.NewID()
-		now := time.Now()
-		alias := now.Format("2006-01-02")
 
 		_, err := store.Create(sessionID)
 		if err != nil {
@@ -72,10 +69,12 @@ var sessionNewCmd = &cobra.Command{
 			os.Exit(1)
 		}
 
-		// Set default alias to today's date
-		if err := store.UpdateAlias(sessionID, alias); err != nil {
-			fmt.Fprintf(os.Stderr, "failed to set alias: %v\n", err)
-			os.Exit(1)
+		// Set alias based on tty
+		alias := sessMgr.Alias()
+		if alias != "" {
+			if err := store.UpdateAlias(sessionID, alias); err != nil {
+				fmt.Fprintf(os.Stderr, "failed to set alias: %v\n", err)
+			}
 		}
 
 		if err := sessMgr.SetCurrentID(sessionID); err != nil {
@@ -83,7 +82,7 @@ var sessionNewCmd = &cobra.Command{
 			os.Exit(1)
 		}
 
-		fmt.Printf("Created session: %s (alias: %s)\n", sessionID[:8], alias)
+		fmt.Printf("Created session: %s\n", sessionID)
 	},
 }
 
@@ -133,7 +132,7 @@ var sessionUseCmd = &cobra.Command{
 			os.Exit(1)
 		}
 
-		fmt.Printf("Switched to session: %s\n", sessionID[:8])
+		fmt.Printf("Switched to session: %s\n", sessionID)
 	},
 }
 
@@ -171,7 +170,7 @@ var sessionShowCmd = &cobra.Command{
 			os.Exit(1)
 		}
 
-		fmt.Printf("Session: %s\n", sessionID[:8])
+		fmt.Printf("Session: %s\n", sessionID)
 		fmt.Printf("Created: %s\n", meta.CreatedAt.Format("2006-01-02 15:04:05"))
 
 		// Count visible messages (exclude agent internal messages)
@@ -190,7 +189,11 @@ var sessionShowCmd = &cobra.Command{
 				continue // skip agent internal messages
 			}
 			idx++
-			fmt.Printf("[%d] %s\n", idx, formatMessage(msg))
+			timeStr := ""
+			if !msg.Time.IsZero() {
+				timeStr = msg.Time.Format("15:04:05")
+			}
+			fmt.Printf("[%d] %s %s\n", idx, timeStr, formatMessage(msg))
 		}
 	},
 }
@@ -222,7 +225,7 @@ var sessionAliasCmd = &cobra.Command{
 			fmt.Fprintf(os.Stderr, "failed to set alias: %v\n", err)
 			os.Exit(1)
 		}
-		fmt.Printf("Set alias '%s' for session: %s\n", alias, sessionID[:8])
+		fmt.Printf("Set alias '%s' for session: %s\n", alias, sessionID)
 	},
 }
 
@@ -252,7 +255,7 @@ var sessionArchiveCmd = &cobra.Command{
 			fmt.Fprintf(os.Stderr, "failed to archive: %v\n", err)
 			os.Exit(1)
 		}
-		fmt.Printf("Archived session: %s\n", sessionID[:8])
+		fmt.Printf("Archived session: %s\n", sessionID)
 
 		// If current session, clear it
 		currentID, _ := sessMgr.GetCurrentID()
@@ -288,7 +291,7 @@ var sessionUnarchiveCmd = &cobra.Command{
 			fmt.Fprintf(os.Stderr, "failed to unarchive: %v\n", err)
 			os.Exit(1)
 		}
-		fmt.Printf("Unarchived session: %s\n", sessionID[:8])
+		fmt.Printf("Unarchived session: %s\n", sessionID)
 	},
 }
 
@@ -361,7 +364,7 @@ var sessionDeleteCmd = &cobra.Command{
 			os.Remove(cfg.DataDirPath() + "/current")
 		}
 
-		fmt.Printf("Deleted session: %s\n", sessionID[:8])
+		fmt.Printf("Deleted session: %s\n", sessionID)
 	},
 }
 
@@ -391,14 +394,25 @@ func formatMessage(msg types.Message) string {
 }
 
 func findSessionByPrefix(metas []sessions.SessionMeta, prefix string) (string, bool) {
-	var matches []string
+	var matches []sessions.SessionMeta
 	for _, meta := range metas {
 		if strings.HasPrefix(meta.ID, prefix) {
-			matches = append(matches, meta.ID)
+			matches = append(matches, meta)
 		}
 	}
 	if len(matches) == 1 {
-		return matches[0], true
+		return matches[0].ID, true
+	}
+	if len(matches) > 1 {
+		fmt.Fprintf(os.Stderr, "Ambiguous prefix '%s', matches %d sessions:\n", prefix, len(matches))
+		for _, m := range matches {
+			alias := m.Alias
+			if alias == "" {
+				alias = "-"
+			}
+			fmt.Fprintf(os.Stderr, "  %s  %s\n", m.ID, alias)
+		}
+		fmt.Fprintf(os.Stderr, "Please use a longer prefix.\n")
 	}
 	return "", false
 }

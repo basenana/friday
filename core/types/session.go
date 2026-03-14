@@ -1,6 +1,8 @@
 package types
 
 import (
+	"time"
+
 	"github.com/google/uuid"
 )
 
@@ -53,7 +55,7 @@ type Message struct {
 	ToolResult *ToolResult `json:"tool_result,omitempty"`
 
 	Metadata map[string]string `json:"-"`
-	Time     string            `json:"time,omitempty"`
+	Time     time.Time         `json:"time,omitempty"`
 }
 
 func (m Message) GetRole() MessageRole {

@@ -20,7 +20,8 @@ make build    # Build for darwin/arm64, darwin/amd64, linux/arm64, linux/amd64
 make test     # Run all unit tests (go test ./...)
 ```
 
-When executing commands, keep them simple and easy to audit. For example, if you need to execute `cmd1 && cmd2`, please use the tool twice, executing `cmd1` and `cmd2` respectively.
+- Binaries need to be placed in the bin directory; it is strongly recommended to use make for building.
+- When executing commands, keep them simple and easy to audit. For example, if you need to execute `cmd1 && cmd2`, please use the tool twice, executing `cmd1` and `cmd2` respectively.
 
 ## Architecture
 
