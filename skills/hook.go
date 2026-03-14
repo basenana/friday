@@ -31,8 +31,6 @@ func (h *Hook) BeforeModel(ctx context.Context, sess *session.Session, req provi
 		return nil
 	}
 
-	skillsXML := FormatSkillsAsXML(skills)
-	req.AppendSystemPrompt("\n" + SKILL_SYSTEM_PROMPT + "\n" + skillsXML)
-
+	req.AppendSystemPrompt(builtSkillsSystemPrompt(h.registry, skills))
 	return nil
 }

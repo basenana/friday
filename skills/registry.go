@@ -10,7 +10,7 @@ type Registry struct {
 	mu     sync.RWMutex
 }
 
-// NewRegistry creates a new skill registry
+// NewRegistry creates a new skill registry from an existing loader
 func NewRegistry(loader *Loader) *Registry {
 	return &Registry{
 		loader: loader,
@@ -63,13 +63,18 @@ func (r *Registry) Refresh() error {
 	defer r.mu.Unlock()
 
 	// Create a new loader and reload
-	newLoader := NewLoader(r.loader.SkillsPath())
+	newLoader := NewLoader(r.loader.SkillsPaths()...)
 	if err := newLoader.Load(); err != nil {
 		return err
 	}
 
 	r.loader = newLoader
 	return nil
+}
+
+// Locations returns all skills directory paths
+func (r *Registry) Locations() []string {
+	return r.loader.SkillsPaths()
 }
 
 // Delete removes a skill

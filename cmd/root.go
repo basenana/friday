@@ -7,8 +7,8 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/basenana/friday/config"
-	"github.com/basenana/friday/session"
-	"github.com/basenana/friday/session/file"
+	"github.com/basenana/friday/sessions"
+	"github.com/basenana/friday/sessions/file"
 	"github.com/basenana/friday/utils/logger"
 )
 
@@ -16,7 +16,7 @@ var (
 	cfgFile      string
 	workspaceDir string
 	cfg          *config.Config
-	sessMgr      *session.Manager
+	sessMgr      *sessions.Manager
 )
 
 var rootCmd = &cobra.Command{
@@ -38,7 +38,7 @@ Text in, text out. Pipe-friendly. No GUI, no cloud dependency.`,
 		// Initialize session manager
 		store := file.NewFileSessionStore(cfg.SessionsPath())
 		currentFile := filepath.Join(cfg.DataDirPath(), "current")
-		sessMgr = session.NewManager(store, currentFile)
+		sessMgr = sessions.NewManager(store, currentFile)
 
 		return nil
 	},

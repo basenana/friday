@@ -10,6 +10,8 @@ const (
 	FileRoleSystemPrompt FileRole = "system_prompt"
 	// FileRoleGuidance files provide guidance only (not loaded into context)
 	FileRoleGuidance FileRole = "guidance"
+	// FileRoleMemory files are used to store long-term critical memories.
+	FileRoleMemory FileRole = "memory"
 	// FileRoleOptional files are optional and may be skipped
 	FileRoleOptional FileRole = "optional"
 )

@@ -23,9 +23,9 @@ const (
 
 // Executor handles command execution with sandboxing
 type Executor struct {
-	config   *Config
-	perm     *Permission
-	sandbox  Sandbox
+	config  *Config
+	perm    *Permission
+	sandbox Sandbox
 }
 
 // NewExecutor creates a new Executor

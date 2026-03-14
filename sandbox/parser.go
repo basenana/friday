@@ -112,13 +112,13 @@ func (c Command) MatchPattern(pattern string) bool {
 	}
 
 	// Case 1: Only command name "git", "npm"
-	 // Special case: single "*" matches anything
-    if len(parts) == 1 && parts[0] == "*" {
-        return true
-    }
-    if len(parts) == 1 {
-        return c.Name == parts[0]
-    }
+	// Special case: single "*" matches anything
+	if len(parts) == 1 && parts[0] == "*" {
+		return true
+	}
+	if len(parts) == 1 {
+		return c.Name == parts[0]
+	}
 
 	// Case 2: Command + subcommand "git push", "npm run"
 	if len(parts) == 2 {

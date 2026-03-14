@@ -10,27 +10,38 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Loader loads and manages skills from a directory
+// Loader loads and manages skills from multiple directories (PATH-like)
 type Loader struct {
-	skillsPath string
-	skills     map[string]*Skill
+	skillsPaths []string
+	skills      map[string]*Skill
 }
 
-// NewLoader creates a new skill loader
-func NewLoader(skillsPath string) *Loader {
+// NewLoader creates a new skill loader with multiple paths
+func NewLoader(skillsPaths ...string) *Loader {
 	return &Loader{
-		skillsPath: skillsPath,
-		skills:     make(map[string]*Skill),
+		skillsPaths: skillsPaths,
+		skills:      make(map[string]*Skill),
 	}
 }
 
-// Load traverses the skills directory and loads all skills
+// Load traverses all skills directories and loads skills
+// Directories are processed in order; later directories override earlier ones
 func (l *Loader) Load() error {
-	if _, err := os.Stat(l.skillsPath); os.IsNotExist(err) {
+	for _, skillsPath := range l.skillsPaths {
+		if err := l.loadFromDir(skillsPath); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// loadFromDir loads skills from a single directory
+func (l *Loader) loadFromDir(skillsPath string) error {
+	if _, err := os.Stat(skillsPath); os.IsNotExist(err) {
 		return nil
 	}
 
-	entries, err := os.ReadDir(l.skillsPath)
+	entries, err := os.ReadDir(skillsPath)
 	if err != nil {
 		return fmt.Errorf("read skills directory: %w", err)
 	}
@@ -40,7 +51,7 @@ func (l *Loader) Load() error {
 			continue
 		}
 
-		skillPath := filepath.Join(l.skillsPath, entry.Name())
+		skillPath := filepath.Join(skillsPath, entry.Name())
 		skill, err := l.loadSkill(skillPath)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: failed to load skill %s: %v\n", entry.Name(), err)
@@ -123,9 +134,19 @@ func (l *Loader) Get(name string) *Skill {
 }
 
 // LoadSkillFromDir loads and returns a skill from a subdirectory name
+// Searches through all paths in order, returns first match
 func (l *Loader) LoadSkillFromDir(dirName string) (*Skill, error) {
-	skillPath := filepath.Join(l.skillsPath, dirName)
-	return l.loadSkill(skillPath)
+	for _, skillsPath := range l.skillsPaths {
+		skillPath := filepath.Join(skillsPath, dirName)
+		skill, err := l.loadSkill(skillPath)
+		if err != nil {
+			return nil, err
+		}
+		if skill != nil {
+			return skill, nil
+		}
+	}
+	return nil, nil
 }
 
 // List returns all loaded skills
@@ -205,7 +226,16 @@ func (l *Loader) Delete(skillName string) error {
 	return nil
 }
 
-// SkillsPath returns the skills directory path
+// SkillsPaths returns all skills directory paths
+func (l *Loader) SkillsPaths() []string {
+	return l.skillsPaths
+}
+
+// SkillsPath returns the first skills directory path for backward compatibility
+// Deprecated: Use SkillsPaths() instead
 func (l *Loader) SkillsPath() string {
-	return l.skillsPath
+	if len(l.skillsPaths) > 0 {
+		return l.skillsPaths[0]
+	}
+	return ""
 }

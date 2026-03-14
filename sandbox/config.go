@@ -14,10 +14,10 @@ type PermissionsConfig struct {
 
 // SandboxConfig defines sandbox isolation settings
 type SandboxConfig struct {
-	Enabled    bool              `json:"enabled" yaml:"enabled"`
-	Filesystem FilesystemConfig  `json:"filesystem" yaml:"filesystem"`
-	Network    NetworkConfig     `json:"network" yaml:"network"`
-	Defaults   DefaultsConfig    `json:"defaults" yaml:"defaults"`
+	Enabled    bool             `json:"enabled" yaml:"enabled"`
+	Filesystem FilesystemConfig `json:"filesystem" yaml:"filesystem"`
+	Network    NetworkConfig    `json:"network" yaml:"network"`
+	Defaults   DefaultsConfig   `json:"defaults" yaml:"defaults"`
 }
 
 // FilesystemConfig defines filesystem access control

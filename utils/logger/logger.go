@@ -2,17 +2,18 @@ package logger
 
 import (
 	"os"
+	"path/filepath"
 
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
 
 var (
-	root           *zap.Logger
-	atom           zap.AtomicLevel
-	sugar          *zap.SugaredLogger
-	rotatingWriter *RotatingFileWriter
-	coreAdapter    *coreLoggerAdapter
+	root        *zap.Logger
+	atom        zap.AtomicLevel
+	sugar       *zap.SugaredLogger
+	logFile     *os.File
+	coreAdapter *coreLoggerAdapter
 )
 
 // Init initializes the logger writing to stdout only
@@ -30,27 +31,33 @@ func Init() {
 	sugar = root.Sugar()
 }
 
-// InitWithFile initializes the logger writing to file only
-func InitWithFile(logPath string, maxDays int) {
+// InitWithFile initializes the logger writing to the specified file
+func InitWithFile(logPath string) {
 	atom = zap.NewAtomicLevel()
 	encoderCfg := zap.NewProductionEncoderConfig()
 	encoderCfg.TimeKey = "timestamp"
 	encoderCfg.EncodeTime = zapcore.RFC3339TimeEncoder
 
 	// Ensure log directory exists
-	if err := os.MkdirAll(logPath, 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(logPath), 0755); err != nil {
 		// Fall back to stdout if directory creation fails
 		Init()
 		return
 	}
 
-	// Create rotating file writer
-	rotatingWriter = NewRotatingFileWriter(logPath, maxDays)
+	// Open log file for appending
+	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		// Fall back to stdout if file open fails
+		Init()
+		return
+	}
+	logFile = f
 
 	// Create core for file only
 	fileCore := zapcore.NewCore(
 		zapcore.NewJSONEncoder(encoderCfg),
-		zapcore.AddSync(rotatingWriter),
+		zapcore.AddSync(logFile),
 		atom,
 	)
 
@@ -68,11 +75,11 @@ func Sync() {
 	_ = root.Sync()
 }
 
-// Close closes the rotating file writer
+// Close closes the log file
 func Close() {
 	Sync()
-	if rotatingWriter != nil {
-		rotatingWriter.Close()
+	if logFile != nil {
+		logFile.Close()
 	}
 }
 

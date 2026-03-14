@@ -268,16 +268,43 @@ func extractZip(destDir, archivePath string) (string, error) {
 	}
 	defer r.Close()
 
+	// Check if all files share a common root directory
+	// A proper skill archive has structure: skill-name/SKILL.md, skill-name/scripts/...
+	// If files are at top level (SKILL.md, scripts/...), we need to create a directory
+	var firstPart string
+	hasRootDir := true
+	for _, f := range r.File {
+		if f.FileInfo().IsDir() {
+			continue
+		}
+		parts := strings.Split(strings.TrimSuffix(f.Name, "/"), "/")
+		if len(parts) == 0 || parts[0] == "" {
+			continue
+		}
+		if firstPart == "" {
+			firstPart = parts[0]
+		} else if firstPart != parts[0] {
+			// Different first parts means no common root directory
+			hasRootDir = false
+			break
+		}
+	}
+
+	// Also check if the first part looks like a directory (contains SKILL.md or other skill files)
+	// If the first part itself is SKILL.md, then there's no root directory
+	if firstPart == "SKILL.md" || firstPart == "_meta.json" {
+		hasRootDir = false
+	}
+
+	// If no root directory, use archive filename (without extension) as skill name
 	var skillName string
+	if !hasRootDir {
+		skillName = strings.TrimSuffix(filepath.Base(archivePath), ".zip")
+	} else {
+		skillName = firstPart
+	}
 
 	for _, f := range r.File {
-		parts := strings.Split(f.Name, "/")
-		if len(parts) > 0 && parts[0] != "" {
-			if skillName == "" {
-				skillName = parts[0]
-			}
-		}
-
 		if f.FileInfo().IsDir() {
 			continue
 		}
@@ -287,7 +314,13 @@ func extractZip(destDir, archivePath string) (string, error) {
 			return "", fmt.Errorf("symlinks not allowed in skill archives: %s", f.Name)
 		}
 
-		relPath := f.Name
+		var relPath string
+		if hasRootDir {
+			relPath = f.Name
+		} else {
+			// Prepend skill name as root directory
+			relPath = filepath.Join(skillName, f.Name)
+		}
 		targetPath := filepath.Join(destDir, relPath)
 
 		// zip slip protection
@@ -343,7 +376,7 @@ func extractTarGz(destDir, archivePath string) (string, error) {
 	}
 	defer gzr.Close()
 
-	return extractTarFromReader(destDir, gzr)
+	return extractTarFromReader(destDir, gzr, archivePath)
 }
 
 func extractTar(destDir, archivePath string) (string, error) {
@@ -353,14 +386,15 @@ func extractTar(destDir, archivePath string) (string, error) {
 	}
 	defer file.Close()
 
-	return extractTarFromReader(destDir, file)
+	return extractTarFromReader(destDir, file, archivePath)
 }
 
-func extractTarFromReader(destDir string, r io.Reader) (string, error) {
+func extractTarFromReader(destDir string, r io.Reader, archivePath string) (string, error) {
 	cleanDestDir := filepath.Clean(destDir)
 	tr := tar.NewReader(r)
 
-	var skillName string
+	var firstPart string
+	hasRootDir := true
 
 	for {
 		header, err := tr.Next()
@@ -371,23 +405,77 @@ func extractTarFromReader(destDir string, r io.Reader) (string, error) {
 			return "", fmt.Errorf("read tar: %w", err)
 		}
 
-		parts := strings.Split(header.Name, "/")
-		if len(parts) > 0 && parts[0] != "" {
-			if skillName == "" {
-				skillName = parts[0]
-			}
+		if header.Typeflag == tar.TypeDir {
+			continue
+		}
+
+		parts := strings.Split(strings.TrimSuffix(header.Name, "/"), "/")
+		if len(parts) == 0 || parts[0] == "" {
+			continue
+		}
+		if firstPart == "" {
+			firstPart = parts[0]
+		} else if firstPart != parts[0] {
+			hasRootDir = false
+		}
+	}
+
+	if firstPart == "SKILL.md" || firstPart == "_meta.json" {
+		hasRootDir = false
+	}
+
+	var skillName string
+	if !hasRootDir {
+		skillName = strings.TrimSuffix(filepath.Base(archivePath), ".tar.gz")
+		skillName = strings.TrimSuffix(skillName, ".tgz")
+		skillName = strings.TrimSuffix(skillName, ".tar")
+	} else {
+		skillName = firstPart
+	}
+
+	// Re-open archive to process files
+	file, err := os.Open(archivePath)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+
+	var reader io.Reader = file
+	if strings.HasSuffix(archivePath, ".tar.gz") || strings.HasSuffix(archivePath, ".tgz") {
+		gzr, err := gzip.NewReader(file)
+		if err != nil {
+			return "", fmt.Errorf("open gzip: %w", err)
+		}
+		defer gzr.Close()
+		reader = gzr
+	}
+
+	tr = tar.NewReader(reader)
+
+	for {
+		header, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return "", fmt.Errorf("read tar: %w", err)
 		}
 
 		if header.Typeflag == tar.TypeDir {
 			continue
 		}
 
-		// Reject symlinks for security
 		if header.Typeflag == tar.TypeSymlink {
 			return "", fmt.Errorf("symlinks not allowed in skill archives: %s", header.Name)
 		}
 
-		targetPath := filepath.Join(destDir, header.Name)
+		var relPath string
+		if hasRootDir {
+			relPath = header.Name
+		} else {
+			relPath = filepath.Join(skillName, header.Name)
+		}
+		targetPath := filepath.Join(destDir, relPath)
 
 		// zip slip protection
 		cleanTarget := filepath.Clean(targetPath)

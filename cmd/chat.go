@@ -12,6 +12,7 @@ import (
 
 var (
 	chatSessionID string
+	chatVerbose   bool
 )
 
 var chatCmd = &cobra.Command{
@@ -73,6 +74,9 @@ Message can be provided as:
 		if chatSessionID != "" {
 			opts = append(opts, WithSessionID(chatSessionID))
 		}
+		if chatVerbose {
+			opts = append(opts, WithVerbose(true))
+		}
 
 		agentCtx, err := SetupAgent(ctx, cfg, sessMgr, opts...)
 		if err != nil {
@@ -88,5 +92,6 @@ Message can be provided as:
 
 func init() {
 	chatCmd.Flags().StringVarP(&chatSessionID, "session", "s", "", "session ID to use")
+	chatCmd.Flags().BoolVarP(&chatVerbose, "verbose", "v", false, "verbose output")
 	rootCmd.AddCommand(chatCmd)
 }

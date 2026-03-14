@@ -9,7 +9,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/basenana/friday/core/types"
-	"github.com/basenana/friday/session"
+	"github.com/basenana/friday/sessions"
 )
 
 // sessionCmd represents the session command
@@ -114,7 +114,7 @@ var sessionUseCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		store := sessMgr.GetStore()
-		sessionID := args[0]
+		prefix := args[0]
 
 		metas, err := store.List()
 		if err != nil {
@@ -122,16 +122,9 @@ var sessionUseCmd = &cobra.Command{
 			os.Exit(1)
 		}
 
-		found := false
-		for _, meta := range metas {
-			if meta.ID == sessionID {
-				found = true
-				break
-			}
-		}
-
+		sessionID, found := findSessionByPrefix(metas, prefix)
 		if !found {
-			fmt.Printf("Session not found: %s\n", sessionID)
+			fmt.Printf("Session not found: %s\n", prefix)
 			os.Exit(1)
 		}
 
@@ -140,7 +133,7 @@ var sessionUseCmd = &cobra.Command{
 			os.Exit(1)
 		}
 
-		fmt.Printf("Switched to session: %s\n", sessionID)
+		fmt.Printf("Switched to session: %s\n", sessionID[:8])
 	},
 }
 
@@ -152,7 +145,19 @@ var sessionShowCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		store := sessMgr.GetStore()
-		sessionID := args[0]
+		prefix := args[0]
+
+		metas, err := store.List()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "failed to list sessions: %v\n", err)
+			os.Exit(1)
+		}
+
+		sessionID, found := findSessionByPrefix(metas, prefix)
+		if !found {
+			fmt.Printf("Session not found: %s\n", prefix)
+			os.Exit(1)
+		}
 
 		messages, err := store.LoadMessages(sessionID)
 		if err != nil {
@@ -166,7 +171,7 @@ var sessionShowCmd = &cobra.Command{
 			os.Exit(1)
 		}
 
-		fmt.Printf("Session: %s\n", sessionID)
+		fmt.Printf("Session: %s\n", sessionID[:8])
 		fmt.Printf("Created: %s\n", meta.CreatedAt.Format("2006-01-02 15:04:05"))
 
 		// Count visible messages (exclude agent internal messages)
@@ -198,14 +203,26 @@ var sessionAliasCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(2),
 	Run: func(cmd *cobra.Command, args []string) {
 		store := sessMgr.GetStore()
-		sessionID := args[0]
+		prefix := args[0]
 		alias := args[1]
+
+		metas, err := store.List()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "failed to list sessions: %v\n", err)
+			os.Exit(1)
+		}
+
+		sessionID, found := findSessionByPrefix(metas, prefix)
+		if !found {
+			fmt.Printf("Session not found: %s\n", prefix)
+			os.Exit(1)
+		}
 
 		if err := store.UpdateAlias(sessionID, alias); err != nil {
 			fmt.Fprintf(os.Stderr, "failed to set alias: %v\n", err)
 			os.Exit(1)
 		}
-		fmt.Printf("Set alias '%s' for session: %s\n", alias, sessionID)
+		fmt.Printf("Set alias '%s' for session: %s\n", alias, sessionID[:8])
 	},
 }
 
@@ -217,13 +234,25 @@ var sessionArchiveCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		store := sessMgr.GetStore()
-		sessionID := args[0]
+		prefix := args[0]
+
+		metas, err := store.List()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "failed to list sessions: %v\n", err)
+			os.Exit(1)
+		}
+
+		sessionID, found := findSessionByPrefix(metas, prefix)
+		if !found {
+			fmt.Printf("Session not found: %s\n", prefix)
+			os.Exit(1)
+		}
 
 		if err := store.Archive(sessionID); err != nil {
 			fmt.Fprintf(os.Stderr, "failed to archive: %v\n", err)
 			os.Exit(1)
 		}
-		fmt.Printf("Archived session: %s\n", sessionID)
+		fmt.Printf("Archived session: %s\n", sessionID[:8])
 
 		// If current session, clear it
 		currentID, _ := sessMgr.GetCurrentID()
@@ -241,13 +270,25 @@ var sessionUnarchiveCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		store := sessMgr.GetStore()
-		sessionID := args[0]
+		prefix := args[0]
+
+		metas, err := store.List()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "failed to list sessions: %v\n", err)
+			os.Exit(1)
+		}
+
+		sessionID, found := findSessionByPrefix(metas, prefix)
+		if !found {
+			fmt.Printf("Session not found: %s\n", prefix)
+			os.Exit(1)
+		}
 
 		if err := store.Unarchive(sessionID); err != nil {
 			fmt.Fprintf(os.Stderr, "failed to unarchive: %v\n", err)
 			os.Exit(1)
 		}
-		fmt.Printf("Unarchived session: %s\n", sessionID)
+		fmt.Printf("Unarchived session: %s\n", sessionID[:8])
 	},
 }
 
@@ -264,7 +305,7 @@ var sessionArchivedCmd = &cobra.Command{
 			os.Exit(1)
 		}
 
-		var archived []session.SessionMeta
+		var archived []sessions.SessionMeta
 		for _, meta := range metas {
 			if meta.Archived {
 				archived = append(archived, meta)
@@ -296,7 +337,7 @@ var sessionDeleteCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		store := sessMgr.GetStore()
-		sessionID := args[0]
+		prefix := args[0]
 
 		metas, err := store.List()
 		if err != nil {
@@ -304,16 +345,9 @@ var sessionDeleteCmd = &cobra.Command{
 			os.Exit(1)
 		}
 
-		found := false
-		for _, meta := range metas {
-			if meta.ID == sessionID {
-				found = true
-				break
-			}
-		}
-
+		sessionID, found := findSessionByPrefix(metas, prefix)
 		if !found {
-			fmt.Printf("Session not found: %s\n", sessionID)
+			fmt.Printf("Session not found: %s\n", prefix)
 			os.Exit(1)
 		}
 
@@ -327,7 +361,7 @@ var sessionDeleteCmd = &cobra.Command{
 			os.Remove(cfg.DataDirPath() + "/current")
 		}
 
-		fmt.Printf("Deleted session: %s\n", sessionID)
+		fmt.Printf("Deleted session: %s\n", sessionID[:8])
 	},
 }
 
@@ -354,6 +388,19 @@ func formatMessage(msg types.Message) string {
 	default:
 		return fmt.Sprintf("unknown(%s): %s", msg.Role, msg.Content)
 	}
+}
+
+func findSessionByPrefix(metas []sessions.SessionMeta, prefix string) (string, bool) {
+	var matches []string
+	for _, meta := range metas {
+		if strings.HasPrefix(meta.ID, prefix) {
+			matches = append(matches, meta.ID)
+		}
+	}
+	if len(matches) == 1 {
+		return matches[0], true
+	}
+	return "", false
 }
 
 func init() {

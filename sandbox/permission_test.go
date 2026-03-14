@@ -51,11 +51,11 @@ func TestPermissionDeny(t *testing.T) {
 		want Decision
 	}{
 		{"git status", Allow},
-		{"sudo ls", Deny},          // in deny list
-		{"rm -rf /tmp", Deny},      // in deny list
-		{"rm file.txt", Allow},     // rm but not -rf
+		{"sudo ls", Deny},      // in deny list
+		{"rm -rf /tmp", Deny},  // in deny list
+		{"rm file.txt", Allow}, // rm but not -rf
 		{"npm install", Allow},
-		{"docker ps", Deny},        // not in allow list
+		{"docker ps", Deny}, // not in allow list
 	}
 
 	for _, tt := range tests {
@@ -85,8 +85,8 @@ func TestDenyPriority(t *testing.T) {
 	}{
 		{"git status", Allow},
 		{"git push origin main", Allow},
-		{"sudo ls", Deny},           // sudo is in deny list
-		{"rm -rf /tmp", Deny},      // rm -rf is in deny list
+		{"sudo ls", Deny},     // sudo is in deny list
+		{"rm -rf /tmp", Deny}, // rm -rf is in deny list
 	}
 
 	for _, tt := range tests {
@@ -115,9 +115,9 @@ func TestCompoundCommandDeny(t *testing.T) {
 		want Decision
 	}{
 		{"git status && npm install", Allow},
-		{"git status && sudo ls", Deny},      // sudo is denied
+		{"git status && sudo ls", Deny}, // sudo is denied
 		{"rm file && rm other", Allow},
-		{"npm install; docker ps", Deny},     // docker not in allow list
+		{"npm install; docker ps", Deny}, // docker not in allow list
 	}
 
 	for _, tt := range tests {
@@ -147,9 +147,9 @@ func TestCommandNotInAllow(t *testing.T) {
 	}{
 		{"git status", Allow},
 		{"npm install", Allow},
-		{"docker ps", Deny},      // not in allow list
+		{"docker ps", Deny},        // not in allow list
 		{"kubectl get pods", Deny}, // not in allow list
-		{"make build", Deny},     // not in allow list
+		{"make build", Deny},       // not in allow list
 	}
 
 	for _, tt := range tests {
@@ -266,10 +266,10 @@ func TestSubcommandMatching(t *testing.T) {
 		{"git push --force", Deny},
 		{"docker ps", Allow},
 		{"docker logs container", Allow},
-		{"docker run ubuntu", Deny},           // docker run not in allow list
+		{"docker run ubuntu", Deny}, // docker run not in allow list
 		{"docker run --privileged ubuntu", Deny},
 		{"npm run build", Allow},
-		{"npm install", Deny},                 // npm not in allow list (only npm run)
+		{"npm install", Deny}, // npm not in allow list (only npm run)
 	}
 
 	for _, tt := range tests {

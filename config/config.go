@@ -101,5 +101,34 @@ func (c *Config) MemoryPath() string {
 }
 
 func LogPath() string {
-	return filepath.Join(os.TempDir(), fmt.Sprintf("friday-%s.log", time.Now().Format(time.DateOnly)))
+	return filepath.Join("/tmp", fmt.Sprintf("friday-%s.log", time.Now().Format(time.DateOnly)))
+}
+
+func WriteDefaultConfig(path string) (bool, error) {
+	if _, err := os.Stat(path); err == nil {
+		return false, nil
+	}
+
+	cfg := DefaultConfig()
+	var data []byte
+	var err error
+
+	if strings.HasSuffix(path, ".json") {
+		data, err = json.MarshalIndent(cfg, "", "  ")
+	} else {
+		data, err = yaml.Marshal(cfg)
+	}
+	if err != nil {
+		return false, err
+	}
+
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return false, err
+	}
+
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		return false, err
+	}
+	return true, nil
 }

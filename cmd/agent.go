@@ -13,8 +13,8 @@ import (
 	coreSession "github.com/basenana/friday/core/session"
 	"github.com/basenana/friday/memory"
 	"github.com/basenana/friday/sandbox"
+	"github.com/basenana/friday/sessions"
 	"github.com/basenana/friday/skills"
-	"github.com/basenana/friday/session"
 	"github.com/basenana/friday/workspace"
 )
 
@@ -50,7 +50,7 @@ func WithVerbose(v bool) AgentOption {
 }
 
 // SetupAgent initializes all components needed to run an agent
-func SetupAgent(ctx context.Context, cfg *config.Config, sessMgr *session.Manager, opts ...AgentOption) (*AgentContext, error) {
+func SetupAgent(ctx context.Context, cfg *config.Config, sessMgr *sessions.Manager, opts ...AgentOption) (*AgentContext, error) {
 	options := &agentOptions{}
 	for _, opt := range opts {
 		opt(options)
@@ -129,7 +129,10 @@ func SetupAgent(ctx context.Context, cfg *config.Config, sessMgr *session.Manage
 	}
 
 	// Initialize sandbox and bash tool
-	sandboxCfg := sandbox.DefaultConfig()
+	sandboxCfg := cfg.Sandbox
+	if sandboxCfg == nil {
+		sandboxCfg = sandbox.DefaultConfig()
+	}
 	sandboxExec := sandbox.NewExecutor(sandboxCfg)
 	bashTool := sandbox.NewBashTool(sandboxExec)
 
@@ -137,7 +140,7 @@ func SetupAgent(ctx context.Context, cfg *config.Config, sessMgr *session.Manage
 	allTools := append(ws.FsTools(), bashTool)
 
 	// Create agent
-	systemPrompt := workspace.ComposeSystemPrompt(wsContent, agents.DEFAULT_SYSTEM_PROMPT)
+	systemPrompt := workspace.ComposeSystemPrompt(wsContent)
 	agent := agents.New(client, agents.Option{
 		SystemPrompt: systemPrompt,
 		Tools:        allTools,
@@ -170,8 +173,20 @@ func (ac *AgentContext) Chat(ctx context.Context, message string) *api.Response 
 
 // PrintResponse streams the response to stdout
 func PrintResponse(resp *api.Response) {
-	for delta := range resp.Deltas() {
-		fmt.Print(delta.Content)
+Waiting:
+	for {
+		select {
+		case err := <-resp.Error():
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				return
+			}
+		case delta, ok := <-resp.Deltas():
+			if !ok {
+				break Waiting
+			}
+			fmt.Print(delta.Content)
+		}
 	}
 	fmt.Println()
 }

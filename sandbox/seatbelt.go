@@ -115,4 +115,3 @@ func (s *Seatbelt) generateProfile(workdir string) string {
 
 	return sb.String()
 }
-

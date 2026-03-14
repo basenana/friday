@@ -106,19 +106,12 @@ func (w *Workspace) loadRecentMemoryLogs(days int) []string {
 }
 
 // ComposeSystemPrompt combines the default prompt with workspace content
-func ComposeSystemPrompt(content *LoadedContent, defaultPrompt string) string {
+func ComposeSystemPrompt(content *LoadedContent) string {
 	if content == nil || len(content.SystemPrompts) == 0 {
-		return defaultPrompt
+		return ""
 	}
 
 	var parts []string
-
-	// Start with default prompt
-	if defaultPrompt != "" {
-		parts = append(parts, defaultPrompt)
-	}
-
-	// Add custom sections
 	for _, prompt := range content.SystemPrompts {
 		prompt = strings.TrimSpace(prompt)
 		if prompt != "" {

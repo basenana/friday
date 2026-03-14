@@ -10,11 +10,11 @@ type Frontmatter struct {
 
 // Skill represents a loaded skill with its metadata and instructions
 type Skill struct {
-	Name        string       // Skill name (from frontmatter)
-	Description string       // Skill description (from frontmatter)
-	Frontmatter *Frontmatter // L1: Metadata for discovery
-	Instructions string      // L2: SKILL.md body content (after frontmatter)
-	BasePath    string       // Path to skill directory
+	Name         string       // Skill name (from frontmatter)
+	Description  string       // Skill description (from frontmatter)
+	Frontmatter  *Frontmatter // L1: Metadata for discovery
+	Instructions string       // L2: SKILL.md body content (after frontmatter)
+	BasePath     string       // Path to skill directory
 }
 
 // Resource represents a skill resource file

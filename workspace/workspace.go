@@ -9,8 +9,8 @@ import (
 // Workspace manages workspace files and memory integration.
 // It also implements core/fs.FileSystem interface for use as session workdir.
 type Workspace struct {
-	basePath string   // Path to workspace directory
-	memPath  string   // Path to memory directory (shared with memory package)
+	basePath string // Path to workspace directory
+	memPath  string // Path to memory directory (shared with memory package)
 	specs    []FileSpec
 }
 
@@ -20,13 +20,13 @@ func NewWorkspace(workspacePath, memoryPath string) *Workspace {
 		basePath: expandHome(workspacePath),
 		memPath:  expandHome(memoryPath),
 		specs: []FileSpec{
-			{Name: "AGENTS.md", Role: FileRoleSystemPrompt, Required: false},
-			{Name: "SOUL.md", Role: FileRoleSystemPrompt, Required: false},
-			{Name: "USER.md", Role: FileRoleSystemPrompt, Required: false},
-			{Name: "IDENTITY.md", Role: FileRoleSystemPrompt, Required: false},
-			{Name: "MEMORY.md", Role: FileRoleSystemPrompt, Required: false},
-			{Name: "TOOLS.md", Role: FileRoleGuidance, Required: false},
-			{Name: "HEARTBEAT.md", Role: FileRoleOptional, Required: false},
+			{Name: "AGENTS.md", Role: FileRoleSystemPrompt, Required: true},
+			{Name: "SOUL.md", Role: FileRoleSystemPrompt},
+			{Name: "USER.md", Role: FileRoleSystemPrompt},
+			{Name: "IDENTITY.md", Role: FileRoleSystemPrompt},
+			{Name: "MEMORY.md", Role: FileRoleMemory},
+			{Name: "TOOLS.md", Role: FileRoleGuidance},
+			{Name: "HEARTBEAT.md", Role: FileRoleOptional},
 		},
 	}
 }

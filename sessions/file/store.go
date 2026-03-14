@@ -10,7 +10,7 @@ import (
 
 	coresession "github.com/basenana/friday/core/session"
 	"github.com/basenana/friday/core/types"
-	"github.com/basenana/friday/session"
+	"github.com/basenana/friday/sessions"
 )
 
 type FileSessionStore struct {
@@ -55,7 +55,7 @@ func (s *FileSessionStore) Create(sessionID string, opts ...coresession.Option) 
 	}
 
 	now := time.Now()
-	meta := session.SessionMeta{
+	meta := sessions.SessionMeta{
 		ID:           sessionID,
 		CreatedAt:    now,
 		UpdatedAt:    now,
@@ -89,7 +89,7 @@ func (s *FileSessionStore) Load(sessionID string, opts ...coresession.Option) (*
 		return nil, err
 	}
 
-	var meta session.SessionMeta
+	var meta sessions.SessionMeta
 	if err := json.Unmarshal(data, &meta); err != nil {
 		return nil, err
 	}
@@ -112,24 +112,24 @@ func (s *FileSessionStore) Delete(sessionID string) error {
 	return os.RemoveAll(sessionDir)
 }
 
-func (s *FileSessionStore) List() ([]session.SessionMeta, error) {
+func (s *FileSessionStore) List() ([]sessions.SessionMeta, error) {
 	return s.listFiltered(false)
 }
 
-func (s *FileSessionStore) ListActive() ([]session.SessionMeta, error) {
+func (s *FileSessionStore) ListActive() ([]sessions.SessionMeta, error) {
 	return s.listFiltered(true)
 }
 
-func (s *FileSessionStore) listFiltered(activeOnly bool) ([]session.SessionMeta, error) {
+func (s *FileSessionStore) listFiltered(activeOnly bool) ([]sessions.SessionMeta, error) {
 	entries, err := os.ReadDir(s.basePath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return []session.SessionMeta{}, nil
+			return []sessions.SessionMeta{}, nil
 		}
 		return nil, err
 	}
 
-	var result []session.SessionMeta
+	var result []sessions.SessionMeta
 	for _, entry := range entries {
 		// Only process directories
 		if !entry.IsDir() {
@@ -144,7 +144,7 @@ func (s *FileSessionStore) listFiltered(activeOnly bool) ([]session.SessionMeta,
 			continue
 		}
 
-		var meta session.SessionMeta
+		var meta sessions.SessionMeta
 		if err := json.Unmarshal(data, &meta); err != nil {
 			continue
 		}
@@ -159,7 +159,7 @@ func (s *FileSessionStore) listFiltered(activeOnly bool) ([]session.SessionMeta,
 	return result, nil
 }
 
-func (s *FileSessionStore) GetMeta(sessionID string) (*session.SessionMeta, error) {
+func (s *FileSessionStore) GetMeta(sessionID string) (*sessions.SessionMeta, error) {
 	return s.loadMeta(sessionID)
 }
 
@@ -296,7 +296,7 @@ func (s *FileSessionStore) updateMeta(sessionID string, added int) error {
 		return err
 	}
 
-	var meta session.SessionMeta
+	var meta sessions.SessionMeta
 	if err := json.Unmarshal(data, &meta); err != nil {
 		return err
 	}
@@ -312,20 +312,20 @@ func (s *FileSessionStore) updateMeta(sessionID string, added int) error {
 	return os.WriteFile(metaPath, metaData, 0644)
 }
 
-func (s *FileSessionStore) loadMeta(sessionID string) (*session.SessionMeta, error) {
+func (s *FileSessionStore) loadMeta(sessionID string) (*sessions.SessionMeta, error) {
 	metaPath := s.metaPath(sessionID)
 	data, err := os.ReadFile(metaPath)
 	if err != nil {
 		return nil, err
 	}
-	var meta session.SessionMeta
+	var meta sessions.SessionMeta
 	if err := json.Unmarshal(data, &meta); err != nil {
 		return nil, err
 	}
 	return &meta, nil
 }
 
-func (s *FileSessionStore) saveMeta(sessionID string, meta *session.SessionMeta) error {
+func (s *FileSessionStore) saveMeta(sessionID string, meta *sessions.SessionMeta) error {
 	metaPath := s.metaPath(sessionID)
 	metaData, err := json.MarshalIndent(meta, "", "  ")
 	if err != nil {

@@ -2,9 +2,11 @@ package main
 
 import (
 	"fmt"
+	"path/filepath"
 
 	"github.com/spf13/cobra"
 
+	"github.com/basenana/friday/config"
 	"github.com/basenana/friday/workspace"
 )
 
@@ -13,22 +15,33 @@ var initCmd = &cobra.Command{
 	Short: "Initialize workspace with default files",
 	Long:  `Initialize the Friday workspace directory with default markdown files for agent context.`,
 	Run: func(cmd *cobra.Command, args []string) {
+		// Generate default config file
+		configPath := filepath.Join(cfg.DataDirPath(), "config.json")
+		created, err := config.WriteDefaultConfig(configPath)
+		if err != nil {
+			fmt.Printf("failed to write config: %v\n", err)
+			return
+		}
+		if created {
+			fmt.Println("Config file created:", configPath)
+		}
+
 		ws := workspace.NewWorkspace(cfg.WorkspacePath(), cfg.MemoryPath())
 
-		created, err := ws.Init()
+		wsCreated, err := ws.Init()
 		if err != nil {
 			fmt.Printf("failed to init workspace: %v\n", err)
 			return
 		}
 
-		if len(created) == 0 {
+		if len(wsCreated) == 0 {
 			fmt.Println("Workspace already initialized at:", cfg.WorkspacePath())
 			fmt.Println("All files already exist.")
 		} else {
 			fmt.Println("Workspace initialized at:", cfg.WorkspacePath())
 			fmt.Println("")
 			fmt.Println("Created files:")
-			for _, filename := range created {
+			for _, filename := range wsCreated {
 				switch filename {
 				case "AGENTS.md":
 					fmt.Println("  AGENTS.md    - Agent guidelines and memory usage rules")

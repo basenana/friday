@@ -50,7 +50,7 @@ func TestParsePipeCommand(t *testing.T) {
 	wantNames := []string{"cat", "grep", "wc"}
 	for i, c := range commands {
 		if c.Name != wantNames[i] {
-				t.Errorf("Expected command %d to be %q, got %q", i, wantNames[i], c.Name)
+			t.Errorf("Expected command %d to be %q, got %q", i, wantNames[i], c.Name)
 		}
 	}
 }
@@ -82,9 +82,9 @@ func TestParseQuotedArgs(t *testing.T) {
 
 func TestParseCommandWithSubcmd(t *testing.T) {
 	tests := []struct {
-		cmd         string
-		wantName    string
-		wantSubcmd  string
+		cmd          string
+		wantName     string
+		wantSubcmd   string
 		wantArgCount int
 	}{
 		{"git push origin main", "git", "push", 4},
@@ -160,7 +160,7 @@ func TestMatchPattern(t *testing.T) {
 		{"git status", "git status", true},
 		{"git push", "git status", false},
 		{"npm run", "npm run", true},
-		{"npm run build", "npm run", true},  // same command and subcommand
+		{"npm run build", "npm run", true},        // same command and subcommand
 		{"npm install package", "npm run", false}, // different subcommand
 
 		// Wildcard patterns

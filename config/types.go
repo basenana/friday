@@ -1,17 +1,19 @@
 package config
 
+import "github.com/basenana/friday/sandbox"
+
 type Config struct {
-	Model     ModelConfig   `yaml:"model" json:"model"`
-	DataDir   string        `yaml:"data_dir" json:"data_dir"`
-	Workspace string        `yaml:"workspace" json:"workspace"`
-	Memory    MemoryConfig  `yaml:"memory" json:"memory"`
-	Session   SessionConfig `yaml:"session" json:"session"`
-	Log       LogConfig     `yaml:"log" json:"log"`
+	Model     ModelConfig     `yaml:"model" json:"model"`
+	DataDir   string          `yaml:"data_dir" json:"data_dir"`
+	Workspace string          `yaml:"workspace" json:"workspace"`
+	Memory    MemoryConfig    `yaml:"memory" json:"memory"`
+	Session   SessionConfig   `yaml:"session" json:"session"`
+	Log       LogConfig       `yaml:"log" json:"log"`
+	Sandbox   *sandbox.Config `yaml:"sandbox" json:"sandbox"`
 }
 
 type LogConfig struct {
 	Enabled bool `yaml:"enabled" json:"enabled"`
-	MaxDays int  `yaml:"max_days" json:"max_days"`
 }
 
 type ModelConfig struct {
@@ -53,5 +55,6 @@ func DefaultConfig() *Config {
 		Session: SessionConfig{
 			DefaultAgent: "react",
 		},
+		Sandbox: sandbox.DefaultConfig(),
 	}
 }
