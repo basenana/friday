@@ -19,9 +19,6 @@ type Processor struct {
 }
 
 func NewProcessor(agent Agent, config ProcessorConfig) *Processor {
-	if config.RecentDays <= 0 {
-		config.RecentDays = 5
-	}
 	return &Processor{
 		agent:  agent,
 		config: config,
@@ -30,7 +27,8 @@ func NewProcessor(agent Agent, config ProcessorConfig) *Processor {
 
 func (p *Processor) ProcessSession(ctx context.Context, history *SessionHistory) (string, error) {
 	convText := FormatConversation(history.Messages)
-	resp := p.agent.Chat(ctx, buildPrompt(history.ID, history.CreatedAt, convText))
+	resp := p.agent.Chat(ctx,
+		buildPrompt(history.ID, history.CreatedAt, convText, p.config.MemoryPath, p.config.WorkspacePath))
 
 	result, err := api.ReadAllContent(ctx, resp)
 	if err != nil {
@@ -61,5 +59,4 @@ func FormatConversation(messages []types.Message) string {
 type ProcessorConfig struct {
 	MemoryPath    string
 	WorkspacePath string
-	RecentDays    int
 }

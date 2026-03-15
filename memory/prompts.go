@@ -10,6 +10,8 @@ const sessionPrompt = `You are analyzing a conversation session to extract valua
 <session>
 Session ID: {session_id}
 Created At: {session_created_at}
+Memory Dir: {memory_dir}
+Workspace Dir: {workspace_dir}
 </session>
 
 <workflow>
@@ -35,23 +37,23 @@ friday sessions archive {session_id}
 - Look for patterns, recurring themes, or accumulated insights
 - Note anything that seems important enough for long-term retention
 
-## Step 3: Update long-term memory (MEMORY.md)
+## Step 3: Update long-term memory
 
 - Identify content worth preserving: key decisions, user preferences, lessons learned, important context
-- Add new entries to MEMORY.md under appropriate sections
+- Add new entries to workspace/MEMORY.md under appropriate sections
 - Keep entries concise but informative
 - Cross-reference related topics when useful
 
 ## Step 4: Prune outdated information
 
-- Remove entries from MEMORY.md that are no longer relevant
+- Remove entries from workspace/MEMORY.md that are no longer relevant
 - Merge redundant entries
-- Keep MEMORY.md lean - quality over quantity
+- Keep workspace/MEMORY.md lean - quality over quantity
 
 ## Step 5: Sync user preferences
 
 - Check session history for any stated preferences or updated context
-- Update USER.md accordingly (name, timezone, ongoing projects, etc.)
+- Update workspace/USER.md accordingly (name, timezone, ongoing projects, etc.)
 </workflow>
 
 
@@ -69,10 +71,12 @@ friday sessions archive {session_id}
 
 `
 
-func buildPrompt(sessionID string, createdAt time.Time, conversation string) string {
+func buildPrompt(sessionID string, createdAt time.Time, conversation, memoryDir, workspaceDir string) string {
 	prompt := sessionPrompt
-	prompt = strings.ReplaceAll(prompt, "<session_id>", sessionID)
-	prompt = strings.ReplaceAll(prompt, "<session_created_at>", createdAt.Format(time.RFC3339))
-	prompt = strings.ReplaceAll(prompt, "<conversation>", conversation)
+	prompt = strings.ReplaceAll(prompt, "{session_id}", sessionID)
+	prompt = strings.ReplaceAll(prompt, "{session_created_at}", createdAt.Format(time.RFC3339))
+	prompt = strings.ReplaceAll(prompt, "{memory_dir}", memoryDir)
+	prompt = strings.ReplaceAll(prompt, "{workspace_dir}", workspaceDir)
+	prompt = strings.ReplaceAll(prompt, "{conversation}", conversation)
 	return prompt
 }

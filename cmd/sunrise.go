@@ -48,7 +48,6 @@ func runSunrise(ctx context.Context, cfg *config.Config, mgr *sessions.Manager) 
 	processor := memory.NewProcessor(agentCtx, memory.ProcessorConfig{
 		MemoryPath:    cfg.MemoryPath(),
 		WorkspacePath: cfg.WorkspacePath(),
-		RecentDays:    5,
 	})
 
 	allSessions, err := store.ListActive()
