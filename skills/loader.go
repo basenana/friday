@@ -51,6 +51,10 @@ func (l *Loader) loadFromDir(skillsPath string) error {
 			continue
 		}
 
+		if strings.HasPrefix(entry.Name(), ".") {
+			continue
+		}
+
 		skillPath := filepath.Join(skillsPath, entry.Name())
 		skill, err := l.loadSkill(skillPath)
 		if err != nil {

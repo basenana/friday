@@ -23,6 +23,8 @@ import (
 const (
 	// maxDownloadSize limits skill archive downloads to 100MB
 	maxDownloadSize = 100 * 1024 * 1024
+	// maxExtractedSize limits total extracted size to 500MB (zip bomb protection)
+	maxExtractedSize = 500 * 1024 * 1024
 	// downloadTimeout is the maximum time for downloading a skill archive
 	downloadTimeout = 60 * time.Second
 )
@@ -50,7 +52,9 @@ var skillsListCmd = &cobra.Command{
 		skillList := loader.List()
 		if len(skillList) == 0 {
 			fmt.Println("No skills installed")
-			fmt.Println("\nUse 'friday skills install --url <url>' to install a skill")
+			fmt.Println("\nUse follow command to install a skill")
+			fmt.Println("\n  friday skills install --url <url>")
+			fmt.Println("\n  friday skills install --file <path>")
 			return
 		}
 
@@ -134,50 +138,42 @@ var skillsInstallCmd = &cobra.Command{
 }
 
 func installSkillFromURL(skillsPath, skillURL string) error {
-	// Parse URL to get filename
-	parsedURL, err := url.Parse(skillURL)
-	if err != nil {
-		return fmt.Errorf("invalid URL: %w", err)
-	}
-
-	filename := filepath.Base(parsedURL.Path)
-	if filename == "" || filename == "." {
-		return fmt.Errorf("cannot determine filename from URL")
-	}
-
-	// Download to temp file
-	tmpFile, err := os.CreateTemp("", "skill-*.download")
-	if err != nil {
-		return fmt.Errorf("create temp file: %w", err)
-	}
-	tmpPath := tmpFile.Name()
-	defer os.Remove(tmpPath)
-
 	fmt.Printf("Downloading from %s...\n", skillURL)
 
-	// Use client with timeout
 	ctx, cancel := context.WithTimeout(context.Background(), downloadTimeout)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, skillURL, nil)
 	if err != nil {
-		tmpFile.Close()
 		return fmt.Errorf("create request: %w", err)
 	}
 
-	client := &http.Client{
-		Timeout: time.Minute, // 1 minute timeout
-	}
+	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
-		tmpFile.Close()
 		return fmt.Errorf("download failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		tmpFile.Close()
 		return fmt.Errorf("download failed: HTTP %d", resp.StatusCode)
+	}
+
+	// Create temp directory for extraction
+	tmpDir, err := os.MkdirTemp(os.TempDir(), "skill-install-")
+	if err != nil {
+		return fmt.Errorf("create temp directory: %w", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Determine filename from Content-Disposition header or URL
+	filename := getFilenameFromResponse(resp, skillURL)
+
+	// Download to temp file
+	tmpArchivePath := filepath.Join(tmpDir, filename)
+	tmpFile, err := os.Create(tmpArchivePath)
+	if err != nil {
+		return fmt.Errorf("create temp file: %w", err)
 	}
 
 	// Limit download size to prevent DoS
@@ -187,25 +183,153 @@ func installSkillFromURL(skillsPath, skillURL string) error {
 		tmpFile.Close()
 		return fmt.Errorf("download failed: %w", err)
 	}
+	tmpFile.Close()
 
 	// Check if we exceeded the limit
-	if _, err := tmpFile.Seek(0, 2); err != nil {
-		tmpFile.Close()
-		return fmt.Errorf("check file size: %w", err)
-	}
-	stat, err := tmpFile.Stat()
+	stat, err := os.Stat(tmpArchivePath)
 	if err != nil {
-		tmpFile.Close()
 		return fmt.Errorf("stat file: %w", err)
 	}
 	if stat.Size() > maxDownloadSize {
-		tmpFile.Close()
 		return fmt.Errorf("download exceeds maximum size (%d bytes)", maxDownloadSize)
 	}
 
-	tmpFile.Close()
+	return installValidatedSkill(skillsPath, tmpArchivePath, filename)
+}
 
-	return installSkillFromArchive(skillsPath, tmpPath, filename)
+// getFilenameFromResponse extracts filename from Content-Disposition header or URL
+func getFilenameFromResponse(resp *http.Response, skillURL string) string {
+	// Try Content-Disposition header first
+	if cd := resp.Header.Get("Content-Disposition"); cd != "" {
+		filename := parseContentDispositionFilename(cd)
+		if filename != "" {
+			// Sanitize filename to prevent path traversal
+			filename = sanitizeFilename(filename)
+			if filename != "" {
+				return filename
+			}
+		}
+	}
+
+	// Try URL path
+	parsedURL, err := url.Parse(skillURL)
+	if err == nil {
+		filename := filepath.Base(parsedURL.Path)
+		// Check if filename has a valid archive extension
+		if isValidArchiveFilename(filename) {
+			return filename
+		}
+		// Try to use query parameter (e.g., ?slug=baidu-search)
+		if slug := parsedURL.Query().Get("slug"); slug != "" {
+			slug = sanitizeFilename(slug)
+			if slug != "" {
+				return slug + ".zip"
+			}
+		}
+	}
+
+	// Default to skill.zip
+	return "skill.zip"
+}
+
+// parseContentDispositionFilename extracts filename from Content-Disposition header
+// Supports both filename="xxx" and filename*=UTF-8”xxx formats (RFC 6266)
+func parseContentDispositionFilename(cd string) string {
+	// Try filename*= (RFC 5987 encoded) first
+	for _, part := range strings.Split(cd, ";") {
+		part = strings.TrimSpace(part)
+		if strings.HasPrefix(strings.ToLower(part), "filename*=") {
+			// Format: filename*=UTF-8''encoded_filename
+			value := strings.TrimPrefix(part, "filename*=")
+			value = strings.TrimPrefix(strings.TrimPrefix(value, "filename*="), "FILENAME*=")
+			// Decode UTF-8'' prefix
+			if idx := strings.Index(value, "''"); idx != -1 {
+				encoded := value[idx+2:]
+				if decoded, err := url.QueryUnescape(encoded); err == nil {
+					return decoded
+				}
+			}
+		}
+	}
+
+	// Fall back to filename=
+	for _, part := range strings.Split(cd, ";") {
+		part = strings.TrimSpace(part)
+		if strings.HasPrefix(strings.ToLower(part), "filename=") {
+			value := strings.TrimPrefix(part, "filename=")
+			value = strings.TrimPrefix(strings.TrimPrefix(value, "FILENAME="), "filename=")
+			filename := strings.Trim(value, `"`)
+			filename = strings.TrimSpace(filename)
+			if filename != "" {
+				return filename
+			}
+		}
+	}
+
+	return ""
+}
+
+// sanitizeFilename removes path traversal characters and ensures a safe filename
+func sanitizeFilename(filename string) string {
+	// Use filepath.Base to remove any directory components
+	filename = filepath.Base(filename)
+	// Remove null bytes and other problematic characters
+	filename = strings.ReplaceAll(filename, "\x00", "")
+	// Trim whitespace
+	filename = strings.TrimSpace(filename)
+	// Reject empty or dot-only filenames
+	if filename == "" || filename == "." || filename == ".." {
+		return ""
+	}
+	return filename
+}
+
+// isValidArchiveFilename checks if the filename has a valid archive extension
+func isValidArchiveFilename(filename string) bool {
+	if filename == "" || filename == "." || filename == "/" {
+		return false
+	}
+	lower := strings.ToLower(filename)
+	return strings.HasSuffix(lower, ".zip") ||
+		strings.HasSuffix(lower, ".tar.gz") ||
+		strings.HasSuffix(lower, ".tgz") ||
+		strings.HasSuffix(lower, ".tar")
+}
+
+// extractAndValidateSkill extracts archive and validates the skill
+func extractAndValidateSkill(destDir, archivePath, filename string) (string, error) {
+	var skillName string
+	var err error
+
+	// Determine archive type and extract
+	if strings.HasSuffix(filename, ".zip") {
+		skillName, err = extractZip(destDir, archivePath)
+	} else if strings.HasSuffix(filename, ".tar.gz") || strings.HasSuffix(filename, ".tgz") {
+		skillName, err = extractTarGz(destDir, archivePath)
+	} else if strings.HasSuffix(filename, ".tar") {
+		skillName, err = extractTar(destDir, archivePath)
+	} else {
+		return "", fmt.Errorf("unsupported archive format: %s (supported: .zip, .tar.gz, .tgz, .tar)", filename)
+	}
+
+	if err != nil {
+		return "", err
+	}
+
+	// Verify SKILL.md exists
+	skillDir := filepath.Join(destDir, skillName)
+	skillFile := filepath.Join(skillDir, "SKILL.md")
+	if _, err := os.Stat(skillFile); os.IsNotExist(err) {
+		return "", fmt.Errorf("invalid skill: SKILL.md not found in archive")
+	}
+
+	// Validate skill by loading it
+	loader := skills.NewLoader(destDir)
+	if _, err := loader.LoadSkillFromDir(skillName); err != nil {
+		return "", fmt.Errorf("invalid skill: %w", err)
+	}
+
+	return skillName, nil
 }
 
 func installSkillFromFile(skillsPath, filePath string) error {
@@ -215,42 +339,50 @@ func installSkillFromFile(skillsPath, filePath string) error {
 	}
 
 	filename := filepath.Base(filePath)
-	return installSkillFromArchive(skillsPath, filePath, filename)
+	return installValidatedSkill(skillsPath, filePath, filename)
 }
 
-func installSkillFromArchive(skillsPath, archivePath, filename string) error {
-	var skillName string
-	var err error
+// installValidatedSkill extracts, validates and installs a skill from an archive
+func installValidatedSkill(skillsPath, archivePath, filename string) error {
+	// Create temp directory for extraction and validation
+	tmpDir, err := os.MkdirTemp(os.TempDir(), "skill-install-")
+	if err != nil {
+		return fmt.Errorf("create temp directory: %w", err)
+	}
+	defer os.RemoveAll(tmpDir)
 
-	// Determine archive type and extract
-	if strings.HasSuffix(filename, ".zip") {
-		skillName, err = extractZip(skillsPath, archivePath)
-	} else if strings.HasSuffix(filename, ".tar.gz") || strings.HasSuffix(filename, ".tgz") {
-		skillName, err = extractTarGz(skillsPath, archivePath)
-	} else if strings.HasSuffix(filename, ".tar") {
-		skillName, err = extractTar(skillsPath, archivePath)
-	} else {
-		return fmt.Errorf("unsupported archive format: %s (supported: .zip, .tar.gz, .tgz, .tar)", filename)
+	// Extract to temp directory first for validation
+	extractDir := filepath.Join(tmpDir, "extracted")
+	if err := os.MkdirAll(extractDir, 0755); err != nil {
+		return fmt.Errorf("create extraction directory: %w", err)
 	}
 
+	skillName, err := extractAndValidateSkill(extractDir, archivePath, filename)
 	if err != nil {
 		return err
 	}
 
-	// Verify SKILL.md exists
-	skillDir := filepath.Join(skillsPath, skillName)
-	skillFile := filepath.Join(skillDir, "SKILL.md")
-	if _, err := os.Stat(skillFile); os.IsNotExist(err) {
-		_ = os.RemoveAll(skillDir)
-		return fmt.Errorf("invalid skill: SKILL.md not found in archive")
+	// Move validated skill to skills directory
+	srcSkillDir := filepath.Join(extractDir, skillName)
+	dstSkillDir := filepath.Join(skillsPath, skillName)
+
+	// Check if skill already exists
+	if _, err := os.Stat(dstSkillDir); err == nil {
+		if err := os.RemoveAll(dstSkillDir); err != nil {
+			return fmt.Errorf("remove existing skill: %w", err)
+		}
 	}
 
-	// Validate skill by loading it directly from the extracted directory
+	// Move the skill directory
+	if err := os.Rename(srcSkillDir, dstSkillDir); err != nil {
+		return fmt.Errorf("move skill to skills directory: %w", err)
+	}
+
+	// Load and display skill info
 	loader := skills.NewLoader(skillsPath)
 	skill, err := loader.LoadSkillFromDir(skillName)
 	if err != nil {
-		_ = os.RemoveAll(skillDir)
-		return fmt.Errorf("invalid skill: %w", err)
+		return fmt.Errorf("load installed skill: %w", err)
 	}
 
 	fmt.Printf("Installed skill: %s\n", skill.Name)
@@ -304,6 +436,7 @@ func extractZip(destDir, archivePath string) (string, error) {
 		skillName = firstPart
 	}
 
+	var totalExtractedSize int64
 	for _, f := range r.File {
 		if f.FileInfo().IsDir() {
 			continue
@@ -344,11 +477,18 @@ func extractZip(destDir, archivePath string) (string, error) {
 			return "", err
 		}
 
-		_, err = io.Copy(outFile, rc)
+		// Zip bomb protection: limit extracted size
+		limitedRc := io.LimitReader(rc, maxExtractedSize-totalExtractedSize+1)
+		n, err := io.Copy(outFile, limitedRc)
 		rc.Close()
 		outFile.Close()
 		if err != nil {
 			return "", err
+		}
+
+		totalExtractedSize += n
+		if totalExtractedSize > maxExtractedSize {
+			return "", fmt.Errorf("archive exceeds maximum extracted size (%d bytes)", maxExtractedSize)
 		}
 
 		// Set file permissions with safe mask (remove setuid/setgid/sticky bits)
@@ -390,68 +530,20 @@ func extractTar(destDir, archivePath string) (string, error) {
 }
 
 func extractTarFromReader(destDir string, r io.Reader, archivePath string) (string, error) {
-	cleanDestDir := filepath.Clean(destDir)
+	// Create temp staging directory
+	stagingDir := filepath.Join(destDir, ".tmp-staging")
+	if err := os.MkdirAll(stagingDir, 0755); err != nil {
+		return "", fmt.Errorf("create staging directory: %w", err)
+	}
+	defer os.RemoveAll(stagingDir)
+
 	tr := tar.NewReader(r)
 
 	var firstPart string
 	hasRootDir := true
+	var totalExtractedSize int64
 
-	for {
-		header, err := tr.Next()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return "", fmt.Errorf("read tar: %w", err)
-		}
-
-		if header.Typeflag == tar.TypeDir {
-			continue
-		}
-
-		parts := strings.Split(strings.TrimSuffix(header.Name, "/"), "/")
-		if len(parts) == 0 || parts[0] == "" {
-			continue
-		}
-		if firstPart == "" {
-			firstPart = parts[0]
-		} else if firstPart != parts[0] {
-			hasRootDir = false
-		}
-	}
-
-	if firstPart == "SKILL.md" || firstPart == "_meta.json" {
-		hasRootDir = false
-	}
-
-	var skillName string
-	if !hasRootDir {
-		skillName = strings.TrimSuffix(filepath.Base(archivePath), ".tar.gz")
-		skillName = strings.TrimSuffix(skillName, ".tgz")
-		skillName = strings.TrimSuffix(skillName, ".tar")
-	} else {
-		skillName = firstPart
-	}
-
-	// Re-open archive to process files
-	file, err := os.Open(archivePath)
-	if err != nil {
-		return "", err
-	}
-	defer file.Close()
-
-	var reader io.Reader = file
-	if strings.HasSuffix(archivePath, ".tar.gz") || strings.HasSuffix(archivePath, ".tgz") {
-		gzr, err := gzip.NewReader(file)
-		if err != nil {
-			return "", fmt.Errorf("open gzip: %w", err)
-		}
-		defer gzr.Close()
-		reader = gzr
-	}
-
-	tr = tar.NewReader(reader)
-
+	// Single pass: extract to staging and determine structure
 	for {
 		header, err := tr.Next()
 		if err == io.EOF {
@@ -469,17 +561,22 @@ func extractTarFromReader(destDir string, r io.Reader, archivePath string) (stri
 			return "", fmt.Errorf("symlinks not allowed in skill archives: %s", header.Name)
 		}
 
-		var relPath string
-		if hasRootDir {
-			relPath = header.Name
-		} else {
-			relPath = filepath.Join(skillName, header.Name)
+		// Track directory structure
+		parts := strings.Split(strings.TrimSuffix(header.Name, "/"), "/")
+		if len(parts) > 0 && parts[0] != "" {
+			if firstPart == "" {
+				firstPart = parts[0]
+			} else if firstPart != parts[0] {
+				hasRootDir = false
+			}
 		}
-		targetPath := filepath.Join(destDir, relPath)
+
+		// Extract to staging directory preserving original path
+		targetPath := filepath.Join(stagingDir, header.Name)
 
 		// zip slip protection
 		cleanTarget := filepath.Clean(targetPath)
-		if !strings.HasPrefix(cleanTarget, cleanDestDir+string(filepath.Separator)) {
+		if !strings.HasPrefix(cleanTarget, stagingDir+string(filepath.Separator)) {
 			return "", fmt.Errorf("invalid file path (potential zip slip): %s", header.Name)
 		}
 
@@ -492,19 +589,67 @@ func extractTarFromReader(destDir string, r io.Reader, archivePath string) (stri
 			return "", err
 		}
 
-		_, err = io.Copy(outFile, tr)
+		// Zip bomb protection
+		remaining := maxExtractedSize - totalExtractedSize + 1
+		limitedTr := io.LimitReader(tr, remaining)
+		n, err := io.Copy(outFile, limitedTr)
 		outFile.Close()
 		if err != nil {
 			return "", err
 		}
 
-		// Set file permissions with safe mask (remove setuid/setgid/sticky bits)
+		totalExtractedSize += n
+		if totalExtractedSize > maxExtractedSize {
+			return "", fmt.Errorf("archive exceeds maximum extracted size (%d bytes)", maxExtractedSize)
+		}
+
+		// Set file permissions with safe mask
 		safeMode := os.FileMode(header.Mode) & 0755
 		_ = os.Chmod(targetPath, safeMode)
 	}
 
+	if firstPart == "SKILL.md" || firstPart == "_meta.json" {
+		hasRootDir = false
+	}
+
+	var skillName string
+	if !hasRootDir {
+		skillName = strings.TrimSuffix(filepath.Base(archivePath), ".tar.gz")
+		skillName = strings.TrimSuffix(skillName, ".tgz")
+		skillName = strings.TrimSuffix(skillName, ".tar")
+	} else {
+		skillName = firstPart
+	}
+
 	if skillName == "" {
 		return "", fmt.Errorf("could not determine skill name from archive")
+	}
+
+	// Move from staging to final location
+	finalSkillDir := filepath.Join(destDir, skillName)
+	if hasRootDir {
+		// Files are in stagingDir/firstPart/, move to destDir/firstPart/
+		srcDir := filepath.Join(stagingDir, firstPart)
+		if err := os.Rename(srcDir, finalSkillDir); err != nil {
+			return "", fmt.Errorf("move skill directory: %w", err)
+		}
+	} else {
+		// Create skill directory and move all files into it
+		if err := os.MkdirAll(finalSkillDir, 0755); err != nil {
+			return "", fmt.Errorf("create skill directory: %w", err)
+		}
+		// Move all items from staging to skill directory
+		entries, err := os.ReadDir(stagingDir)
+		if err != nil {
+			return "", fmt.Errorf("read staging directory: %w", err)
+		}
+		for _, entry := range entries {
+			src := filepath.Join(stagingDir, entry.Name())
+			dst := filepath.Join(finalSkillDir, entry.Name())
+			if err := os.Rename(src, dst); err != nil {
+				return "", fmt.Errorf("move file to skill directory: %w", err)
+			}
+		}
 	}
 
 	return skillName, nil
