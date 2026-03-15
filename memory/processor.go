@@ -7,15 +7,18 @@ import (
 
 	"github.com/basenana/friday/core/api"
 	"github.com/basenana/friday/core/types"
-	"github.com/basenana/friday/setup"
 )
 
+type Agent interface {
+	Chat(ctx context.Context, message string) *api.Response
+}
+
 type Processor struct {
-	agent  *setup.AgentContext
+	agent  Agent
 	config ProcessorConfig
 }
 
-func NewProcessor(agent *setup.AgentContext, config ProcessorConfig) *Processor {
+func NewProcessor(agent Agent, config ProcessorConfig) *Processor {
 	if config.RecentDays <= 0 {
 		config.RecentDays = 5
 	}

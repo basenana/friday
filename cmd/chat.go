@@ -21,7 +21,7 @@ var (
 
 var chatCmd = &cobra.Command{
 	Use:   "chat [message]",
-	Short: "Send a message to AI assistant",
+	Short: "Send a message to AI assistant, once the task is complete, the process will exit immediately.",
 	Long: `Send a message to the AI assistant and print the response.
 
 Message can be provided as:

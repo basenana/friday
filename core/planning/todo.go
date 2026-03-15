@@ -2,23 +2,20 @@ package planning
 
 import (
 	"context"
-	"encoding/json"
+	"sync"
 
-	"github.com/basenana/friday/core/agents"
 	"github.com/basenana/friday/core/logger"
 	"github.com/basenana/friday/core/providers"
 	"github.com/basenana/friday/core/session"
-	"github.com/basenana/friday/core/state"
 	"github.com/basenana/friday/core/tools"
 	"github.com/basenana/friday/core/types"
 )
 
 type Todo struct {
-	react *agents.Agent
-
-	opt    Option
-	todo   *TodoList
-	logger logger.Logger
+	todoMaps map[string]*TodoList
+	opt      Option
+	mu       sync.RWMutex
+	logger   logger.Logger
 }
 
 var _ session.BeforeAgentHook = &Todo{}
@@ -32,14 +29,12 @@ func (a *Todo) BeforeAgent(ctx context.Context, sess *session.Session, req sessi
 func (a *Todo) BeforeModel(ctx context.Context, sess *session.Session, req providers.Request) error {
 	req.AppendSystemPrompt(a.opt.SystemPrompt)
 
-	todo := &TodoList{}
-	content, err := sess.State.Get(ctx, state.ScopeApp, todoStateKey(sess))
-	if err != nil {
-		return nil // ignore
-	}
-	_ = json.Unmarshal([]byte(content), todo)
+	key := todoStateKey(sess)
+	a.mu.RLock()
+	todo := a.todoMaps[key]
+	a.mu.RUnlock()
 
-	if len(todo.Todos) == 0 {
+	if todo == nil || len(todo.Todos) == 0 {
 		return nil
 	}
 
@@ -82,7 +77,7 @@ func (a *Todo) planningTools(sess *session.Session) []*tools.Tool {
 				}),
 				tools.Description("A list of tasks, each task is an object with 'describe' and 'status' fields. 'describe' is the task description, 'status' is the current state: pending, in_progress, or completed."),
 			),
-			tools.WithToolHandler(writeTodoListHandler(sess)),
+			tools.WithToolHandler(writeTodoListHandler(a, sess)),
 		),
 	}
 }
@@ -97,9 +92,9 @@ func New(llm providers.Client, option Option) *Todo {
 	}
 
 	return &Todo{
-		opt:    option,
-		todo:   emptyTodoList(),
-		logger: logger.New("planning"),
+		opt:      option,
+		todoMaps: make(map[string]*TodoList),
+		logger:   logger.New("planning"),
 	}
 }
 

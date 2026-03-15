@@ -10,6 +10,7 @@ import (
 	"github.com/basenana/friday/core/agents"
 	"github.com/basenana/friday/core/agents/summarize"
 	"github.com/basenana/friday/core/api"
+	"github.com/basenana/friday/core/planning"
 	"github.com/basenana/friday/core/providers"
 	"github.com/basenana/friday/core/providers/anthropics"
 	"github.com/basenana/friday/core/providers/openai"
@@ -132,6 +133,8 @@ func NewAgent(sessionMgr SessionManager, cfg *config.Config, opts ...Option) (*A
 	compactHook := summarize.NewCompactHook(client, compactThreshold)
 	sess.RegisterHook(compactHook)
 
+	sess.RegisterHook(planning.New(client, planning.Option{}))
+
 	skillLoader := skills.NewLoader(ws.SkillsPath())
 	if err := skillLoader.Load(); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: failed to load skills: %v\n", err)
@@ -163,8 +166,15 @@ func NewAgent(sessionMgr SessionManager, cfg *config.Config, opts ...Option) (*A
 	}
 
 	agent := agents.New(client, agents.Option{
-		SystemPrompt: workspace.ComposeSystemPrompt(wsContent), // always use this prompts
-		Tools:        allTools,
+		SystemPrompt: workspace.ComposeSystemPrompt(wsContent, &workspace.Paths{
+			DataDir:   cfg.DataDirPath(),
+			Workspace: cfg.WorkspacePath(),
+			Sessions:  cfg.SessionsPath(),
+			Memory:    cfg.MemoryPath(),
+			State:     cfg.StatePath(),
+			Log:       config.LogPath(),
+		}),
+		Tools: allTools,
 	})
 
 	memSys := memory.NewMemorySystem(cfg.MemoryPath(), cfg.Memory.Days)

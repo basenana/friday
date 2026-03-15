@@ -105,13 +105,32 @@ func (w *Workspace) loadRecentMemoryLogs(days int) []string {
 	return logs
 }
 
-// ComposeSystemPrompt combines the default prompt with workspace content
-func ComposeSystemPrompt(content *LoadedContent) string {
+// ComposeSystemPrompt combines the default prompt with workspace content and paths info
+func ComposeSystemPrompt(content *LoadedContent, paths *Paths) string {
+	var (
+		base      = basePrompts
+		pathsInfo string
+	)
+
+	if paths != nil {
+		pathsInfo = fmt.Sprintf(`
+- DataDir: %s — Root data directory for all friday data
+- Workspace: %s — Markdown files for agent context (SOUL.md, USER.md, etc.)
+- Sessions: %s — Conversation history storage
+- Memory: %s — Daily memory logs
+- State: %s — Persistent key-value state storage
+- Log: %s — Application log file
+`, paths.DataDir, paths.Workspace, paths.Sessions, paths.Memory, paths.State, paths.Log)
+	} else {
+		pathsInfo = "DataDir: ~/.friday — Root data directory for all friday data"
+	}
+	strings.ReplaceAll(base, "{friday_directories}", pathsInfo)
+
 	if content == nil || len(content.SystemPrompts) == 0 {
-		return ""
+		return base
 	}
 
-	var parts []string
+	var parts = []string{base}
 	for _, prompt := range content.SystemPrompts {
 		prompt = strings.TrimSpace(prompt)
 		if prompt != "" {

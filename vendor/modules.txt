@@ -28,6 +28,7 @@ github.com/basenana/friday/core/agents
 github.com/basenana/friday/core/agents/summarize
 github.com/basenana/friday/core/api
 github.com/basenana/friday/core/logger
+github.com/basenana/friday/core/planning
 github.com/basenana/friday/core/providers
 github.com/basenana/friday/core/providers/anthropics
 github.com/basenana/friday/core/providers/openai

@@ -3,15 +3,13 @@ package planning
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"github.com/basenana/friday/core/session"
-	"github.com/basenana/friday/core/state"
 	"github.com/basenana/friday/core/tools"
 )
 
-func writeTodoListHandler(sess *session.Session) tools.ToolHandlerFunc {
+func writeTodoListHandler(t *Todo, sess *session.Session) tools.ToolHandlerFunc {
 	return func(ctx context.Context, request *tools.Request) (*tools.Result, error) {
 		todoList, ok := request.Arguments["todo_list"].([]any)
 		if !ok {
@@ -37,15 +35,10 @@ func writeTodoListHandler(sess *session.Session) tools.ToolHandlerFunc {
 			todo.Todos = append(todo.Todos, &TodoItem{Describe: describe, Status: status})
 		}
 
-		todoKey := todoStateKey(sess)
-		data, err := json.Marshal(todo)
-		if err != nil {
-			return nil, err
-		}
-		err = sess.State.Set(ctx, state.ScopeApp, todoKey, string(data))
-		if err != nil {
-			return tools.NewToolResultError(fmt.Sprintf("saving todo list error: %s", err)), nil
-		}
+		key := todoStateKey(sess)
+		t.mu.Lock()
+		t.todoMaps[key] = todo
+		t.mu.Unlock()
 
 		return tools.NewToolResultText(fmt.Sprintf("Updated todo list to:\n %s", displayTodoList(todo))), nil
 	}
@@ -53,10 +46,6 @@ func writeTodoListHandler(sess *session.Session) tools.ToolHandlerFunc {
 
 type TodoList struct {
 	Todos []*TodoItem `json:"todos"`
-}
-
-func emptyTodoList() *TodoList {
-	return &TodoList{Todos: make([]*TodoItem, 0, 10)}
 }
 
 type TodoItem struct {

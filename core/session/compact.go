@@ -100,6 +100,7 @@ Focus on:
 3. Any important context that would be needed to continue the conversation
 
 Your summary will be used to replace the old history, so make it comprehensive but concise.
+Be sure to retain details of any actions performed or files processed during the conversation, such as the specific commands executed or file paths.
 This is the ONLY content you should output - do not add any introductions or conclusions.
 
 CONVERSATION HISTORY:

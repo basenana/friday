@@ -59,7 +59,7 @@ func (s *Session) CompactHistory(ctx context.Context) error {
 	defer s.mu.Unlock()
 
 	prompt := compactPrompt(s.History)
-	req := providers.NewRequest("", types.Message{Role: types.RoleUser, Content: prompt})
+	req := providers.NewRequest("", types.Message{Role: types.RoleAgent, Content: prompt})
 	abstract, err := s.llm.CompletionNonStreaming(ctx, req)
 	if err != nil {
 		return fmt.Errorf("failed to generate summary: %w", err)
@@ -100,6 +100,7 @@ Focus on:
 3. Any important context that would be needed to continue the conversation
 
 Your summary will be used to replace the old history, so make it comprehensive but concise.
+Be sure to retain details of any actions performed or files processed during the conversation, such as the specific commands executed or file paths.
 This is the ONLY content you should output - do not add any introductions or conclusions.
 
 CONVERSATION HISTORY:

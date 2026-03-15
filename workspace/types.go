@@ -30,3 +30,13 @@ type LoadedContent struct {
 	// MemoryHistory contains memory log messages to prepend to conversation history
 	MemoryHistory []types.Message
 }
+
+// Paths contains important directory paths for the friday application
+type Paths struct {
+	DataDir   string
+	Workspace string
+	Sessions  string
+	Memory    string
+	State     string
+	Log       string
+}
