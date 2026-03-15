@@ -13,6 +13,7 @@ import (
 var (
 	chatSessionID string
 	chatVerbose   bool
+	chatIsolate   bool
 )
 
 var chatCmd = &cobra.Command{
@@ -72,10 +73,17 @@ Message can be provided as:
 		// Setup agent
 		var opts []AgentOption
 		if chatSessionID != "" {
+			if chatIsolate {
+				fmt.Fprintln(os.Stderr, "Error: --session and --isolate cannot be used together")
+				os.Exit(1)
+			}
 			opts = append(opts, WithSessionID(chatSessionID))
 		}
 		if chatVerbose {
 			opts = append(opts, WithVerbose(true))
+		}
+		if chatIsolate {
+			opts = append(opts, WithIsolate(true))
 		}
 
 		agentCtx, err := SetupAgent(ctx, cfg, sessMgr, opts...)
@@ -92,6 +100,7 @@ Message can be provided as:
 
 func init() {
 	chatCmd.Flags().StringVarP(&chatSessionID, "session", "s", "", "session ID to use")
+	chatCmd.Flags().BoolVarP(&chatIsolate, "isolate", "i", false, "create isolated session for one-time task or subtask")
 	chatCmd.Flags().BoolVarP(&chatVerbose, "verbose", "v", false, "verbose output")
 	rootCmd.AddCommand(chatCmd)
 }

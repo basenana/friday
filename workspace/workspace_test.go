@@ -90,9 +90,9 @@ func TestWorkspaceLoad(t *testing.T) {
 		t.Fatalf("Load failed: %v", err)
 	}
 
-	// Should have 5 system prompt files (AGENTS, SOUL, USER, IDENTITY, MEMORY)
-	if len(content.SystemPrompts) != 5 {
-		t.Errorf("expected 5 system prompts, got %d", len(content.SystemPrompts))
+	// Should have 4 system prompt files (AGENTS, SOUL, USER, IDENTITY)
+	if len(content.SystemPrompts) != 4 {
+		t.Errorf("expected 4 system prompts, got %d", len(content.SystemPrompts))
 	}
 
 	// MemoryHistory should be empty (no daily memory files)
@@ -110,26 +110,26 @@ func TestComposeSystemPrompt(t *testing.T) {
 		{
 			name:     "nil content",
 			content:  nil,
-			expected: "default",
+			expected: "",
 		},
 		{
 			name:     "empty content",
 			content:  &LoadedContent{},
-			expected: "default",
+			expected: "",
 		},
 		{
 			name: "with system prompts",
 			content: &LoadedContent{
 				SystemPrompts: []string{"prompt1", "prompt2"},
 			},
-			expected: "default\n\nprompt1\n\nprompt2",
+			expected: "prompt1\n\nprompt2",
 		},
 		{
 			name: "empty prompts filtered",
 			content: &LoadedContent{
 				SystemPrompts: []string{"", "prompt1", "   ", "prompt2"},
 			},
-			expected: "default\n\nprompt1\n\nprompt2",
+			expected: "prompt1\n\nprompt2",
 		},
 	}
 

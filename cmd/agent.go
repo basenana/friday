@@ -33,6 +33,7 @@ type AgentOption func(*agentOptions)
 type agentOptions struct {
 	sessionID string
 	verbose   bool
+	isolate   bool
 }
 
 // WithSessionID specifies a specific session to use
@@ -46,6 +47,13 @@ func WithSessionID(id string) AgentOption {
 func WithVerbose(v bool) AgentOption {
 	return func(o *agentOptions) {
 		o.verbose = v
+	}
+}
+
+// WithIsolate creates an isolated session that won't become the current session
+func WithIsolate(v bool) AgentOption {
+	return func(o *agentOptions) {
+		o.isolate = v
 	}
 }
 
@@ -77,6 +85,9 @@ func SetupAgent(ctx context.Context, cfg *config.Config, sessMgr *sessions.Manag
 	if options.sessionID != "" {
 		sess, created, err = sessMgr.GetOrCreateByID(options.sessionID, sessionOpts...)
 		sessionID = options.sessionID
+	} else if options.isolate {
+		sess, sessionID, err = sessMgr.CreateIsolated(sessionOpts...)
+		created = true
 	} else {
 		sess, sessionID, created, err = sessMgr.GetOrCreateCurrent(sessionOpts...)
 	}
@@ -85,10 +96,14 @@ func SetupAgent(ctx context.Context, cfg *config.Config, sessMgr *sessions.Manag
 	}
 
 	if options.verbose {
+		sessionType := ""
+		if options.isolate {
+			sessionType = " (isolated)"
+		}
 		if created {
-			fmt.Printf("Created new session: %s\n", sessionID[:8])
+			fmt.Printf("Created new session%s: %s\n", sessionType, sessionID[:8])
 		} else {
-			fmt.Printf("Using session: %s (loaded %d messages)\n", sessionID[:8], len(sess.History))
+			fmt.Printf("Using session%s: %s (loaded %d messages)\n", sessionType, sessionID[:8], len(sess.History))
 		}
 	}
 

@@ -136,3 +136,25 @@ func (m *Manager) GetOrCreateByID(sessionID string, opts ...coresession.Option) 
 
 	return sess, true, nil
 }
+
+// CreateIsolated creates a new session without setting it as current.
+// Returns the session and session ID.
+func (m *Manager) CreateIsolated(opts ...coresession.Option) (*coresession.Session, string, error) {
+	if err := m.store.EnsureDir(); err != nil {
+		return nil, "", err
+	}
+
+	sessionID := types.NewID()
+	alias := m.generateAlias()
+
+	sess, err := m.store.Create(sessionID, opts...)
+	if err != nil {
+		return nil, "", err
+	}
+
+	if err := m.store.UpdateAlias(sessionID, alias); err != nil {
+		return nil, "", err
+	}
+
+	return sess, sessionID, nil
+}
