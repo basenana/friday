@@ -59,6 +59,7 @@ var DefaultAllowedCommands = []string{
 	"touch",
 	"cp",
 	"mv",
+	"rm",
 	"grep",
 	"find",
 	"sed",

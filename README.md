@@ -22,8 +22,12 @@ Text in, text out. Pipe-friendly. No GUI, no cloud dependency, no account requir
 ## Installation
 
 ```bash
-go install github.com/basenana/friday@latest
+git clone https://github.com/basenana/friday.git
+cd friday
+make build
 ```
+
+The binary will be placed in the `bin/` directory.
 
 ---
 

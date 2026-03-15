@@ -29,7 +29,7 @@ Usage notes:
 )
 
 // NewBashTool creates a new bash tool
-func NewBashTool(exec *Executor) *tools.Tool {
+func NewBashTool(exec *Executor, workdir string) *tools.Tool {
 	permissionBuf := bytes.NewBuffer(nil)
 
 	if len(exec.config.Permissions.Allow) > 0 {

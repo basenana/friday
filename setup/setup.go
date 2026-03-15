@@ -152,14 +152,17 @@ func NewAgent(sessionMgr SessionManager, cfg *config.Config, opts ...Option) (*A
 		sess.History = append(wsContent.MemoryHistory, sess.History...)
 	}
 
+	workdir, _ := os.Getwd()
+
 	var allTools []*tools.Tool
 	sandboxCfg := cfg.Sandbox
 	if sandboxCfg == nil {
 		sandboxCfg = sandbox.DefaultConfig()
 	}
 	sandboxExec := sandbox.NewExecutor(sandboxCfg)
-	bashTool := sandbox.NewBashTool(sandboxExec)
-	allTools = append(ws.FsTools(), bashTool)
+	fsTools := sandbox.NewFsTools(sandboxExec, workdir)
+	bashTool := sandbox.NewBashTool(sandboxExec, workdir)
+	allTools = append(fsTools, bashTool)
 
 	if len(options.extraTools) > 0 {
 		allTools = append(allTools, options.extraTools...)
