@@ -229,46 +229,6 @@ Add whatever helps you do your job. This is your cheat sheet.
 	// DefaultHeartbeatMd is the default content for HEARTBEAT.md
 	DefaultHeartbeatMd = `HEARTBEAT.md
 
-Optional checklist for periodic checks.
-
-## Task: Review recent memories
-
-This is a daily task, perform memory maintenance:
-
-### Step 1: Update today's daily memory from session history
-
-- Review today's conversation history across all sessions
-- Extract notable events: decisions made, problems solved, new information learned
-- Write concise entries to 'memory/YYYY-MM-DD.md' (today's date)
-- Format: timestamp + brief description (one line per entry)
-- Skip trivial exchanges; focus on what future sessions should know
-
-### Step 2: Review recent daily memories
-
-- Read 'memory/YYYY-MM-DD.md' files from the last 3-5 days
-- Look for patterns, recurring themes, or accumulated insights
-- Note anything that seems important enough for long-term retention
-
-### Step 3: Update long-term memory (MEMORY.md)
-
-- Identify content worth preserving: key decisions, user preferences, lessons learned, important context
-- Add new entries to MEMORY.md under appropriate sections
-- Keep entries concise but informative
-- Cross-reference related topics when useful
-
-### Step 4: Prune outdated information
-
-- Remove entries from MEMORY.md that are no longer relevant
-- Merge redundant entries
-- Keep MEMORY.md lean - quality over quantity
-
-### Step 5: Sync user preferences
-
-- Check session history for any stated preferences or updated context
-- Update USER.md accordingly (name, timezone, ongoing projects, etc.)
-
----
-
 If nothing needs attention, reply HEARTBEAT_OK.
 `
 

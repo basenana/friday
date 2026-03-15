@@ -7,14 +7,12 @@ import (
 
 	"github.com/basenana/friday/config"
 	"github.com/basenana/friday/core/agents"
-	"github.com/basenana/friday/core/agents/summarize"
 	"github.com/basenana/friday/core/api"
 	"github.com/basenana/friday/core/providers"
-	coreSession "github.com/basenana/friday/core/session"
+	"github.com/basenana/friday/core/session"
 	"github.com/basenana/friday/memory"
-	"github.com/basenana/friday/sandbox"
 	"github.com/basenana/friday/sessions"
-	"github.com/basenana/friday/skills"
+	"github.com/basenana/friday/setup"
 	"github.com/basenana/friday/workspace"
 )
 
@@ -22,7 +20,7 @@ import (
 type AgentContext struct {
 	Client    providers.Client
 	Workspace *workspace.Workspace
-	Session   *coreSession.Session
+	Session   *session.Session
 	Agent     agents.Agent
 	Memory    *memory.MemorySystem
 }
@@ -64,35 +62,19 @@ func SetupAgent(ctx context.Context, cfg *config.Config, sessMgr *sessions.Manag
 		opt(options)
 	}
 
-	// Create provider client
-	client, err := createClient(cfg)
-	if err != nil {
-		return nil, fmt.Errorf("create provider client: %w", err)
+	setupOpts := []setup.Option{
+		setup.WithSessionManager(sessMgr),
 	}
-
-	// Initialize workspace
-	ws := workspace.NewWorkspace(cfg.WorkspacePath(), cfg.MemoryPath())
-	if err = ws.EnsureDir(""); err != nil {
-		return nil, fmt.Errorf("create workspace: %w", err)
-	}
-
-	// Get or create session
-	sessionOpts := []coreSession.Option{coreSession.WithWorkdirFS(ws)}
-	var sess *coreSession.Session
-	var sessionID string
-	var created bool
-
 	if options.sessionID != "" {
-		sess, created, err = sessMgr.GetOrCreateByID(options.sessionID, sessionOpts...)
-		sessionID = options.sessionID
-	} else if options.isolate {
-		sess, sessionID, err = sessMgr.CreateIsolated(sessionOpts...)
-		created = true
-	} else {
-		sess, sessionID, created, err = sessMgr.GetOrCreateCurrent(sessionOpts...)
+		setupOpts = append(setupOpts, setup.WithSessionID(options.sessionID))
 	}
+	if options.isolate {
+		setupOpts = append(setupOpts, setup.WithIsolate(true))
+	}
+
+	agentCtx, err := setup.NewAgent(ctx, cfg, setupOpts...)
 	if err != nil {
-		return nil, fmt.Errorf("get/create session: %w", err)
+		return nil, err
 	}
 
 	if options.verbose {
@@ -100,66 +82,14 @@ func SetupAgent(ctx context.Context, cfg *config.Config, sessMgr *sessions.Manag
 		if options.isolate {
 			sessionType = " (isolated)"
 		}
-		if created {
-			fmt.Printf("Created new session%s: %s\n", sessionType, sessionID[:8])
-		} else {
-			fmt.Printf("Using session%s: %s (loaded %d messages)\n", sessionType, sessionID[:8], len(sess.History))
+		if agentCtx.Session != nil {
+			if len(agentCtx.Session.History) == 0 {
+				fmt.Printf("Created new session%s\n", sessionType)
+			} else {
+				fmt.Printf("Using session%s (loaded %d messages)\n", sessionType, len(agentCtx.Session.History))
+			}
 		}
 	}
-
-	// Register compact hook
-	compactThreshold := int64(float64(cfg.Model.MaxTokens) * 0.85)
-	compactHook := summarize.NewCompactHook(client, compactThreshold)
-	sess.RegisterHook(compactHook)
-
-	// Initialize skills
-	skillLoader := skills.NewLoader(ws.SkillsPath())
-	if err := skillLoader.Load(); err != nil {
-		// Non-fatal, just log
-		fmt.Fprintf(os.Stderr, "Warning: failed to load skills: %v\n", err)
-	} else if options.verbose {
-		skillCount := len(skillLoader.List())
-		if skillCount > 0 {
-			fmt.Printf("Loaded %d skills\n", skillCount)
-		}
-	}
-
-	// Register skill hook
-	skillRegistry := skills.NewRegistry(skillLoader)
-	skillHook := skills.NewHook(skillRegistry)
-	sess.RegisterHook(skillHook)
-
-	// Load workspace content
-	wsContent, err := ws.Load()
-	if err != nil {
-		return nil, fmt.Errorf("load workspace: %w", err)
-	}
-
-	// Prepend memory history to session if this is a new session
-	if wsContent != nil && len(wsContent.MemoryHistory) > 0 && len(sess.History) == 0 {
-		sess.History = append(wsContent.MemoryHistory, sess.History...)
-		if options.verbose {
-			fmt.Printf("Loaded %d memory messages\n", len(wsContent.MemoryHistory))
-		}
-	}
-
-	// Initialize sandbox and bash tool
-	sandboxCfg := cfg.Sandbox
-	if sandboxCfg == nil {
-		sandboxCfg = sandbox.DefaultConfig()
-	}
-	sandboxExec := sandbox.NewExecutor(sandboxCfg)
-	bashTool := sandbox.NewBashTool(sandboxExec)
-
-	// Collect all tools
-	allTools := append(ws.FsTools(), bashTool)
-
-	// Create agent
-	systemPrompt := workspace.ComposeSystemPrompt(wsContent)
-	agent := agents.New(client, agents.Option{
-		SystemPrompt: systemPrompt,
-		Tools:        allTools,
-	})
 
 	// Ensure memory log exists
 	memSys := memory.NewMemorySystem(cfg.MemoryPath(), cfg.Memory.Days)
@@ -169,10 +99,10 @@ func SetupAgent(ctx context.Context, cfg *config.Config, sessMgr *sessions.Manag
 	}
 
 	return &AgentContext{
-		Client:    client,
-		Workspace: ws,
-		Session:   sess,
-		Agent:     agent,
+		Client:    agentCtx.Client,
+		Workspace: agentCtx.Workspace,
+		Session:   agentCtx.Session,
+		Agent:     agentCtx.Agent,
 		Memory:    memSys,
 	}, nil
 }

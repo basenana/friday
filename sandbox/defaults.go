@@ -39,6 +39,7 @@ var DefaultAllowedDomains = []string{
 
 // DefaultAllowedCommands are commands allowed by default
 var DefaultAllowedCommands = []string{
+	"friday",
 	"git",
 	"npm",
 	"yarn",
