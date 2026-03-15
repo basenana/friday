@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+
+	"github.com/basenana/friday/setup"
 )
 
 var heartbeatCmd = &cobra.Command{
@@ -17,7 +19,7 @@ var heartbeatCmd = &cobra.Command{
 		ctx := context.Background()
 
 		// Setup agent with verbose output
-		agentCtx, err := SetupAgent(ctx, cfg, sessMgr, WithVerbose(true))
+		agentCtx, err := setup.NewAgent(sessMgr, cfg)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "%v\n", err)
 			os.Exit(1)
@@ -41,7 +43,7 @@ var heartbeatCmd = &cobra.Command{
 
 		// Send message and print response
 		resp := agentCtx.Chat(ctx, heartbeatContent)
-		PrintResponse(resp)
+		setup.PrintResponse(resp)
 	},
 }
 

@@ -5,9 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"path/filepath"
 
 	"github.com/basenana/friday/core/session"
+	"github.com/basenana/friday/core/state"
 	"github.com/basenana/friday/core/tools"
 )
 
@@ -37,17 +37,12 @@ func writeTodoListHandler(sess *session.Session) tools.ToolHandlerFunc {
 			todo.Todos = append(todo.Todos, &TodoItem{Describe: describe, Status: status})
 		}
 
-		todoFile := todoFilePath(sess)
-		err := sess.Workdir.MkdirAll(filepath.Dir(todoFile))
-		if err != nil {
-			return tools.NewToolResultError(fmt.Sprintf("init todo list error: %s", err)), nil
-		}
-
+		todoKey := todoStateKey(sess)
 		data, err := json.Marshal(todo)
 		if err != nil {
 			return nil, err
 		}
-		err = sess.Workdir.Write(todoFile, string(data))
+		err = sess.State.Set(ctx, state.ScopeApp, todoKey, string(data))
 		if err != nil {
 			return tools.NewToolResultError(fmt.Sprintf("saving todo list error: %s", err)), nil
 		}
@@ -84,6 +79,6 @@ func displayTodoList(todo *TodoList) string {
 	return buf.String()
 }
 
-func todoFilePath(sess *session.Session) string {
-	return filepath.Join(".friday", "sessions", sess.Root.ID, fmt.Sprintf("todo_list_%s.json", sess.ID))
+func todoStateKey(sess *session.Session) string {
+	return fmt.Sprintf("todo_list_%s_%s", sess.Root.ID, sess.ID)
 }

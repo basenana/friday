@@ -8,12 +8,15 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+
+	"github.com/basenana/friday/setup"
 )
 
 var (
 	chatSessionID string
 	chatVerbose   bool
 	chatIsolate   bool
+	chatTemporary bool
 )
 
 var chatCmd = &cobra.Command{
@@ -71,22 +74,30 @@ Message can be provided as:
 		}
 
 		// Setup agent
-		var opts []AgentOption
+		var opts []setup.Option
 		if chatSessionID != "" {
-			if chatIsolate {
-				fmt.Fprintln(os.Stderr, "Error: --session and --isolate cannot be used together")
+			if chatIsolate || chatTemporary {
+				fmt.Fprintln(os.Stderr, "Error: --session cannot be used with --isolate or --temporary")
 				os.Exit(1)
 			}
-			opts = append(opts, WithSessionID(chatSessionID))
-		}
-		if chatVerbose {
-			opts = append(opts, WithVerbose(true))
+			opts = append(opts, setup.WithSessionID(chatSessionID))
 		}
 		if chatIsolate {
-			opts = append(opts, WithIsolate(true))
+			if chatTemporary {
+				fmt.Fprintln(os.Stderr, "Error: --isolate and --temporary cannot be used together")
+				os.Exit(1)
+			}
+			opts = append(opts, setup.WithIsolate(true))
+		}
+		if chatTemporary {
+			opts = append(opts, setup.WithTemporary(true))
 		}
 
-		agentCtx, err := SetupAgent(ctx, cfg, sessMgr, opts...)
+		if chatVerbose {
+			opts = append(opts, setup.WithVerbose(true))
+		}
+
+		agentCtx, err := setup.NewAgent(sessMgr, cfg, opts...)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "%v\n", err)
 			os.Exit(1)
@@ -94,13 +105,14 @@ Message can be provided as:
 
 		// Send message and print response
 		resp := agentCtx.Chat(ctx, userMessage)
-		PrintResponse(resp)
+		setup.PrintResponse(resp)
 	},
 }
 
 func init() {
 	chatCmd.Flags().StringVarP(&chatSessionID, "session", "s", "", "session ID to use")
 	chatCmd.Flags().BoolVarP(&chatIsolate, "isolate", "i", false, "create isolated session for one-time task or subtask")
+	chatCmd.Flags().BoolVarP(&chatTemporary, "temporary", "t", false, "create temporary session that won't persist messages")
 	chatCmd.Flags().BoolVarP(&chatVerbose, "verbose", "v", false, "verbose output")
 	rootCmd.AddCommand(chatCmd)
 }

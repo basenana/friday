@@ -27,12 +27,12 @@ github.com/bahlo/generic-list-go
 github.com/basenana/friday/core/agents
 github.com/basenana/friday/core/agents/summarize
 github.com/basenana/friday/core/api
-github.com/basenana/friday/core/fs
 github.com/basenana/friday/core/logger
 github.com/basenana/friday/core/providers
 github.com/basenana/friday/core/providers/anthropics
 github.com/basenana/friday/core/providers/openai
 github.com/basenana/friday/core/session
+github.com/basenana/friday/core/state
 github.com/basenana/friday/core/tools
 github.com/basenana/friday/core/types
 # github.com/buger/jsonparser v1.1.1

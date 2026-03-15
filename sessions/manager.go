@@ -81,11 +81,13 @@ func (m *Manager) GetOrCreateCurrent(opts ...coresession.Option) (*coresession.S
 		return nil, "", false, err
 	}
 
-	if err := m.store.UpdateAlias(sessionID, alias); err != nil {
-		return nil, "", false, err
+	if alias != "" {
+		if err = m.store.UpdateAlias(sessionID, alias); err != nil {
+			return nil, "", false, err
+		}
 	}
 
-	if err := m.SetCurrentID(sessionID); err != nil {
+	if err = m.SetCurrentID(sessionID); err != nil {
 		return nil, "", false, err
 	}
 
@@ -119,15 +121,17 @@ func (m *Manager) GetOrCreateByID(sessionID string, opts ...coresession.Option) 
 	}
 
 	// Create new session
-	alias := m.generateAlias()
 
 	sess, err = m.store.Create(sessionID, opts...)
 	if err != nil {
 		return nil, false, err
 	}
 
-	if err := m.store.UpdateAlias(sessionID, alias); err != nil {
-		return nil, false, err
+	alias := m.generateAlias()
+	if alias != "" {
+		if err := m.store.UpdateAlias(sessionID, alias); err != nil {
+			return nil, false, err
+		}
 	}
 
 	if err := m.SetCurrentID(sessionID); err != nil {
@@ -156,5 +160,14 @@ func (m *Manager) CreateIsolated(opts ...coresession.Option) (*coresession.Sessi
 		return nil, "", err
 	}
 
+	return sess, sessionID, nil
+}
+
+// CreateTemporary creates a temporary session that won't persist messages.
+// Returns the session and session ID.
+func (m *Manager) CreateTemporary(opts ...coresession.Option) (*coresession.Session, string, error) {
+	opts = append(opts, coresession.WithTemporary(true))
+	sessionID := types.NewID()
+	sess := coresession.New(sessionID, nil, opts...)
 	return sess, sessionID, nil
 }

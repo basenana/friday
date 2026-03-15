@@ -59,7 +59,7 @@ func (s *Session) CompactHistory(ctx context.Context) error {
 	defer s.mu.Unlock()
 
 	prompt := compactPrompt(s.History)
-	req := providers.NewRequest("", types.Message{Role: types.RoleUser, Content: prompt})
+	req := providers.NewRequest("", types.Message{Role: types.RoleAgent, Content: prompt})
 	abstract, err := s.llm.CompletionNonStreaming(ctx, req)
 	if err != nil {
 		return fmt.Errorf("failed to generate summary: %w", err)

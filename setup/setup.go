@@ -9,11 +9,13 @@ import (
 	"github.com/basenana/friday/config"
 	"github.com/basenana/friday/core/agents"
 	"github.com/basenana/friday/core/agents/summarize"
+	"github.com/basenana/friday/core/api"
 	"github.com/basenana/friday/core/providers"
 	"github.com/basenana/friday/core/providers/anthropics"
 	"github.com/basenana/friday/core/providers/openai"
 	coreSession "github.com/basenana/friday/core/session"
 	"github.com/basenana/friday/core/tools"
+	"github.com/basenana/friday/memory"
 	"github.com/basenana/friday/sandbox"
 	"github.com/basenana/friday/skills"
 	"github.com/basenana/friday/workspace"
@@ -24,6 +26,7 @@ type AgentContext struct {
 	Workspace *workspace.Workspace
 	Session   *coreSession.Session
 	Agent     agents.Agent
+	Memory    *memory.MemorySystem
 }
 
 type Option func(*options)
@@ -31,13 +34,15 @@ type Option func(*options)
 type options struct {
 	sessionID  string
 	isolate    bool
-	sessionMgr SessionManager
+	temporary  bool
+	verbose    bool
 	extraTools []*tools.Tool
 }
 
 type SessionManager interface {
 	GetOrCreateByID(sessionID string, opts ...coreSession.Option) (*coreSession.Session, bool, error)
 	CreateIsolated(opts ...coreSession.Option) (*coreSession.Session, string, error)
+	CreateTemporary(opts ...coreSession.Option) (*coreSession.Session, string, error)
 	GetOrCreateCurrent(opts ...coreSession.Option) (*coreSession.Session, string, bool, error)
 }
 
@@ -53,9 +58,15 @@ func WithIsolate(v bool) Option {
 	}
 }
 
-func WithSessionManager(mgr SessionManager) Option {
+func WithTemporary(v bool) Option {
 	return func(o *options) {
-		o.sessionMgr = mgr
+		o.temporary = v
+	}
+}
+
+func WithVerbose(v bool) Option {
+	return func(o *options) {
+		o.verbose = v
 	}
 }
 
@@ -65,7 +76,7 @@ func WithExtraTools(t []*tools.Tool) Option {
 	}
 }
 
-func NewAgent(ctx context.Context, cfg *config.Config, opts ...Option) (*AgentContext, error) {
+func NewAgent(sessionMgr SessionManager, cfg *config.Config, opts ...Option) (*AgentContext, error) {
 	options := &options{}
 	for _, opt := range opts {
 		opt(options)
@@ -81,41 +92,60 @@ func NewAgent(ctx context.Context, cfg *config.Config, opts ...Option) (*AgentCo
 		return nil, fmt.Errorf("create workspace: %w", err)
 	}
 
+	fileState := workspace.NewFileState(cfg.StatePath())
+	sessionOpts := []coreSession.Option{coreSession.WithState(fileState)}
+
 	var sess *coreSession.Session
+	switch {
+	case options.sessionID != "":
+		sess, _, err = sessionMgr.GetOrCreateByID(options.sessionID, sessionOpts...)
 
-	if options.sessionMgr != nil {
-		sessionOpts := []coreSession.Option{coreSession.WithWorkdirFS(ws)}
+	case options.isolate:
+		sess, _, err = sessionMgr.CreateIsolated(sessionOpts...)
 
-		if options.sessionID != "" {
-			sess, _, err = options.sessionMgr.GetOrCreateByID(options.sessionID, sessionOpts...)
-		} else if options.isolate {
-			sess, _, err = options.sessionMgr.CreateIsolated(sessionOpts...)
-		} else {
-			sess, _, _, err = options.sessionMgr.GetOrCreateCurrent(sessionOpts...)
-		}
-		if err != nil {
-			return nil, fmt.Errorf("get/create session: %w", err)
-		}
+	case options.temporary:
+		sess, _, err = sessionMgr.CreateTemporary(sessionOpts...)
 
-		compactThreshold := int64(float64(cfg.Model.MaxTokens) * 0.85)
-		compactHook := summarize.NewCompactHook(client, compactThreshold)
-		sess.RegisterHook(compactHook)
-
-		skillLoader := skills.NewLoader(ws.SkillsPath())
-		if err := skillLoader.Load(); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: failed to load skills: %v\n", err)
-		}
-		skillRegistry := skills.NewRegistry(skillLoader)
-		skillHook := skills.NewHook(skillRegistry)
-		sess.RegisterHook(skillHook)
+	default:
+		sess, _, _, err = sessionMgr.GetOrCreateCurrent(sessionOpts...)
 	}
+	if err != nil {
+		return nil, fmt.Errorf("get/create session: %w", err)
+	}
+
+	if options.verbose {
+		sessionType := ""
+		if options.isolate {
+			sessionType = " (isolated)"
+		}
+		if options.temporary {
+			sessionType = " (temporary)"
+		}
+		if len(sess.History) == 0 {
+			fmt.Printf("Created new session%s\n", sessionType)
+		} else {
+			fmt.Printf("Using session%s (loaded %d messages)\n", sessionType, len(sess.History))
+		}
+	}
+
+	compactThreshold := int64(float64(cfg.Model.MaxTokens) * 0.85)
+	compactHook := summarize.NewCompactHook(client, compactThreshold)
+	sess.RegisterHook(compactHook)
+
+	skillLoader := skills.NewLoader(ws.SkillsPath())
+	if err := skillLoader.Load(); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to load skills: %v\n", err)
+	}
+	skillRegistry := skills.NewRegistry(skillLoader)
+	skillHook := skills.NewHook(skillRegistry)
+	sess.RegisterHook(skillHook)
 
 	wsContent, err := ws.Load()
 	if err != nil {
 		return nil, fmt.Errorf("load workspace: %w", err)
 	}
 
-	if sess != nil && wsContent != nil && len(wsContent.MemoryHistory) > 0 && len(sess.History) == 0 {
+	if wsContent != nil && len(wsContent.MemoryHistory) > 0 && len(sess.History) == 0 {
 		sess.History = append(wsContent.MemoryHistory, sess.History...)
 	}
 
@@ -137,12 +167,45 @@ func NewAgent(ctx context.Context, cfg *config.Config, opts ...Option) (*AgentCo
 		Tools:        allTools,
 	})
 
+	memSys := memory.NewMemorySystem(cfg.MemoryPath(), cfg.Memory.Days)
+	if err = memSys.EnsureTodayMemory(); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to ensure memory log: %v\n", err)
+	}
+
 	return &AgentContext{
 		Client:    client,
 		Workspace: ws,
 		Session:   sess,
 		Agent:     agent,
+		Memory:    memSys,
 	}, nil
+}
+
+func (ac *AgentContext) Chat(ctx context.Context, message string) *api.Response {
+	req := &api.Request{
+		Session:     ac.Session,
+		UserMessage: message,
+	}
+	return ac.Agent.Chat(ctx, req)
+}
+
+func PrintResponse(resp *api.Response) {
+Waiting:
+	for {
+		select {
+		case err := <-resp.Error():
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				return
+			}
+		case delta, ok := <-resp.Deltas():
+			if !ok {
+				break Waiting
+			}
+			fmt.Print(delta.Content)
+		}
+	}
+	fmt.Println()
 }
 
 func createProviderClient(cfg *config.Config) (providers.Client, error) {

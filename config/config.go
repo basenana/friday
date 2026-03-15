@@ -100,6 +100,10 @@ func (c *Config) MemoryPath() string {
 	return filepath.Join(c.DataDirPath(), "memory")
 }
 
+func (c *Config) StatePath() string {
+	return filepath.Join(c.DataDirPath(), "states")
+}
+
 func LogPath() string {
 	return filepath.Join("/tmp", fmt.Sprintf("friday-%s.log", time.Now().Format(time.DateOnly)))
 }

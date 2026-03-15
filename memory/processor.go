@@ -5,17 +5,17 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/basenana/friday/core/agents"
 	"github.com/basenana/friday/core/api"
 	"github.com/basenana/friday/core/types"
+	"github.com/basenana/friday/setup"
 )
 
 type Processor struct {
-	agent  agents.Agent
+	agent  *setup.AgentContext
 	config ProcessorConfig
 }
 
-func NewProcessor(agent agents.Agent, config ProcessorConfig) *Processor {
+func NewProcessor(agent *setup.AgentContext, config ProcessorConfig) *Processor {
 	if config.RecentDays <= 0 {
 		config.RecentDays = 5
 	}
@@ -27,17 +27,14 @@ func NewProcessor(agent agents.Agent, config ProcessorConfig) *Processor {
 
 func (p *Processor) ProcessSession(ctx context.Context, history *SessionHistory) (string, error) {
 	convText := FormatConversation(history.Messages)
-	req := &api.Request{
-		UserMessage: buildPrompt(history.ID, history.CreatedAt, convText),
-	}
+	resp := p.agent.Chat(ctx, buildPrompt(history.ID, history.CreatedAt, convText))
 
-	resp := p.agent.Chat(ctx, req)
-	response, err := api.ReadAllContent(ctx, resp)
+	result, err := api.ReadAllContent(ctx, resp)
 	if err != nil {
 		return "", fmt.Errorf("agent chat failed: %w", err)
 	}
 
-	return response, nil
+	return result, nil
 }
 
 func FormatConversation(messages []types.Message) string {

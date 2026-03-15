@@ -8,6 +8,7 @@ import (
 	"github.com/basenana/friday/core/logger"
 	"github.com/basenana/friday/core/providers"
 	"github.com/basenana/friday/core/session"
+	"github.com/basenana/friday/core/state"
 	"github.com/basenana/friday/core/tools"
 	"github.com/basenana/friday/core/types"
 )
@@ -32,7 +33,7 @@ func (a *Todo) BeforeModel(ctx context.Context, sess *session.Session, req provi
 	req.AppendSystemPrompt(a.opt.SystemPrompt)
 
 	todo := &TodoList{}
-	content, err := sess.Workdir.Read(todoFilePath(sess))
+	content, err := sess.State.Get(ctx, state.ScopeApp, todoStateKey(sess))
 	if err != nil {
 		return nil // ignore
 	}

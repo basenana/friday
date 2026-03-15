@@ -6,15 +6,12 @@ import (
 	"strings"
 )
 
-// Workspace manages workspace files and memory integration.
-// It also implements core/fs.FileSystem interface for use as session workdir.
 type Workspace struct {
-	basePath string // Path to workspace directory
-	memPath  string // Path to memory directory (shared with memory package)
+	basePath string
+	memPath  string
 	specs    []FileSpec
 }
 
-// NewWorkspace creates a new Workspace instance
 func NewWorkspace(workspacePath, memoryPath string) *Workspace {
 	return &Workspace{
 		basePath: expandHome(workspacePath),
@@ -31,7 +28,6 @@ func NewWorkspace(workspacePath, memoryPath string) *Workspace {
 	}
 }
 
-// expandHome expands ~ to home directory
 func expandHome(path string) string {
 	if strings.HasPrefix(path, "~/") {
 		home, err := os.UserHomeDir()
@@ -43,28 +39,22 @@ func expandHome(path string) string {
 	return path
 }
 
-// Exists checks if the workspace directory exists
 func (w *Workspace) Exists() bool {
 	_, err := os.Stat(w.basePath)
 	return err == nil
 }
 
-// Init creates the workspace directory structure with default files.
-// It creates missing directories and files without overwriting existing ones.
 func (w *Workspace) Init() ([]string, error) {
 	var created []string
 
-	// Create workspace directory
 	if err := os.MkdirAll(w.basePath, 0755); err != nil {
 		return nil, err
 	}
 
-	// Create memory directory if it doesn't exist
 	if err := os.MkdirAll(w.memPath, 0755); err != nil {
 		return nil, err
 	}
 
-	// Create default files if they don't exist
 	for filename, content := range DefaultContents {
 		filePath := filepath.Join(w.basePath, filename)
 		if _, err := os.Stat(filePath); os.IsNotExist(err) {
@@ -78,26 +68,18 @@ func (w *Workspace) Init() ([]string, error) {
 	return created, nil
 }
 
-// BasePath returns the workspace base path
 func (w *Workspace) BasePath() string {
 	return w.basePath
 }
 
-// MemoryPath returns the memory path
 func (w *Workspace) MemoryPath() string {
 	return w.memPath
 }
 
-// SkillsPath returns the skills directory path
 func (w *Workspace) SkillsPath() string {
 	return filepath.Join(w.basePath, "skills")
 }
 
-// ========================================
-// core/fs.FileSystem interface implementation
-// ========================================
-
-// Ls lists files in a directory relative to workspace root
 func (w *Workspace) Ls(dirPath string) ([]string, error) {
 	absPath := w.absolutePath(dirPath)
 
@@ -113,13 +95,6 @@ func (w *Workspace) Ls(dirPath string) ([]string, error) {
 	return result, nil
 }
 
-// MkdirAll creates a directory and all parent directories
-func (w *Workspace) MkdirAll(dirPath string) error {
-	absPath := w.absolutePath(dirPath)
-	return os.MkdirAll(absPath, 0755)
-}
-
-// Read reads a file's content
 func (w *Workspace) Read(filePath string) (string, error) {
 	absPath := w.absolutePath(filePath)
 	data, err := os.ReadFile(absPath)
@@ -129,7 +104,6 @@ func (w *Workspace) Read(filePath string) (string, error) {
 	return string(data), nil
 }
 
-// Write writes content to a file, creating parent directories if needed
 func (w *Workspace) Write(filePath string, data string) error {
 	absPath := w.absolutePath(filePath)
 
@@ -141,31 +115,32 @@ func (w *Workspace) Write(filePath string, data string) error {
 	return os.WriteFile(absPath, []byte(data), 0644)
 }
 
-// Delete removes a file or directory
 func (w *Workspace) Delete(path string) error {
 	absPath := w.absolutePath(path)
 	return os.RemoveAll(absPath)
 }
 
-// absolutePath returns the absolute path within workspace
+func (w *Workspace) MkdirAll(dirPath string) error {
+	absPath := w.absolutePath(dirPath)
+	return os.MkdirAll(absPath, 0755)
+}
+
+func (w *Workspace) EnsureDir(dirPath string) error {
+	absPath := w.absolutePath(dirPath)
+	return os.MkdirAll(absPath, 0755)
+}
+
+func (w *Workspace) SetRoot(root string) {
+	w.basePath = expandHome(root)
+}
+
+func (w *Workspace) Root() string {
+	return w.basePath
+}
+
 func (w *Workspace) absolutePath(path string) string {
 	if filepath.IsAbs(path) {
 		return path
 	}
 	return filepath.Join(w.basePath, path)
-}
-
-// EnsureDir ensures a directory exists
-func (w *Workspace) EnsureDir(dirPath string) error {
-	return w.MkdirAll(dirPath)
-}
-
-// SetRoot sets the workspace root path
-func (w *Workspace) SetRoot(root string) {
-	w.basePath = expandHome(root)
-}
-
-// Root returns the workspace root path
-func (w *Workspace) Root() string {
-	return w.basePath
 }

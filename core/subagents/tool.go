@@ -33,7 +33,7 @@ func callSubagentTool(agents []ExpertAgent, sess *session.Session, subagentTools
 		if err := subSession.CompactHistory(ctx); err != nil {
 			return nil, err
 		}
-			subSession.History[0] = types.Message{Role: types.RoleUser, Content: userMessage}
+		subSession.History[0] = types.Message{Role: types.RoleUser, Content: userMessage}
 
 		for _, agt := range agents {
 			if fuzzyMatching(agt.Name, agentName) {

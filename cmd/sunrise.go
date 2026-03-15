@@ -40,12 +40,12 @@ func runSunrise(ctx context.Context, cfg *config.Config, mgr *sessions.Manager) 
 	today := time.Now().Truncate(24 * time.Hour)
 
 	store := mgr.GetStore()
-	agentCtx, err := setup.NewAgent(ctx, cfg)
+	agentCtx, err := setup.NewAgent(mgr, cfg, setup.WithTemporary(true))
 	if err != nil {
 		return fmt.Errorf("failed to create agent: %w", err)
 	}
 
-	processor := memory.NewProcessor(agentCtx.Agent, memory.ProcessorConfig{
+	processor := memory.NewProcessor(agentCtx, memory.ProcessorConfig{
 		MemoryPath:    cfg.MemoryPath(),
 		WorkspacePath: cfg.WorkspacePath(),
 		RecentDays:    5,

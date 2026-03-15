@@ -5,8 +5,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/basenana/friday/core/fs"
 	"github.com/basenana/friday/core/providers"
+	"github.com/basenana/friday/core/state"
 	"github.com/basenana/friday/core/types"
 )
 
@@ -22,8 +22,9 @@ type Session struct {
 	Parent    *Session
 	Children  []*Session
 	History   []types.Message
-	Workdir   fs.FileSystem
+	State     state.State
 	CreatedAt time.Time
+	Temporary bool
 
 	compactThreshold int64
 
@@ -48,8 +49,8 @@ func New(id string, llm providers.Client, options ...Option) *Session {
 		option(s)
 	}
 
-	if s.Workdir == nil {
-		s.Workdir = fs.NewInMemory()
+	if s.State == nil {
+		s.State = state.NewInMemory()
 	}
 	return s
 }
@@ -61,8 +62,9 @@ func (s *Session) Fork() *Session {
 		Root:             s.Root,
 		Parent:           s,
 		History:          make([]types.Message, len(s.History)),
-		Workdir:          s.Workdir,
+		State:            s.State,
 		CreatedAt:        time.Now(),
+		Temporary:        s.Temporary,
 		compactThreshold: s.compactThreshold,
 		hooks:            s.hooks,
 		llm:              s.llm,
@@ -88,7 +90,8 @@ func (s *Session) AppendMessage(msgList ...*types.Message) {
 	s.mu.Unlock()
 
 	// Persist messages outside the lock to avoid potential deadlocks
-	if s.writer != nil && len(toPersist) > 0 {
+	// Skip persistence for temporary sessions
+	if !s.Temporary && s.writer != nil && len(toPersist) > 0 {
 		s.writer.AppendMessages(s.ID, toPersist...)
 	}
 }
@@ -156,9 +159,9 @@ func WithHooks(hooks ...Hook) Option {
 	}
 }
 
-func WithWorkdirFS(wfs fs.FileSystem) Option {
+func WithState(st state.State) Option {
 	return func(s *Session) {
-		s.Workdir = wfs
+		s.State = st
 	}
 }
 
@@ -174,11 +177,21 @@ func WithMessageWriter(w MessageWriter) Option {
 	}
 }
 
+func WithTemporary(v bool) Option {
+	return func(s *Session) {
+		s.Temporary = v
+	}
+}
+
 func (s *Session) ReplaceHistory(msgs ...types.Message) error {
 	s.mu.Lock()
 	s.History = msgs
 	s.mu.Unlock()
 
+	// Skip persistence for temporary sessions
+	if s.Temporary {
+		return nil
+	}
 	if s.writer != nil {
 		return s.writer.ReplaceMessages(s.ID, msgs...)
 	}

@@ -40,7 +40,7 @@ func (w *Workspace) Load() (*LoadedContent, error) {
 	if len(memLogs) > 0 {
 		combinedMemory := strings.Join(memLogs, "\n\n---\n\n")
 		content.MemoryHistory = append(content.MemoryHistory, types.Message{
-			Role:    types.RoleUser,
+			Role:    types.RoleAgent,
 			Content: fmt.Sprintf("[Memory Context]\n\n%s", combinedMemory),
 		})
 	}

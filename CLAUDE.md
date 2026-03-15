@@ -13,11 +13,24 @@ Core features:
 - **Session management** — Persistent conversations with history
 - **Multi-provider support** — OpenAI, Anthropic, Ollama, Google Gemini
 
+## Module Structure
+
+This repository contains two Go modules:
+- **Root module** (`/`) — CLI application, config, workspace, memory, skills, sandbox, MCP
+- **Core module** (`/core`) — Agent interfaces, providers, session management, tools, planning
+
+The `core` package is a separate module with its own `go.mod`. See `core/CLAUDE.md` for details.
+
 ## Commands
 
 ```bash
 make build    # Build for darwin/arm64, darwin/amd64, linux/arm64, linux/amd64
-make test     # Run all unit tests (go test ./...)
+make test     # Run all unit tests (go test ./... and go test ./core/...)
+```
+
+To run a single test:
+```bash
+go test -v -run TestName ./path/to/package
 ```
 
 - Binaries need to be placed in the bin directory; it is strongly recommended to use make for building.
@@ -33,7 +46,6 @@ Cobra CLI application with commands:
 - `init.go` - Initialize workspace with default markdown files
 - `session.go` - Session management (list, new, use, show, archive, delete)
 - `heartbeat.go` - Send periodic tasks defined in HEARTBEAT.md
-- `agent.go` - AgentContext setup combining all components
 
 ### Agent System (`core/agents/`)
 
@@ -93,10 +105,10 @@ Orchestrates expert sub-agents:
 - `session.go` - Message types with roles (system/user/assistant/agent/tool)
 - `event.go` - Session hook type constants (`BeforeAgent`, `BeforeModel`, `AfterModel`)
 
-### Filesystem (`core/fs/`)
+### State (`core/state/`)
 
-- `interface.go` - FileSystem interface
-- `inmemory.go` - In-memory filesystem for session workdir (default)
+- `interface.go` - State interface for KV storage with app/user scopes
+- `inmemory.go` - In-memory state implementation (default)
 
 ### Logger (`core/logger/`)
 
@@ -154,8 +166,16 @@ LLM clients implement `Client` interface with:
 - `CompletionNonStreaming(ctx, Request) (string, error)`
 - `StructuredPredict(ctx, Request, model any) error` - Structured output
 
-## Agent Setup Flow (`cmd/agent.go`)
+## Agent Setup Flow (`setup/setup.go`)
 
+The setup package provides agent initialization:
+- `NewAgent` - Creates AgentContext with all components
+- `AgentContext` - Holds Client, Workspace, Session, Agent, Memory
+- `Chat` method - Sends message to agent
+- `PrintResponse` - Streams response to stdout
+- Options: `WithSessionID`, `WithIsolate`, `WithTemporary`, `WithVerbose`
+
+Setup flow:
 1. Create provider client from config
 2. Initialize workspace directory
 3. Get or create session (from session manager)
@@ -163,4 +183,30 @@ LLM clients implement `Client` interface with:
 5. Load workspace content (system prompts + memory history)
 6. Create agent with system prompt and tools
 7. Ensure memory log exists for today
+
+## Skills System (`skills/`)
+
+Skills are markdown-based extensions with YAML frontmatter:
+- `skill.go` — Skill struct with Frontmatter (name, description, allowed_tools)
+- `loader.go` — Loads SKILL.md files from directories
+- `registry.go` — Skill registration and discovery
+- `hook.go` — Injects skill instructions into session context
+
+## Sandbox (`sandbox/`)
+
+OS-level sandboxing for secure command execution:
+- `sandbox.go` — Sandbox interface (WrapCommand, IsAvailable, Name)
+- `seatbelt.go` — macOS sandbox using Seatbelt framework
+- `bwrap.go` — Linux sandbox using bubblewrap
+- `executor.go` — Command execution with sandbox integration
+- `permission.go` — Permission definitions (filesystem, network)
+
+## MCP Server (`mcp/`)
+
+Model Context Protocol integration:
+- `server.go` — Connects to MCP SSE endpoints and converts MCP tools to internal Tool format
+
+## Skills Command (`cmd/skills.go`)
+
+CLI for managing skills: list, install, update installed skills.
 
