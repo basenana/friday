@@ -38,7 +38,6 @@ type Paths struct {
 	Sessions  string
 	Memory    string
 	State     string
-	Log       string
 }
 
 // TemplateParams contains parameters for rendering workspace templates

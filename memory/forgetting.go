@@ -3,8 +3,6 @@ package memory
 import (
 	"math"
 	"time"
-
-	"github.com/basenana/friday/types"
 )
 
 type EvaluationResult struct {
@@ -56,7 +54,7 @@ func (fs *ForgettingSystem) calculateFrequencyBoost(usageCount int) float64 {
 	return boost
 }
 
-func (fs *ForgettingSystem) calculateMemoryStrength(record *types.Memory) (strength, timeDecay, freqBoost float64) {
+func (fs *ForgettingSystem) calculateMemoryStrength(record *Memory) (strength, timeDecay, freqBoost float64) {
 	timeDecay = fs.calculateTimeDecay(record.LastUsedAt)
 
 	freqBoost = fs.calculateFrequencyBoost(record.UsageCount)
@@ -73,7 +71,7 @@ func (fs *ForgettingSystem) calculateMemoryStrength(record *types.Memory) (stren
 	return strength, timeDecay, freqBoost
 }
 
-func (fs *ForgettingSystem) Evaluate(record *types.Memory) EvaluationResult {
+func (fs *ForgettingSystem) Evaluate(record *Memory) EvaluationResult {
 	strength, timeDecay, freqBoost := fs.calculateMemoryStrength(record)
 
 	result := EvaluationResult{
@@ -89,7 +87,7 @@ func (fs *ForgettingSystem) Evaluate(record *types.Memory) EvaluationResult {
 	return result
 }
 
-func DefaultCheckMemoryNeedToForget() func(memory *types.Memory) bool {
+func DefaultCheckMemoryNeedToForget() func(memory *Memory) bool {
 	fs := ForgettingSystem{
 		HalfLifeDays:      30,
 		FrequencyWeight:   0.6,
@@ -97,7 +95,7 @@ func DefaultCheckMemoryNeedToForget() func(memory *types.Memory) bool {
 		MaxUsageCount:     100,
 	}
 
-	return func(memory *types.Memory) bool {
+	return func(memory *Memory) bool {
 		return fs.Evaluate(memory).Forget
 	}
 }

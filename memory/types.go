@@ -6,29 +6,23 @@ import (
 	"github.com/basenana/friday/core/types"
 )
 
+type Memory struct {
+	ID         string            `json:"id"`
+	Type       string            `json:"type"`
+	Category   string            `json:"category"`
+	Overview   string            `json:"overview"`
+	Details    string            `json:"details"`  // Cause, Process, and Result
+	Relevant   string            `json:"relevant"` // Related people or things
+	Comment    string            `json:"comment"`  // Subjective evaluation or remarks
+	Metadata   map[string]string `json:"metadata"`
+	UsageCount int               `json:"usage_count"`
+	CreatedAt  time.Time         `json:"created_at"`
+	LastUsedAt time.Time         `json:"last_used_at"`
+}
+
 type SessionHistory struct {
 	ID           string
 	CreatedAt    time.Time
 	Messages     []types.Message
 	MessageCount int
-}
-
-type ExtractionResult struct {
-	SessionID       string             `json:"session_id"`
-	DailyEntries    []MemoryEntry      `json:"daily_entries"`
-	LongTermEntries []MemoryEntry      `json:"long_term_entries"`
-	UserPreferences []PreferenceUpdate `json:"user_preferences"`
-}
-
-type MemoryEntry struct {
-	Timestamp time.Time `json:"timestamp"`
-	Category  string    `json:"category"`
-	Content   string    `json:"content"`
-	Source    string    `json:"source"`
-}
-
-type PreferenceUpdate struct {
-	Field   string `json:"field"`
-	Value   string `json:"value"`
-	Context string `json:"context"`
 }

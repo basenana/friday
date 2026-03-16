@@ -48,7 +48,12 @@ func (c *client) Completion(ctx context.Context, request providers.Request) prov
 		)
 
 		defer func() {
-			c.logger.Infow("completion-with-streaming finish", "elapsed", time.Since(startAt).String())
+			sec := time.Since(startAt).Seconds()
+			if sec < 1 {
+				sec = 1
+			}
+			tps := float64(resp.Token.CompletionTokens) / sec
+			c.logger.Infow("completion-with-streaming finish", "elapsed", time.Since(startAt).String(), "tps", fmt.Sprintf("%.2f", tps))
 		}()
 
 	Retry:
@@ -231,7 +236,7 @@ func (c *client) messageCreateParams(request providers.Request) *anthropic.Messa
 		paramsMap := t.GetParameters()
 		properties := make(map[string]any)
 		var required []string
-		
+
 		if props, ok := paramsMap["properties"].(map[string]any); ok {
 			properties = props
 		}
@@ -243,7 +248,7 @@ func (c *client) messageCreateParams(request providers.Request) *anthropic.Messa
 				}
 			}
 		}
-		
+
 		inputSchema := anthropic.ToolInputSchemaParam{
 			Properties: properties,
 			Required:   required,

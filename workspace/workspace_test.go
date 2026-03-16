@@ -31,7 +31,7 @@ func TestWorkspaceInit(t *testing.T) {
 	ws := NewWorkspace(workspacePath, memoryPath)
 
 	// Test Init
-	created, err := ws.Init()
+	created, err := ws.InitWithParams(nil)
 	if err != nil {
 		t.Fatalf("Init failed: %v", err)
 	}
@@ -57,7 +57,7 @@ func TestWorkspaceInit(t *testing.T) {
 	}
 
 	// Test Init again - should return empty created list
-	createdAgain, err := ws.Init()
+	createdAgain, err := ws.InitWithParams(nil)
 	if err != nil {
 		t.Fatalf("second Init failed: %v", err)
 	}
@@ -80,7 +80,7 @@ func TestWorkspaceLoad(t *testing.T) {
 	ws := NewWorkspace(workspacePath, memoryPath)
 
 	// Init workspace
-	_, err = ws.Init()
+	_, err = ws.InitWithParams(nil)
 	if err != nil {
 		t.Fatalf("Init failed: %v", err)
 	}

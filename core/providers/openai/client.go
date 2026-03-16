@@ -41,7 +41,12 @@ func (c *client) Completion(ctx context.Context, request providers.Request) prov
 		)
 
 		defer func() {
-			c.logger.Infow("completion-with-streaming finish", "elapsed", time.Since(startAt).String())
+			sec := time.Since(startAt).Seconds()
+			if sec < 1 {
+				sec = 1
+			}
+			tps := float64(resp.Token.CompletionTokens) / sec
+			c.logger.Infow("completion-with-streaming finish", "elapsed", time.Since(startAt).String(), "tps", fmt.Sprintf("%.2f", tps))
 		}()
 
 	Retry:

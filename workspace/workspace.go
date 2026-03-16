@@ -44,10 +44,6 @@ func (w *Workspace) Exists() bool {
 	return err == nil
 }
 
-func (w *Workspace) Init() ([]string, error) {
-	return w.InitWithParams(nil)
-}
-
 func (w *Workspace) InitWithParams(params *TemplateParams) ([]string, error) {
 	var created []string
 

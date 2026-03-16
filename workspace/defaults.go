@@ -27,7 +27,7 @@ This folder is home. Treat it that way.
 - **Sessions:** {{if .Paths}}{{.Paths.Sessions}}{{else}}~/.friday/sessions{{end}} — Conversation history storage
 - **Memory:** {{if .Paths}}{{.Paths.Memory}}{{else}}~/.friday/memory{{end}} — Daily memory logs
 - **State:** {{if .Paths}}{{.Paths.State}}{{else}}~/.friday/state{{end}} — Persistent key-value state storage
-- **Log:** {{if .Paths}}{{.Paths.Log}}{{else}}~/.friday/log{{end}} — Application log file
+- **Log:** /tmp/friday-YYYY-MM-DD.log — Friday run log file
 
 ## Session Startup
 

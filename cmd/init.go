@@ -35,7 +35,6 @@ var initCmd = &cobra.Command{
 				Sessions:  cfg.SessionsPath(),
 				Memory:    cfg.MemoryPath(),
 				State:     cfg.StatePath(),
-				Log:       config.LogPath(),
 			},
 		}
 
