@@ -203,6 +203,7 @@ func (ac *AgentContext) Chat(ctx context.Context, message string) *api.Response 
 }
 
 func PrintResponse(resp *api.Response) {
+	hasOutput := false
 Waiting:
 	for {
 		select {
@@ -215,6 +216,10 @@ Waiting:
 			if !ok {
 				break Waiting
 			}
+			if !hasOutput && strings.TrimSpace(delta.Content) == "" {
+				continue
+			}
+			hasOutput = true
 			fmt.Print(delta.Content)
 		}
 	}

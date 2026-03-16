@@ -183,7 +183,12 @@ WaitMessage:
 	}
 
 	if reasoning != "" || len(content) > 0 {
-		msg := &types.Message{Role: types.RoleAssistant, Content: content, Reasoning: reasoning}
+		msg := &types.Message{
+			Role:      types.RoleAssistant,
+			Content:   content,
+			Reasoning: reasoning,
+			Tokens:    stream.Tokens().CompletionTokens,
+		}
 		sess.AppendMessage(msg)
 	}
 	if agentMessage != "" {

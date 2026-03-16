@@ -31,6 +31,7 @@ github.com/basenana/friday/core/logger
 github.com/basenana/friday/core/planning
 github.com/basenana/friday/core/providers
 github.com/basenana/friday/core/providers/anthropics
+github.com/basenana/friday/core/providers/common
 github.com/basenana/friday/core/providers/openai
 github.com/basenana/friday/core/session
 github.com/basenana/friday/core/state

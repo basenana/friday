@@ -42,6 +42,9 @@ type ToolResult struct {
 // For assistant messages with reasoning, Reasoning contains the thought process.
 // ToolCalls contains tool call requests (assistant role).
 // ToolResult contains tool execution results (tool role).
+// Tokens is the token count for this message:
+//   - For assistant messages: output_tokens from API response (or estimated via FuzzyTokens)
+//   - For other messages: estimated using FuzzyTokens()
 type Message struct {
 	Role      MessageRole `json:"role"`
 	Content   string      `json:"content,omitempty"`
@@ -53,6 +56,9 @@ type Message struct {
 	// Tool interaction
 	ToolCalls  []ToolCall  `json:"tool_calls,omitempty"`
 	ToolResult *ToolResult `json:"tool_result,omitempty"`
+
+	// Tokens is the token count for this message
+	Tokens int64 `json:"tokens,omitempty"`
 
 	Metadata map[string]string `json:"-"`
 	Time     time.Time         `json:"time,omitempty"`

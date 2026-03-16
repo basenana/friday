@@ -12,6 +12,7 @@ import (
 
 	"github.com/basenana/friday/core/logger"
 	"github.com/basenana/friday/core/providers"
+	"github.com/basenana/friday/core/providers/common"
 	"github.com/basenana/friday/core/types"
 	"github.com/invopop/jsonschema"
 	"github.com/openai/openai-go"
@@ -29,6 +30,7 @@ type client struct {
 }
 
 func (c *client) Completion(ctx context.Context, request providers.Request) providers.Response {
+	c.logger.Infow("llm processing...")
 	resp := newResponse()
 	go func() {
 		defer resp.close()
@@ -76,11 +78,15 @@ func (c *client) Completion(ctx context.Context, request providers.Request) prov
 			resp.fail(err)
 			return
 		}
+
+		// Fallback: if API didn't return token counts, estimate using FuzzyTokens
+		resp.applyTokenFallback(request.Messages())
 	}()
 	return resp
 }
 
 func (c *client) CompletionNonStreaming(ctx context.Context, request providers.Request) (string, error) {
+	c.logger.Infow("llm processing...")
 	var (
 		p       = c.chatCompletionNewParams(request)
 		startAt = time.Now()
@@ -151,6 +157,9 @@ func (c *client) chatCompletionNewParams(request providers.Request) *openai.Chat
 		Model:    c.model.Name,
 		TopP:     param.NewOpt(1.0),
 		N:        param.NewOpt(int64(1)),
+		StreamOptions: openai.ChatCompletionStreamOptionsParam{
+			IncludeUsage: param.NewOpt(true),
+		},
 	}
 
 	if c.model.Temperature != nil {
@@ -290,6 +299,9 @@ type response struct {
 		Name      string
 		Arguments string
 	}
+
+	// accumulatedContent tracks the content for token fallback calculation
+	accumulatedContent string
 }
 
 func (r *response) nextChoice(chunk openai.ChatCompletionChunkChoice) {
@@ -308,6 +320,7 @@ func (r *response) nextChoice(chunk openai.ChatCompletionChunkChoice) {
 	}
 
 	if chunk.Delta.Content != "" {
+		r.accumulatedContent += chunk.Delta.Content
 		r.Stream <- providers.Delta{Content: chunk.Delta.Content}
 	}
 }
@@ -334,6 +347,12 @@ func (r *response) updateUsage(chunk openai.CompletionUsage) {
 	r.Token.CompletionTokens += chunk.CompletionTokens
 	r.Token.PromptTokens += chunk.PromptTokens
 	r.Token.TotalTokens += chunk.TotalTokens
+}
+
+// applyTokenFallback fills in token counts using FuzzyTokens if API didn't return them
+func (r *response) applyTokenFallback(requestMessages []types.Message) {
+	r.Token.PromptTokens, r.Token.CompletionTokens, r.Token.TotalTokens =
+		common.ApplyTokenFallback(r.Token.PromptTokens, r.Token.CompletionTokens, r.accumulatedContent, requestMessages)
 }
 
 func (r *response) fail(err error) { r.Err <- err }

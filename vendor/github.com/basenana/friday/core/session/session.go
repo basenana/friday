@@ -106,6 +106,14 @@ func (s *Session) Tokens() int64 {
 	return total
 }
 
+func (s *Session) GetHistory() []types.Message {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	history := make([]types.Message, len(s.History))
+	copy(history, s.History)
+	return history
+}
+
 func (s *Session) RegisterHook(handler Hook) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -117,10 +125,15 @@ func (s *Session) CleanHooks() {
 }
 
 func (s *Session) RunHooks(ctx context.Context, hookType types.SessionType, payload HookPayload) error {
+	// Copy hooks slice to avoid holding lock during hook execution.
+	// Hooks may call methods like Fork() that require write lock,
+	// and RWMutex doesn't support upgrading from RLock to Lock.
 	s.mu.RLock()
-	defer s.mu.RUnlock()
+	hooks := make([]Hook, len(s.hooks))
+	copy(hooks, s.hooks)
+	s.mu.RUnlock()
 
-	for _, h := range s.hooks {
+	for _, h := range hooks {
 		switch hookType {
 		case types.SessionHookBeforeAgent:
 			if bh, ok := h.(BeforeAgentHook); ok {

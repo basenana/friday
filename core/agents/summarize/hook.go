@@ -29,14 +29,14 @@ func (h Hook) BeforeModel(ctx context.Context, sess *session.Session, req provid
 		return err
 	}
 
-	newHistory := session.RebuildHistoryWithAbstract(sess.History, abstract)
+	newHistory := session.RebuildHistoryWithAbstract(sess.GetHistory(), abstract)
 
 	// Persist new history (automatically backs up original file)
 	if err := sess.ReplaceHistory(newHistory...); err != nil {
 		return err
 	}
 
-	req.SetHistory(sess.History)
+	req.SetHistory(sess.GetHistory())
 	return nil
 }
 

@@ -14,6 +14,7 @@ import (
 	"github.com/anthropics/anthropic-sdk-go/option"
 	"github.com/basenana/friday/core/logger"
 	"github.com/basenana/friday/core/providers"
+	"github.com/basenana/friday/core/providers/common"
 	"github.com/basenana/friday/core/types"
 	"github.com/invopop/jsonschema"
 	"golang.org/x/time/rate"
@@ -36,6 +37,7 @@ type client struct {
 }
 
 func (c *client) Completion(ctx context.Context, request providers.Request) providers.Response {
+	c.logger.Infow("llm processing...")
 	resp := newResponse()
 	go func() {
 		defer resp.close()
@@ -76,11 +78,15 @@ func (c *client) Completion(ctx context.Context, request providers.Request) prov
 			resp.fail(err)
 			return
 		}
+
+		// Fallback: if API didn't return token counts, estimate using FuzzyTokens
+		resp.applyTokenFallback(request.Messages())
 	}()
 	return resp
 }
 
 func (c *client) CompletionNonStreaming(ctx context.Context, request providers.Request) (string, error) {
+	c.logger.Infow("llm processing...")
 	var (
 		params  = c.messageCreateParams(request)
 		startAt = time.Now()
@@ -298,12 +304,16 @@ type response struct {
 		Name      string
 		Arguments string
 	}
+
+	// accumulatedContent tracks the content for token fallback calculation
+	accumulatedContent string
 }
 
 func (r *response) handleEvent(event anthropic.MessageStreamEventUnion) {
 	switch event.Type {
 	case "message_start":
-		// message started
+		msg := event.AsMessageStart()
+		r.Token.PromptTokens = msg.Message.Usage.InputTokens
 
 	case "message_delta":
 		delta := event.AsMessageDelta()
@@ -322,6 +332,7 @@ func (r *response) handleEvent(event anthropic.MessageStreamEventUnion) {
 	case "content_block_delta":
 		delta := event.AsContentBlockDelta()
 		if delta.Delta.Type == "text_delta" {
+			r.accumulatedContent += delta.Delta.Text
 			r.Stream <- providers.Delta{Content: delta.Delta.Text}
 		} else if delta.Delta.Type == "input_json_delta" {
 			r.incompleteTool.Arguments += delta.Delta.PartialJSON
@@ -348,6 +359,12 @@ func (r *response) flushToolUse() {
 		Name      string
 		Arguments string
 	}{}
+}
+
+// applyTokenFallback fills in token counts using FuzzyTokens if API didn't return them
+func (r *response) applyTokenFallback(requestMessages []types.Message) {
+	r.Token.PromptTokens, r.Token.CompletionTokens, r.Token.TotalTokens =
+		common.ApplyTokenFallback(r.Token.PromptTokens, r.Token.CompletionTokens, r.accumulatedContent, requestMessages)
 }
 
 func (r *response) fail(err error) { r.Err <- err }
