@@ -40,3 +40,8 @@ type Paths struct {
 	State     string
 	Log       string
 }
+
+// TemplateParams contains parameters for rendering workspace templates
+type TemplateParams struct {
+	Paths *Paths
+}

@@ -28,7 +28,18 @@ var initCmd = &cobra.Command{
 
 		ws := workspace.NewWorkspace(cfg.WorkspacePath(), cfg.MemoryPath())
 
-		wsCreated, err := ws.Init()
+		params := &workspace.TemplateParams{
+			Paths: &workspace.Paths{
+				DataDir:   cfg.DataDirPath(),
+				Workspace: cfg.WorkspacePath(),
+				Sessions:  cfg.SessionsPath(),
+				Memory:    cfg.MemoryPath(),
+				State:     cfg.StatePath(),
+				Log:       config.LogPath(),
+			},
+		}
+
+		wsCreated, err := ws.InitWithParams(params)
 		if err != nil {
 			fmt.Printf("failed to init workspace: %v\n", err)
 			return

@@ -169,15 +169,8 @@ func NewAgent(sessionMgr SessionManager, cfg *config.Config, opts ...Option) (*A
 	}
 
 	agent := agents.New(client, agents.Option{
-		SystemPrompt: workspace.ComposeSystemPrompt(wsContent, &workspace.Paths{
-			DataDir:   cfg.DataDirPath(),
-			Workspace: cfg.WorkspacePath(),
-			Sessions:  cfg.SessionsPath(),
-			Memory:    cfg.MemoryPath(),
-			State:     cfg.StatePath(),
-			Log:       config.LogPath(),
-		}),
-		Tools: allTools,
+		SystemPrompt: workspace.ComposeSystemPrompt(wsContent),
+		Tools:        allTools,
 	})
 
 	memSys := memory.NewMemorySystem(cfg.MemoryPath(), cfg.Memory.Days)

@@ -37,6 +37,7 @@ type client struct {
 }
 
 func (c *client) Completion(ctx context.Context, request providers.Request) providers.Response {
+	c.logger.Infow("llm processing...")
 	resp := newResponse()
 	go func() {
 		defer resp.close()
@@ -85,6 +86,7 @@ func (c *client) Completion(ctx context.Context, request providers.Request) prov
 }
 
 func (c *client) CompletionNonStreaming(ctx context.Context, request providers.Request) (string, error) {
+	c.logger.Infow("llm processing...")
 	var (
 		params  = c.messageCreateParams(request)
 		startAt = time.Now()

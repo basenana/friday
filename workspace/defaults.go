@@ -1,12 +1,33 @@
 package workspace
 
+import (
+	"bytes"
+	"text/template"
+)
+
 // Default file content templates for workspace initialization
 
 const (
 	// DefaultAgentsMd is the default content for AGENTS.md
 	DefaultAgentsMd = `# AGENTS.md - Your Workspace
 
+You are Friday, a Unix-philosophy AI agent CLI built for terminal users.
+
+Your startup command is 'friday' — users invoke you with it. Use this command to understand yourself, configure settings, or delegate subtasks to another Friday process.
+Run 'friday --help' to see your capabilities.
+
+
+## Your Directories
+
+All your data resides in your data directory. You may freely explore and use it.
 This folder is home. Treat it that way.
+
+- **DataDir:** {{if .Paths}}{{.Paths.DataDir}}{{else}}~/.friday{{end}} — Root data directory for all friday data
+- **Workspace:** {{if .Paths}}{{.Paths.Workspace}}{{else}}~/.friday/workspace{{end}} — Markdown files for agent context (SOUL.md, USER.md, skills, etc.)
+- **Sessions:** {{if .Paths}}{{.Paths.Sessions}}{{else}}~/.friday/sessions{{end}} — Conversation history storage
+- **Memory:** {{if .Paths}}{{.Paths.Memory}}{{else}}~/.friday/memory{{end}} — Daily memory logs
+- **State:** {{if .Paths}}{{.Paths.State}}{{else}}~/.friday/state{{end}} — Persistent key-value state storage
+- **Log:** {{if .Paths}}{{.Paths.Log}}{{else}}~/.friday/log{{end}} — Application log file
 
 ## Session Startup
 
@@ -237,7 +258,7 @@ If nothing needs attention, reply HEARTBEAT_OK.
 `
 )
 
-// DefaultContents maps filename to default content
+// DefaultContents maps filename to default content templates
 var DefaultContents = map[string]string{
 	"AGENTS.md":    DefaultAgentsMd,
 	"SOUL.md":      DefaultSoulMd,
@@ -246,4 +267,22 @@ var DefaultContents = map[string]string{
 	"TOOLS.md":     DefaultToolsMd,
 	"HEARTBEAT.md": DefaultHeartbeatMd,
 	"MEMORY.md":    DefaultMemoryMd,
+}
+
+func RenderTemplate(tmpl string, params *TemplateParams) (string, error) {
+	if params == nil {
+		params = &TemplateParams{}
+	}
+
+	t, err := template.New("workspace").Parse(tmpl)
+	if err != nil {
+		return "", err
+	}
+
+	var buf bytes.Buffer
+	if err := t.Execute(&buf, params); err != nil {
+		return "", err
+	}
+
+	return buf.String(), nil
 }

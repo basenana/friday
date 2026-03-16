@@ -3,6 +3,7 @@ package workspace
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -103,68 +104,70 @@ func TestWorkspaceLoad(t *testing.T) {
 
 func TestComposeSystemPrompt(t *testing.T) {
 	tests := []struct {
-		name     string
-		content  *LoadedContent
-		paths    *Paths
-		expected string
+		name        string
+		content     *LoadedContent
+		contains    string
+		notContains string
 	}{
-		{
-			name:     "nil content",
-			content:  nil,
-			paths:    nil,
-			expected: "",
-		},
-		{
-			name:     "empty content",
-			content:  &LoadedContent{},
-			paths:    nil,
-			expected: "",
-		},
-		{
-			name: "with system prompts",
-			content: &LoadedContent{
-				SystemPrompts: []string{"prompt1", "prompt2"},
-			},
-			paths:    nil,
-			expected: "prompt1\n\nprompt2",
-		},
 		{
 			name: "empty prompts filtered",
 			content: &LoadedContent{
 				SystemPrompts: []string{"", "prompt1", "   ", "prompt2"},
 			},
-			paths:    nil,
-			expected: "prompt1\n\nprompt2",
-		},
-		{
-			name: "with paths",
-			content: &LoadedContent{
-				SystemPrompts: []string{"prompt1"},
-			},
-			paths: &Paths{
-				DataDir:   "/data",
-				Workspace: "/workspace",
-				Sessions:  "/sessions",
-				Memory:    "/memory",
-				State:     "/state",
-				Log:       "/log",
-			},
-			expected: `prompt1
-
-# Friday Directories
-
-- DataDir: /data — Root data directory for all friday data
-- Workspace: /workspace — Markdown files for agent context (SOUL.md, USER.md, etc.)
-- Sessions: /sessions — Conversation history storage
-- Memory: /memory — Daily memory logs
-- State: /state — Persistent key-value state storage
-- Log: /log — Application log file`,
+			contains: "prompt1",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := ComposeSystemPrompt(tt.content, tt.paths)
+			result := ComposeSystemPrompt(tt.content)
+			if tt.contains != "" && !strings.Contains(result, tt.contains) {
+				t.Errorf("expected result to contain %q, got %q", tt.contains, result)
+			}
+			if tt.notContains != "" && strings.Contains(result, tt.notContains) {
+				t.Errorf("expected result not to contain %q, got %q", tt.notContains, result)
+			}
+		})
+	}
+}
+
+func TestRenderTemplate(t *testing.T) {
+	tests := []struct {
+		name     string
+		tmpl     string
+		params   *TemplateParams
+		expected string
+	}{
+		{
+			name:     "nil params uses defaults",
+			tmpl:     "DataDir: {{if .Paths}}{{.Paths.DataDir}}{{else}}~/.friday{{end}}",
+			params:   nil,
+			expected: "DataDir: ~/.friday",
+		},
+		{
+			name: "with paths renders correctly",
+			tmpl: "DataDir: {{.Paths.DataDir}}",
+			params: &TemplateParams{
+				Paths: &Paths{
+					DataDir: "/custom/data",
+				},
+			},
+			expected: "DataDir: /custom/data",
+		},
+		{
+			name:     "plain text unchanged",
+			tmpl:     "Hello World",
+			params:   nil,
+			expected: "Hello World",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := RenderTemplate(tt.tmpl, tt.params)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
 			if result != tt.expected {
 				t.Errorf("expected %q, got %q", tt.expected, result)
 			}

@@ -84,6 +84,10 @@ func (m Message) GetContent() string {
 }
 
 func (m Message) FuzzyTokens() int64 {
+	if m.Tokens != 0 {
+		return m.Tokens
+	}
+
 	total := len([]rune(m.Content)) + len([]rune(m.Reasoning)) + len([]rune(m.ImageURL))
 
 	for _, tc := range m.ToolCalls {

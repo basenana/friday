@@ -45,6 +45,10 @@ func (w *Workspace) Exists() bool {
 }
 
 func (w *Workspace) Init() ([]string, error) {
+	return w.InitWithParams(nil)
+}
+
+func (w *Workspace) InitWithParams(params *TemplateParams) ([]string, error) {
 	var created []string
 
 	if err := os.MkdirAll(w.basePath, 0755); err != nil {
@@ -55,9 +59,13 @@ func (w *Workspace) Init() ([]string, error) {
 		return nil, err
 	}
 
-	for filename, content := range DefaultContents {
+	for filename, tmpl := range DefaultContents {
 		filePath := filepath.Join(w.basePath, filename)
 		if _, err := os.Stat(filePath); os.IsNotExist(err) {
+			content, renderErr := RenderTemplate(tmpl, params)
+			if renderErr != nil {
+				return nil, renderErr
+			}
 			if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
 				return nil, err
 			}
