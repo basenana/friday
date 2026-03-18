@@ -4,6 +4,7 @@ import (
 	"time"
 
 	coresession "github.com/basenana/friday/core/session"
+	"github.com/basenana/friday/core/providers"
 	"github.com/basenana/friday/core/types"
 )
 
@@ -25,8 +26,8 @@ type Store interface {
 	EnsureDir() error
 
 	// Session lifecycle
-	Create(sessionID string, opts ...coresession.Option) (*coresession.Session, error)
-	Load(sessionID string, opts ...coresession.Option) (*coresession.Session, error)
+	Create(sessionID string, llm providers.Client, opts ...coresession.Option) (*coresession.Session, error)
+	Load(sessionID string, llm providers.Client, opts ...coresession.Option) (*coresession.Session, error)
 	Delete(sessionID string) error
 
 	// Query

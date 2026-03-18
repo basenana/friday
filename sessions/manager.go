@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	coresession "github.com/basenana/friday/core/session"
+	"github.com/basenana/friday/core/providers"
 	"github.com/basenana/friday/core/types"
 	"github.com/basenana/friday/utils/logger"
 )
@@ -14,6 +15,7 @@ type Manager struct {
 	store       Store
 	currentFile string
 	tty         string
+	llm         providers.Client
 }
 
 // NewManager creates a new session manager
@@ -28,6 +30,11 @@ func NewManager(store Store, currentFile string, tty string) *Manager {
 // GetStore returns the underlying store
 func (m *Manager) GetStore() Store {
 	return m.store
+}
+
+// SetLLM sets the LLM client for the manager
+func (m *Manager) SetLLM(llm providers.Client) {
+	m.llm = llm
 }
 
 // GetCurrentID returns the current session ID, or empty string if none
@@ -61,7 +68,7 @@ func (m *Manager) GetOrCreateCurrent(opts ...coresession.Option) (*coresession.S
 
 	// Try to load existing session
 	if currentID != "" {
-		sess, err := m.store.Load(currentID, opts...)
+		sess, err := m.store.Load(currentID, m.llm, opts...)
 		if err == nil {
 			return sess, currentID, false, nil
 		}
@@ -76,7 +83,7 @@ func (m *Manager) GetOrCreateCurrent(opts ...coresession.Option) (*coresession.S
 	sessionID := types.NewID()
 	alias := m.generateAlias()
 
-	sess, err := m.store.Create(sessionID, opts...)
+	sess, err := m.store.Create(sessionID, m.llm, opts...)
 	if err != nil {
 		return nil, "", false, err
 	}
@@ -115,14 +122,14 @@ func (m *Manager) GetOrCreateByID(sessionID string, opts ...coresession.Option) 
 	}
 
 	// Try to load existing session
-	sess, err := m.store.Load(sessionID, opts...)
+	sess, err := m.store.Load(sessionID, m.llm, opts...)
 	if err == nil {
 		return sess, false, nil
 	}
 
 	// Create new session
 
-	sess, err = m.store.Create(sessionID, opts...)
+	sess, err = m.store.Create(sessionID, m.llm, opts...)
 	if err != nil {
 		return nil, false, err
 	}
@@ -151,7 +158,7 @@ func (m *Manager) CreateIsolated(opts ...coresession.Option) (*coresession.Sessi
 	sessionID := types.NewID()
 	alias := m.generateAlias()
 
-	sess, err := m.store.Create(sessionID, opts...)
+	sess, err := m.store.Create(sessionID, m.llm, opts...)
 	if err != nil {
 		return nil, "", err
 	}
@@ -168,6 +175,6 @@ func (m *Manager) CreateIsolated(opts ...coresession.Option) (*coresession.Sessi
 func (m *Manager) CreateTemporary(opts ...coresession.Option) (*coresession.Session, string, error) {
 	opts = append(opts, coresession.WithTemporary(true))
 	sessionID := types.NewID()
-	sess := coresession.New(sessionID, nil, opts...)
+	sess := coresession.New(sessionID, m.llm, opts...)
 	return sess, sessionID, nil
 }

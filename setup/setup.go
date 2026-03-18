@@ -41,6 +41,7 @@ type options struct {
 }
 
 type SessionManager interface {
+	SetLLM(llm providers.Client)
 	GetOrCreateByID(sessionID string, opts ...coreSession.Option) (*coreSession.Session, bool, error)
 	CreateIsolated(opts ...coreSession.Option) (*coreSession.Session, string, error)
 	CreateTemporary(opts ...coreSession.Option) (*coreSession.Session, string, error)
@@ -83,10 +84,12 @@ func NewAgent(sessionMgr SessionManager, cfg *config.Config, opts ...Option) (*A
 		opt(options)
 	}
 
-	client, err := createProviderClient(cfg)
+	client, err := CreateProviderClient(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("create provider client: %w", err)
 	}
+
+	sessionMgr.SetLLM(client)
 
 	ws := workspace.NewWorkspace(cfg.WorkspacePath(), cfg.MemoryPath())
 	if err = ws.EnsureDir(""); err != nil {
@@ -219,7 +222,7 @@ Waiting:
 	fmt.Println()
 }
 
-func createProviderClient(cfg *config.Config) (providers.Client, error) {
+func CreateProviderClient(cfg *config.Config) (providers.Client, error) {
 	provider := strings.ToLower(cfg.Model.Provider)
 
 	switch provider {

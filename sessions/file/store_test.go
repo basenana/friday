@@ -24,7 +24,7 @@ func TestReplaceMessages(t *testing.T) {
 	sessionID := "test-session-001"
 
 	// 1. Create session
-	sess, err := store.Create(sessionID)
+	sess, err := store.Create(sessionID, nil)
 	if err != nil {
 		t.Fatalf("failed to create session: %v", err)
 	}

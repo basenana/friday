@@ -9,6 +9,7 @@ import (
 	"time"
 
 	coresession "github.com/basenana/friday/core/session"
+	"github.com/basenana/friday/core/providers"
 	"github.com/basenana/friday/core/types"
 	"github.com/basenana/friday/sessions"
 )
@@ -43,7 +44,7 @@ func (s *FileSessionStore) historyPath(id string) string {
 
 // Store interface implementation
 
-func (s *FileSessionStore) Create(sessionID string, opts ...coresession.Option) (*coresession.Session, error) {
+func (s *FileSessionStore) Create(sessionID string, llm providers.Client, opts ...coresession.Option) (*coresession.Session, error) {
 	if err := s.EnsureDir(); err != nil {
 		return nil, err
 	}
@@ -75,11 +76,11 @@ func (s *FileSessionStore) Create(sessionID string, opts ...coresession.Option) 
 		return nil, err
 	}
 
-	sess := coresession.New(sessionID, nil, append(opts, coresession.WithMessageWriter(s))...)
+	sess := coresession.New(sessionID, llm, append(opts, coresession.WithMessageWriter(s))...)
 	return sess, nil
 }
 
-func (s *FileSessionStore) Load(sessionID string, opts ...coresession.Option) (*coresession.Session, error) {
+func (s *FileSessionStore) Load(sessionID string, llm providers.Client, opts ...coresession.Option) (*coresession.Session, error) {
 	metaPath := s.metaPath(sessionID)
 	data, err := os.ReadFile(metaPath)
 	if err != nil {
@@ -99,7 +100,7 @@ func (s *FileSessionStore) Load(sessionID string, opts ...coresession.Option) (*
 		return nil, err
 	}
 
-	sess := coresession.New(sessionID, nil, append(opts,
+	sess := coresession.New(sessionID, llm, append(opts,
 		coresession.WithHistory(messages...),
 		coresession.WithMessageWriter(s),
 	)...)

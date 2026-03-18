@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strings"
@@ -9,6 +10,8 @@ import (
 
 	"github.com/basenana/friday/core/types"
 	"github.com/basenana/friday/sessions"
+	"github.com/basenana/friday/sessions/file"
+	"github.com/basenana/friday/setup"
 )
 
 // sessionCmd represents the session command
@@ -63,7 +66,7 @@ var sessionNewCmd = &cobra.Command{
 		store := sessMgr.GetStore()
 		sessionID := types.NewID()
 
-		_, err := store.Create(sessionID)
+		_, err := store.Create(sessionID, nil)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "failed to create session: %v\n", err)
 			os.Exit(1)
@@ -368,6 +371,67 @@ var sessionDeleteCmd = &cobra.Command{
 	},
 }
 
+// sessionCompactCmd represents the session compact command
+var sessionCompactCmd = &cobra.Command{
+	Use:   "compact <id>",
+	Short: "Compact a session",
+	Long:  `Compact a session by summarizing its history to reduce token count.`,
+	Args:  cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		store := sessMgr.GetStore()
+		prefix := args[0]
+
+		metas, err := store.List()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "failed to list sessions: %v\n", err)
+			os.Exit(1)
+		}
+
+		sessionID, found := findSessionByPrefix(metas, prefix)
+		if !found {
+			fmt.Printf("Session not found: %s\n", prefix)
+			os.Exit(1)
+		}
+
+		client, err := setup.CreateProviderClient(cfg)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "failed to create provider: %v\n", err)
+			os.Exit(1)
+		}
+
+		fileStore := file.NewFileSessionStore(cfg.SessionsPath())
+		sess, err := fileStore.Load(sessionID, client)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "failed to load session: %v\n", err)
+			os.Exit(1)
+		}
+
+		beforeTokens := sess.Tokens()
+		beforeCount := len(sess.History)
+		fmt.Printf("Compacting session: %s\n", sessionID)
+		fmt.Printf("  Before: %d messages, %d tokens\n", beforeCount, beforeTokens)
+
+		if err := sess.CompactHistory(context.Background()); err != nil {
+			fmt.Fprintf(os.Stderr, "failed to compact: %v\n", err)
+			os.Exit(1)
+		}
+
+		if err := sess.ReplaceHistory(sess.History...); err != nil {
+			fmt.Fprintf(os.Stderr, "failed to persist: %v\n", err)
+			os.Exit(1)
+		}
+
+		afterTokens := sess.Tokens()
+		afterCount := len(sess.History)
+		fmt.Printf("  After: %d messages, %d tokens\n", afterCount, afterTokens)
+		if beforeTokens > 0 {
+			fmt.Printf("  Reduced: %d%% (%d tokens)\n",
+				(beforeTokens-afterTokens)*100/beforeTokens,
+				beforeTokens-afterTokens)
+		}
+	},
+}
+
 func formatMessage(msg types.Message) string {
 	switch msg.Role {
 	case types.RoleUser:
@@ -429,4 +493,5 @@ func init() {
 	sessionCmd.AddCommand(sessionUnarchiveCmd)
 	sessionCmd.AddCommand(sessionArchivedCmd)
 	sessionCmd.AddCommand(sessionDeleteCmd)
+	sessionCmd.AddCommand(sessionCompactCmd)
 }

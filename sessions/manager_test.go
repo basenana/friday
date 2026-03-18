@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	coresession "github.com/basenana/friday/core/session"
+	"github.com/basenana/friday/core/providers"
 	"github.com/basenana/friday/core/types"
 )
 
@@ -41,16 +42,16 @@ func (m *mockStore) ReplaceMessages(sessionID string, msgs ...types.Message) err
 	return nil
 }
 
-func (m *mockStore) Create(sessionID string, opts ...coresession.Option) (*coresession.Session, error) {
+func (m *mockStore) Create(sessionID string, llm providers.Client, opts ...coresession.Option) (*coresession.Session, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	sess := coresession.New(sessionID, nil, append(opts, coresession.WithMessageWriter(m))...)
+	sess := coresession.New(sessionID, llm, append(opts, coresession.WithMessageWriter(m))...)
 	m.sessions[sessionID] = sess
 	m.metas[sessionID] = &SessionMeta{ID: sessionID}
 	return sess, nil
 }
 
-func (m *mockStore) Load(sessionID string, opts ...coresession.Option) (*coresession.Session, error) {
+func (m *mockStore) Load(sessionID string, llm providers.Client, opts ...coresession.Option) (*coresession.Session, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if sess, ok := m.sessions[sessionID]; ok {
