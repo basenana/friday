@@ -3,7 +3,7 @@ module github.com/basenana/friday
 go 1.25.0
 
 require (
-	github.com/basenana/friday/core v0.0.0-20260316134627-24da67db2ef4
+	github.com/basenana/friday/core v0.0.0-20260318140521-1403f596e8e2
 	github.com/davecgh/go-spew v1.1.1
 	github.com/hyponet/eventbus v1.1.0
 	github.com/mark3labs/mcp-go v0.43.2
