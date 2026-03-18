@@ -7,7 +7,8 @@
 
 # Test binary, built with `go test -c`
 *.test
-.local
+go.work
+go.work.sum
 friday
 
 # Output of the go coverage tool, specifically when used with LiteIDE

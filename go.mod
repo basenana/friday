@@ -3,7 +3,7 @@ module github.com/basenana/friday
 go 1.25.0
 
 require (
-	github.com/basenana/friday/core v0.0.0-00010101000000-000000000000
+	github.com/basenana/friday/core v0.0.0-20260316134627-24da67db2ef4
 	github.com/davecgh/go-spew v1.1.1
 	github.com/hyponet/eventbus v1.1.0
 	github.com/mark3labs/mcp-go v0.43.2
@@ -35,5 +35,3 @@ require (
 	golang.org/x/time v0.14.0 // indirect
 	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c // indirect
 )
-
-replace github.com/basenana/friday/core => ./core
