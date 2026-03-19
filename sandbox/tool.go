@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -75,7 +76,7 @@ func bashToolHandler(exec *Executor) tools.ToolHandlerFunc {
 		}
 
 		// Extract optional workdir
-		var workdir string
+		workdir, _ := os.Getwd()
 		if w, ok := req.Arguments["workdir"].(string); ok {
 			workdir = w
 		}

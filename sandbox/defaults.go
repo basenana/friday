@@ -88,7 +88,7 @@ func DefaultConfig() *Config {
 			Filesystem: FilesystemConfig{
 				ReadOnly:  []string{},
 				Deny:      append([]string{}, DefaultProtectedPaths[:3]...), // ~/.ssh, ~/.aws, ~/.gnupg
-				Write:     []string{".", "/tmp"},
+				Write:     []string{"/tmp"},
 				Protected: append([]string{}, DefaultProtectedPaths...),
 			},
 			Network: NetworkConfig{

@@ -100,6 +100,7 @@ func (b *Bwrap) buildArgs(workdir string) []string {
 	// Set working directory
 	if workdir != "" {
 		absWorkdir, _ := filepath.Abs(workdir)
+		args = append(args, "--bind", absWorkdir, absWorkdir)
 		args = append(args, "--chdir", absWorkdir)
 	}
 
