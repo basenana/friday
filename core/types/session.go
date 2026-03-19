@@ -37,6 +37,22 @@ type ToolResult struct {
 	Content string `json:"content,omitempty"`
 }
 
+// ImageType represents the type of image content
+type ImageType string
+
+const (
+	ImageTypeURL    ImageType = "url"
+	ImageTypeBase64 ImageType = "base64"
+)
+
+// ImageContent represents image content in a message
+type ImageContent struct {
+	Type      ImageType `json:"type"`                 // "url" or "base64"
+	URL       string    `json:"url,omitempty"`        // URL for ImageTypeURL
+	MediaType string    `json:"media_type,omitempty"` // MIME type for ImageTypeBase64
+	Data      string    `json:"data,omitempty"`       // Base64 encoded data for ImageTypeBase64
+}
+
 // Message represents a single message in the conversation
 // Role determines the type of message, Content is the main text.
 // For assistant messages with reasoning, Reasoning contains the thought process.
@@ -51,7 +67,7 @@ type Message struct {
 	Reasoning string      `json:"reasoning,omitempty"`
 
 	// Multimedia content
-	ImageURL string `json:"image_url,omitempty"`
+	Image *ImageContent `json:"image,omitempty"`
 
 	// Tool interaction
 	ToolCalls  []ToolCall  `json:"tool_calls,omitempty"`
@@ -88,7 +104,17 @@ func (m Message) FuzzyTokens() int64 {
 		return m.Tokens
 	}
 
-	total := len([]rune(m.Content)) + len([]rune(m.Reasoning)) + len([]rune(m.ImageURL))
+	total := len([]rune(m.Content)) + len([]rune(m.Reasoning))
+
+	// Count image tokens (rough estimate)
+	if m.Image != nil {
+		if m.Image.Type == ImageTypeURL {
+			total += len([]rune(m.Image.URL))
+		} else if m.Image.Type == ImageTypeBase64 {
+			// Base64 images are expensive, estimate ~1000 tokens per image
+			total += 1000
+		}
+	}
 
 	for _, tc := range m.ToolCalls {
 		total += len([]rune(tc.ID)) + len([]rune(tc.Name)) + len([]rune(tc.Arguments))
