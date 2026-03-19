@@ -186,17 +186,34 @@ func (c *client) chatCompletionNewParams(request providers.Request) *openai.Chat
 			)
 
 		case types.RoleUser:
-			if msg.ImageURL != "" {
-				p.Messages = append(p.Messages,
-					openai.UserMessage([]openai.ChatCompletionContentPartUnionParam{
-						openai.ImageContentPart(openai.ChatCompletionContentPartImageImageURLParam{URL: msg.ImageURL}),
-					}),
-				)
-			} else {
-				p.Messages = append(p.Messages,
-					openai.UserMessage(msg.Content),
-				)
+			var contentParts []openai.ChatCompletionContentPartUnionParam
+
+			// Add text content
+			if msg.Content != "" {
+				contentParts = append(contentParts, openai.TextContentPart(msg.Content))
 			}
+
+			// Add image content
+			if msg.Image != nil {
+				switch msg.Image.Type {
+				case types.ImageTypeURL:
+					contentParts = append(contentParts,
+						openai.ImageContentPart(openai.ChatCompletionContentPartImageImageURLParam{
+							URL: msg.Image.URL,
+						}),
+					)
+				case types.ImageTypeBase64:
+					// OpenAI supports data URI format
+					dataURI := fmt.Sprintf("data:%s;base64,%s", msg.Image.MediaType, msg.Image.Data)
+					contentParts = append(contentParts,
+						openai.ImageContentPart(openai.ChatCompletionContentPartImageImageURLParam{
+							URL: dataURI,
+						}),
+					)
+				}
+			}
+
+			p.Messages = append(p.Messages, openai.UserMessage(contentParts))
 
 		case types.RoleAgent:
 			p.Messages = append(p.Messages,

@@ -9,6 +9,7 @@ import (
 type Request struct {
 	Session     *session.Session
 	UserMessage string
+	Image       *types.ImageContent
 	ImageURLs   []string
 	Tools       []*tools.Tool
 }

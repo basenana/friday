@@ -183,15 +183,65 @@ func (c *client) messageCreateParams(request providers.Request) *anthropic.Messa
 			})
 
 		case types.RoleUser:
+			// Build content blocks
+			var contentBlocks []anthropic.ContentBlockParamUnion
+
+			// Add text content
+			if msg.Content != "" {
+				contentBlocks = append(contentBlocks, anthropic.NewTextBlock(msg.Content))
+			}
+
+			// Add image content
+			if msg.Image != nil {
+				switch msg.Image.Type {
+				case types.ImageTypeURL:
+					contentBlocks = append(contentBlocks,
+						anthropic.NewImageBlock(anthropic.URLImageSourceParam{
+							URL:  msg.Image.URL,
+							Type: "url",
+						}),
+					)
+				case types.ImageTypeBase64:
+					contentBlocks = append(contentBlocks,
+						anthropic.NewImageBlockBase64(msg.Image.MediaType, msg.Image.Data),
+					)
+				}
+			}
+
 			params.Messages = append(params.Messages, anthropic.MessageParam{
 				Role:    anthropic.MessageParamRoleUser,
-				Content: []anthropic.ContentBlockParamUnion{anthropic.NewTextBlock(msg.Content)},
+				Content: contentBlocks,
 			})
 
 		case types.RoleAgent:
+			// Build content blocks
+			var contentBlocks []anthropic.ContentBlockParamUnion
+
+			// Add text content
+			if msg.Content != "" {
+				contentBlocks = append(contentBlocks, anthropic.NewTextBlock(msg.Content))
+			}
+
+			// Add image content
+			if msg.Image != nil {
+				switch msg.Image.Type {
+				case types.ImageTypeURL:
+					contentBlocks = append(contentBlocks,
+						anthropic.NewImageBlock(anthropic.URLImageSourceParam{
+							URL:  msg.Image.URL,
+							Type: "url",
+						}),
+					)
+				case types.ImageTypeBase64:
+					contentBlocks = append(contentBlocks,
+						anthropic.NewImageBlockBase64(msg.Image.MediaType, msg.Image.Data),
+					)
+				}
+			}
+
 			params.Messages = append(params.Messages, anthropic.MessageParam{
 				Role:    anthropic.MessageParamRoleUser,
-				Content: []anthropic.ContentBlockParamUnion{anthropic.NewTextBlock(msg.Content)},
+				Content: contentBlocks,
 			})
 
 		case types.RoleAssistant:

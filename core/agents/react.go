@@ -36,7 +36,7 @@ func (a *react) Chat(ctx context.Context, req *api.Request) *api.Response {
 		return resp
 	}
 
-	sess.AppendMessage(&types.Message{Role: types.RoleUser, Content: req.UserMessage})
+	sess.AppendMessage(&types.Message{Role: types.RoleUser, Content: req.UserMessage, Image: req.Image})
 	a.logger.Infow("handle request", "message", logger.FirstLine(req.UserMessage), "session", sess.ID)
 	go a.reactLoop(ctx, sess, resp, req.Tools)
 	return resp
