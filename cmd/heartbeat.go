@@ -42,7 +42,7 @@ var heartbeatCmd = &cobra.Command{
 		fmt.Println()
 
 		// Send message and print response
-		resp := agentCtx.Chat(ctx, heartbeatContent)
+		resp := agentCtx.Chat(ctx, heartbeatContent, nil)
 		setup.PrintResponse(resp)
 	},
 }

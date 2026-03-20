@@ -11,7 +11,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/basenana/friday/core/api"
 	"github.com/basenana/friday/core/types"
 	"github.com/basenana/friday/setup"
 )
@@ -118,15 +117,8 @@ Message can be provided as:
 			}
 		}
 
-		// Build request
-		req := &api.Request{
-			Session:     agentCtx.Session,
-			UserMessage: userMessage,
-			Image:       image,
-		}
-
 		// Send message and print response
-		resp := agentCtx.Agent.Chat(ctx, req)
+		resp := agentCtx.Chat(ctx, userMessage, image)
 		setup.PrintResponse(resp)
 	},
 }
