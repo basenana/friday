@@ -16,6 +16,7 @@ import (
 	"github.com/basenana/friday/core/providers/openai"
 	coreSession "github.com/basenana/friday/core/session"
 	"github.com/basenana/friday/core/tools"
+	"github.com/basenana/friday/core/types"
 	"github.com/basenana/friday/memory"
 	"github.com/basenana/friday/sandbox"
 	"github.com/basenana/friday/skills"
@@ -190,10 +191,11 @@ func NewAgent(sessionMgr SessionManager, cfg *config.Config, opts ...Option) (*A
 	}, nil
 }
 
-func (ac *AgentContext) Chat(ctx context.Context, message string) *api.Response {
+func (ac *AgentContext) Chat(ctx context.Context, message string, image *types.ImageContent) *api.Response {
 	req := &api.Request{
 		Session:     ac.Session,
 		UserMessage: message,
+		Image:       image,
 	}
 	return ac.Agent.Chat(ctx, req)
 }
