@@ -34,8 +34,8 @@ type FilesystemConfig struct {
 
 // NetworkConfig defines network access control
 type NetworkConfig struct {
-	Enabled bool     `json:"enabled" yaml:"enabled"`
-	Allow   []string `json:"allow" yaml:"allow"`
+	Isolation bool     `json:"isolation" yaml:"isolation"`
+	Allow     []string `json:"allow" yaml:"allow"`
 }
 
 // DefaultsConfig defines default execution parameters

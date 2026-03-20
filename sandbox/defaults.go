@@ -92,8 +92,8 @@ func DefaultConfig() *Config {
 				Protected: append([]string{}, DefaultProtectedPaths...),
 			},
 			Network: NetworkConfig{
-				Enabled: true,
-				Allow:   append([]string{}, DefaultAllowedDomains...),
+				Isolation: true,
+				Allow:     append([]string{}, DefaultAllowedDomains...),
 			},
 			Defaults: DefaultsConfig{
 				Timeout: "5m",

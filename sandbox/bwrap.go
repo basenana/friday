@@ -105,7 +105,7 @@ func (b *Bwrap) buildArgs(workdir string) []string {
 	}
 
 	// Network isolation
-	if b.config.Sandbox.Network.Enabled {
+	if b.config.Sandbox.Network.Isolation {
 		args = append(args, "--unshare-net")
 		// If network is needed, we'd set up a proxy
 		// For now, just unshare network completely
