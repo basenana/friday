@@ -64,7 +64,7 @@ func (b *Bwrap) buildArgs(workdir string) []string {
 
 	// Basic isolation
 	args = append(args,
-		"--unshare-pid",
+		//"--unshare-pid",
 		"--die-with-parent",
 	)
 
@@ -104,16 +104,8 @@ func (b *Bwrap) buildArgs(workdir string) []string {
 		args = append(args, "--chdir", absWorkdir)
 	}
 
-	// Memory limit (via cgroup, requires bwrap with --rlimit support)
-	if b.config.Sandbox.Defaults.MemoryLimit != "" {
-		memBytes := parseMemoryLimit(b.config.Sandbox.Defaults.MemoryLimit)
-		if memBytes > 0 {
-			args = append(args, "--rlimit-as", fmt.Sprintf("%d", memBytes))
-		}
-	}
-
 	// Network isolation
-	if b.config.Sandbox.Network.Enabled {
+	if b.config.Sandbox.Network.Isolation {
 		args = append(args, "--unshare-net")
 		// If network is needed, we'd set up a proxy
 		// For now, just unshare network completely
