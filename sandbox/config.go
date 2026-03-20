@@ -40,8 +40,7 @@ type NetworkConfig struct {
 
 // DefaultsConfig defines default execution parameters
 type DefaultsConfig struct {
-	Timeout     string `json:"timeout" yaml:"timeout"`           // e.g. "5m"
-	MemoryLimit string `json:"memory_limit" yaml:"memory_limit"` // e.g. "2G"
+	Timeout string `json:"timeout" yaml:"timeout"` // e.g. "5m"
 }
 
 // LoadConfig loads sandbox configuration from file

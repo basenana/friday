@@ -96,8 +96,7 @@ func DefaultConfig() *Config {
 				Allow:   append([]string{}, DefaultAllowedDomains...),
 			},
 			Defaults: DefaultsConfig{
-				Timeout:     "5m",
-				MemoryLimit: "2G",
+				Timeout: "5m",
 			},
 		},
 	}

@@ -64,7 +64,7 @@ func (b *Bwrap) buildArgs(workdir string) []string {
 
 	// Basic isolation
 	args = append(args,
-		"--unshare-pid",
+		//"--unshare-pid",
 		"--die-with-parent",
 	)
 
@@ -102,14 +102,6 @@ func (b *Bwrap) buildArgs(workdir string) []string {
 		absWorkdir, _ := filepath.Abs(workdir)
 		args = append(args, "--bind", absWorkdir, absWorkdir)
 		args = append(args, "--chdir", absWorkdir)
-	}
-
-	// Memory limit (via cgroup, requires bwrap with --rlimit support)
-	if b.config.Sandbox.Defaults.MemoryLimit != "" {
-		memBytes := parseMemoryLimit(b.config.Sandbox.Defaults.MemoryLimit)
-		if memBytes > 0 {
-			args = append(args, "--rlimit-as", fmt.Sprintf("%d", memBytes))
-		}
 	}
 
 	// Network isolation
