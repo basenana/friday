@@ -135,8 +135,8 @@ func (f *MemoryFiles) AppendLongTermMemory(content string) error {
 	return err
 }
 
-func (f *MemoryFiles) ReadUserPreferences() (string, error) {
-	path := filepath.Join(f.workspacePath, "USER.md")
+func (f *MemoryFiles) ReadEnvironment() (string, error) {
+	path := filepath.Join(f.workspacePath, "ENVIRONMENT.md")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -147,10 +147,10 @@ func (f *MemoryFiles) ReadUserPreferences() (string, error) {
 	return string(data), nil
 }
 
-func (f *MemoryFiles) WriteUserPreferences(content string) error {
+func (f *MemoryFiles) WriteEnvironment(content string) error {
 	if err := os.MkdirAll(f.workspacePath, 0755); err != nil {
 		return err
 	}
-	path := filepath.Join(f.workspacePath, "USER.md")
+	path := filepath.Join(f.workspacePath, "ENVIRONMENT.md")
 	return os.WriteFile(path, []byte(content), 0644)
 }

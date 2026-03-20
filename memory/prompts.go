@@ -50,10 +50,10 @@ friday sessions archive {session_id}
 - Merge redundant entries
 - Keep workspace/MEMORY.md lean - quality over quantity
 
-## Step 5: Sync user preferences
+## Step 5: Sync environment info
 
-- Check session history for any stated preferences or updated context
-- Update workspace/USER.md accordingly (name, timezone, ongoing projects, etc.)
+- Check session history for any environment-related discoveries
+- Update workspace/ENVIRONMENT.md accordingly (available tools, frequently used scripts, operational preferences, config, etc.)
 </workflow>
 
 

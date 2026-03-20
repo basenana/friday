@@ -23,7 +23,7 @@ All your data resides in your data directory. You may freely explore and use it.
 This folder is home. Treat it that way.
 
 - **DataDir:** {{if .Paths}}{{.Paths.DataDir}}{{else}}~/.friday{{end}} — Root data directory for all friday data
-- **Workspace:** {{if .Paths}}{{.Paths.Workspace}}{{else}}~/.friday/workspace{{end}} — Markdown files for agent context (SOUL.md, USER.md, skills, etc.)
+- **Workspace:** {{if .Paths}}{{.Paths.Workspace}}{{else}}~/.friday/workspace{{end}} — Markdown files for agent context (SOUL.md, ENVIRONMENT.md, skills, etc.)
 - **Sessions:** {{if .Paths}}{{.Paths.Sessions}}{{else}}~/.friday/sessions{{end}} — Conversation history storage
 - **Memory:** {{if .Paths}}{{.Paths.Memory}}{{else}}~/.friday/memory{{end}} — Daily memory logs
 - **State:** {{if .Paths}}{{.Paths.State}}{{else}}~/.friday/state{{end}} — Persistent key-value state storage
@@ -34,7 +34,7 @@ This folder is home. Treat it that way.
 Once the session starts, the following files will be loaded into the context even if you do nothing:
 
 1. Read 'SOUL.md' — this is who you are
-2. Read 'USER.md' — this is who you're helping
+2. Read 'ENVIRONMENT.md' — this is where you're running
 3. Read 'memory/YYYY-MM-DD.md' (today + yesterday) for recent context
 4. Read 'MEMORY.md' - curated long-term memory
 
@@ -87,7 +87,13 @@ Capture what matters. Decisions, context, things to remember. Skip the secrets u
 
 ## Tools
 
-Skills provide your tools. When you need one, check its 'SKILL.md'. Keep local notes (camera names, SSH details, voice preferences) in 'TOOLS.md'.
+Skills provide your tools. When you need one, check its in 'skills' dir. Keep local notes (operational preferences, frequently commands) in 'TOOLS.md'.
+
+## Environment
+
+This machine is your home. As you use it, you'll become increasingly familiar with it. 
+You need to save everything you learn about this machine in 'ENVIRONMENT.md', 
+including machine configuration information, common operations, frequently used binary commands, core service information, and directory conventions.
 
 ## Heartbeats - Be Proactive!
 
@@ -168,23 +174,24 @@ If you change this file, tell the user — it's your soul, and they should know.
 _This file is yours to evolve. As you learn who you are, update it._
 `
 
-	// DefaultUserMd is the default content for USER.md
-	DefaultUserMd = `# USER.md - About Your Human
+	// DefaultEnvironmentMd is the default content for ENVIRONMENT.md
+	DefaultEnvironmentMd = `# ENVIRONMENT.md - Execution Environment
 
-_Learn about the person you're helping. Update this as you go._
+_Information about the current machine and execution context._
 
-- **Name:** Captain
-- **What to call them:** Captain
-- **Timezone:** Same time zone as the current machine
-- **Notes:** He can only interact with you through a Linux terminal.
+## System
+
+- **OS:** {{if .System}}{{.System.OS}}{{else}}Unknown{{end}}
+- **Arch:** {{if .System}}{{.System.Arch}}{{else}}Unknown{{end}}
+- **Hostname:** {{if .System}}{{.System.Hostname}}{{else}}Unknown{{end}}
 
 ## Context
 
-_(What do they care about? What projects are they working on? What annoys them? What makes them laugh? Build this over time.)_
+_(Add environment-specific notes here: bins, paths, network config, etc.)_
 
 ---
 
-The more you know, the better you can help. But remember — you're learning about a person, not building a dossier. Respect the difference.
+This file describes where you're running. Keep it technical.
 `
 
 	// DefaultIdentityMd is the default content for IDENTITY.md
@@ -260,13 +267,13 @@ If nothing needs attention, reply HEARTBEAT_OK.
 
 // DefaultContents maps filename to default content templates
 var DefaultContents = map[string]string{
-	"AGENTS.md":    DefaultAgentsMd,
-	"SOUL.md":      DefaultSoulMd,
-	"USER.md":      DefaultUserMd,
-	"IDENTITY.md":  DefaultIdentityMd,
-	"TOOLS.md":     DefaultToolsMd,
-	"HEARTBEAT.md": DefaultHeartbeatMd,
-	"MEMORY.md":    DefaultMemoryMd,
+	"AGENTS.md":      DefaultAgentsMd,
+	"SOUL.md":        DefaultSoulMd,
+	"ENVIRONMENT.md": DefaultEnvironmentMd,
+	"IDENTITY.md":    DefaultIdentityMd,
+	"TOOLS.md":       DefaultToolsMd,
+	"HEARTBEAT.md":   DefaultHeartbeatMd,
+	"MEMORY.md":      DefaultMemoryMd,
 }
 
 func RenderTemplate(tmpl string, params *TemplateParams) (string, error) {

@@ -125,7 +125,7 @@ Workspace loads markdown files for agent context:
 
 Workspace files (loaded into system prompt):
 - `SOUL.md` - Persona and tone
-- `USER.md` - User preferences
+- `ENVIRONMENT.md` - Machine and execution environment
 - `AGENTS.md` - Behavior guidelines
 - `IDENTITY.md` - Agent name and style
 - `TOOLS.md` - Tool usage guidance

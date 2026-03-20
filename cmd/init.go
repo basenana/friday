@@ -2,7 +2,9 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
+	"runtime"
 
 	"github.com/spf13/cobra"
 
@@ -28,6 +30,7 @@ var initCmd = &cobra.Command{
 
 		ws := workspace.NewWorkspace(cfg.WorkspacePath(), cfg.MemoryPath())
 
+		hostname, _ := os.Hostname()
 		params := &workspace.TemplateParams{
 			Paths: &workspace.Paths{
 				DataDir:   cfg.DataDirPath(),
@@ -35,6 +38,11 @@ var initCmd = &cobra.Command{
 				Sessions:  cfg.SessionsPath(),
 				Memory:    cfg.MemoryPath(),
 				State:     cfg.StatePath(),
+			},
+			System: &workspace.SystemInfo{
+				OS:       runtime.GOOS,
+				Arch:     runtime.GOARCH,
+				Hostname: hostname,
 			},
 		}
 
@@ -57,8 +65,8 @@ var initCmd = &cobra.Command{
 					fmt.Println("  AGENTS.md    - Agent guidelines and memory usage rules")
 				case "SOUL.md":
 					fmt.Println("  SOUL.md      - Persona, tone, and boundaries")
-				case "USER.md":
-					fmt.Println("  USER.md      - User info and preferences")
+				case "ENVIRONMENT.md":
+					fmt.Println("  ENVIRONMENT.md - Machine and execution environment info")
 				case "IDENTITY.md":
 					fmt.Println("  IDENTITY.md  - Agent name, style, and emoji")
 				case "TOOLS.md":

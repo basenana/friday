@@ -40,7 +40,15 @@ type Paths struct {
 	State     string
 }
 
+// SystemInfo contains system environment information
+type SystemInfo struct {
+	OS       string
+	Arch     string
+	Hostname string
+}
+
 // TemplateParams contains parameters for rendering workspace templates
 type TemplateParams struct {
-	Paths *Paths
+	Paths  *Paths
+	System *SystemInfo
 }

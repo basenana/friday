@@ -177,7 +177,7 @@ friday heartbeat
 ├── log/                 # Application logs
 └── workspace/           # Agent context files
     ├── SOUL.md          # Persona and tone
-    ├── USER.md          # User preferences
+    ├── ENVIRONMENT.md   # Machine and execution environment
     ├── AGENTS.md        # Behavior guidelines
     ├── IDENTITY.md      # Agent name and style
     ├── TOOLS.md         # Tool usage guidance
@@ -206,7 +206,7 @@ friday heartbeat
 ```
 
 1. **Input**: Message from arguments, stdin, or both
-2. **Context**: Loads workspace files (SOUL.md, USER.md, etc.) into system prompt
+2. **Context**: Loads workspace files (SOUL.md, ENVIRONMENT.md, etc.) into system prompt
 3. **Memory**: Prepends recent memory logs to conversation history
 4. **Agent**: Executes ReAct-style reasoning with tool support
 5. **Output**: Streams response to stdout
