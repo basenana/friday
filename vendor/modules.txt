@@ -1,3 +1,4 @@
+## workspace
 # github.com/anthropics/anthropic-sdk-go v1.27.0
 ## explicit; go 1.23.0
 github.com/anthropics/anthropic-sdk-go
@@ -24,19 +25,6 @@ github.com/anthropics/anthropic-sdk-go/shared/constant
 github.com/bahlo/generic-list-go
 # github.com/basenana/friday/core v0.0.0-20260320135009-3bc389439604
 ## explicit; go 1.25.0
-github.com/basenana/friday/core/agents
-github.com/basenana/friday/core/agents/summarize
-github.com/basenana/friday/core/api
-github.com/basenana/friday/core/logger
-github.com/basenana/friday/core/planning
-github.com/basenana/friday/core/providers
-github.com/basenana/friday/core/providers/anthropics
-github.com/basenana/friday/core/providers/common
-github.com/basenana/friday/core/providers/openai
-github.com/basenana/friday/core/session
-github.com/basenana/friday/core/state
-github.com/basenana/friday/core/tools
-github.com/basenana/friday/core/types
 # github.com/buger/jsonparser v1.1.1
 ## explicit; go 1.13
 github.com/buger/jsonparser
@@ -55,6 +43,8 @@ github.com/inconshreveable/mousetrap
 # github.com/invopop/jsonschema v0.13.0
 ## explicit; go 1.18
 github.com/invopop/jsonschema
+# github.com/kr/pretty v0.3.1
+## explicit; go 1.12
 # github.com/mailru/easyjson v0.7.7
 ## explicit; go 1.12
 github.com/mailru/easyjson/buffer
@@ -88,6 +78,8 @@ github.com/openai/openai-go/responses
 github.com/openai/openai-go/shared
 github.com/openai/openai-go/shared/constant
 github.com/openai/openai-go/webhooks
+# github.com/rogpeppe/go-internal v1.14.1
+## explicit; go 1.23
 # github.com/spf13/cast v1.7.1
 ## explicit; go 1.19
 github.com/spf13/cast
@@ -97,6 +89,8 @@ github.com/spf13/cobra
 # github.com/spf13/pflag v1.0.9
 ## explicit; go 1.12
 github.com/spf13/pflag
+# github.com/stretchr/testify v1.9.0
+## explicit; go 1.17
 # github.com/tidwall/gjson v1.18.0
 ## explicit; go 1.12
 github.com/tidwall/gjson
@@ -137,6 +131,10 @@ golang.org/x/sync/errgroup
 # golang.org/x/time v0.14.0
 ## explicit; go 1.24.0
 golang.org/x/time/rate
+# gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c
+## explicit; go 1.11
+# gopkg.in/yaml.v2 v2.4.0
+## explicit; go 1.15
 # gopkg.in/yaml.v3 v3.0.1
 ## explicit
 gopkg.in/yaml.v3

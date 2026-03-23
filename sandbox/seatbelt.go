@@ -108,7 +108,7 @@ func (s *Seatbelt) generateProfile(workdir string) string {
 
 	// Network restrictions - deny by default for security
 	sb.WriteString("(deny network*)\n")
-	if s.config.Sandbox.Network.Enabled {
+	if s.config.Sandbox.Network.Isolation {
 		// Allow network outbound if explicitly enabled
 		sb.WriteString("(allow network-outbound)\n")
 	}
