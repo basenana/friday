@@ -1,6 +1,7 @@
 package session
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -60,10 +61,28 @@ func (s *Session) CompactHistory(ctx context.Context) error {
 
 	prompt := compactPrompt(s.History)
 	req := providers.NewRequest("", types.Message{Role: types.RoleAgent, Content: prompt})
-	abstract, err := s.llm.CompletionNonStreaming(ctx, req)
-	if err != nil {
-		return fmt.Errorf("failed to generate summary: %w", err)
+	resp := s.llm.Completion(ctx, req)
+
+	var contentBuf bytes.Buffer
+Waiting:
+	for {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("failed to generate summary: %w", ctx.Err())
+		case err := <-resp.Error():
+			if err != nil { // don't remove this
+				return fmt.Errorf("failed to generate summary: %w", err)
+			}
+		case delta, ok := <-resp.Message():
+			if !ok {
+				break Waiting
+			}
+			if delta.Content != "" {
+				contentBuf.WriteString(delta.Content)
+			}
+		}
 	}
+	abstract := contentBuf.String()
 
 	if abstract == "" {
 		return fmt.Errorf("summary is empty")
