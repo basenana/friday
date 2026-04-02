@@ -24,6 +24,7 @@ var heartbeatCmd = &cobra.Command{
 			fmt.Fprintf(os.Stderr, "%v\n", err)
 			os.Exit(1)
 		}
+		defer agentCtx.TaskManager.KillAll()
 
 		// Load HEARTBEAT.md content
 		heartbeatContent, err := agentCtx.Workspace.LoadFile("HEARTBEAT.md")

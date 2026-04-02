@@ -106,6 +106,7 @@ Message can be provided as:
 			fmt.Fprintf(os.Stderr, "%v\n", err)
 			os.Exit(1)
 		}
+		defer agentCtx.TaskManager.KillAll()
 
 		// Process image if provided
 		var image *types.ImageContent

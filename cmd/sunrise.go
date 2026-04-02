@@ -44,6 +44,7 @@ func runSunrise(ctx context.Context, cfg *config.Config, mgr *sessions.Manager) 
 	if err != nil {
 		return fmt.Errorf("failed to create agent: %w", err)
 	}
+	defer agentCtx.TaskManager.KillAll()
 
 	processor := memory.NewProcessor(agentCtx, memory.ProcessorConfig{
 		MemoryPath:    cfg.MemoryPath(),

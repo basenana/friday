@@ -24,11 +24,12 @@ import (
 )
 
 type AgentContext struct {
-	Client    providers.Client
-	Workspace *workspace.Workspace
-	Session   *coreSession.Session
-	Agent     agents.Agent
-	Memory    *memory.MemorySystem
+	Client      providers.Client
+	Workspace   *workspace.Workspace
+	Session     *coreSession.Session
+	Agent       agents.Agent
+	Memory      *memory.MemorySystem
+	TaskManager *sandbox.TaskManager
 }
 
 type Option func(*options)
@@ -165,8 +166,12 @@ func NewAgent(sessionMgr SessionManager, cfg *config.Config, opts ...Option) (*A
 	}
 	sandboxExec := sandbox.NewExecutor(sandboxCfg)
 	fsTools := sandbox.NewFsTools(sandboxExec, workdir)
+	allTools = append(allTools, fsTools...)
 	bashTool := sandbox.NewBashTool(sandboxExec, workdir)
-	allTools = append(fsTools, bashTool)
+	allTools = append(allTools, bashTool)
+	taskManager := sandbox.NewTaskManager(sandboxExec)
+	bgTools := sandbox.NewBackgroundTaskTools(taskManager, workdir)
+	allTools = append(allTools, bgTools...)
 
 	if len(options.extraTools) > 0 {
 		allTools = append(allTools, options.extraTools...)
@@ -183,11 +188,12 @@ func NewAgent(sessionMgr SessionManager, cfg *config.Config, opts ...Option) (*A
 	}
 
 	return &AgentContext{
-		Client:    client,
-		Workspace: ws,
-		Session:   sess,
-		Agent:     agent,
-		Memory:    memSys,
+		Client:      client,
+		Workspace:   ws,
+		Session:     sess,
+		Agent:       agent,
+		Memory:      memSys,
+		TaskManager: taskManager,
 	}, nil
 }
 

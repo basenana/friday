@@ -194,6 +194,12 @@ func GetOSInfo() string {
 	return fmt.Sprintf("%s/%s", runtime.GOOS, runtime.GOARCH)
 }
 
+// WrapCommand wraps a command with sandbox isolation.
+// Returns the wrapped command string, a cleanup function, and any error.
+func (e *Executor) WrapCommand(cmd string, opts ExecOptions) (string, func(), error) {
+	return e.sandbox.WrapCommand(cmd, opts)
+}
+
 // ValidateWorkdir validates and expands the working directory
 func ValidateWorkdir(workdir string) (string, error) {
 	if workdir == "" {
