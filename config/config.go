@@ -59,9 +59,16 @@ func Load(configPath string) (*Config, error) {
 func (c *Config) expandEnv() {
 	c.Model.Key = expandEnvStr(c.Model.Key)
 	c.Model.BaseURL = expandEnvStr(c.Model.BaseURL)
+	c.Model.Input = expandEnvStr(c.Model.Input)
+	c.Model.Proxy = expandEnvStr(c.Model.Proxy)
 	c.DataDir = expandEnvStr(c.DataDir)
 	c.Workspace = expandEnvStr(c.Workspace)
 	c.Model.Model = expandEnvStr(c.Model.Model)
+	c.ImageModel.Key = expandEnvStr(c.ImageModel.Key)
+	c.ImageModel.BaseURL = expandEnvStr(c.ImageModel.BaseURL)
+	c.ImageModel.Input = expandEnvStr(c.ImageModel.Input)
+	c.ImageModel.Model = expandEnvStr(c.ImageModel.Model)
+	c.ImageModel.Proxy = expandEnvStr(c.ImageModel.Proxy)
 }
 
 func expandEnvStr(s string) string {

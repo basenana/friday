@@ -6,8 +6,8 @@ import (
 	"sync"
 	"testing"
 
-	coresession "github.com/basenana/friday/core/session"
 	"github.com/basenana/friday/core/providers"
+	coresession "github.com/basenana/friday/core/session"
 	"github.com/basenana/friday/core/types"
 )
 

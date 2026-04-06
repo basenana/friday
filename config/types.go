@@ -3,13 +3,14 @@ package config
 import "github.com/basenana/friday/sandbox"
 
 type Config struct {
-	Model     ModelConfig     `yaml:"model" json:"model"`
-	DataDir   string          `yaml:"data_dir" json:"data_dir"`
-	Workspace string          `yaml:"workspace" json:"workspace"`
-	Memory    MemoryConfig    `yaml:"memory" json:"memory"`
-	Session   SessionConfig   `yaml:"session" json:"session"`
-	Log       LogConfig       `yaml:"log" json:"log"`
-	Sandbox   *sandbox.Config `yaml:"sandbox" json:"sandbox"`
+	Model      ModelConfig     `yaml:"model" json:"model"`
+	ImageModel ModelConfig     `yaml:"image_model" json:"image_model"`
+	DataDir    string          `yaml:"data_dir" json:"data_dir"`
+	Workspace  string          `yaml:"workspace" json:"workspace"`
+	Memory     MemoryConfig    `yaml:"memory" json:"memory"`
+	Session    SessionConfig   `yaml:"session" json:"session"`
+	Log        LogConfig       `yaml:"log" json:"log"`
+	Sandbox    *sandbox.Config `yaml:"sandbox" json:"sandbox"`
 }
 
 type LogConfig struct {
@@ -20,6 +21,7 @@ type ModelConfig struct {
 	Provider    string  `yaml:"provider" json:"provider"` // "openai" or "anthropic"
 	BaseURL     string  `yaml:"base_url" json:"base_url"`
 	Key         string  `yaml:"key" json:"key"`
+	Input       string  `yaml:"input" json:"input"` // "text" "image"
 	Model       string  `yaml:"model" json:"model"`
 	MaxTokens   int     `yaml:"max_tokens" json:"max_tokens"`
 	Temperature float64 `yaml:"temperature" json:"temperature"`

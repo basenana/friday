@@ -2,16 +2,15 @@ package main
 
 import (
 	"context"
-	"encoding/base64"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/spf13/cobra"
 
-	"github.com/basenana/friday/core/types"
 	"github.com/basenana/friday/setup"
 )
 
@@ -108,10 +107,10 @@ Message can be provided as:
 		}
 		defer agentCtx.TaskManager.KillAll()
 
-		// Process image if provided
-		var image *types.ImageContent
+		// Normalize image reference if provided. The agent will inspect it through the image tool.
+		var imageRef string
 		if chatImage != "" {
-			image, err = processImage(chatImage)
+			imageRef, err = normalizeImageRef(chatImage)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error processing image: %v\n", err)
 				os.Exit(1)
@@ -119,7 +118,13 @@ Message can be provided as:
 		}
 
 		// Send message and print response
-		resp := agentCtx.Chat(ctx, userMessage, image)
+		if imageRef != "" {
+			resp := agentCtx.ChatWithImageRefs(ctx, userMessage, nil, imageRef)
+			setup.PrintResponse(resp)
+			return
+		}
+
+		resp := agentCtx.Chat(ctx, userMessage, nil)
 		setup.PrintResponse(resp)
 	},
 }
@@ -166,53 +171,38 @@ func detectImageMediaType(filePath string) (string, error) {
 	return "", fmt.Errorf("unsupported image type: %s", contentType)
 }
 
-// loadImageAsBase64 reads a file and converts it to Base64
-func loadImageAsBase64(filePath string) (*types.ImageContent, error) {
-	// Check file size (limit 5MB)
-	fileInfo, err := os.Stat(filePath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to stat file: %w", err)
-	}
-	if fileInfo.Size() > 5*1024*1024 {
-		return nil, fmt.Errorf("file too large: %d bytes (max 5MB)", fileInfo.Size())
-	}
-
-	// Detect MIME type
-	mediaType, err := detectImageMediaType(filePath)
-	if err != nil {
-		return nil, err
-	}
-
-	// Read file
-	data, err := os.ReadFile(filePath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read file: %w", err)
-	}
-
-	// Base64 encode
-	encoded := base64.StdEncoding.EncodeToString(data)
-
-	return &types.ImageContent{
-		Type:      types.ImageTypeBase64,
-		MediaType: mediaType,
-		Data:      encoded,
-	}, nil
-}
-
-// processImage processes an image input (URL or local file)
-func processImage(imagePath string) (*types.ImageContent, error) {
+// normalizeImageRef normalizes a CLI image reference so the agent can pass it to the image tool verbatim.
+func normalizeImageRef(imagePath string) (string, error) {
 	if imagePath == "" {
-		return nil, nil
+		return "", nil
 	}
 
 	if isURL(imagePath) {
-		// URL type
-		return &types.ImageContent{
-			Type: types.ImageTypeURL,
-			URL:  imagePath,
-		}, nil
+		return imagePath, nil
 	}
 
-	// Local file
-	return loadImageAsBase64(imagePath)
+	if strings.HasPrefix(imagePath, "~/") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("failed to resolve home directory: %w", err)
+		}
+		imagePath = filepath.Join(home, imagePath[2:])
+	}
+
+	absPath, err := filepath.Abs(imagePath)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve image path: %w", err)
+	}
+
+	info, err := os.Stat(absPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to stat image: %w", err)
+	}
+	if info.IsDir() {
+		return "", fmt.Errorf("image path is a directory: %s", absPath)
+	}
+	if _, err := detectImageMediaType(absPath); err != nil {
+		return "", err
+	}
+	return absPath, nil
 }

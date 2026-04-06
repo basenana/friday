@@ -12,8 +12,6 @@ import (
 	"github.com/basenana/friday/core/api"
 	"github.com/basenana/friday/core/planning"
 	"github.com/basenana/friday/core/providers"
-	"github.com/basenana/friday/core/providers/anthropics"
-	"github.com/basenana/friday/core/providers/openai"
 	coreSession "github.com/basenana/friday/core/session"
 	"github.com/basenana/friday/core/tools"
 	"github.com/basenana/friday/core/types"
@@ -167,6 +165,8 @@ func NewAgent(sessionMgr SessionManager, cfg *config.Config, opts ...Option) (*A
 	sandboxExec := sandbox.NewExecutor(sandboxCfg)
 	fsTools := sandbox.NewFsTools(sandboxExec, workdir)
 	allTools = append(allTools, fsTools...)
+	imageTool := sandbox.NewImageTool(sandboxExec, workdir, newImageAnalyzer(cfg))
+	allTools = append(allTools, imageTool)
 	bashTool := sandbox.NewBashTool(sandboxExec, workdir)
 	allTools = append(allTools, bashTool)
 	taskManager := sandbox.NewTaskManager(sandboxExec)
@@ -206,6 +206,20 @@ func (ac *AgentContext) Chat(ctx context.Context, message string, image *types.I
 	return ac.Agent.Chat(ctx, req)
 }
 
+func (ac *AgentContext) ChatWithImageRefs(ctx context.Context, message string, image *types.ImageContent, imageRefs ...string) *api.Response {
+	if len(imageRefs) > 0 {
+		message = appendImageRefsToMessage(message, imageRefs)
+	}
+
+	req := &api.Request{
+		Session:     ac.Session,
+		UserMessage: message,
+		Image:       image,
+		ImageURLs:   append([]string(nil), imageRefs...),
+	}
+	return ac.Agent.Chat(ctx, req)
+}
+
 func PrintResponse(resp *api.Response) {
 	hasOutput := false
 Waiting:
@@ -230,36 +244,18 @@ Waiting:
 	fmt.Println()
 }
 
-func CreateProviderClient(cfg *config.Config) (providers.Client, error) {
-	provider := strings.ToLower(cfg.Model.Provider)
+func appendImageRefsToMessage(message string, imageRefs []string) string {
+	var builder strings.Builder
 
-	switch provider {
-	case "anthropic":
-		host := cfg.Model.BaseURL
-		if host == "" {
-			host = "https://api.anthropic.com"
-		}
-		temp := cfg.Model.Temperature
-		maxTokens := int64(cfg.Model.MaxTokens)
-		return anthropics.New(host, cfg.Model.Key, anthropics.Model{
-			Name:        cfg.Model.Model,
-			Temperature: &temp,
-			MaxTokens:   &maxTokens,
-			QPM:         cfg.Model.QPM,
-			Proxy:       cfg.Model.Proxy,
-		}), nil
-	case "openai", "":
-		host := cfg.Model.BaseURL
-		if host == "" {
-			host = "https://api.openai.com/v1"
-		}
-		temp := cfg.Model.Temperature
-		return openai.New(host, cfg.Model.Key, openai.Model{
-			Name:        cfg.Model.Model,
-			Temperature: &temp,
-			QPM:         cfg.Model.QPM,
-		}), nil
-	default:
-		return nil, fmt.Errorf("unknown provider: %s", provider)
+	builder.WriteString(strings.TrimSpace(message))
+	if builder.Len() > 0 {
+		builder.WriteString("\n\n")
 	}
+
+	builder.WriteString("User-provided image references:\n")
+	for i, ref := range imageRefs {
+		fmt.Fprintf(&builder, "%d. %s\n", i+1, ref)
+	}
+	builder.WriteString("If you need to inspect image contents, use the image tool with the relevant image reference instead of guessing.")
+	return builder.String()
 }
