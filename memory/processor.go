@@ -10,7 +10,7 @@ import (
 )
 
 type Agent interface {
-	Chat(ctx context.Context, message string, image *types.ImageContent) *api.Response
+	Chat(ctx context.Context, message string) *api.Response
 }
 
 type Processor struct {
@@ -27,8 +27,7 @@ func NewProcessor(agent Agent, config ProcessorConfig) *Processor {
 
 func (p *Processor) ProcessSession(ctx context.Context, history *SessionHistory) (string, error) {
 	convText := FormatConversation(history.Messages)
-	resp := p.agent.Chat(ctx,
-		buildPrompt(history.ID, history.CreatedAt, convText, p.config.MemoryPath, p.config.WorkspacePath), nil)
+	resp := p.agent.Chat(ctx, buildPrompt(history.ID, history.CreatedAt, convText, p.config.MemoryPath, p.config.WorkspacePath))
 
 	result, err := api.ReadAllContent(ctx, resp)
 	if err != nil {

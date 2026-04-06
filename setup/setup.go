@@ -14,7 +14,6 @@ import (
 	"github.com/basenana/friday/core/providers"
 	coreSession "github.com/basenana/friday/core/session"
 	"github.com/basenana/friday/core/tools"
-	"github.com/basenana/friday/core/types"
 	"github.com/basenana/friday/memory"
 	"github.com/basenana/friday/sandbox"
 	"github.com/basenana/friday/skills"
@@ -197,16 +196,15 @@ func NewAgent(sessionMgr SessionManager, cfg *config.Config, opts ...Option) (*A
 	}, nil
 }
 
-func (ac *AgentContext) Chat(ctx context.Context, message string, image *types.ImageContent) *api.Response {
+func (ac *AgentContext) Chat(ctx context.Context, message string) *api.Response {
 	req := &api.Request{
 		Session:     ac.Session,
 		UserMessage: message,
-		Image:       image,
 	}
 	return ac.Agent.Chat(ctx, req)
 }
 
-func (ac *AgentContext) ChatWithImageRefs(ctx context.Context, message string, image *types.ImageContent, imageRefs ...string) *api.Response {
+func (ac *AgentContext) ChatWithImageRefs(ctx context.Context, message string, imageRefs ...string) *api.Response {
 	if len(imageRefs) > 0 {
 		message = appendImageRefsToMessage(message, imageRefs)
 	}
@@ -214,7 +212,6 @@ func (ac *AgentContext) ChatWithImageRefs(ctx context.Context, message string, i
 	req := &api.Request{
 		Session:     ac.Session,
 		UserMessage: message,
-		Image:       image,
 		ImageURLs:   append([]string(nil), imageRefs...),
 	}
 	return ac.Agent.Chat(ctx, req)

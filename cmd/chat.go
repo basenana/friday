@@ -119,12 +119,12 @@ Message can be provided as:
 
 		// Send message and print response
 		if imageRef != "" {
-			resp := agentCtx.ChatWithImageRefs(ctx, userMessage, nil, imageRef)
+			resp := agentCtx.ChatWithImageRefs(ctx, userMessage, imageRef)
 			setup.PrintResponse(resp)
 			return
 		}
 
-		resp := agentCtx.Chat(ctx, userMessage, nil)
+		resp := agentCtx.Chat(ctx, userMessage)
 		setup.PrintResponse(resp)
 	},
 }

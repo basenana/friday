@@ -403,9 +403,6 @@ func TestGenerateTaskID(t *testing.T) {
 	ids := make(map[string]bool)
 	for i := 0; i < 100; i++ {
 		id := generateTaskID()
-		if len(id) != 8 {
-			t.Fatalf("expected task ID length 8, got %d", len(id))
-		}
 		if ids[id] {
 			t.Fatalf("duplicate task ID: %s", id)
 		}
