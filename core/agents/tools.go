@@ -37,23 +37,23 @@ func (t *ToolUse) ID() string {
 	return t.GenID
 }
 
-func toolCall(ctx context.Context, sess *session.Session, use *ToolUse, td *tools.Tool) (string, error) {
+func toolCall(ctx context.Context, sess *session.Session, use *ToolUse, td *tools.Tool) (string, bool, error) {
 	req := &tools.Request{Arguments: make(map[string]interface{}), SessionID: sess.ID}
 	if err := json.Unmarshal([]byte(use.Arguments), &req.Arguments); err != nil {
-		return "", fmt.Errorf("unmarshal json argument failed: %s", err)
+		return "", false, fmt.Errorf("unmarshal json argument failed: %s", err)
 	}
 
 	result, err := td.Handler(ctx, req)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 
 	content, err := json.Marshal(result)
 	if err != nil {
-		return "", fmt.Errorf("marshal tool %s result failed: %s", use.Name, err)
+		return "", false, fmt.Errorf("marshal tool %s result failed: %s", use.Name, err)
 	}
 
-	return string(content), nil
+	return string(content), !result.IsError, nil
 }
 
 func newLLMRequest(systemMessage string, sess *session.Session, toolList []*tools.Tool) providers.Request {
@@ -66,7 +66,7 @@ func newLLMRequest(systemMessage string, sess *session.Session, toolList []*tool
 		toolDef = append(toolDef, t)
 	}
 
-	req := providers.NewRequest(systemMessage, sess.History...)
+	req := providers.NewRequest(systemMessage, sess.GetHistory()...)
 	req.SetToolDefines(toolDef)
 	return req
 }
@@ -76,23 +76,6 @@ func NewToolUseEvent(source string, use *ToolUse) *types.Event {
 	return &types.Event{
 		Id:              types.NewID(),
 		Type:            "tool_use",
-		Source:          source,
-		SpecVersion:     "1.0",
-		DataContentType: "application/json",
-		Data:            string(data),
-		Time:            time.Now(),
-	}
-}
-
-func NewToolUseResultEvent(source string, use *ToolUse, result string) *types.Event {
-	data, _ := json.Marshal(map[string]interface{}{
-		"id":     use.ID(),
-		"result": result,
-	})
-
-	return &types.Event{
-		Id:              types.NewID(),
-		Type:            "tool_use_result",
 		Source:          source,
 		SpecVersion:     "1.0",
 		DataContentType: "application/json",

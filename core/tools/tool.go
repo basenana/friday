@@ -54,7 +54,7 @@ type Request struct {
 
 type Result struct {
 	Content []Content `json:"content"`
-	IsError bool      `json:"isError,omitempty"`
+	IsError bool      `json:"is_error,omitempty"`
 }
 
 // NewToolResultText creates a new CallToolResult with a text content

@@ -1,15 +1,20 @@
 package session
 
 import (
-	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/basenana/friday/core/providers"
 	"github.com/basenana/friday/core/types"
+)
+
+const (
+	compactTailMessages = 6
 )
 
 var (
@@ -29,76 +34,96 @@ func init() {
 
 func (s *Session) autoCompactHistory(ctx context.Context, req providers.Request) error {
 	if s.compactThreshold < 0 {
-		// disable compact
 		return nil
 	}
 
-	beforeTokens := tokenCount(s.History)
+	beforeTokens := tokenCount(s.GetHistory())
 	if beforeTokens < s.compactThreshold {
 		return nil
 	}
 
-	err := s.CompactHistory(ctx)
-	if err != nil {
+	if err := s.CompactHistory(ctx); err != nil {
 		return err
 	}
 
-	req.SetHistory(s.History)
+	req.SetHistory(s.GetHistory())
 	return nil
 }
 
 func (s *Session) CompactHistory(ctx context.Context) error {
-	// If no LLM, use simple truncation (keep last 40 messages)
-	if s.llm == nil {
-		s.mu.Lock()
-		s.History = truncateToLastN(s.History, 40)
-		s.mu.Unlock()
+	history := s.GetHistory()
+	if len(history) == 0 {
 		return nil
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	prompt := compactPrompt(s.History)
-	req := providers.NewRequest("", types.Message{Role: types.RoleAgent, Content: prompt})
-	resp := s.llm.Completion(ctx, req)
-
-	var contentBuf bytes.Buffer
-Waiting:
-	for {
-		select {
-		case <-ctx.Done():
-			return fmt.Errorf("failed to generate summary: %w", ctx.Err())
-		case err := <-resp.Error():
-			if err != nil { // don't remove this
-				return fmt.Errorf("failed to generate summary: %w", err)
-			}
-		case delta, ok := <-resp.Message():
-			if !ok {
-				break Waiting
-			}
-			if delta.Content != "" {
-				contentBuf.WriteString(delta.Content)
-			}
-		}
+	ctxState := s.EnsureContextState()
+	if s.llm == nil && len(history) <= compactTailMessages {
+		return nil
 	}
-	abstract := contentBuf.String()
 
-	if abstract == "" {
+	summary, err := SummarizeToCaseFile(ctx, s.llm, ctxState.CaseFile, compactableMessages(history, compactTailMessages))
+	if err != nil {
+		return err
+	}
+	if summary.IsZero() {
 		return fmt.Errorf("summary is empty")
 	}
 
-	s.History = RebuildHistoryWithAbstract(s.History, abstract)
-	return nil
+	ctxState.CaseFile = MergeCaseFiles(ctxState.CaseFile, summary)
+	ctxState.LastCompactionAt = nowOr(history[len(history)-1].Time)
+	ctxState.LastCompactionTokens = tokenCount(history)
+
+	compacted := BuildCompactedHistory(history, ctxState.CaseFile, compactTailMessages)
+	return s.ReplaceHistory(compacted...)
+}
+
+func BuildCompactedHistory(history []types.Message, cf CaseFile, tail int) []types.Message {
+	if len(history) == 0 {
+		return nil
+	}
+
+	filtered := filterCompactHistory(history)
+	keep := truncateToLastN(filtered, tail)
+	result := make([]types.Message, 0, len(keep)+2)
+	if len(filtered) > 0 {
+		result = append(result, filtered[0])
+		if len(filtered) <= tail && len(keep) > 0 {
+			keep = keep[1:]
+		}
+	}
+	result = append(result, cf.ToMessage())
+	result = append(result, keep...)
+	return result
+}
+
+func compactableMessages(history []types.Message, tail int) []types.Message {
+	filtered := filterCompactHistory(history)
+	if len(filtered) <= tail {
+		return filtered
+	}
+	return filtered[:len(filtered)-tail]
+}
+
+func filterCompactHistory(history []types.Message) []types.Message {
+	result := make([]types.Message, 0, len(history))
+	for _, msg := range history {
+		if IsSyntheticContextMessage(msg) {
+			continue
+		}
+		switch msg.Role {
+		case types.RoleUser, types.RoleAgent, types.RoleAssistant, types.RoleTool:
+			result = append(result, msg)
+		}
+	}
+	return result
 }
 
 // truncateToLastN keeps only the last n messages.
 func truncateToLastN(history []types.Message, n int) []types.Message {
 	if len(history) <= n {
-		return history
+		return append([]types.Message(nil), history...)
 	}
-	// Keep last n messages, preserving order
-	return history[len(history)-n:]
+	return append([]types.Message(nil), history[len(history)-n:]...)
 }
 
 // tokenCount calculates total tokens for a history.
@@ -110,22 +135,44 @@ func tokenCount(history []types.Message) int64 {
 	return total
 }
 
-// compactPrompt generates the prompt for summarizing conversation history.
-func compactPrompt(history []types.Message) string {
-	return fmt.Sprintf(`Please summarize the following conversation history.
-Focus on:
-1. The main topics discussed
-2. Key conclusions or decisions
-3. Any important context that would be needed to continue the conversation
+func compactPrompt(history []types.Message, existing CaseFile) string {
+	existingJSON := "{}"
+	if !existing.IsZero() {
+		if raw, err := json.Marshal(existing); err == nil {
+			existingJSON = string(raw)
+		}
+	}
 
-Your summary will be used to replace the old history, so make it comprehensive but concise.
-Be sure to retain details of any actions performed or files processed during the conversation, such as the specific commands executed or file paths.
-This is the ONLY content you should output - do not add any introductions or conclusions.
+	return fmt.Sprintf(`You are compressing an autonomous agent conversation into a durable case file.
+Return a single JSON object and nothing else.
 
-CONVERSATION HISTORY:
+The JSON schema is:
+{
+  "task_objective": "string",
+  "user_constraints": ["string"],
+  "architecture_decisions": ["string"],
+  "current_status": "string",
+  "pending_work": ["string"],
+  "recent_requests": ["string"],
+  "recent_files": ["string"],
+  "important_commands_or_tools": ["string"],
+  "known_risks": ["string"],
+  "timeline_highlights": ["string"]
+}
+
+Rules:
+- Return every field in the schema. Use "" for unknown strings and [] for unknown lists.
+- Preserve concrete next steps, decisions, file paths, and unresolved work.
+- Prefer short list items over paragraphs.
+- Do not include markdown fences.
+- Keep recent_files to the most relevant 5 entries.
+- Keep recent_requests to the most relevant 3 entries.
+
+Existing case file JSON:
 %s
 
-SUMMARY:`, formatHistoryForPrompt(history))
+Conversation history:
+%s`, existingJSON, formatHistoryForPrompt(history))
 }
 
 // formatHistoryForPrompt formats history for the summarization prompt.
@@ -196,7 +243,6 @@ func RebuildHistoryWithAbstract(history []types.Message, abstract string) []type
 	}
 
 	if cutAt == 0 {
-		// keep all and append abstracts
 		effectiveHistory = append(effectiveHistory, abstractMessage)
 		return effectiveHistory
 	}
@@ -206,4 +252,11 @@ func RebuildHistoryWithAbstract(history []types.Message, abstract string) []type
 	newHistory = append(newHistory, abstractMessage)
 	newHistory = append(newHistory, keep...)
 	return newHistory
+}
+
+func nowOr(ts time.Time) time.Time {
+	if ts.IsZero() {
+		return time.Now()
+	}
+	return ts
 }

@@ -29,6 +29,10 @@ type client struct {
 	logger     logger.Logger
 }
 
+func (c *client) ContextWindow() int64 {
+	return c.model.ContextWindow
+}
+
 func (c *client) Completion(ctx context.Context, request providers.Request) providers.Response {
 	c.logger.Infow("llm processing...")
 	resp := newResponse()

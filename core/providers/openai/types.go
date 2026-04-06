@@ -12,6 +12,7 @@ type Model struct {
 	StrictMode       bool
 	QPM              int64
 	Proxy            string
+	ContextWindow    int64
 }
 
 type ToolUse struct {

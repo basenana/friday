@@ -21,12 +21,13 @@ import (
 )
 
 type Model struct {
-	Name        string
-	Temperature *float64
-	MaxTokens   *int64
-	StrictMode  bool
-	QPM         int64
-	Proxy       string
+	Name          string
+	Temperature   *float64
+	MaxTokens     *int64
+	StrictMode    bool
+	QPM           int64
+	Proxy         string
+	ContextWindow int64
 }
 
 type client struct {
@@ -34,6 +35,10 @@ type client struct {
 	model      Model
 	apiLimiter *rate.Limiter
 	logger     logger.Logger
+}
+
+func (c *client) ContextWindow() int64 {
+	return c.model.ContextWindow
 }
 
 func (c *client) Completion(ctx context.Context, request providers.Request) providers.Response {

@@ -18,15 +18,16 @@ type LogConfig struct {
 }
 
 type ModelConfig struct {
-	Provider    string  `yaml:"provider" json:"provider"` // "openai" or "anthropic"
-	BaseURL     string  `yaml:"base_url" json:"base_url"`
-	Key         string  `yaml:"key" json:"key"`
-	Input       string  `yaml:"input" json:"input"` // "text" "image"
-	Model       string  `yaml:"model" json:"model"`
-	MaxTokens   int     `yaml:"max_tokens" json:"max_tokens"`
-	Temperature float64 `yaml:"temperature" json:"temperature"`
-	QPM         int64   `yaml:"qpm" json:"qpm"`
-	Proxy       string  `yaml:"proxy" json:"proxy"`
+	Provider      string  `yaml:"provider" json:"provider"` // "openai" or "anthropic"
+	BaseURL       string  `yaml:"base_url" json:"base_url"`
+	Key           string  `yaml:"key" json:"key"`
+	Input         string  `yaml:"input" json:"input"` // "text" "image"
+	Model         string  `yaml:"model" json:"model"`
+	ContextWindow int64   `yaml:"context_window" json:"context_window"`
+	MaxTokens     int     `yaml:"max_tokens" json:"max_tokens"`
+	Temperature   float64 `yaml:"temperature" json:"temperature"`
+	QPM           int64   `yaml:"qpm" json:"qpm"`
+	Proxy         string  `yaml:"proxy" json:"proxy"`
 }
 
 type MemoryConfig struct {
@@ -41,13 +42,14 @@ type SessionConfig struct {
 func DefaultConfig() *Config {
 	return &Config{
 		Model: ModelConfig{
-			Provider:    "openai",
-			BaseURL:     "",
-			Key:         "",
-			Model:       "gpt-4o",
-			MaxTokens:   4096,
-			Temperature: 0.7,
-			QPM:         60,
+			Provider:      "openai",
+			BaseURL:       "",
+			Key:           "",
+			Model:         "gpt-4o",
+			ContextWindow: 128000,
+			MaxTokens:     4096,
+			Temperature:   0.7,
+			QPM:           60,
 		},
 		DataDir:   "~/.friday",
 		Workspace: "~/.friday/workspace",

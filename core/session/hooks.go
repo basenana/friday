@@ -26,6 +26,15 @@ type AfterModelHook interface {
 	AfterModel(ctx context.Context, sess *Session, req providers.Request, apply *providers.Apply) error
 }
 
+type AfterToolHook interface {
+	AfterTool(ctx context.Context, sess *Session, payload ToolPayload) error
+}
+
+type ToolExecution struct {
+	Call     providers.ToolCall
+	Messages []types.Message
+}
+
 type AgentRequest interface {
 	GetUserMessage() string
 	SetUserMessage(msg string)
@@ -38,4 +47,10 @@ type HookPayload struct {
 	ModelApply   *providers.Apply
 	AgentRequest AgentRequest
 	Messages     []types.Message
+	Executions   []ToolExecution
+	ToolCalls    []providers.ToolCall
+}
+
+type ToolPayload struct {
+	Executions []ToolExecution
 }

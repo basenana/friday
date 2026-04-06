@@ -12,6 +12,7 @@ const (
 	SessionHookBeforeAgent = "before_agent"
 	SessionHookBeforeModel = "before_model"
 	SessionHookAfterModel  = "after_model"
+	SessionHookAfterTool   = "after_tool"
 )
 
 type MessageRole string
@@ -35,6 +36,7 @@ type ToolCall struct {
 type ToolResult struct {
 	CallID  string `json:"call_id,omitempty"`
 	Content string `json:"content,omitempty"`
+	Success bool   `json:"success,omitempty"`
 }
 
 // ImageType represents the type of image content

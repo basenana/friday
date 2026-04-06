@@ -220,29 +220,47 @@ WaitMessage:
 func (a *react) doToolCalls(ctx context.Context, sess *session.Session, toolUses []providers.ToolCall, reasoning string, toolList []*tools.Tool) {
 	var (
 		result []*types.Message
-		update = make(chan []*types.Message, len(toolUses))
+		update = make(chan toolExecutionResult, len(toolUses))
 		wg     = &sync.WaitGroup{}
 	)
 
 	for i := range toolUses {
 		use := toolUses[i]
+		idx := i
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			update <- a.tryToolCall(ctx, sess, use, reasoning, toolList)
+			update <- toolExecutionResult{
+				Index:    idx,
+				Call:     use,
+				Messages: a.tryToolCall(ctx, sess, use, reasoning, toolList),
+			}
 		}()
 	}
 	wg.Wait()
 	close(update)
 
-	for message := range update {
-		if len(message) == 0 {
+	outcomes := make([]toolExecutionResult, len(toolUses))
+	for outcome := range update {
+		outcomes[outcome.Index] = outcome
+	}
+
+	var executions []session.ToolExecution
+	for _, outcome := range outcomes {
+		if len(outcome.Messages) == 0 {
 			continue
 		}
-		result = append(result, message...)
+		result = append(result, outcome.Messages...)
+		executions = append(executions, session.ToolExecution{
+			Call:     outcome.Call,
+			Messages: cloneMessages(outcome.Messages),
+		})
 	}
 
 	sess.AppendMessage(result...)
+	if err := sess.RunHooks(ctx, types.SessionHookAfterTool, session.HookPayload{Executions: executions}); err != nil {
+		a.logger.Errorw("failed to run after tool hooks", "error", err)
+	}
 }
 
 func (a *react) tryToolCall(ctx context.Context, sess *session.Session, use providers.ToolCall, reasoning string, toolList []*tools.Tool) []*types.Message {
@@ -278,14 +296,14 @@ func (a *react) tryToolCall(ctx context.Context, sess *session.Session, use prov
 
 	toolUse := &ToolUse{GenID: use.ID, Name: use.Name, Arguments: use.Arguments}
 	a.logger.Infow("using tool", "tool", toolUse.Name, "args", toolUse.Arguments, "session", sess.ID)
-	msg, err := toolCall(ctx, sess, toolUse, td)
+	msg, isSucceed, err := toolCall(ctx, sess, toolUse, td)
 	if err != nil {
 		result = append(result, &types.Message{Role: types.RoleTool, ToolResult: &types.ToolResult{CallID: toolUse.ID(), Content: fmt.Sprintf("using tool failed: %s", err)}})
 		a.logger.Warnw("using tool failed", "tool", use.Name, "error", err, "session", sess.ID)
 		return result
 	}
 
-	result = append(result, &types.Message{Role: types.RoleTool, ToolResult: &types.ToolResult{CallID: toolUse.ID(), Content: msg}})
+	result = append(result, &types.Message{Role: types.RoleTool, ToolResult: &types.ToolResult{CallID: toolUse.ID(), Content: msg, Success: isSucceed}})
 	return result
 }
 
@@ -296,6 +314,23 @@ func getToolByName(toolList []*tools.Tool, name string) *tools.Tool {
 		}
 	}
 	return nil
+}
+
+func cloneMessages(msgs []*types.Message) []types.Message {
+	result := make([]types.Message, 0, len(msgs))
+	for _, msg := range msgs {
+		if msg == nil {
+			continue
+		}
+		result = append(result, *msg)
+	}
+	return result
+}
+
+type toolExecutionResult struct {
+	Index    int
+	Call     providers.ToolCall
+	Messages []*types.Message
 }
 
 func New(llm providers.Client, option Option) Agent {

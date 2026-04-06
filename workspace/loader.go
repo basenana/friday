@@ -22,8 +22,8 @@ func (w *Workspace) Load() (*LoadedContent, error) {
 		MemoryHistory: make([]types.Message, 0),
 	}
 
-	// Load system prompt files
 	for _, spec := range w.specs {
+		// Load system prompt files
 		if spec.Role == FileRoleSystemPrompt {
 			data, err := w.loadFile(spec.Name)
 			if err != nil && spec.Required {
@@ -31,6 +31,20 @@ func (w *Workspace) Load() (*LoadedContent, error) {
 			}
 			if data != "" {
 				content.SystemPrompts = append(content.SystemPrompts, data)
+			}
+		}
+
+		// Load long-term curated memory from workspace root
+		if spec.Role == FileRoleMemory {
+			data, err := w.loadFile(spec.Name)
+			if err != nil {
+				return nil, fmt.Errorf("failed to load memory file %s: %w", spec.Name, err)
+			}
+			if strings.TrimSpace(data) != "" {
+				content.MemoryHistory = append(content.MemoryHistory, types.Message{
+					Role:    types.RoleAgent,
+					Content: fmt.Sprintf("[Long-Term Memory]\n\n%s", data),
+				})
 			}
 		}
 	}

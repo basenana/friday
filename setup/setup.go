@@ -8,8 +8,8 @@ import (
 
 	"github.com/basenana/friday/config"
 	"github.com/basenana/friday/core/agents"
-	"github.com/basenana/friday/core/agents/summarize"
 	"github.com/basenana/friday/core/api"
+	"github.com/basenana/friday/core/contextmgr"
 	"github.com/basenana/friday/core/planning"
 	"github.com/basenana/friday/core/providers"
 	coreSession "github.com/basenana/friday/core/session"
@@ -131,10 +131,16 @@ func NewAgent(sessionMgr SessionManager, cfg *config.Config, opts ...Option) (*A
 		}
 	}
 
-	compactThreshold := int64(float64(cfg.Model.MaxTokens) * 0.85)
-	compactHook := summarize.NewCompactHook(client, compactThreshold)
-	sess.RegisterHook(compactHook)
+	memSys := memory.NewMemorySystem(cfg.MemoryPath(), cfg.Memory.Days)
+	if err = memSys.EnsureTodayMemory(); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to ensure memory log: %v\n", err)
+	}
 
+	loaded, err := ws.Load()
+	if err != nil {
+		return nil, fmt.Errorf("load workspace content: %w", err)
+	}
+	memoryBridge := newSessionMemoryBridge(loaded.MemoryHistory)
 	sess.RegisterHook(planning.New(client, planning.Option{}))
 
 	skillLoader := skills.NewLoader(ws.SkillsPath())
@@ -144,15 +150,7 @@ func NewAgent(sessionMgr SessionManager, cfg *config.Config, opts ...Option) (*A
 	skillRegistry := skills.NewRegistry(skillLoader)
 	skillHook := skills.NewHook(skillRegistry)
 	sess.RegisterHook(skillHook)
-
-	wsContent, err := ws.Load()
-	if err != nil {
-		return nil, fmt.Errorf("load workspace: %w", err)
-	}
-
-	if wsContent != nil && len(wsContent.MemoryHistory) > 0 && len(sess.History) == 0 {
-		sess.History = append(wsContent.MemoryHistory, sess.History...)
-	}
+	sess.RegisterHook(contextmgr.New(client, contextmgr.Config{MemoryBridge: memoryBridge}))
 
 	workdir, _ := os.Getwd()
 
@@ -177,14 +175,9 @@ func NewAgent(sessionMgr SessionManager, cfg *config.Config, opts ...Option) (*A
 	}
 
 	agent := agents.New(client, agents.Option{
-		SystemPrompt: workspace.ComposeSystemPrompt(wsContent),
+		SystemPrompt: workspace.ComposeSystemPrompt(loaded),
 		Tools:        allTools,
 	})
-
-	memSys := memory.NewMemorySystem(cfg.MemoryPath(), cfg.Memory.Days)
-	if err = memSys.EnsureTodayMemory(); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: failed to ensure memory log: %v\n", err)
-	}
 
 	return &AgentContext{
 		Client:      client,

@@ -28,6 +28,10 @@ type Client interface {
 	StructuredPredict(ctx context.Context, request Request, model any) error
 }
 
+type ContextWindowProvider interface {
+	ContextWindow() int64
+}
+
 type Embedding interface {
 	Vectorization(ctx context.Context, content string) ([]float64, error)
 }

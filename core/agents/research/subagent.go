@@ -8,8 +8,8 @@ import (
 	agtapi "github.com/basenana/friday/core/api"
 	"github.com/basenana/friday/core/providers"
 	"github.com/basenana/friday/core/session"
+	"github.com/basenana/friday/core/subagents"
 	"github.com/basenana/friday/core/tools"
-	"github.com/basenana/friday/core/types"
 )
 
 func newResearchLeader(agt *Agent, sess *session.Session, agentTools []*tools.Tool) agents.Agent {
@@ -62,15 +62,13 @@ func blockingSubagentTool(worker agents.Agent, sess *session.Session, agentTools
 		)
 
 		subRoot := sess.Fork()
-		_ = subRoot.CompactHistory(ctx)
 
 		for _, t := range taskDescList {
 			func(task string) {
 				subSession := subRoot.Fork()
-				subSession.History[0] = types.Message{Role: types.RoleUser, Content: task} // reset task
 				content, err := agtapi.ReadAllContent(ctx, worker.Chat(ctx, &agtapi.Request{
 					Session:     subSession,
-					UserMessage: task,
+					UserMessage: injectResearchReportRequest(task),
 					Tools:       agentTools,
 				}))
 				if err != nil {
@@ -79,7 +77,7 @@ func blockingSubagentTool(worker agents.Agent, sess *session.Session, agentTools
 					return
 				}
 
-				result <- strings.Join([]string{"Subagent Task:", task, task, "Report:", content}, "\n")
+				result <- subagents.FormatReport(subagents.BuildReport(task, content))
 			}(t)
 		}
 		close(result)
@@ -98,4 +96,16 @@ func NewDefaultWorker(llm providers.Client, opt Option) agents.Agent {
 		MaxLoopTimes: 30,
 		Tools:        opt.ResearchTools,
 	})
+}
+
+func injectResearchReportRequest(task string) string {
+	return strings.TrimSpace(task) + `
+
+Return a final report with these sections:
+- Task
+- What Changed
+- Findings
+- Files Touched
+- Open Questions
+- Recommended Next Step`
 }

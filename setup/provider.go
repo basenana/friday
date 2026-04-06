@@ -50,11 +50,12 @@ func (a *imageAnalyzer) Analyze(ctx context.Context, prompt, modelOverride strin
 }
 
 func (a *imageAnalyzer) clientForModel(modelCfg config.ModelConfig) (providers.Client, error) {
-	key := fmt.Sprintf("%s|%s|%s|%s|%d|%g|%d|%s",
+	key := fmt.Sprintf("%s|%s|%s|%s|%d|%d|%g|%d|%s",
 		modelCfg.Provider,
 		modelCfg.BaseURL,
 		modelCfg.Key,
 		modelCfg.Model,
+		modelCfg.ContextWindow,
 		modelCfg.MaxTokens,
 		modelCfg.Temperature,
 		modelCfg.QPM,
@@ -92,11 +93,12 @@ func CreateProviderClientFromModel(modelCfg config.ModelConfig) (providers.Clien
 		temp := modelCfg.Temperature
 		maxTokens := int64(modelCfg.MaxTokens)
 		return anthropics.New(host, modelCfg.Key, anthropics.Model{
-			Name:        modelCfg.Model,
-			Temperature: &temp,
-			MaxTokens:   &maxTokens,
-			QPM:         modelCfg.QPM,
-			Proxy:       modelCfg.Proxy,
+			Name:          modelCfg.Model,
+			Temperature:   &temp,
+			MaxTokens:     &maxTokens,
+			QPM:           modelCfg.QPM,
+			Proxy:         modelCfg.Proxy,
+			ContextWindow: modelCfg.ContextWindow,
 		}), nil
 	case "openai", "":
 		host := modelCfg.BaseURL
@@ -105,10 +107,11 @@ func CreateProviderClientFromModel(modelCfg config.ModelConfig) (providers.Clien
 		}
 		temp := modelCfg.Temperature
 		return openai.New(host, modelCfg.Key, openai.Model{
-			Name:        modelCfg.Model,
-			Temperature: &temp,
-			QPM:         modelCfg.QPM,
-			Proxy:       modelCfg.Proxy,
+			Name:          modelCfg.Model,
+			Temperature:   &temp,
+			QPM:           modelCfg.QPM,
+			Proxy:         modelCfg.Proxy,
+			ContextWindow: modelCfg.ContextWindow,
 		}), nil
 	default:
 		return nil, fmt.Errorf("unknown provider: %s", modelCfg.Provider)

@@ -8,7 +8,6 @@ import (
 	"github.com/basenana/friday/core/api"
 	"github.com/basenana/friday/core/session"
 	"github.com/basenana/friday/core/tools"
-	"github.com/basenana/friday/core/types"
 )
 
 func fuzzyMatching(s1, s2 string) bool {
@@ -30,16 +29,13 @@ func callSubagentTool(agents []ExpertAgent, sess *session.Session, subagentTools
 		}
 
 		subSession := sess.Fork()
-		if err := subSession.CompactHistory(ctx); err != nil {
-			return nil, err
-		}
-		subSession.History[0] = types.Message{Role: types.RoleUser, Content: userMessage}
+		subTask := injectStructuredReportRequest(userMessage)
 
 		for _, agt := range agents {
 			if fuzzyMatching(agt.Name, agentName) {
 				req := &api.Request{
 					Session:     subSession,
-					UserMessage: userMessage,
+					UserMessage: subTask,
 					Tools:       subagentTools,
 				}
 				content, err := api.ReadAllContent(ctx, agt.Agent.Chat(ctx, req))
@@ -47,10 +43,24 @@ func callSubagentTool(agents []ExpertAgent, sess *session.Session, subagentTools
 					return tools.NewToolResultError(err.Error()), nil
 				}
 
-				return tools.NewToolResultText(content), nil
+				return tools.NewToolResultText(FormatReport(BuildReport(userMessage, content))), nil
 			}
 		}
 
 		return tools.NewToolResultError(fmt.Sprintf("subagent %s not found", agentName)), nil
 	}
+}
+
+func injectStructuredReportRequest(task string) string {
+	return strings.TrimSpace(task) + `
+
+Return a single final report with these exact sections:
+- Task
+- What Changed
+- Findings
+- Files Touched
+- Open Questions
+- Recommended Next Step
+
+Keep the report concise but specific.`
 }

@@ -55,13 +55,14 @@ Sessions can be forked (`sess.Fork()`) for sub-agent execution.
 
 ### Hook System (`session/hooks.go`)
 
-Three hook types:
+Four hook types:
 - `BeforeAgentHook` — called before agent starts processing
 - `BeforeModelHook` — called before each LLM call (can modify request)
 - `AfterModelHook` — called after LLM response (can modify tool calls)
+- `AfterToolHook` — called after tool execution batches (can update derived context)
 
 Hooks are used for:
-- Conversation compaction (`summarize/hook.go`)
+- Context projection and compaction (`contextmgr/manager.go`)
 - Subagent tool injection (`subagents/hook.go`)
 - TODO tracking (`planning/todo.go`)
 

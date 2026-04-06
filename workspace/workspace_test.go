@@ -96,9 +96,12 @@ func TestWorkspaceLoad(t *testing.T) {
 		t.Errorf("expected 4 system prompts, got %d", len(content.SystemPrompts))
 	}
 
-	// MemoryHistory should be empty (no daily memory files)
-	if len(content.MemoryHistory) != 0 {
-		t.Errorf("expected 0 memory history messages, got %d", len(content.MemoryHistory))
+	// MEMORY.md is now loaded as long-term memory context by default.
+	if len(content.MemoryHistory) != 1 {
+		t.Errorf("expected 1 memory history message, got %d", len(content.MemoryHistory))
+	}
+	if len(content.MemoryHistory) > 0 && !strings.Contains(content.MemoryHistory[0].Content, "[Long-Term Memory]") {
+		t.Errorf("expected long-term memory context, got %q", content.MemoryHistory[0].Content)
 	}
 }
 

@@ -7,9 +7,14 @@ import (
 	"time"
 )
 
-func TestExecuteSimpleCommand(t *testing.T) {
+func newTestExecutor() *Executor {
 	cfg := DefaultConfig()
-	exec := NewExecutor(cfg)
+	cfg.Sandbox.Enabled = false
+	return NewExecutor(cfg)
+}
+
+func TestExecuteSimpleCommand(t *testing.T) {
+	exec := newTestExecutor()
 
 	ctx := context.Background()
 	result, err := exec.Run(ctx, "echo hello", ExecOptions{})
@@ -27,6 +32,7 @@ func TestExecuteSimpleCommand(t *testing.T) {
 
 func TestExecuteCommandWithExitCode(t *testing.T) {
 	cfg := DefaultConfig()
+	cfg.Sandbox.Enabled = false
 	cfg.Permissions.Allow = append(cfg.Permissions.Allow, "false")
 	exec := NewExecutor(cfg)
 
@@ -43,6 +49,7 @@ func TestExecuteCommandWithExitCode(t *testing.T) {
 
 func TestExecuteTimeout(t *testing.T) {
 	cfg := DefaultConfig()
+	cfg.Sandbox.Enabled = false
 	cfg.Permissions.Allow = append(cfg.Permissions.Allow, "sleep")
 	exec := NewExecutor(cfg)
 
@@ -65,6 +72,7 @@ func TestExecuteTimeout(t *testing.T) {
 
 func TestExecutePermissionDenied(t *testing.T) {
 	cfg := DefaultConfig()
+	cfg.Sandbox.Enabled = false
 	cfg.Permissions.Allow = []string{"echo"}
 	cfg.Permissions.Deny = []string{}
 	exec := NewExecutor(cfg)
@@ -87,8 +95,7 @@ func TestExecutePermissionDenied(t *testing.T) {
 }
 
 func TestExecuteWorkdir(t *testing.T) {
-	cfg := DefaultConfig()
-	exec := NewExecutor(cfg)
+	exec := newTestExecutor()
 
 	ctx := context.Background()
 	result, err := exec.Run(ctx, "pwd", ExecOptions{
@@ -153,8 +160,7 @@ func TestParseTimeoutConfig(t *testing.T) {
 }
 
 func TestExecutorCheckPermission(t *testing.T) {
-	cfg := DefaultConfig()
-	exec := NewExecutor(cfg)
+	exec := newTestExecutor()
 
 	decision, reason, err := exec.CheckPermission("echo hello")
 	if err != nil {

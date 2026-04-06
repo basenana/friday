@@ -74,6 +74,9 @@ func (m *ModelConfig) overlay(src ModelConfig) {
 	if strings.TrimSpace(src.Model) != "" {
 		m.Model = src.Model
 	}
+	if src.ContextWindow != 0 {
+		m.ContextWindow = src.ContextWindow
+	}
 	if src.MaxTokens != 0 {
 		m.MaxTokens = src.MaxTokens
 	}

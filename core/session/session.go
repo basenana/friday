@@ -22,6 +22,7 @@ type Session struct {
 	Parent    *Session
 	Children  []*Session
 	History   []types.Message
+	Context   *ContextState
 	State     state.State
 	CreatedAt time.Time
 	Temporary bool
@@ -38,6 +39,7 @@ func New(id string, llm providers.Client, options ...Option) *Session {
 	s := &Session{
 		ID:               id,
 		History:          make([]types.Message, 0, 10),
+		Context:          newContextState(),
 		compactThreshold: CompactThreshold,
 		hooks:            make([]Hook, 0),
 		CreatedAt:        time.Now(),
@@ -48,6 +50,8 @@ func New(id string, llm providers.Client, options ...Option) *Session {
 	for _, option := range options {
 		option(s)
 	}
+
+	s.Context = restoreContextState(s.Context, s.History)
 
 	if s.State == nil {
 		s.State = state.NewInMemory()
@@ -62,6 +66,7 @@ func (s *Session) Fork() *Session {
 		Root:             s.Root,
 		Parent:           s,
 		History:          make([]types.Message, len(s.History)),
+		Context:          cloneContextState(s.Context),
 		State:            s.State,
 		CreatedAt:        time.Now(),
 		Temporary:        s.Temporary,
@@ -153,6 +158,12 @@ func (s *Session) RunHooks(ctx context.Context, hookType types.SessionType, payl
 					return err
 				}
 			}
+		case types.SessionHookAfterTool:
+			if ah, ok := h.(AfterToolHook); ok {
+				if err := ah.AfterTool(ctx, s, ToolPayload{Executions: payload.Executions}); err != nil {
+					return err
+				}
+			}
 		}
 	}
 	return nil
@@ -199,6 +210,7 @@ func WithTemporary(v bool) Option {
 func (s *Session) ReplaceHistory(msgs ...types.Message) error {
 	s.mu.Lock()
 	s.History = msgs
+	s.Context = restoreContextState(s.Context, msgs)
 	s.mu.Unlock()
 
 	// Skip persistence for temporary sessions
@@ -209,4 +221,13 @@ func (s *Session) ReplaceHistory(msgs ...types.Message) error {
 		return s.writer.ReplaceMessages(s.ID, msgs...)
 	}
 	return nil
+}
+
+func (s *Session) EnsureContextState() *ContextState {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.Context == nil {
+		s.Context = restoreContextState(nil, s.History)
+	}
+	return s.Context
 }
