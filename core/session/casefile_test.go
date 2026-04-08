@@ -47,6 +47,34 @@ func TestHeuristicCaseFileTracksPendingWorkAndFiles(t *testing.T) {
 	}
 }
 
+func TestHeuristicCaseFileTracksMixedAssistantStatusAndTools(t *testing.T) {
+	now := time.Now()
+	history := []types.Message{
+		{Role: types.RoleUser, Content: "Inspect core/session/casefile.go.", Time: now},
+		{
+			Role:    types.RoleAssistant,
+			Content: "I found the relevant code and will inspect the file.",
+			ToolCalls: []types.ToolCall{{
+				Name:      "read_file",
+				Arguments: `{"path":"core/session/casefile.go"}`,
+			}},
+			Time: now,
+		},
+	}
+
+	cf := HeuristicCaseFile(history)
+
+	if cf.CurrentStatus != "I found the relevant code and will inspect the file." {
+		t.Fatalf("expected mixed assistant content to populate current status, got %q", cf.CurrentStatus)
+	}
+	if len(cf.ImportantCommandsOrTools) != 1 || cf.ImportantCommandsOrTools[0] != "read_file" {
+		t.Fatalf("expected tool usage to be preserved, got %#v", cf.ImportantCommandsOrTools)
+	}
+	if len(cf.TimelineHighlights) == 0 || !strings.Contains(cf.TimelineHighlights[1], "used tools: read_file") {
+		t.Fatalf("expected timeline highlight to include mixed assistant tool usage, got %#v", cf.TimelineHighlights)
+	}
+}
+
 func TestParseCaseFileMessageRejectsLegacyTextFormat(t *testing.T) {
 	legacy := `<case_file>
 ## Task Objective

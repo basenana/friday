@@ -225,32 +225,7 @@ func (c *client) chatCompletionNewParams(request providers.Request) *openai.Chat
 			)
 
 		case types.RoleAssistant:
-			if len(msg.ToolCalls) > 0 {
-				toolCalls := make([]openai.ChatCompletionMessageToolCallParam, len(msg.ToolCalls))
-				for i, tc := range msg.ToolCalls {
-					toolCalls[i] = openai.ChatCompletionMessageToolCallParam{
-						ID:   tc.ID,
-						Type: "function",
-						Function: openai.ChatCompletionMessageToolCallFunctionParam{
-							Name:      tc.Name,
-							Arguments: tc.Arguments,
-						},
-					}
-				}
-				tmsg := &openai.ChatCompletionAssistantMessageParam{
-					ToolCalls: toolCalls,
-				}
-				if msg.Reasoning != "" {
-					tmsg.SetExtraFields(map[string]any{"reasoning_content": msg.Reasoning})
-				}
-				p.Messages = append(p.Messages,
-					openai.ChatCompletionMessageParamUnion{OfAssistant: tmsg},
-				)
-			} else {
-				p.Messages = append(p.Messages,
-					openai.AssistantMessage(msg.Content),
-				)
-			}
+			p.Messages = append(p.Messages, assistantMessageParam(msg))
 
 		case types.RoleTool:
 			if msg.ToolResult != nil {
@@ -317,6 +292,37 @@ func newClient(host, apiKey string, model Model) *client {
 
 var _ providers.Client = (*client)(nil)
 
+func assistantMessageParam(msg types.Message) openai.ChatCompletionMessageParamUnion {
+	if len(msg.ToolCalls) == 0 && msg.Reasoning == "" {
+		return openai.AssistantMessage(msg.Content)
+	}
+
+	tmsg := &openai.ChatCompletionAssistantMessageParam{}
+	if msg.Content != "" || (len(msg.ToolCalls) == 0 && msg.Reasoning != "") {
+		tmsg.Content = openai.ChatCompletionAssistantMessageParamContentUnion{
+			OfString: param.NewOpt(msg.Content),
+		}
+	}
+	if len(msg.ToolCalls) > 0 {
+		toolCalls := make([]openai.ChatCompletionMessageToolCallParam, len(msg.ToolCalls))
+		for i, tc := range msg.ToolCalls {
+			toolCalls[i] = openai.ChatCompletionMessageToolCallParam{
+				ID:   tc.ID,
+				Type: "function",
+				Function: openai.ChatCompletionMessageToolCallFunctionParam{
+					Name:      tc.Name,
+					Arguments: tc.Arguments,
+				},
+			}
+		}
+		tmsg.ToolCalls = toolCalls
+	}
+	if msg.Reasoning != "" {
+		tmsg.SetExtraFields(map[string]any{"reasoning_content": msg.Reasoning})
+	}
+	return openai.ChatCompletionMessageParamUnion{OfAssistant: tmsg}
+}
+
 type response struct {
 	*providers.CommonResponse
 
@@ -342,7 +348,6 @@ func (r *response) nextChoice(chunk openai.ChatCompletionChunkChoice) {
 			}
 			r.incompleteTool.Arguments += tc.Function.Arguments
 		}
-		return
 	}
 
 	if chunk.Delta.Content != "" {

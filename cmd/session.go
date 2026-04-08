@@ -442,6 +442,9 @@ func formatMessage(msg types.Message) string {
 			for _, tc := range msg.ToolCalls {
 				calls = append(calls, fmt.Sprintf("%s(%s)", tc.Name, tc.Arguments))
 			}
+			if msg.Content != "" {
+				return fmt.Sprintf("assistant: %s [tool_calls] %s", msg.Content, strings.Join(calls, ", "))
+			}
 			return fmt.Sprintf("assistant: [tool_calls] %s", strings.Join(calls, ", "))
 		}
 		return fmt.Sprintf("assistant: %s", msg.Content)

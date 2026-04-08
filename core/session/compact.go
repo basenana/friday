@@ -189,12 +189,11 @@ func formatHistoryForPrompt(history []types.Message) string {
 		case types.RoleAgent:
 			lines = append(lines, fmt.Sprintf("[Agent %d] %s", i+1, msg.Content))
 		case types.RoleAssistant:
-			if len(msg.ToolCalls) > 0 {
-				for _, tc := range msg.ToolCalls {
-					lines = append(lines, fmt.Sprintf("[ToolCall %d] %s(%s)", i+1, tc.Name, tc.Arguments))
-				}
-			} else {
+			if msg.Content != "" {
 				lines = append(lines, fmt.Sprintf("[Assistant %d] %s", i+1, msg.Content))
+			}
+			for _, tc := range msg.ToolCalls {
+				lines = append(lines, fmt.Sprintf("[ToolCall %d] %s(%s)", i+1, tc.Name, tc.Arguments))
 			}
 		case types.RoleTool:
 			if msg.ToolResult != nil {

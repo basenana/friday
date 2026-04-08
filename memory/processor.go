@@ -52,7 +52,15 @@ func FormatConversation(messages []types.Message) string {
 			if msg.Reasoning != "" {
 				sb.WriteString(fmt.Sprintf("ASSISTANT [thinking]: %s\n", msg.Reasoning))
 			}
-			sb.WriteString(fmt.Sprintf("ASSISTANT: %s", msg.Content))
+			if msg.Content != "" {
+				sb.WriteString(fmt.Sprintf("ASSISTANT: %s", msg.Content))
+			}
+			for i, tc := range msg.ToolCalls {
+				if msg.Content != "" || i > 0 {
+					sb.WriteString("\n")
+				}
+				sb.WriteString(fmt.Sprintf("ASSISTANT TOOL CALL: %s(%s)", tc.Name, tc.Arguments))
+			}
 		case types.RoleTool:
 			if msg.ToolResult != nil {
 				sb.WriteString(fmt.Sprintf("TOOL RESULT: %s", msg.ToolResult.Content))

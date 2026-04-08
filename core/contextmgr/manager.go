@@ -324,9 +324,7 @@ func pruneMessage(msg types.Message, cfg Config) types.Message {
 			return cpMsg
 		}
 	case types.RoleAssistant:
-		if len(msg.ToolCalls) == 0 {
-			msg.Content = trimForProjection(msg.Content, cfg.MaxAssistantChars)
-		}
+		msg.Content = trimForProjection(msg.Content, cfg.MaxAssistantChars)
 		msg.Reasoning = ""
 	case types.RoleUser, types.RoleAgent:
 		msg.Content = trimForProjection(msg.Content, cfg.MaxUserChars)

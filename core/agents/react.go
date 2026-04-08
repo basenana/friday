@@ -182,11 +182,28 @@ WaitMessage:
 		agentMessage += "The tool is used in an incorrect format; please try using the tool again.\n"
 	}
 
-	if reasoning != "" || len(content) > 0 {
+	// after_model hooks
+	appl := &providers.Apply{ToolUse: toolUse}
+	err = sess.RunHooks(ctx, types.SessionHookAfterModel, session.HookPayload{ModelRequest: llmReq, ModelApply: appl})
+	if err != nil {
+		return false, err
+	}
+	toolUse = canonicalizeToolCalls(appl.ToolUse)
+
+	if reasoning != "" || len(content) > 0 || len(toolUse) > 0 {
+		toolCalls := make([]types.ToolCall, 0, len(toolUse))
+		for _, use := range toolUse {
+			toolCalls = append(toolCalls, types.ToolCall{
+				ID:        use.ID,
+				Name:      use.Name,
+				Arguments: use.Arguments,
+			})
+		}
 		msg := &types.Message{
 			Role:      types.RoleAssistant,
 			Content:   content,
 			Reasoning: reasoning,
+			ToolCalls: toolCalls,
 			Tokens:    stream.Tokens().CompletionTokens,
 		}
 		sess.AppendMessage(msg)
@@ -195,14 +212,6 @@ WaitMessage:
 		keepRun = true
 		sess.AppendMessage(&types.Message{Role: types.RoleAgent, Content: agentMessage})
 	}
-
-	// after_model hooks
-	appl := &providers.Apply{ToolUse: toolUse}
-	err = sess.RunHooks(ctx, types.SessionHookAfterModel, session.HookPayload{ModelRequest: llmReq, ModelApply: appl})
-	if err != nil {
-		return false, err
-	}
-	toolUse = appl.ToolUse
 
 	if len(toolUse) > 0 {
 		keepRun = true
@@ -250,7 +259,13 @@ func (a *react) doToolCalls(ctx context.Context, sess *session.Session, toolUses
 		if len(outcome.Messages) == 0 {
 			continue
 		}
-		result = append(result, outcome.Messages...)
+
+		for _, msg := range outcome.Messages {
+			if msg != nil && msg.Role == types.RoleTool {
+				result = append(result, msg)
+			}
+		}
+
 		executions = append(executions, session.ToolExecution{
 			Call:     outcome.Call,
 			Messages: cloneMessages(outcome.Messages),
@@ -314,6 +329,25 @@ func getToolByName(toolList []*tools.Tool, name string) *tools.Tool {
 		}
 	}
 	return nil
+}
+
+func canonicalizeToolCalls(toolUses []providers.ToolCall) []providers.ToolCall {
+	result := make([]providers.ToolCall, 0, len(toolUses))
+	usedIDs := make(map[string]int, len(toolUses))
+	for _, use := range toolUses {
+		baseID := use.ID
+		if baseID == "" {
+			baseID = (&ToolUse{Name: use.Name, Arguments: use.Arguments}).ID()
+		}
+		usedIDs[baseID]++
+		if usedIDs[baseID] == 1 {
+			use.ID = baseID
+		} else {
+			use.ID = fmt.Sprintf("%s-%d", baseID, usedIDs[baseID])
+		}
+		result = append(result, use)
+	}
+	return result
 }
 
 func cloneMessages(msgs []*types.Message) []types.Message {

@@ -39,6 +39,33 @@ func TestFormatConversation(t *testing.T) {
 			want: "ASSISTANT [thinking]: Let me think...\nASSISTANT: Response\n\n",
 		},
 		{
+			name: "assistant with content and tool call",
+			messages: []types.Message{
+				{
+					Role:    types.RoleAssistant,
+					Content: "I will inspect the file.",
+					ToolCalls: []types.ToolCall{{
+						Name:      "read_file",
+						Arguments: `{"path":"core/session/compact.go"}`,
+					}},
+				},
+			},
+			want: "ASSISTANT: I will inspect the file.\nASSISTANT TOOL CALL: read_file({\"path\":\"core/session/compact.go\"})\n\n",
+		},
+		{
+			name: "assistant with tool call only",
+			messages: []types.Message{
+				{
+					Role: types.RoleAssistant,
+					ToolCalls: []types.ToolCall{{
+						Name:      "list_dir",
+						Arguments: `{"path":"core/session"}`,
+					}},
+				},
+			},
+			want: "ASSISTANT TOOL CALL: list_dir({\"path\":\"core/session\"})\n\n",
+		},
+		{
 			name: "tool result",
 			messages: []types.Message{
 				{Role: types.RoleTool, ToolResult: &types.ToolResult{Content: "tool output"}},

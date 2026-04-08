@@ -1,0 +1,128 @@
+package agents
+
+import (
+	"context"
+	"errors"
+	"sync"
+	"testing"
+
+	"github.com/basenana/friday/core/api"
+	"github.com/basenana/friday/core/providers"
+	"github.com/basenana/friday/core/session"
+	"github.com/basenana/friday/core/tools"
+	"github.com/basenana/friday/core/types"
+)
+
+func TestReactPersistsAssistantContentReasoningAndToolCallsInSingleMessage(t *testing.T) {
+	llm := &fakeLLMClient{
+		completions: [][]providers.Delta{
+			{
+				{Reasoning: "Need to inspect the file first."},
+				{Content: "I will inspect the file."},
+				{ToolUse: []providers.ToolCall{{
+					ID:        "call-1",
+					Name:      "read_file",
+					Arguments: `{"path":"core/session/compact.go"}`,
+				}}},
+			},
+			{
+				{Content: "Done."},
+			},
+		},
+	}
+
+	tool := tools.NewTool("read_file",
+		tools.WithToolHandler(func(ctx context.Context, request *tools.Request) (*tools.Result, error) {
+			return tools.NewToolResultText("file content"), nil
+		}),
+	)
+
+	sess := session.New("sess-react", llm)
+	resp := New(llm, Option{SystemPrompt: "system prompt", MaxLoopTimes: 4}).Chat(context.Background(), &api.Request{
+		Session:     sess,
+		UserMessage: "Inspect the file.",
+		Tools:       []*tools.Tool{tool},
+	})
+
+	if _, err := api.ReadAllContent(context.Background(), resp); err != nil {
+		t.Fatalf("ReadAllContent() error = %v", err)
+	}
+
+	history := sess.GetHistory()
+	if len(history) != 4 {
+		t.Fatalf("expected 4 history messages, got %#v", history)
+	}
+
+	firstAssistant := history[1]
+	if firstAssistant.Role != types.RoleAssistant {
+		t.Fatalf("expected second message to be assistant, got %#v", firstAssistant)
+	}
+	if firstAssistant.Content != "I will inspect the file." {
+		t.Fatalf("expected assistant content to be preserved, got %#v", firstAssistant)
+	}
+	if firstAssistant.Reasoning != "Need to inspect the file first." {
+		t.Fatalf("expected assistant reasoning to be preserved, got %#v", firstAssistant)
+	}
+	if len(firstAssistant.ToolCalls) != 1 || firstAssistant.ToolCalls[0].Name != "read_file" {
+		t.Fatalf("expected assistant tool call to be persisted on the same message, got %#v", firstAssistant)
+	}
+
+	if history[2].Role != types.RoleTool || history[2].ToolResult == nil {
+		t.Fatalf("expected third message to be tool result, got %#v", history[2])
+	}
+	if history[3].Role != types.RoleAssistant || history[3].Content != "Done." {
+		t.Fatalf("expected final assistant message, got %#v", history[3])
+	}
+}
+
+func TestCanonicalizeToolCallsMakesDuplicateFallbackIDsUnique(t *testing.T) {
+	toolUses := canonicalizeToolCalls([]providers.ToolCall{
+		{Name: "read_file", Arguments: `{"path":"core/session/compact.go"}`},
+		{Name: "read_file", Arguments: `{"path":"core/session/compact.go"}`},
+	})
+
+	if len(toolUses) != 2 {
+		t.Fatalf("expected 2 tool calls, got %#v", toolUses)
+	}
+	if toolUses[0].ID == "" || toolUses[1].ID == "" {
+		t.Fatalf("expected generated IDs, got %#v", toolUses)
+	}
+	if toolUses[0].ID == toolUses[1].ID {
+		t.Fatalf("expected duplicate fallback IDs to be uniquified, got %#v", toolUses)
+	}
+}
+
+type fakeLLMClient struct {
+	mu          sync.Mutex
+	completions [][]providers.Delta
+	calls       int
+}
+
+func (f *fakeLLMClient) Completion(_ context.Context, _ providers.Request) providers.Response {
+	f.mu.Lock()
+	idx := f.calls
+	f.calls++
+	f.mu.Unlock()
+
+	resp := providers.NewCommonResponse()
+	go func() {
+		defer close(resp.Stream)
+		defer close(resp.Err)
+		if idx >= len(f.completions) {
+			resp.Err <- errors.New("unexpected completion call")
+			return
+		}
+		for _, delta := range f.completions[idx] {
+			resp.Stream <- delta
+		}
+	}()
+	return resp
+}
+
+func (f *fakeLLMClient) CompletionNonStreaming(context.Context, providers.Request) (string, error) {
+	return "", errors.New("not implemented")
+}
+
+func (f *fakeLLMClient) StructuredPredict(context.Context, providers.Request, any) error {
+	return errors.New("not implemented")
+}

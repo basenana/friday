@@ -215,7 +215,8 @@ func HeuristicCaseFile(history []types.Message) CaseFile {
 				for _, call := range msg.ToolCalls {
 					commandsTools = append(commandsTools, call.Name)
 				}
-			} else if text != "" {
+			}
+			if text != "" {
 				result.CurrentStatus = text
 			}
 
@@ -259,6 +260,12 @@ func summarizeTimelineEntry(msg types.Message) string {
 	switch {
 	case msg.Role == types.RoleUser && text != "":
 		return "user: " + squeezeWhitespace(text, 140)
+	case msg.Role == types.RoleAssistant && len(msg.ToolCalls) > 0 && text != "":
+		var names []string
+		for _, call := range msg.ToolCalls {
+			names = append(names, call.Name)
+		}
+		return "assistant: " + squeezeWhitespace(text, 110) + " | used tools: " + strings.Join(limitStrings(names, 4), ", ")
 	case msg.Role == types.RoleAssistant && len(msg.ToolCalls) > 0:
 		var names []string
 		for _, call := range msg.ToolCalls {

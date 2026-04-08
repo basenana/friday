@@ -250,29 +250,30 @@ func (c *client) messageCreateParams(request providers.Request) *anthropic.Messa
 			})
 
 		case types.RoleAssistant:
-			if len(msg.ToolCalls) > 0 {
-				for _, tc := range msg.ToolCalls {
-					toolUse := anthropic.ToolUseBlockParam{
-						ID:   tc.ID,
-						Name: tc.Name,
-					}
-					if tc.Arguments != "" {
-						var args any
-						if err := json.Unmarshal([]byte(tc.Arguments), &args); err == nil {
-							toolUse.Input = args
-						}
-					}
-					params.Messages = append(params.Messages, anthropic.MessageParam{
-						Role:    anthropic.MessageParamRoleAssistant,
-						Content: []anthropic.ContentBlockParamUnion{{OfToolUse: &toolUse}},
-					})
-				}
-			} else {
-				params.Messages = append(params.Messages, anthropic.MessageParam{
-					Role:    anthropic.MessageParamRoleAssistant,
-					Content: []anthropic.ContentBlockParamUnion{anthropic.NewTextBlock(msg.Content)},
-				})
+			var contentBlocks []anthropic.ContentBlockParamUnion
+			if msg.Content != "" {
+				contentBlocks = append(contentBlocks, anthropic.NewTextBlock(msg.Content))
 			}
+			for _, tc := range msg.ToolCalls {
+				toolUse := anthropic.ToolUseBlockParam{
+					ID:   tc.ID,
+					Name: tc.Name,
+				}
+				if tc.Arguments != "" {
+					var args any
+					if err := json.Unmarshal([]byte(tc.Arguments), &args); err == nil {
+						toolUse.Input = args
+					}
+				}
+				contentBlocks = append(contentBlocks, anthropic.ContentBlockParamUnion{OfToolUse: &toolUse})
+			}
+			if len(contentBlocks) == 0 {
+				contentBlocks = append(contentBlocks, anthropic.NewTextBlock(msg.Content))
+			}
+			params.Messages = append(params.Messages, anthropic.MessageParam{
+				Role:    anthropic.MessageParamRoleAssistant,
+				Content: contentBlocks,
+			})
 
 		case types.RoleTool:
 			if msg.ToolResult != nil {

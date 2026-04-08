@@ -136,32 +136,7 @@ func (c *compatibleClient) chatCompletionNewParams(request providers.Request) *o
 			)
 
 		case types.RoleAssistant:
-			if len(msg.ToolCalls) > 0 {
-				toolCalls := make([]openai.ChatCompletionMessageToolCallParam, len(msg.ToolCalls))
-				for i, tc := range msg.ToolCalls {
-					toolCalls[i] = openai.ChatCompletionMessageToolCallParam{
-						ID:   tc.ID,
-						Type: "function",
-						Function: openai.ChatCompletionMessageToolCallFunctionParam{
-							Name:      tc.Name,
-							Arguments: tc.Arguments,
-						},
-					}
-				}
-				tmsg := &openai.ChatCompletionAssistantMessageParam{
-					ToolCalls: toolCalls,
-				}
-				if msg.Reasoning != "" {
-					tmsg.SetExtraFields(map[string]any{"reasoning_content": msg.Reasoning})
-				}
-				p.Messages = append(p.Messages,
-					openai.ChatCompletionMessageParamUnion{OfAssistant: tmsg},
-				)
-			} else {
-				p.Messages = append(p.Messages,
-					openai.AssistantMessage(msg.Content),
-				)
-			}
+			p.Messages = append(p.Messages, assistantMessageParam(msg))
 
 		case types.RoleTool:
 			if msg.ToolResult != nil {
