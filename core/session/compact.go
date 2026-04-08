@@ -86,7 +86,11 @@ func BuildCompactedHistory(history []types.Message, cf CaseFile, tail int) []typ
 	keep := truncateToLastN(filtered, tail)
 	result := make([]types.Message, 0, len(keep)+2)
 	if len(filtered) > 0 {
+		// Always preserve the very first message (typically the initial user request)
+		// so the agent retains the original task objective even after compaction.
 		result = append(result, filtered[0])
+		// When filtered is short enough to fit within tail, keep already contains
+		// filtered[0], so skip it to avoid duplication.
 		if len(filtered) <= tail && len(keep) > 0 {
 			keep = keep[1:]
 		}

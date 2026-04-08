@@ -14,6 +14,7 @@ require (
 )
 
 require (
+	github.com/a2aproject/a2a-go v0.3.13 // indirect
 	github.com/anthropics/anthropic-sdk-go v1.27.0 // indirect
 	github.com/bahlo/generic-list-go v0.2.0 // indirect
 	github.com/buger/jsonparser v1.1.1 // indirect

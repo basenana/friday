@@ -164,6 +164,77 @@ Run periodic tasks defined in `HEARTBEAT.md`:
 friday heartbeat
 ```
 
+### A2A Channel
+
+Expose Friday as an A2A (Agent-to-Agent) protocol server for inter-agent communication:
+
+```bash
+# Start with defaults (127.0.0.1:8999)
+friday channel
+
+# Custom address
+friday channel --listen 0.0.0.0:9000 --public-url http://myhost:9000/
+```
+
+The A2A server provides:
+
+| Endpoint | Description |
+|---|---|
+| `GET /.well-known/agent-card.json` | Agent Card discovery |
+| `POST /` | JSON-RPC 2.0 endpoint |
+
+Supported A2A methods:
+
+| Method | Description |
+|---|---|
+| `message/send` | Send a chat message (sync) |
+| `message/stream` | Send a chat message (streaming SSE) |
+| `tasks/get` | Query task status |
+| `tasks/cancel` | Cancel a running task |
+
+Example requests:
+
+```bash
+# Get Agent Card
+curl http://127.0.0.1:8999/.well-known/agent-card.json
+
+# Send a message (JSON-RPC)
+curl -X POST http://127.0.0.1:8999/ -H 'Content-Type: application/json' -d '{
+  "jsonrpc": "2.0",
+  "method": "message/send",
+  "id": 1,
+  "params": {
+    "message": {
+      "messageId": "msg-001",
+      "role": "user",
+      "parts": [{"kind": "text", "text": "Hello!"}]
+    }
+  }
+}'
+
+# Stream a message
+curl -X POST http://127.0.0.1:8999/ -H 'Content-Type: application/json' -d '{
+  "jsonrpc": "2.0",
+  "method": "message/stream",
+  "id": 2,
+  "params": {
+    "message": {
+      "messageId": "msg-002",
+      "role": "user",
+      "parts": [{"kind": "text", "text": "Write a haiku about Go"}]
+    }
+  }
+}'
+
+# Cancel a task
+curl -X POST http://127.0.0.1:8999/ -H 'Content-Type: application/json' -d '{
+  "jsonrpc": "2.0",
+  "method": "tasks/cancel",
+  "id": 3,
+  "params": {"id": "<task-id>"}
+}'
+```
+
 ---
 
 ## Data Structure

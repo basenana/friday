@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -279,4 +280,98 @@ func (f *fakeCaseFileClient) StructuredPredict(ctx context.Context, request prov
 	}
 	*cf = f.structuredCaseFile
 	return nil
+}
+
+func TestBuildCompactedHistoryPreservesFirstMessage(t *testing.T) {
+	cf := CaseFile{TaskObjective: "test objective", CurrentStatus: "working"}
+
+	// Create 10 messages; tail=5 so we keep the last 5.
+	// filtered[0] is always preserved separately.
+	history := make([]types.Message, 10)
+	for i := range history {
+		history[i] = types.Message{Role: types.RoleUser, Content: fmt.Sprintf("message-%d", i)}
+	}
+
+	compacted := BuildCompactedHistory(history, cf, 5)
+
+	// First message should be preserved
+	if len(compacted) == 0 || compacted[0].Content != "message-0" {
+		t.Fatalf("expected first message preserved, got %v", compacted[0].Content)
+	}
+
+	// Case file message should be second
+	if len(compacted) < 2 || !strings.Contains(compacted[1].Content, "test objective") {
+		t.Fatalf("expected case file message as second element")
+	}
+
+	// Tail messages should be the last 5 (indices 5-9)
+	if len(compacted) < 3 {
+		t.Fatalf("expected at least 3 elements (first + casefile + tail), got %d", len(compacted))
+	}
+	tailStart := compacted[2]
+	if tailStart.Content != "message-5" {
+		t.Errorf("expected tail to start with message-5, got %q", tailStart.Content)
+	}
+}
+
+func TestBuildCompactedHistoryExactTailBoundary(t *testing.T) {
+	cf := CaseFile{TaskObjective: "boundary test"}
+
+	// tail=5, exactly 5 messages => filtered fits within tail
+	// filtered[0] is preserved, then skip duplicates
+	history := make([]types.Message, 5)
+	for i := range history {
+		history[i] = types.Message{Role: types.RoleUser, Content: fmt.Sprintf("msg-%d", i)}
+	}
+
+	compacted := BuildCompactedHistory(history, cf, 5)
+
+	// Should have: first (msg-0) + casefile + remaining tail (msg-1..msg-4)
+	// No duplicate of msg-0 since filtered <= tail triggers skip
+	found := []string{}
+	for _, m := range compacted {
+		if strings.HasPrefix(m.Content, "msg-") {
+			found = append(found, m.Content)
+		}
+	}
+	// msg-0 should appear exactly once
+	count := 0
+	for _, f := range found {
+		if f == "msg-0" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Errorf("expected msg-0 exactly once, got %d times in %v", count, found)
+	}
+}
+
+func TestBuildCompactedHistoryJustOverTail(t *testing.T) {
+	cf := CaseFile{TaskObjective: "overflow test"}
+
+	// tail=5, 6 messages => filtered > tail, so keep = last 5 (msg-1..msg-5)
+	// filtered[0] (msg-0) is not in keep, no duplication
+	history := make([]types.Message, 6)
+	for i := range history {
+		history[i] = types.Message{Role: types.RoleUser, Content: fmt.Sprintf("msg-%d", i)}
+	}
+
+	compacted := BuildCompactedHistory(history, cf, 5)
+
+	// Should have: msg-0 (preserved) + casefile + msg-1..msg-5 (tail)
+	msgs := []string{}
+	for _, m := range compacted {
+		if strings.HasPrefix(m.Content, "msg-") {
+			msgs = append(msgs, m.Content)
+		}
+	}
+
+	if len(msgs) != 6 {
+		t.Errorf("expected 6 messages total, got %d: %v", len(msgs), msgs)
+	}
+
+	// First should be msg-0, rest should be msg-1 through msg-5
+	if msgs[0] != "msg-0" {
+		t.Errorf("expected first msg to be msg-0, got %q", msgs[0])
+	}
 }

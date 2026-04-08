@@ -238,12 +238,12 @@ func HeuristicCaseFile(history []types.Message) CaseFile {
 		}
 	}
 
-	result.RecentRequests = tailStrings(recentUsers, defaultRecentRequestLimit)
+	result.RecentRequests = limitStrings(recentUsers, defaultRecentRequestLimit)
 	result.PendingWork = limitStrings(pending, defaultPendingWorkLimit)
 	result.UserConstraints = limitStrings(constraints, 8)
 	result.ImportantCommandsOrTools = limitStrings(commandsTools, 8)
 	result.KnownRisks = limitStrings(risks, 8)
-	result.TimelineHighlights = tailStrings(timeline, defaultTimelineHighlightLimit)
+	result.TimelineHighlights = limitStrings(timeline, defaultTimelineHighlightLimit)
 
 	if result.TaskObjective == "" && len(result.RecentRequests) > 0 {
 		result.TaskObjective = result.RecentRequests[len(result.RecentRequests)-1]
@@ -415,14 +415,6 @@ func mergeUniqueStrings(base, extra []string, limit int) []string {
 		result = result[len(result)-limit:]
 	}
 	return result
-}
-
-func tailStrings(items []string, limit int) []string {
-	items = limitStrings(items, limit)
-	if len(items) <= limit {
-		return items
-	}
-	return items[len(items)-limit:]
 }
 
 func limitStrings(items []string, limit int) []string {

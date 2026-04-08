@@ -143,6 +143,7 @@ func (m *Manager) BeforeModel(ctx stdctx.Context, sess *session.Session, req pro
 		history = sess.GetHistory()
 		cf = st.CaseFile
 		projected = m.projectHistory(history, st, cf, false)
+		projectedTokens = countTokens(projected)
 	}
 
 	req.SetHistory(projected)

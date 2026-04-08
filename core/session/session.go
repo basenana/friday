@@ -223,6 +223,11 @@ func (s *Session) ReplaceHistory(msgs ...types.Message) error {
 	return nil
 }
 
+// EnsureContextState returns the session's ContextState, initializing it if nil.
+// The returned pointer is NOT protected by the session mutex after this call returns.
+// Callers must only access ContextState from a single goroutine at a time.
+// In practice this is safe because hooks run sequentially in RunHooks, and Fork()
+// deep-copies ContextState so each forked session owns its own independent copy.
 func (s *Session) EnsureContextState() *ContextState {
 	s.mu.Lock()
 	defer s.mu.Unlock()

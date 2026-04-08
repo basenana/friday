@@ -1,4 +1,20 @@
 ## workspace
+# github.com/a2aproject/a2a-go v0.3.13
+## explicit; go 1.24.4
+github.com/a2aproject/a2a-go/a2a
+github.com/a2aproject/a2a-go/a2asrv
+github.com/a2aproject/a2a-go/a2asrv/eventqueue
+github.com/a2aproject/a2a-go/a2asrv/limiter
+github.com/a2aproject/a2a-go/a2asrv/push
+github.com/a2aproject/a2a-go/a2asrv/workqueue
+github.com/a2aproject/a2a-go/internal/eventpipe
+github.com/a2aproject/a2a-go/internal/jsonrpc
+github.com/a2aproject/a2a-go/internal/sse
+github.com/a2aproject/a2a-go/internal/taskexec
+github.com/a2aproject/a2a-go/internal/taskstore
+github.com/a2aproject/a2a-go/internal/taskupdate
+github.com/a2aproject/a2a-go/internal/utils
+github.com/a2aproject/a2a-go/log
 # github.com/anthropics/anthropic-sdk-go v1.27.0
 ## explicit; go 1.23.0
 github.com/anthropics/anthropic-sdk-go

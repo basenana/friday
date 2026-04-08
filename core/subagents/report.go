@@ -24,7 +24,7 @@ func BuildReport(task, content string) Report {
 		RecommendedNextStep: "Integrate the findings into the main thread and continue from the open items above.",
 	}
 
-	for _, ref := range session.ExtractFileRefs(content, "subagent_report", timeNow()) {
+	for _, ref := range session.ExtractFileRefs(content, "subagent_report", time.Now()) {
 		report.FilesTouched = append(report.FilesTouched, ref.Path)
 	}
 	return report
@@ -72,8 +72,4 @@ func FormatReport(report Report) string {
 	}
 	buf.WriteString("</subagent_report>")
 	return strings.TrimSpace(buf.String())
-}
-
-func timeNow() time.Time {
-	return time.Now()
 }
