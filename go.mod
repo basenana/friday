@@ -3,7 +3,8 @@ module github.com/basenana/friday
 go 1.25.0
 
 require (
-	github.com/basenana/friday/core v0.0.0-20260320135009-3bc389439604
+	github.com/a2aproject/a2a-go v0.3.13
+	github.com/basenana/friday/core v0.0.0-20260408115350-4b8ee46a1e16
 	github.com/davecgh/go-spew v1.1.1
 	github.com/hyponet/eventbus v1.1.0
 	github.com/mark3labs/mcp-go v0.43.2
@@ -14,7 +15,6 @@ require (
 )
 
 require (
-	github.com/a2aproject/a2a-go v0.3.13 // indirect
 	github.com/anthropics/anthropic-sdk-go v1.27.0 // indirect
 	github.com/bahlo/generic-list-go v0.2.0 // indirect
 	github.com/buger/jsonparser v1.1.1 // indirect

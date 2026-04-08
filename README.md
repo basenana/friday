@@ -65,6 +65,7 @@ Create `~/.friday/config.json` (or `friday.yaml`):
 <summary>More provider examples</summary>
 
 **Ollama (local)**
+
 ```json
 {
   "model": {
@@ -77,6 +78,7 @@ Create `~/.friday/config.json` (or `friday.yaml`):
 ```
 
 **Anthropic**
+
 ```json
 {
   "model": {
@@ -88,6 +90,7 @@ Create `~/.friday/config.json` (or `friday.yaml`):
 ```
 
 **Google Gemini (OpenAI-compatible)**
+
 ```json
 {
   "model": {
@@ -178,19 +181,19 @@ friday channel --listen 0.0.0.0:9000 --public-url http://myhost:9000/
 
 The A2A server provides:
 
-| Endpoint | Description |
-|---|---|
-| `GET /.well-known/agent-card.json` | Agent Card discovery |
-| `POST /` | JSON-RPC 2.0 endpoint |
+| Endpoint                           | Description           |
+|------------------------------------|-----------------------|
+| `GET /.well-known/agent-card.json` | Agent Card discovery  |
+| `POST /`                           | JSON-RPC 2.0 endpoint |
 
 Supported A2A methods:
 
-| Method | Description |
-|---|---|
-| `message/send` | Send a chat message (sync) |
+| Method           | Description                         |
+|------------------|-------------------------------------|
+| `message/send`   | Send a chat message (sync)          |
 | `message/stream` | Send a chat message (streaming SSE) |
-| `tasks/get` | Query task status |
-| `tasks/cancel` | Cancel a running task |
+| `tasks/get`      | Query task status                   |
+| `tasks/cancel`   | Cancel a running task               |
 
 Example requests:
 
