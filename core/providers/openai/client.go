@@ -152,7 +152,7 @@ func (c *client) StructuredPredict(ctx context.Context, request providers.Reques
 		return err
 	}
 
-	err = extractJSON(jsonbody, model)
+	err = common.ExtractJSON(jsonbody, model)
 	if err != nil {
 		c.logger.Errorw("failed to extract json", "content", jsonbody, "err", err)
 		return err

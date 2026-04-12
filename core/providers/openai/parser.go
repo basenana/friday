@@ -1,7 +1,6 @@
 package openai
 
 import (
-	"bytes"
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
@@ -235,16 +234,6 @@ func compactMessages(messages []providers.Delta) []providers.Delta {
 	}
 
 	return result
-}
-
-func extractJSON(jsonContent string, model any) error {
-	start := strings.Index(jsonContent, "{")
-	if start == -1 {
-		return fmt.Errorf("no JSON found")
-	}
-
-	jsonContent = jsonContent[start:]
-	return json.NewDecoder(bytes.NewBuffer([]byte(jsonContent))).Decode(model)
 }
 
 func isTooManyError(err error) bool {
