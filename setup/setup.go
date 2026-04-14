@@ -16,6 +16,7 @@ import (
 	"github.com/basenana/friday/core/tools"
 	"github.com/basenana/friday/memory"
 	"github.com/basenana/friday/sandbox"
+	"github.com/basenana/friday/sessions"
 	"github.com/basenana/friday/skills"
 	"github.com/basenana/friday/workspace"
 )
@@ -140,7 +141,7 @@ func NewAgent(sessionMgr SessionManager, cfg *config.Config, opts ...Option) (*A
 	if err != nil {
 		return nil, fmt.Errorf("load workspace content: %w", err)
 	}
-	memoryBridge := newSessionMemoryBridge(loaded.MemoryHistory)
+
 	sess.RegisterHook(planning.New(client, planning.Option{}))
 
 	skillLoader := skills.NewLoader(ws.SkillsPath())
@@ -150,7 +151,9 @@ func NewAgent(sessionMgr SessionManager, cfg *config.Config, opts ...Option) (*A
 	skillRegistry := skills.NewRegistry(skillLoader)
 	skillHook := skills.NewHook(skillRegistry)
 	sess.RegisterHook(skillHook)
-	sess.RegisterHook(contextmgr.New(client, contextmgr.Config{MemoryBridge: memoryBridge}))
+	sess.RegisterHook(contextmgr.New(client, contextmgr.Config{
+		SessionMemoryStore: sessionMemoryStoreFromManager(sessionMgr),
+	}))
 
 	workdir, _ := os.Getwd()
 
@@ -195,6 +198,19 @@ func (ac *AgentContext) Chat(ctx context.Context, message string) *api.Response 
 		UserMessage: message,
 	}
 	return ac.Agent.Chat(ctx, req)
+}
+
+func sessionMemoryStoreFromManager(sessionMgr SessionManager) contextmgr.SessionMemoryStore {
+	provider, ok := sessionMgr.(interface{ GetStore() sessions.Store })
+	if !ok {
+		return nil
+	}
+
+	store, ok := provider.GetStore().(contextmgr.SessionMemoryStore)
+	if !ok {
+		return nil
+	}
+	return store
 }
 
 func (ac *AgentContext) ChatWithImageRefs(ctx context.Context, message string, imageRefs ...string) *api.Response {

@@ -31,12 +31,11 @@ This folder is home. Treat it that way.
 
 ## Session Startup
 
-Once the session starts, the following files will be loaded into the context even if you do nothing:
+Once the session begins, you need to actively load the following files into the context:
 
-1. Read 'SOUL.md' — this is who you are
-2. Read 'ENVIRONMENT.md' — this is where you're running
-3. Read 'memory/YYYY-MM-DD.md' (today + yesterday) for recent context
-4. Read 'MEMORY.md' - curated long-term memory
+1. Read 'ENVIRONMENT.md' — this is where you're running
+2. Read 'memory/YYYY-MM-DD.md' (today + yesterday) for recent context
+3. Read 'MEMORY.md' - curated long-term memory
 
 ## Memory
 

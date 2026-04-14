@@ -1,6 +1,7 @@
 package session
 
 import (
+	"sync"
 	"time"
 
 	"github.com/basenana/friday/core/types"
@@ -8,22 +9,31 @@ import (
 
 const (
 	defaultRecentFileLimit        = 5
-	defaultToolObservationLimit   = 12
-	defaultRecentRequestLimit     = 3
-	defaultPendingWorkLimit       = 8
 	defaultTimelineHighlightLimit = 12
 )
 
 type ContextState struct {
-	CaseFile         CaseFile
-	ToolObservations []ToolObservation
-	MemorySnapshot   []types.Message
+	SessionMemory    []types.Message
 	PromptBudget     PromptBudget
-
-	MemoryLoaded bool
 
 	LastCompactionAt     time.Time
 	LastCompactionTokens int64
+
+	// LastSyncedAt is the Time of the last history message included in
+	// the persisted session memory. Used as the boundary when projecting
+	// history with session memory. Zero value means "never synced".
+	LastSyncedAt time.Time
+
+	// SessionMemoryGenerating is an atomic flag (0 or 1) preventing concurrent
+	// async session memory generation goroutines.
+	SessionMemoryGenerating int32
+
+	// PendingMemory holds a freshly generated session memory record from the
+	// async goroutine, waiting to be drained by the next BeforeModel call.
+	// Typed as `any` to avoid circular import (actual type: *contextmgr.SessionMemoryRecord).
+	// Protected by pendingMu since it's written by the async goroutine and read by the main goroutine.
+	pendingMu     sync.Mutex
+	PendingMemory any
 }
 
 type PromptBudget struct {
@@ -41,32 +51,25 @@ type FileRef struct {
 	SeenAt time.Time `json:"seen_at,omitempty"`
 }
 
-type ToolObservation struct {
-	ToolName   string    `json:"tool_name"`
-	Summary    string    `json:"summary"`
-	Success    bool      `json:"success"`
-	ObservedAt time.Time `json:"observed_at"`
-	Files      []string  `json:"files,omitempty"`
-}
-
 func newContextState() *ContextState {
 	return &ContextState{
-		ToolObservations: make([]ToolObservation, 0, defaultToolObservationLimit),
-		MemorySnapshot:   make([]types.Message, 0),
+		SessionMemory: make([]types.Message, 0),
 	}
 }
 
 func restoreContextState(existing *ContextState, history []types.Message) *ContextState {
+	// Preserve LastSyncedAt before cloning.
+	var savedSyncedAt time.Time
+	if existing != nil {
+		savedSyncedAt = existing.LastSyncedAt
+	}
+
 	state := cloneContextState(existing)
 	if state == nil {
 		state = newContextState()
 	}
 
-	for _, msg := range history {
-		if cf, ok := ParseCaseFileMessage(msg.Content); ok {
-			state.CaseFile = MergeCaseFiles(state.CaseFile, cf)
-		}
-	}
+	state.LastSyncedAt = savedSyncedAt
 	return state
 }
 
@@ -76,8 +79,23 @@ func cloneContextState(src *ContextState) *ContextState {
 	}
 
 	dst := *src
-	dst.ToolObservations = append([]ToolObservation(nil), src.ToolObservations...)
-	dst.MemorySnapshot = append([]types.Message(nil), src.MemorySnapshot...)
-	dst.CaseFile = src.CaseFile.clone()
+	dst.SessionMemory = append([]types.Message(nil), src.SessionMemory...)
+	dst.pendingMu = sync.Mutex{} // fresh mutex for the clone
+	dst.PendingMemory = nil      // fork starts with no pending
 	return &dst
 }
+
+func (cs *ContextState) StorePendingMemory(v any) {
+	cs.pendingMu.Lock()
+	cs.PendingMemory = v
+	cs.pendingMu.Unlock()
+}
+
+func (cs *ContextState) DrainPendingMemory() any {
+	cs.pendingMu.Lock()
+	defer cs.pendingMu.Unlock()
+	v := cs.PendingMemory
+	cs.PendingMemory = nil
+	return v
+}
+

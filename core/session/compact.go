@@ -2,9 +2,10 @@ package session
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
+	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -13,8 +14,13 @@ import (
 	"github.com/basenana/friday/core/types"
 )
 
+var (
+	filePathPattern = regexp.MustCompile("(?i)(?:^|[\\s(\"'])(?:((?:\\.{0,2}/|/)?[A-Za-z0-9_.~\\-/]+?\\.(?:go|mod|sum|ts|tsx|js|jsx|json|yaml|yml|toml|md|txt|py|rs|java|c|cc|cpp|h|hpp|sh|sql|html|css|xml)))(?:$|[\\s)\"',:;])")
+)
+
 const (
-	compactTailMessages = 6
+	compactTailMessages         = 6
+	compactFallbackKeepMessages = 20
 )
 
 var (
@@ -57,69 +63,144 @@ func (s *Session) CompactHistory(ctx context.Context) error {
 	}
 
 	ctxState := s.EnsureContextState()
-	if s.llm == nil && len(history) <= compactTailMessages {
+
+	// Without an LLM, fallback to keeping the last N messages instead of guessing.
+	if s.llm == nil {
+		compacted := truncateToLastN(history, compactFallbackKeepMessages)
+		if err := s.ReplaceHistory(compacted...); err != nil {
+			return err
+		}
+		ctxState = s.EnsureContextState()
+		ctxState.LastCompactionAt = nowOr(history[len(history)-1].Time)
+		ctxState.LastCompactionTokens = tokenCount(history)
 		return nil
 	}
 
-	summary, err := SummarizeToCaseFile(ctx, s.llm, ctxState.CaseFile, compactableMessages(history, compactTailMessages))
+	summary, err := SummarizeToCompactSummary(ctx, s.llm, history)
 	if err != nil {
 		return err
 	}
-	if summary.IsZero() {
-		return fmt.Errorf("summary is empty")
+	if strings.TrimSpace(summary) == "" {
+		// LLM returned empty summary; fallback to keeping the last N messages.
+		compacted := truncateToLastN(history, compactFallbackKeepMessages)
+		if err := s.ReplaceHistory(compacted...); err != nil {
+			return err
+		}
+		ctxState = s.EnsureContextState()
+		ctxState.LastCompactionAt = nowOr(history[len(history)-1].Time)
+		ctxState.LastCompactionTokens = tokenCount(history)
+		return nil
 	}
 
-	ctxState.CaseFile = MergeCaseFiles(ctxState.CaseFile, summary)
+	compacted := BuildCompactSummaryHistory(history, summary)
+	if err := s.ReplaceHistory(compacted...); err != nil {
+		return err
+	}
+	ctxState = s.EnsureContextState()
 	ctxState.LastCompactionAt = nowOr(history[len(history)-1].Time)
 	ctxState.LastCompactionTokens = tokenCount(history)
-
-	compacted := BuildCompactedHistory(history, ctxState.CaseFile, compactTailMessages)
-	return s.ReplaceHistory(compacted...)
+	return nil
 }
 
-func BuildCompactedHistory(history []types.Message, cf CaseFile, tail int) []types.Message {
+// SummarizeToCompactSummary produces a natural-language summary of the conversation
+// history suitable for the Claude-style compact format.
+func SummarizeToCompactSummary(ctx context.Context, llm providers.Client, history []types.Message) (string, error) {
+	if len(history) == 0 {
+		return "", nil
+	}
+
+	if llm == nil {
+		return "", nil
+	}
+
+	req := providers.NewRequest(compactSummaryPrompt(history))
+	resp := llm.Completion(ctx, req)
+	msgCh := resp.Message()
+
+	var raw strings.Builder
+Loop:
+	for {
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case err := <-resp.Error():
+			if err != nil {
+				return "", err
+			}
+		case delta, ok := <-msgCh:
+			if !ok {
+				break Loop
+			}
+			if delta.Content != "" {
+				raw.WriteString(delta.Content)
+			}
+		}
+	}
+
+	result := strings.TrimSpace(raw.String())
+	if result != "" {
+		return result, nil
+	}
+	// Don't fall back to heuristic if the context was cancelled
+	if ctx.Err() != nil {
+		return "", ctx.Err()
+	}
+	return "", nil
+}
+
+// BuildCompactSummaryHistory replaces the old history with a compact summary
+// message followed by the tail of recent messages.
+func BuildCompactSummaryHistory(history []types.Message, summary string) []types.Message {
 	if len(history) == 0 {
 		return nil
 	}
 
-	filtered := filterCompactHistory(history)
-	keep := truncateToLastN(filtered, tail)
-	result := make([]types.Message, 0, len(keep)+2)
-	if len(filtered) > 0 {
-		// Always preserve the very first message (typically the initial user request)
-		// so the agent retains the original task objective even after compaction.
-		result = append(result, filtered[0])
-		// When filtered is short enough to fit within tail, keep already contains
-		// filtered[0], so skip it to avoid duplication.
-		if len(filtered) <= tail && len(keep) > 0 {
-			keep = keep[1:]
-		}
-	}
-	result = append(result, cf.ToMessage())
+	keep := truncateToLastN(history, compactTailMessages)
+	result := make([]types.Message, 0, len(keep)+1)
+	result = append(result, BuildCompactSummaryMessage(summary))
 	result = append(result, keep...)
 	return result
 }
 
-func compactableMessages(history []types.Message, tail int) []types.Message {
-	filtered := filterCompactHistory(history)
-	if len(filtered) <= tail {
-		return filtered
-	}
-	return filtered[:len(filtered)-tail]
+// FallbackCompactHistory returns the last n messages of history.
+// Used when LLM summarization is unavailable.
+func FallbackCompactHistory(history []types.Message, n int) []types.Message {
+	return truncateToLastN(history, n)
 }
 
-func filterCompactHistory(history []types.Message) []types.Message {
-	result := make([]types.Message, 0, len(history))
-	for _, msg := range history {
-		if IsSyntheticContextMessage(msg) {
-			continue
-		}
-		switch msg.Role {
-		case types.RoleUser, types.RoleAgent, types.RoleAssistant, types.RoleTool:
-			result = append(result, msg)
-		}
+// CompactFallbackKeepMessages returns the number of messages to keep when
+// LLM summarization is unavailable.
+func CompactFallbackKeepMessages() int {
+	return compactFallbackKeepMessages
+}
+
+// BuildCompactSummaryMessage wraps a summary string into an agent message
+// suitable for injecting into history.
+func BuildCompactSummaryMessage(summary string) types.Message {
+	return types.Message{
+		Role:    types.RoleAgent,
+		Content: summaryPrefix + summary,
 	}
-	return result
+}
+
+func compactSummaryPrompt(history []types.Message) string {
+	return fmt.Sprintf(`You are summarizing a conversation between a user and an AI assistant.
+
+Produce a concise but comprehensive summary that captures:
+1. The user's original goal or task
+2. Key decisions and progress made
+3. Important files, paths, or artifacts referenced
+4. Unresolved issues or pending work
+5. Any constraints or requirements the user specified
+
+Rules:
+- Write in plain text, not JSON or markdown.
+- Be concise but preserve concrete details (file paths, error messages, tool names).
+- Focus on information that would be needed to continue the conversation effectively.
+- Do not include greetings or filler text.
+
+Conversation history:
+%s`, formatHistoryForPrompt(history))
 }
 
 // truncateToLastN keeps only the last n messages.
@@ -137,46 +218,6 @@ func tokenCount(history []types.Message) int64 {
 		total += msg.FuzzyTokens()
 	}
 	return total
-}
-
-func compactPrompt(history []types.Message, existing CaseFile) string {
-	existingJSON := "{}"
-	if !existing.IsZero() {
-		if raw, err := json.Marshal(existing); err == nil {
-			existingJSON = string(raw)
-		}
-	}
-
-	return fmt.Sprintf(`You are compressing an autonomous agent conversation into a durable case file.
-Return a single JSON object and nothing else.
-
-The JSON schema is:
-{
-  "task_objective": "string",
-  "user_constraints": ["string"],
-  "architecture_decisions": ["string"],
-  "current_status": "string",
-  "pending_work": ["string"],
-  "recent_requests": ["string"],
-  "recent_files": ["string"],
-  "important_commands_or_tools": ["string"],
-  "known_risks": ["string"],
-  "timeline_highlights": ["string"]
-}
-
-Rules:
-- Return every field in the schema. Use "" for unknown strings and [] for unknown lists.
-- Preserve concrete next steps, decisions, file paths, and unresolved work.
-- Prefer short list items over paragraphs.
-- Do not include markdown fences.
-- Keep recent_files to the most relevant 5 entries.
-- Keep recent_requests to the most relevant 3 entries.
-
-Existing case file JSON:
-%s
-
-Conversation history:
-%s`, existingJSON, formatHistoryForPrompt(history))
 }
 
 // formatHistoryForPrompt formats history for the summarization prompt.
@@ -262,4 +303,70 @@ func nowOr(ts time.Time) time.Time {
 		return time.Now()
 	}
 	return ts
+}
+
+func extractFileRefsFromHistory(history []types.Message) []FileRef {
+	var refs []FileRef
+	for _, msg := range history {
+		refs = append(refs, ExtractFileRefs(msg.GetContent(), string(msg.Role), msg.Time)...)
+		if msg.IsToolCall() {
+			for _, call := range msg.ToolCalls {
+				refs = append(refs, ExtractFileRefs(call.Arguments, call.Name, msg.Time)...)
+			}
+		}
+	}
+	return dedupeFileRefs(refs, defaultRecentFileLimit)
+}
+
+// ExtractFileRefs extracts file path references from text.
+func ExtractFileRefs(text, source string, seenAt time.Time) []FileRef {
+	matches := filePathPattern.FindAllStringSubmatch(text, -1)
+	if len(matches) == 0 {
+		return nil
+	}
+
+	result := make([]FileRef, 0, len(matches))
+	for _, match := range matches {
+		if len(match) < 2 {
+			continue
+		}
+		path := strings.TrimSpace(match[1])
+		path = strings.Trim(path, `"'`)
+		if path == "" {
+			continue
+		}
+		result = append(result, FileRef{Path: path, Source: source, SeenAt: seenAt})
+	}
+	return dedupeFileRefs(result, defaultRecentFileLimit)
+}
+
+func dedupeFileRefs(refs []FileRef, limit int) []FileRef {
+	if len(refs) == 0 {
+		return nil
+	}
+	seen := make(map[string]FileRef)
+	order := make([]string, 0, len(refs))
+	for _, ref := range refs {
+		if ref.Path == "" {
+			continue
+		}
+		seen[ref.Path] = ref
+		order = append(order, ref.Path)
+	}
+
+	slices.Reverse(order)
+	var result []FileRef
+	added := make(map[string]struct{})
+	for _, path := range order {
+		if _, ok := added[path]; ok {
+			continue
+		}
+		result = append(result, seen[path])
+		added[path] = struct{}{}
+		if len(result) >= limit {
+			break
+		}
+	}
+	slices.Reverse(result)
+	return result
 }
