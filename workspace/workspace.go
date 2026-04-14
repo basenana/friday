@@ -19,9 +19,9 @@ func NewWorkspace(workspacePath, memoryPath string) *Workspace {
 		specs: []FileSpec{
 			{Name: "AGENTS.md", Role: FileRoleSystemPrompt, Required: true},
 			{Name: "SOUL.md", Role: FileRoleSystemPrompt},
-			{Name: "ENVIRONMENT.md", Role: FileRoleSystemPrompt},
 			{Name: "IDENTITY.md", Role: FileRoleSystemPrompt},
-			{Name: "MEMORY.md", Role: FileRoleMemory},
+			{Name: "ENVIRONMENT.md", Role: FileRoleGuidance},
+			{Name: "MEMORY.md", Role: FileRoleOptional},
 			{Name: "TOOLS.md", Role: FileRoleGuidance},
 			{Name: "HEARTBEAT.md", Role: FileRoleOptional},
 		},

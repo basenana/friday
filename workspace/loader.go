@@ -4,22 +4,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
-	"time"
-
-	"github.com/basenana/friday/core/types"
-)
-
-const (
-	// DefaultMemoryDays is the default number of days of memory to load
-	DefaultMemoryDays = 2 // today + yesterday
 )
 
 // Load reads all workspace files and returns composed content
 func (w *Workspace) Load() (*LoadedContent, error) {
 	content := &LoadedContent{
 		SystemPrompts: make([]string, 0),
-		MemoryHistory: make([]types.Message, 0),
 	}
 
 	for _, spec := range w.specs {
@@ -33,30 +23,6 @@ func (w *Workspace) Load() (*LoadedContent, error) {
 				content.SystemPrompts = append(content.SystemPrompts, data)
 			}
 		}
-
-		// Load long-term curated memory from workspace root
-		if spec.Role == FileRoleMemory {
-			data, err := w.loadFile(spec.Name)
-			if err != nil {
-				return nil, fmt.Errorf("failed to load memory file %s: %w", spec.Name, err)
-			}
-			if strings.TrimSpace(data) != "" {
-				content.MemoryHistory = append(content.MemoryHistory, types.Message{
-					Role:    types.RoleAgent,
-					Content: fmt.Sprintf("[Long-Term Memory]\n\n%s", data),
-				})
-			}
-		}
-	}
-
-	// Load daily memory (today + yesterday)
-	memLogs := w.loadRecentMemoryLogs(DefaultMemoryDays)
-	if len(memLogs) > 0 {
-		combinedMemory := strings.Join(memLogs, "\n\n---\n\n")
-		content.MemoryHistory = append(content.MemoryHistory, types.Message{
-			Role:    types.RoleAgent,
-			Content: fmt.Sprintf("[Memory Context]\n\n%s", combinedMemory),
-		})
 	}
 
 	return content, nil
@@ -78,43 +44,4 @@ func (w *Workspace) loadFile(name string) (string, error) {
 		return "", err
 	}
 	return string(data), nil
-}
-
-// loadRecentMemoryLogs loads memory logs from the last N days
-func (w *Workspace) loadRecentMemoryLogs(days int) []string {
-	// Ensure memory directory exists
-	if _, err := os.Stat(w.memPath); os.IsNotExist(err) {
-		return nil
-	}
-
-	entries, err := os.ReadDir(w.memPath)
-	if err != nil {
-		return nil
-	}
-
-	var logs []string
-	now := time.Now()
-
-	for _, entry := range entries {
-		if !strings.HasSuffix(entry.Name(), ".md") {
-			continue
-		}
-
-		filename := strings.TrimSuffix(entry.Name(), ".md")
-		logDate, err := time.Parse("2006-01-02", filename)
-		if err != nil {
-			continue
-		}
-
-		daysDiff := int(now.Sub(logDate).Hours() / 24)
-		if daysDiff >= 0 && daysDiff < days {
-			data, err := os.ReadFile(filepath.Join(w.memPath, entry.Name()))
-			if err != nil {
-				continue
-			}
-			logs = append(logs, string(data))
-		}
-	}
-
-	return logs
 }

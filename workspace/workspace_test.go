@@ -96,12 +96,8 @@ func TestWorkspaceLoad(t *testing.T) {
 		t.Errorf("expected 4 system prompts, got %d", len(content.SystemPrompts))
 	}
 
-	// MEMORY.md is now loaded as long-term memory context by default.
-	if len(content.MemoryHistory) != 1 {
-		t.Errorf("expected 1 memory history message, got %d", len(content.MemoryHistory))
-	}
-	if len(content.MemoryHistory) > 0 && !strings.Contains(content.MemoryHistory[0].Content, "[Long-Term Memory]") {
-		t.Errorf("expected long-term memory context, got %q", content.MemoryHistory[0].Content)
+	if len(content.SystemPrompts) != 4 {
+		t.Errorf("expected memory files to stay out of loaded content prompts, got %d system prompts", len(content.SystemPrompts))
 	}
 }
 

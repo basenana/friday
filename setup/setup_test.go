@@ -1,13 +1,15 @@
 package setup
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
-	"github.com/basenana/friday/core/types"
+	"github.com/basenana/friday/config"
+	"github.com/basenana/friday/sessions"
+	"github.com/basenana/friday/sessions/file"
 	"github.com/basenana/friday/workspace"
 )
 
@@ -50,20 +52,43 @@ func TestWorkspaceLoadProvidesSystemPrompt(t *testing.T) {
 	}
 }
 
-func TestSessionMemoryBridgeReturnsSnapshotCopy(t *testing.T) {
-	original := []types.Message{{Role: types.RoleAgent, Content: "memory snapshot"}}
-	bridge := newSessionMemoryBridge(original)
-
-	got, err := bridge.LoadSessionMemory(context.Background(), nil)
+func TestNewAgentDoesNotInjectWorkspaceMemoryIntoNewSession(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "setup-no-workspace-memory-*")
 	if err != nil {
-		t.Fatalf("LoadSessionMemory failed: %v", err)
+		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	if len(got) != 1 || got[0].Content != "memory snapshot" {
-		t.Fatalf("unexpected snapshot: %#v", got)
+	defer os.RemoveAll(tmpDir)
+
+	cfg := config.DefaultConfig()
+	cfg.DataDir = filepath.Join(tmpDir, "data")
+	cfg.Workspace = filepath.Join(tmpDir, "workspace")
+	cfg.Model.Provider = "openai"
+	cfg.Model.Model = "test-model"
+
+	ws := workspace.NewWorkspace(cfg.WorkspacePath(), cfg.MemoryPath())
+	if _, err := ws.InitWithParams(nil); err != nil {
+		t.Fatalf("init workspace failed: %v", err)
+	}
+	if err := ws.Write("MEMORY.md", "remember persistent workspace facts"); err != nil {
+		t.Fatalf("write MEMORY.md failed: %v", err)
+	}
+	if err := os.MkdirAll(cfg.MemoryPath(), 0755); err != nil {
+		t.Fatalf("create memory dir failed: %v", err)
+	}
+	memLogPath := filepath.Join(cfg.MemoryPath(), time.Now().Format("2006-01-02")+".md")
+	if err := os.WriteFile(memLogPath, []byte("daily memory note"), 0644); err != nil {
+		t.Fatalf("write memory log failed: %v", err)
 	}
 
-	got[0].Content = "mutated"
-	if original[0].Content != "memory snapshot" {
-		t.Fatalf("expected bridge to return a copy, got %#v", original)
+	sessionStore := file.NewFileSessionStore(cfg.SessionsPath())
+	sessionMgr := sessions.NewManager(sessionStore, filepath.Join(cfg.DataDirPath(), "current"), "")
+
+	agentCtx, err := NewAgent(sessionMgr, cfg)
+	if err != nil {
+		t.Fatalf("NewAgent failed: %v", err)
+	}
+
+	if len(agentCtx.Session.GetHistory()) != 0 {
+		t.Fatalf("expected new session history to stay empty; got %#v", agentCtx.Session.GetHistory())
 	}
 }

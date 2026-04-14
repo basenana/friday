@@ -4,7 +4,9 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
+	"github.com/basenana/friday/core/contextmgr"
 	"github.com/basenana/friday/core/types"
 )
 
@@ -100,4 +102,56 @@ func TestReplaceMessages(t *testing.T) {
 
 	t.Logf("Session ID: %s", sess.ID)
 	t.Logf("Original messages: %d, After compact: %d", len(loaded), len(newLoaded))
+}
+
+func TestSessionMemoryRoundTrip(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "session_memory_test")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	store := NewFileSessionStore(tmpDir)
+	if err := store.EnsureDir(); err != nil {
+		t.Fatalf("failed to ensure dir: %v", err)
+	}
+
+	sessionID := "test-session-memory-001"
+	if _, err := store.Create(sessionID, nil); err != nil {
+		t.Fatalf("failed to create session: %v", err)
+	}
+
+	record := &contextmgr.SessionMemoryRecord{
+		GeneratedAt:    time.Now().Add(-time.Minute).UTC().Truncate(time.Second),
+		LastSyncAt:     time.Now().UTC().Truncate(time.Second),
+		TaskObjective:  "persist session memory",
+		CurrentStatus:  "wrote session memory to disk",
+		KeyDecisions:   []string{"use session_memory.json"},
+		RecentWork:     []string{"added file store round-trip test"},
+		PendingItems:   []string{"wire store into setup"},
+		FileReferences: []string{"sessions/file/store.go"},
+		ImportantCtx:   "stored alongside history.jsonl",
+	}
+
+	if err := store.WriteSessionMemory(sessionID, record); err != nil {
+		t.Fatalf("WriteSessionMemory failed: %v", err)
+	}
+
+	loaded, err := store.ReadSessionMemory(sessionID)
+	if err != nil {
+		t.Fatalf("ReadSessionMemory failed: %v", err)
+	}
+	if loaded == nil {
+		t.Fatal("expected persisted session memory record")
+	}
+	if loaded.TaskObjective != record.TaskObjective {
+		t.Fatalf("expected task objective %q, got %q", record.TaskObjective, loaded.TaskObjective)
+	}
+	if len(loaded.FileReferences) != 1 || loaded.FileReferences[0] != "sessions/file/store.go" {
+		t.Fatalf("unexpected file references: %#v", loaded.FileReferences)
+	}
+
+	if _, err := os.Stat(filepath.Join(tmpDir, sessionID, "session_memory.json")); err != nil {
+		t.Fatalf("expected session_memory.json to exist: %v", err)
+	}
 }

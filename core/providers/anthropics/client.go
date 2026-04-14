@@ -150,18 +150,14 @@ func (c *client) StructuredPredict(ctx context.Context, request providers.Reques
 	schemaRaw, _ := json.Marshal(jsonschema.Reflect(model))
 	prompt = strings.ReplaceAll(prompt, "{insert_json_schema_here}", string(schemaRaw))
 
-	jsonbody, err := c.CompletionNonStreaming(ctx, providers.NewRequest(prompt))
-	if err != nil {
-		c.logger.Errorw("get completion error", "err", err)
-		return err
-	}
-
-	err = common.ExtractJSON(jsonbody, model)
-	if err != nil {
-		c.logger.Errorw("failed to extract json", "content", jsonbody, "err", err)
-		return err
-	}
-	return nil
+	return common.StructuredPredictWithFallback(
+		ctx,
+		providers.NewPromptRequest(prompt),
+		model,
+		c.CompletionNonStreaming,
+		c.Completion,
+		c.logger,
+	)
 }
 
 func (c *client) messageCreateParams(request providers.Request) *anthropic.MessageNewParams {
@@ -169,6 +165,7 @@ func (c *client) messageCreateParams(request providers.Request) *anthropic.Messa
 	if c.model.MaxTokens != nil {
 		maxTokens = *c.model.MaxTokens
 	}
+	systemPrompt := strings.TrimSpace(request.SystemPrompt())
 
 	params := anthropic.MessageNewParams{
 		Model:     anthropic.Model(c.model.Name),
@@ -313,6 +310,17 @@ func (c *client) messageCreateParams(request providers.Request) *anthropic.Messa
 		toolUnion := anthropic.ToolUnionParamOfTool(inputSchema, t.GetName())
 		toolUnion.OfTool.Description = anthropic.String(t.GetDescription())
 		params.Tools = append(params.Tools, toolUnion)
+	}
+
+	// Anthropic requires at least one non-system message. Some internal callers
+	// build prompt-only requests via NewRequest(prompt), which would otherwise
+	// serialize as a system-only payload and fail at /v1/messages.
+	if len(params.Messages) == 0 && systemPrompt != "" {
+		params.System = nil
+		params.Messages = append(params.Messages, anthropic.MessageParam{
+			Role:    anthropic.MessageParamRoleUser,
+			Content: []anthropic.ContentBlockParamUnion{anthropic.NewTextBlock(systemPrompt)},
+		})
 	}
 
 	return &params

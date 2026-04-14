@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/basenana/friday/core/contextmgr"
 	"github.com/basenana/friday/core/providers"
 	coresession "github.com/basenana/friday/core/session"
 	"github.com/basenana/friday/core/types"
@@ -40,6 +41,10 @@ func (s *FileSessionStore) metaPath(id string) string {
 
 func (s *FileSessionStore) historyPath(id string) string {
 	return filepath.Join(s.sessionDir(id), "history.jsonl")
+}
+
+func (s *FileSessionStore) sessionMemoryPath(id string) string {
+	return filepath.Join(s.sessionDir(id), "session_memory.json")
 }
 
 // Store interface implementation
@@ -278,6 +283,39 @@ func (s *FileSessionStore) ReplaceMessages(sessionID string, msgs ...types.Messa
 
 	// 3. Update metadata
 	return s.updateMetaCount(sessionID, len(msgs))
+}
+
+func (s *FileSessionStore) WriteSessionMemory(sessionID string, record *contextmgr.SessionMemoryRecord) error {
+	if record == nil {
+		return nil
+	}
+
+	if err := os.MkdirAll(s.sessionDir(sessionID), 0755); err != nil {
+		return err
+	}
+
+	data, err := json.MarshalIndent(record, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	return os.WriteFile(s.sessionMemoryPath(sessionID), data, 0644)
+}
+
+func (s *FileSessionStore) ReadSessionMemory(sessionID string) (*contextmgr.SessionMemoryRecord, error) {
+	data, err := os.ReadFile(s.sessionMemoryPath(sessionID))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	var record contextmgr.SessionMemoryRecord
+	if err := json.Unmarshal(data, &record); err != nil {
+		return nil, err
+	}
+	return &record, nil
 }
 
 func (s *FileSessionStore) updateMetaCount(sessionID string, count int) error {
