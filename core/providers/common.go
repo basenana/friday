@@ -23,12 +23,22 @@ type commonRequest struct {
 }
 
 func NewRequest(systemMessage string, history ...types.Message) Request {
-	return &commonRequest{systemPrompts: []string{systemMessage}, history: history}
+	req := &commonRequest{history: history}
+	if systemMessage != "" {
+		req.systemPrompts = []string{systemMessage}
+	}
+	return req
+}
+
+func NewPromptRequest(prompt string) Request {
+	return &commonRequest{history: []types.Message{{Role: types.RoleUser, Content: prompt}}}
 }
 
 func (s *commonRequest) Messages() []types.Message {
 	result := make([]types.Message, 0, len(s.history)+1)
-	result = append(result, types.Message{Role: types.RoleSystem, Content: s.SystemPrompt()})
+	if prompt := s.SystemPrompt(); prompt != "" {
+		result = append(result, types.Message{Role: types.RoleSystem, Content: prompt})
+	}
 	result = append(result, s.history...)
 	return result
 }
@@ -44,6 +54,9 @@ func (s *commonRequest) ToolDefines() []ToolDefine {
 func (s *commonRequest) SystemPrompt() string {
 	var result string
 	for _, p := range s.systemPrompts {
+		if p == "" {
+			continue
+		}
 		result += p + "\n\n"
 	}
 	return result
@@ -69,6 +82,10 @@ func (s *commonRequest) SetToolDefines(tools []ToolDefine) {
 }
 
 func (s *commonRequest) SetSystemPrompt(prompt string) {
+	if prompt == "" {
+		s.systemPrompts = nil
+		return
+	}
 	s.systemPrompts = []string{prompt}
 }
 
@@ -93,7 +110,12 @@ func (s *commonRequest) AppendToolDefines(tools ...ToolDefine) {
 }
 
 func (s *commonRequest) AppendSystemPrompt(prompts ...string) {
-	s.systemPrompts = append(s.systemPrompts, prompts...)
+	for _, prompt := range prompts {
+		if prompt == "" {
+			continue
+		}
+		s.systemPrompts = append(s.systemPrompts, prompt)
+	}
 }
 
 type commonToolDefine struct {

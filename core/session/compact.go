@@ -113,7 +113,7 @@ func SummarizeToCompactSummary(ctx context.Context, llm providers.Client, histor
 		return "", nil
 	}
 
-	req := providers.NewRequest(compactSummaryPrompt(history))
+	req := providers.NewPromptRequest(compactSummaryPrompt(history))
 	resp := llm.Completion(ctx, req)
 	msgCh := resp.Message()
 

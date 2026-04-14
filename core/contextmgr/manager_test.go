@@ -435,7 +435,7 @@ type capturePromptClient struct {
 }
 
 func (c *capturePromptClient) Completion(_ stdctx.Context, req providers.Request) providers.Response {
-	c.capturedPrompt = req.SystemPrompt()
+	c.capturedPrompt = captureRequestPrompt(req)
 	resp := providers.NewCommonResponse()
 	go func() {
 		defer close(resp.Stream)
@@ -447,20 +447,32 @@ func (c *capturePromptClient) Completion(_ stdctx.Context, req providers.Request
 }
 
 func (c *capturePromptClient) CompletionNonStreaming(_ stdctx.Context, req providers.Request) (string, error) {
-	c.capturedPrompt = req.SystemPrompt()
+	c.capturedPrompt = captureRequestPrompt(req)
 	result, _ := json.Marshal(c.structuredResult)
 	return string(result), nil
 }
 
 func (c *capturePromptClient) StructuredPredict(_ stdctx.Context, req providers.Request, model any) error {
 	c.structuredCalls++
-	c.capturedPrompt = req.SystemPrompt()
+	c.capturedPrompt = captureRequestPrompt(req)
 	record, ok := model.(*SessionMemoryRecord)
 	if !ok {
 		return errors.New("model is not *SessionMemoryRecord")
 	}
 	*record = c.structuredResult
 	return nil
+}
+
+func captureRequestPrompt(req providers.Request) string {
+	if prompt := req.SystemPrompt(); prompt != "" {
+		return prompt
+	}
+	for _, msg := range req.Messages() {
+		if msg.Content != "" {
+			return msg.Content
+		}
+	}
+	return ""
 }
 
 func containsTaggedMessage(history []types.Message, tag string) bool {

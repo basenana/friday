@@ -146,18 +146,14 @@ func (c *client) StructuredPredict(ctx context.Context, request providers.Reques
 	schemaRaw, _ := json.Marshal(jsonschema.Reflect(model))
 	prompt = strings.ReplaceAll(prompt, "{insert_json_schema_here}", string(schemaRaw))
 
-	jsonbody, err := c.CompletionNonStreaming(ctx, providers.NewRequest(prompt))
-	if err != nil {
-		c.logger.Errorw("get completion error", "err", err)
-		return err
-	}
-
-	err = common.ExtractJSON(jsonbody, model)
-	if err != nil {
-		c.logger.Errorw("failed to extract json", "content", jsonbody, "err", err)
-		return err
-	}
-	return nil
+	return common.StructuredPredictWithFallback(
+		ctx,
+		providers.NewPromptRequest(prompt),
+		model,
+		c.CompletionNonStreaming,
+		c.Completion,
+		c.logger,
+	)
 }
 
 func (c *client) chatCompletionNewParams(request providers.Request) *openai.ChatCompletionNewParams {

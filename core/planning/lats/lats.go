@@ -189,7 +189,7 @@ func (a *Agent) extendCandidates(ctx context.Context, node *SearchNode) ([]strin
 	)
 	defer canF()
 	for i := 0; i < 3; i++ {
-		err = a.llm.StructuredPredict(runCtx, providers.NewRequest(buf.String()), cand)
+		err = a.llm.StructuredPredict(runCtx, providers.NewPromptRequest(buf.String()), cand)
 		if err == nil {
 			break
 		}
@@ -279,7 +279,7 @@ func (a *Agent) evaluate(ctx context.Context, node *SearchNode, reasoning string
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		default:
-			err = a.llm.StructuredPredict(ctx, providers.NewRequest(prompt), eva)
+			err = a.llm.StructuredPredict(ctx, providers.NewPromptRequest(prompt), eva)
 		}
 		if err == nil {
 			break

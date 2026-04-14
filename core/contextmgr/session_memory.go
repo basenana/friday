@@ -63,39 +63,10 @@ func generateSessionMemoryRecord(ctx context.Context, llm providers.Client, hist
 	}
 
 	prompt := sessionMemoryPrompt(incremental, existingRecord)
-	req := providers.NewRequest(prompt)
+	req := providers.NewPromptRequest(prompt)
 
 	var record SessionMemoryRecord
-	if err := llm.StructuredPredict(ctx, req, &record); err == nil && !record.IsZero() {
-		record.GeneratedAt = genAt
-		record.LastSyncAt = lastMessageTime(history)
-		return &record
-	}
-
-	// Fallback to completion + JSON decode
-	resp := llm.Completion(ctx, req)
-	msgCh := resp.Message()
-	var raw strings.Builder
-Wait:
-	for {
-		select {
-		case <-ctx.Done():
-			return nil
-		case err := <-resp.Error():
-			if err != nil {
-				return nil
-			}
-		case delta, ok := <-msgCh:
-			if !ok {
-				break Wait
-			}
-			if delta.Content != "" {
-				raw.WriteString(delta.Content)
-			}
-		}
-	}
-
-	if err := decodeSessionMemoryJSON(raw.String(), &record); err != nil {
+	if err := llm.StructuredPredict(ctx, req, &record); err != nil {
 		return nil
 	}
 	if record.IsZero() {
@@ -113,15 +84,6 @@ func lastMessageTime(history []types.Message) time.Time {
 		}
 	}
 	return time.Now()
-}
-
-func decodeSessionMemoryJSON(raw string, target *SessionMemoryRecord) error {
-	start := strings.Index(raw, "{")
-	end := strings.LastIndex(raw, "}")
-	if start < 0 || end < 0 || end <= start {
-		return fmt.Errorf("json object not found")
-	}
-	return json.Unmarshal([]byte(raw[start:end+1]), target)
 }
 
 // IsZero returns true if the record has no meaningful content.

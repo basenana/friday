@@ -23,7 +23,7 @@ const (
 	defaultMaxAssistantChars      int     = 800
 	defaultMaxUserChars           int     = 1000
 	defaultSessionMemoryThreshold int64   = 15_000
-	projectionTailGroups          int     = 2
+	projectionTailGroups          int     = 4
 )
 
 type Config struct {
