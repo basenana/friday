@@ -91,12 +91,13 @@ func TestWorkspaceLoad(t *testing.T) {
 		t.Fatalf("Load failed: %v", err)
 	}
 
-	// Should have 4 system prompt files (AGENTS, SOUL, USER, IDENTITY)
-	if len(content.SystemPrompts) != 4 {
-		t.Errorf("expected 4 system prompts, got %d", len(content.SystemPrompts))
+	// Should have 3 system prompt files (AGENTS, SOUL, IDENTITY)
+	if len(content.SystemPrompts) != 3 {
+		t.Errorf("expected 3 system prompts, got %d", len(content.SystemPrompts))
 	}
 
-	if len(content.SystemPrompts) != 4 {
+	// MEMORY.md has FileRoleOptional, so it should not be in SystemPrompts
+	if len(content.SystemPrompts) != 3 {
 		t.Errorf("expected memory files to stay out of loaded content prompts, got %d system prompts", len(content.SystemPrompts))
 	}
 }
