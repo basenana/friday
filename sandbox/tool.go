@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -135,8 +136,10 @@ func bashToolHandler(exec *Executor) tools.ToolHandlerFunc {
 
 // parseDuration parses a duration string, handling common formats
 func parseDuration(s string) (time.Duration, error) {
+	s = strings.TrimSpace(s)
+
 	// Handle plain numbers as seconds
-	if _, err := fmt.Sscanf(s, "%d", new(int)); err == nil {
+	if _, err := strconv.Atoi(s); err == nil {
 		s = s + "s"
 	}
 	return time.ParseDuration(s)
