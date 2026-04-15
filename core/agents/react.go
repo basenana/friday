@@ -174,6 +174,9 @@ WaitMessage:
 		"fuzzyTokens", sess.Tokens(), "promptTokens", stream.Tokens().PromptTokens,
 		"completionTokens", stream.Tokens().CompletionTokens, "budget", budget, "session", sess.ID)
 
+	// Calibrate message tokens using the exact request sent to the provider.
+	session.CalibrateAndBackfill(sess, llmReq, stream.Tokens().PromptTokens)
+
 	content = strings.TrimSpace(content)
 	reasoning = strings.TrimSpace(reasoning)
 

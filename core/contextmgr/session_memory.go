@@ -301,7 +301,7 @@ func (m *Manager) maybeStartAsyncSessionMemory(sess *session.Session, st *sessio
 // ReplaceHistory, similar to compactWithSummary.
 func (m *Manager) compactWithSessionMemory(ctx context.Context, sess *session.Session, history []types.Message) error {
 	st := sess.EnsureContextState()
-	historyTokens := countTokens(history)
+	historyTokens := countTokens(sess, history)
 	if st.LastSyncedAt.IsZero() || len(st.SessionMemory) == 0 {
 		return fmt.Errorf("no session memory available")
 	}
@@ -314,8 +314,8 @@ func (m *Manager) compactWithSessionMemory(ctx context.Context, sess *session.Se
 		}
 	}
 
-	tailTokens := countTokens(tail)
-	smTokens := countTokens(st.SessionMemory)
+	tailTokens := countTokens(sess, tail)
+	smTokens := countTokens(sess, st.SessionMemory)
 
 	totalProjected := smTokens + tailTokens
 	if totalProjected > st.PromptBudget.SoftThreshold {
@@ -339,7 +339,7 @@ func (m *Manager) compactWithSessionMemory(ctx context.Context, sess *session.Se
 		"history_messages_before", len(history),
 		"history_tokens_before", historyTokens,
 		"history_messages_after", len(compacted),
-		"history_tokens_after", countTokens(compacted),
+		"history_tokens_after", countTokens(sess, compacted),
 		"last_synced_at", st.LastSyncedAt,
 	)
 	return nil

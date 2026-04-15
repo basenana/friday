@@ -16,6 +16,13 @@ type MessageWriter interface {
 	ReplaceMessages(sessionID string, msgs ...types.Message) error
 }
 
+// MessageTokenUpdater persists token-only updates for existing messages.
+// Writers can implement this to avoid rewriting the whole history on every
+// prompt-token calibration update.
+type MessageTokenUpdater interface {
+	UpdateMessageTokens(sessionID string, updates map[int]int64) error
+}
+
 type Session struct {
 	ID        string
 	Root      *Session
@@ -28,6 +35,7 @@ type Session struct {
 	Temporary bool
 
 	compactThreshold int64
+	tokenCalibration TokenCalibration
 
 	hooks  []Hook
 	llm    providers.Client
@@ -103,12 +111,11 @@ func (s *Session) AppendMessage(msgList ...*types.Message) {
 
 func (s *Session) Tokens() int64 {
 	s.mu.RLock()
-	defer s.mu.RUnlock()
-	var total int64
-	for _, msg := range s.History {
-		total += msg.FuzzyTokens()
-	}
-	return total
+	history := make([]types.Message, len(s.History))
+	copy(history, s.History)
+	factor := normalizedCalibrationFactor(s.tokenCalibration.CalibrationFactor)
+	s.mu.RUnlock()
+	return CalibratedTokenCount(history, factor)
 }
 
 func (s *Session) GetHistory() []types.Message {
@@ -117,6 +124,16 @@ func (s *Session) GetHistory() []types.Message {
 	history := make([]types.Message, len(s.History))
 	copy(history, s.History)
 	return history
+}
+
+func (s *Session) CountTokens(history []types.Message) int64 {
+	return CalibratedTokenCount(history, s.CalibrationFactor())
+}
+
+func (s *Session) CalibrationFactor() float64 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return normalizedCalibrationFactor(s.tokenCalibration.CalibrationFactor)
 }
 
 func (s *Session) RegisterHook(handler Hook) {

@@ -224,6 +224,34 @@ func (s *FileSessionStore) AppendMessages(sessionID string, msgs ...types.Messag
 	return nil
 }
 
+func (s *FileSessionStore) UpdateMessageTokens(sessionID string, updates map[int]int64) error {
+	if len(updates) == 0 {
+		return nil
+	}
+
+	msgs, err := s.LoadMessages(sessionID)
+	if err != nil {
+		return err
+	}
+
+	changed := false
+	for idx, tokens := range updates {
+		if idx < 0 || idx >= len(msgs) {
+			continue
+		}
+		if msgs[idx].Tokens == tokens {
+			continue
+		}
+		msgs[idx].Tokens = tokens
+		changed = true
+	}
+	if !changed {
+		return nil
+	}
+
+	return s.writeHistory(s.historyPath(sessionID), msgs)
+}
+
 func (s *FileSessionStore) LoadMessages(sessionID string) ([]types.Message, error) {
 	historyPath := s.historyPath(sessionID)
 
@@ -265,7 +293,16 @@ func (s *FileSessionStore) ReplaceMessages(sessionID string, msgs ...types.Messa
 	}
 
 	// 2. Write new content
-	file, err := os.OpenFile(historyPath, os.O_CREATE|os.O_WRONLY, 0644)
+	if err := s.writeHistory(historyPath, msgs); err != nil {
+		return err
+	}
+
+	// 3. Update metadata
+	return s.updateMetaCount(sessionID, len(msgs))
+}
+
+func (s *FileSessionStore) writeHistory(historyPath string, msgs []types.Message) error {
+	file, err := os.OpenFile(historyPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
 	if err != nil {
 		return err
 	}
@@ -280,9 +317,7 @@ func (s *FileSessionStore) ReplaceMessages(sessionID string, msgs ...types.Messa
 			return err
 		}
 	}
-
-	// 3. Update metadata
-	return s.updateMetaCount(sessionID, len(msgs))
+	return nil
 }
 
 func (s *FileSessionStore) WriteSessionMemory(sessionID string, record *contextmgr.SessionMemoryRecord) error {

@@ -3,6 +3,7 @@ package contextmgr
 import (
 	stdctx "context"
 	"fmt"
+	"reflect"
 	"strings"
 	"time"
 
@@ -90,7 +91,8 @@ func (m *Manager) BeforeModel(ctx stdctx.Context, sess *session.Session, req pro
 	st := sess.EnsureContextState()
 	st.PromptBudget = m.buildBudget()
 	history := req.History()
-	inputTokens := countTokens(history)
+	promptOverhead := session.EstimateRequestOverhead(req)
+	inputTokens := countTokens(sess, history) + promptOverhead
 	softThresholdExceeded := false
 	microcompactUsed := false
 	sessionMemoryUsed := false
@@ -110,8 +112,8 @@ func (m *Manager) BeforeModel(ctx stdctx.Context, sess *session.Session, req pro
 	m.ensureSessionMemory(ctx, sess)
 	m.maybeStartAsyncSessionMemory(sess, st, history)
 
-	projected := m.projectHistory(sess.ID, history, projectionFull)
-	projectedTokens := countTokens(projected)
+	projected := m.projectHistory(sess, sess.ID, history, projectionFull)
+	projectedTokens := countTokens(sess, projected) + promptOverhead
 	fullProjected := projected
 	fullProjectedTokens := projectedTokens
 
@@ -122,8 +124,8 @@ func (m *Manager) BeforeModel(ctx stdctx.Context, sess *session.Session, req pro
 			"projected_tokens", projectedTokens,
 			"soft_threshold", st.PromptBudget.SoftThreshold,
 		)
-		microProjected := m.projectHistory(sess.ID, history, projectionMicroCompact)
-		microProjectedTokens := countTokens(microProjected)
+		microProjected := m.projectHistory(sess, sess.ID, history, projectionMicroCompact)
+		microProjectedTokens := countTokens(sess, microProjected) + promptOverhead
 		if fullProjectedTokens > 0 && float64(microProjectedTokens)/float64(fullProjectedTokens) < 0.8 {
 			projected = microProjected
 			projectedTokens = microProjectedTokens
@@ -158,7 +160,7 @@ func (m *Manager) BeforeModel(ctx stdctx.Context, sess *session.Session, req pro
 			st = sess.EnsureContextState()
 			history = sess.GetHistory()
 			projected = cloneMessages(history)
-			projectedTokens = countTokens(projected)
+			projectedTokens = countTokens(sess, projected) + promptOverhead
 			m.logger.Infow("session memory compact fits under hard threshold",
 				"session", sess.ID,
 				"projected_tokens", projectedTokens,
@@ -170,8 +172,8 @@ func (m *Manager) BeforeModel(ctx stdctx.Context, sess *session.Session, req pro
 				hardCompacted = true
 				st = sess.EnsureContextState()
 				history = sess.GetHistory()
-				projected = m.projectHistory(sess.ID, history, projectionFull)
-				projectedTokens = countTokens(projected)
+				projected = m.projectHistory(sess, sess.ID, history, projectionFull)
+				projectedTokens = countTokens(sess, projected) + promptOverhead
 			} else {
 				m.logger.Errorw("history compaction failed; continuing with best-effort projection",
 					"session", sess.ID,
@@ -211,7 +213,7 @@ func (m *Manager) ensureSessionMemory(_ stdctx.Context, sess *session.Session) {
 		m.logger.Infow("drained pending session memory into context state",
 			"session", sess.ID,
 			"last_sync_at", record.LastSyncAt,
-			"session_memory_tokens", countTokens(st.SessionMemory),
+			"session_memory_tokens", countTokens(sess, st.SessionMemory),
 		)
 
 		return
@@ -244,7 +246,7 @@ func (m *Manager) ensureSessionMemory(_ stdctx.Context, sess *session.Session) {
 		m.logger.Infow("loaded session memory from outside",
 			"session", sess.ID,
 			"last_sync_at", record.LastSyncAt,
-			"tokens", countTokens(st.SessionMemory),
+			"tokens", countTokens(sess, st.SessionMemory),
 		)
 
 		st.SessionMemory = []types.Message{record.ToMessage()}
@@ -255,7 +257,7 @@ func (m *Manager) ensureSessionMemory(_ stdctx.Context, sess *session.Session) {
 
 func (m *Manager) compactWithSummary(ctx stdctx.Context, sess *session.Session, history []types.Message) error {
 	st := sess.EnsureContextState()
-	historyTokens := countTokens(history)
+	historyTokens := countTokens(sess, history)
 	m.logger.Infow("starting history compaction",
 		"session", sess.ID,
 		"history_messages", len(history),
@@ -296,7 +298,7 @@ func (m *Manager) compactWithSummary(ctx stdctx.Context, sess *session.Session, 
 		"history_messages_before", len(history),
 		"history_tokens_before", historyTokens,
 		"history_messages_after", len(compacted),
-		"history_tokens_after", countTokens(compacted),
+		"history_tokens_after", countTokens(sess, compacted),
 		"summary_preview", trimForProjection(summary, 240),
 	)
 	return nil
@@ -341,7 +343,7 @@ type conversationGroup struct {
 	Tokens    int64
 }
 
-func (m *Manager) projectHistory(sessionID string, history []types.Message, mode projectionMode) []types.Message {
+func (m *Manager) projectHistory(sess *session.Session, sessionID string, history []types.Message, mode projectionMode) []types.Message {
 	groups := groupHistory(history)
 	tailStart := len(groups) - projectionTailGroups
 	if tailStart < 0 {
@@ -366,7 +368,7 @@ func (m *Manager) projectHistory(sessionID string, history []types.Message, mode
 		"old_groups", len(oldGroups),
 		"tail_groups", len(tailGroups),
 		"projected_messages", len(projected),
-		"projected_tokens", countTokens(projected),
+		"projected_tokens", countTokens(sess, projected),
 		"group_tools", strings.Join(groupToolSummary(groups), ","),
 	)
 	return projected
@@ -393,6 +395,7 @@ func flattenGroups(groups []conversationGroup) []types.Message {
 }
 
 func pruneMessage(msg types.Message, cfg Config) types.Message {
+	original := msg
 	switch msg.Role {
 	case types.RoleTool:
 		if msg.ToolResult != nil {
@@ -400,7 +403,7 @@ func pruneMessage(msg types.Message, cfg Config) types.Message {
 			toolResult := *msg.ToolResult
 			toolResult.Content = trimForProjection(toolResult.Content, cfg.MaxToolResultChars)
 			cpMsg.ToolResult = &toolResult
-			return cpMsg
+			msg = cpMsg
 		}
 	case types.RoleAssistant:
 		if len(msg.ToolCalls) > 0 {
@@ -410,6 +413,9 @@ func pruneMessage(msg types.Message, cfg Config) types.Message {
 		msg.Reasoning = ""
 	case types.RoleUser:
 		msg.Content = trimForProjection(msg.Content, cfg.MaxUserChars)
+	}
+	if !reflect.DeepEqual(original, msg) {
+		msg.Tokens = 0
 	}
 	return msg
 }
@@ -452,12 +458,12 @@ func needsProjectionTrim(text string, limit int) bool {
 	return len([]rune(text)) > limit
 }
 
-func countTokens(history []types.Message) int64 {
-	var total int64
-	for _, msg := range history {
-		total += msg.FuzzyTokens()
+func countTokens(sess *session.Session, history []types.Message) int64 {
+	if sess != nil {
+		return sess.CountTokens(history)
 	}
-	return total
+
+	return session.CalibratedTokenCount(history, 1)
 }
 
 func maxInt64(a, b int64) int64 {

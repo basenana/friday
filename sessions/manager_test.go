@@ -42,6 +42,20 @@ func (m *mockStore) ReplaceMessages(sessionID string, msgs ...types.Message) err
 	return nil
 }
 
+func (m *mockStore) UpdateMessageTokens(sessionID string, updates map[int]int64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	msgs := m.msgs[sessionID]
+	for idx, tokens := range updates {
+		if idx < 0 || idx >= len(msgs) {
+			continue
+		}
+		msgs[idx].Tokens = tokens
+	}
+	m.msgs[sessionID] = msgs
+	return nil
+}
+
 func (m *mockStore) Create(sessionID string, llm providers.Client, opts ...coresession.Option) (*coresession.Session, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

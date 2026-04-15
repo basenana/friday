@@ -126,3 +126,77 @@ func (f *fakeLLMClient) CompletionNonStreaming(context.Context, providers.Reques
 func (f *fakeLLMClient) StructuredPredict(context.Context, providers.Request, any) error {
 	return errors.New("not implemented")
 }
+
+func TestReactCalibratesMessageTokensFromAPI(t *testing.T) {
+	llm := &calibratingFakeLLM{
+		completions: [][]providers.Delta{
+			{{Content: "Hello back."}},
+		},
+		promptTokens:     150,
+		completionTokens: 30,
+	}
+
+	sess := session.New("sess-cal", llm)
+	resp := New(llm, Option{SystemPrompt: "system prompt", MaxLoopTimes: 4}).Chat(context.Background(), &api.Request{
+		Session:     sess,
+		UserMessage: "Hello world, this is a test message.",
+	})
+
+	if _, err := api.ReadAllContent(context.Background(), resp); err != nil {
+		t.Fatalf("ReadAllContent() error = %v", err)
+	}
+
+	history := sess.GetHistory()
+
+	// User message (index 0) should have been backfilled with calibrated tokens
+	if history[0].Tokens == 0 {
+		t.Fatalf("expected user message Tokens to be backfilled from API prompt_tokens, got 0")
+	}
+
+	// Assistant message (index 1) should have completion tokens
+	if history[1].Tokens != 30 {
+		t.Fatalf("expected assistant message Tokens=30, got %d", history[1].Tokens)
+	}
+}
+
+type calibratingFakeLLM struct {
+	mu               sync.Mutex
+	completions      [][]providers.Delta
+	calls            int
+	promptTokens     int64
+	completionTokens int64
+}
+
+func (f *calibratingFakeLLM) Completion(_ context.Context, _ providers.Request) providers.Response {
+	f.mu.Lock()
+	idx := f.calls
+	f.calls++
+	f.mu.Unlock()
+
+	resp := providers.NewCommonResponse()
+	resp.Token = providers.Tokens{
+		PromptTokens:     f.promptTokens,
+		CompletionTokens: f.completionTokens,
+		TotalTokens:      f.promptTokens + f.completionTokens,
+	}
+	go func() {
+		defer close(resp.Stream)
+		defer close(resp.Err)
+		if idx >= len(f.completions) {
+			resp.Err <- errors.New("unexpected completion call")
+			return
+		}
+		for _, delta := range f.completions[idx] {
+			resp.Stream <- delta
+		}
+	}()
+	return resp
+}
+
+func (f *calibratingFakeLLM) CompletionNonStreaming(context.Context, providers.Request) (string, error) {
+	return "", errors.New("not implemented")
+}
+
+func (f *calibratingFakeLLM) StructuredPredict(context.Context, providers.Request, any) error {
+	return errors.New("not implemented")
+}

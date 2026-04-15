@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/basenana/friday/core/contextmgr"
+	"github.com/basenana/friday/core/providers"
+	coresession "github.com/basenana/friday/core/session"
 	"github.com/basenana/friday/core/types"
 )
 
@@ -153,5 +155,41 @@ func TestSessionMemoryRoundTrip(t *testing.T) {
 
 	if _, err := os.Stat(filepath.Join(tmpDir, sessionID, "session_memory.json")); err != nil {
 		t.Fatalf("expected session_memory.json to exist: %v", err)
+	}
+}
+
+func TestCalibratedMessageTokensPersistAcrossReload(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "session_tokens_test")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	store := NewFileSessionStore(tmpDir)
+	if err := store.EnsureDir(); err != nil {
+		t.Fatalf("failed to ensure dir: %v", err)
+	}
+
+	sessionID := "test-session-tokens-001"
+	sess, err := store.Create(sessionID, nil)
+	if err != nil {
+		t.Fatalf("failed to create session: %v", err)
+	}
+
+	sess.AppendMessage(&types.Message{Role: types.RoleUser, Content: "Hello world"})
+	req := providers.NewRequest("", sess.GetHistory()...)
+	coresession.CalibrateAndBackfill(sess, req, 42)
+
+	reloaded, err := store.Load(sessionID, nil)
+	if err != nil {
+		t.Fatalf("failed to reload session: %v", err)
+	}
+
+	history := reloaded.GetHistory()
+	if len(history) != 1 {
+		t.Fatalf("expected 1 message after reload, got %d", len(history))
+	}
+	if history[0].Tokens != 42 {
+		t.Fatalf("expected persisted calibrated tokens=42, got %d", history[0].Tokens)
 	}
 }

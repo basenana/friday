@@ -16,9 +16,9 @@ import (
 
 func TestBeforeModelMicroCompactPrunesOldToolResults(t *testing.T) {
 	largeToolResult := strings.Repeat("tool output ", 200)
-	// Three user messages => three conversation groups.
-	// The first group has the large tool result and should be micro-compacted
-	// while the last two groups remain untouched.
+	// Five user messages => five conversation groups.
+	// With projectionTailGroups=4, the first group becomes an "old" group
+	// and should be micro-compacted while the last four groups remain untouched.
 	sess := session.New("sess-1", nil, session.WithHistory(
 		types.Message{Role: types.RoleUser, Content: "Investigate core/session/compact.go."},
 		types.Message{Role: types.RoleAssistant, ToolCalls: []types.ToolCall{{Name: "read_file", Arguments: `{"path":"core/session/compact.go"}`}}},
@@ -28,6 +28,10 @@ func TestBeforeModelMicroCompactPrunesOldToolResults(t *testing.T) {
 		types.Message{Role: types.RoleAssistant, Content: "I'm preparing the summary."},
 		types.Message{Role: types.RoleUser, Content: "Give me the final answer."},
 		types.Message{Role: types.RoleAssistant, Content: "I'm drafting the final response."},
+		types.Message{Role: types.RoleUser, Content: "What about the tests?"},
+		types.Message{Role: types.RoleAssistant, Content: "I'll check the tests too."},
+		types.Message{Role: types.RoleUser, Content: "And the docs?"},
+		types.Message{Role: types.RoleAssistant, Content: "I'll review the docs as well."},
 	))
 
 	mgr := New(nil, Config{
@@ -43,7 +47,7 @@ func TestBeforeModelMicroCompactPrunesOldToolResults(t *testing.T) {
 	}
 
 	projected := req.History()
-	if len(projected) < 4 {
+	if len(projected) < 8 {
 		t.Fatalf("expected projected history with pruned tool results, got %d messages", len(projected))
 	}
 	// The large tool result should have been pruned in microcompact mode
@@ -53,6 +57,26 @@ func TestBeforeModelMicroCompactPrunesOldToolResults(t *testing.T) {
 				t.Fatalf("expected large tool result to be pruned, but found it in projection")
 			}
 		}
+	}
+}
+
+func TestPruneMessageClearsStaleTokensWhenProjectionTrimsContent(t *testing.T) {
+	msg := types.Message{
+		Role:   types.RoleTool,
+		Tokens: 120,
+		ToolResult: &types.ToolResult{
+			CallID:  "call-1",
+			Content: strings.Repeat("tool output ", 50),
+		},
+	}
+
+	pruned := pruneMessage(msg, Config{MaxToolResultChars: 40})
+
+	if pruned.Tokens != 0 {
+		t.Fatalf("expected trimmed projection to clear stale token count, got %d", pruned.Tokens)
+	}
+	if pruned.ToolResult == nil || pruned.ToolResult.Content == msg.ToolResult.Content {
+		t.Fatalf("expected tool result content to be trimmed, got %#v", pruned.ToolResult)
 	}
 }
 

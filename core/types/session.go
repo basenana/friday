@@ -60,9 +60,9 @@ type ImageContent struct {
 // For assistant messages with reasoning, Reasoning contains the thought process.
 // ToolCalls contains tool call requests (assistant role).
 // ToolResult contains tool execution results (tool role).
-// Tokens is the token count for this message:
-//   - For assistant messages: output_tokens from API response (or estimated via FuzzyTokens)
-//   - For other messages: estimated using FuzzyTokens()
+// Tokens is the token count for this message.
+// It may store exact completion tokens from the provider or calibrated prompt
+// token counts when a request message can be mapped back to session history.
 type Message struct {
 	Role      MessageRole `json:"role"`
 	Content   string      `json:"content,omitempty"`
@@ -106,23 +106,32 @@ func (m Message) FuzzyTokens() int64 {
 		return m.Tokens
 	}
 
-	total := len([]rune(m.Content)) + len([]rune(m.Reasoning))
+	return m.EstimatedTokens()
+}
+
+// EstimatedTokens returns the fuzzy token estimate for the current message
+// content, ignoring any previously stored exact token count.
+func (m Message) EstimatedTokens() int64 {
+	cp := m
+	cp.Tokens = 0
+
+	total := len([]rune(cp.Content)) + len([]rune(cp.Reasoning))
 
 	// Count image tokens (rough estimate)
-	if m.Image != nil {
-		if m.Image.Type == ImageTypeURL {
-			total += len([]rune(m.Image.URL))
-		} else if m.Image.Type == ImageTypeBase64 {
+	if cp.Image != nil {
+		if cp.Image.Type == ImageTypeURL {
+			total += len([]rune(cp.Image.URL))
+		} else if cp.Image.Type == ImageTypeBase64 {
 			// Base64 images are expensive, estimate ~1000 tokens per image
 			total += 1000
 		}
 	}
 
-	for _, tc := range m.ToolCalls {
+	for _, tc := range cp.ToolCalls {
 		total += len([]rune(tc.ID)) + len([]rune(tc.Name)) + len([]rune(tc.Arguments))
 	}
-	if m.ToolResult != nil {
-		total += len([]rune(m.ToolResult.CallID)) + len([]rune(m.ToolResult.Content))
+	if cp.ToolResult != nil {
+		total += len([]rune(cp.ToolResult.CallID)) + len([]rune(cp.ToolResult.Content))
 	}
 
 	return int64(float64(total) * 0.6)
