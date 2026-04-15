@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/basenana/friday/core/providers"
 	openaisdk "github.com/openai/openai-go"
 
 	"github.com/basenana/friday/core/types"
@@ -89,5 +90,59 @@ func TestResponseNextChoiceEmitsContentAndToolCallsFromSameChunk(t *testing.T) {
 	}
 	if len(deltas[1].ToolUse) != 1 || deltas[1].ToolUse[0].Name != "read_file" {
 		t.Fatalf("expected second delta to be tool use, got %#v", deltas[1])
+	}
+}
+
+func TestResponseUpdateUsageTracksCachedPromptTokens(t *testing.T) {
+	resp := newResponse()
+	resp.updateUsage(openaisdk.CompletionUsage{
+		PromptTokens:     120,
+		CompletionTokens: 30,
+		TotalTokens:      150,
+		PromptTokensDetails: openaisdk.CompletionUsagePromptTokensDetails{
+			CachedTokens: 80,
+		},
+	})
+
+	tokens := resp.Tokens()
+	if tokens.PromptTokens != 120 {
+		t.Fatalf("expected prompt tokens to be tracked, got %d", tokens.PromptTokens)
+	}
+	if tokens.CachedPromptTokens != 80 {
+		t.Fatalf("expected cached prompt tokens to be tracked, got %d", tokens.CachedPromptTokens)
+	}
+}
+
+func TestChatCompletionNewParamsSetsPromptCacheKeyAndSortsTools(t *testing.T) {
+	cli := &client{model: Model{Name: "gpt-test"}}
+	req := providers.NewRequest("system prompt", types.Message{Role: types.RoleUser, Content: "hello"})
+	req.SetPromptCacheKey("session:root-123")
+	req.SetToolDefines([]providers.ToolDefine{
+		providers.NewToolDefine("zeta_tool", "zeta", map[string]any{"type": "object"}),
+		providers.NewToolDefine("alpha_tool", "alpha", map[string]any{"type": "object"}),
+	})
+
+	raw, err := json.Marshal(cli.chatCompletionNewParams(req))
+	if err != nil {
+		t.Fatalf("failed to marshal chat params: %v", err)
+	}
+
+	var decoded map[string]any
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatalf("failed to unmarshal chat params: %v", err)
+	}
+
+	if decoded["prompt_cache_key"] != "session:root-123" {
+		t.Fatalf("expected prompt_cache_key to be propagated, got %#v", decoded["prompt_cache_key"])
+	}
+
+	tools, ok := decoded["tools"].([]any)
+	if !ok || len(tools) != 2 {
+		t.Fatalf("expected two tools in params, got %#v", decoded["tools"])
+	}
+	firstTool, _ := tools[0].(map[string]any)
+	firstFn, _ := firstTool["function"].(map[string]any)
+	if firstFn["name"] != "alpha_tool" {
+		t.Fatalf("expected tools to be sorted by name, got %#v", decoded["tools"])
 	}
 }

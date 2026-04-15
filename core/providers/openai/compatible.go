@@ -91,6 +91,9 @@ func (c *compatibleClient) chatCompletionNewParams(request providers.Request) *o
 	if c.model.PresencePenalty != nil {
 		p.PresencePenalty = param.NewOpt(*c.model.PresencePenalty)
 	}
+	if key := request.PromptCacheKey(); key != "" {
+		p.PromptCacheKey = param.NewOpt(key)
+	}
 
 	messages := request.Messages()
 	for _, msg := range messages {
@@ -156,7 +159,7 @@ func (c *compatibleClient) chatCompletionNewParams(request providers.Request) *o
 	}
 
 	// rewrite system prompt
-	toolList := request.ToolDefines()
+	toolList := sortedToolDefines(request.ToolDefines())
 	if len(toolList) > 0 {
 		p.Tools = nil
 

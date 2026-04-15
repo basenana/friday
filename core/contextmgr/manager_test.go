@@ -17,8 +17,8 @@ import (
 func TestBeforeModelMicroCompactPrunesOldToolResults(t *testing.T) {
 	largeToolResult := strings.Repeat("tool output ", 200)
 	// Five user messages => five conversation groups.
-	// With projectionTailGroups=4, the first group becomes an "old" group
-	// and should be micro-compacted while the last four groups remain untouched.
+	// The first group has the large tool result and should be micro-compacted
+	// while the most recent four groups remain untouched.
 	sess := session.New("sess-1", nil, session.WithHistory(
 		types.Message{Role: types.RoleUser, Content: "Investigate core/session/compact.go."},
 		types.Message{Role: types.RoleAssistant, ToolCalls: []types.ToolCall{{Name: "read_file", Arguments: `{"path":"core/session/compact.go"}`}}},
@@ -28,10 +28,10 @@ func TestBeforeModelMicroCompactPrunesOldToolResults(t *testing.T) {
 		types.Message{Role: types.RoleAssistant, Content: "I'm preparing the summary."},
 		types.Message{Role: types.RoleUser, Content: "Give me the final answer."},
 		types.Message{Role: types.RoleAssistant, Content: "I'm drafting the final response."},
-		types.Message{Role: types.RoleUser, Content: "What about the tests?"},
-		types.Message{Role: types.RoleAssistant, Content: "I'll check the tests too."},
-		types.Message{Role: types.RoleUser, Content: "And the docs?"},
-		types.Message{Role: types.RoleAssistant, Content: "I'll review the docs as well."},
+		types.Message{Role: types.RoleUser, Content: "Double check the result."},
+		types.Message{Role: types.RoleAssistant, Content: "I'm reviewing the result."},
+		types.Message{Role: types.RoleUser, Content: "Deliver it."},
+		types.Message{Role: types.RoleAssistant, Content: "Delivering the response."},
 	))
 
 	mgr := New(nil, Config{
@@ -106,6 +106,113 @@ func TestBeforeModelKeepsFullHistoryBelowSoftThreshold(t *testing.T) {
 	}
 	if projected[1].ToolResult == nil || projected[1].ToolResult.Content != toolResult {
 		t.Fatalf("expected old tool result to remain unpruned below soft threshold, got %#v", projected[1].ToolResult)
+	}
+}
+
+func TestBeforeModelSetsPromptCacheKeyFromRootSession(t *testing.T) {
+	rootSess := session.New("root-session", nil, session.WithHistory(
+		types.Message{Role: types.RoleUser, Content: "Root user request."},
+	))
+	forkedSess := session.New("forked-session", nil, session.WithHistory(
+		types.Message{Role: types.RoleUser, Content: "Forked user request."},
+	))
+	forkedSess.Root = rootSess
+
+	req := providers.NewRequest("", forkedSess.GetHistory()...)
+	mgr := New(nil, Config{})
+	if err := mgr.BeforeModel(stdctx.Background(), forkedSess, req); err != nil {
+		t.Fatalf("BeforeModel failed: %v", err)
+	}
+
+	if got := req.PromptCacheKey(); got != "session:root-session" {
+		t.Fatalf("expected prompt cache key to use root session, got %q", got)
+	}
+}
+
+func TestTrimForProjectionPreservesWhitespaceWhenNoTrimNeeded(t *testing.T) {
+	input := "line 1\n\n  line 2\tend"
+	got := trimForProjection(input, len([]rune(input))+8)
+	if got != input {
+		t.Fatalf("expected exact text preservation when no trim is needed, got %q", got)
+	}
+}
+
+func TestPruneMessageOnlyPrunesToolResults(t *testing.T) {
+	cfg := Config{
+		MaxToolResultChars: 8,
+	}
+
+	assistant := types.Message{Role: types.RoleAssistant, Content: "assistant content", Reasoning: "reasoning"}
+	if got := pruneMessage(assistant, cfg); got.Content != assistant.Content || got.Reasoning != assistant.Reasoning {
+		t.Fatalf("expected assistant message to remain unchanged, got %#v", got)
+	}
+
+	assistantWithTool := types.Message{
+		Role:    types.RoleAssistant,
+		Content: "assistant content",
+		ToolCalls: []types.ToolCall{{
+			ID:        "call-1",
+			Name:      "read_file",
+			Arguments: `{"path":"core/session/compact.go","mode":"full"}`,
+		}},
+	}
+	if got := pruneMessage(assistantWithTool, cfg); got.ToolCalls[0].Arguments != assistantWithTool.ToolCalls[0].Arguments {
+		t.Fatalf("expected assistant tool call arguments to remain unchanged, got %#v", got.ToolCalls)
+	}
+
+	user := types.Message{Role: types.RoleUser, Content: "user content"}
+	if got := pruneMessage(user, cfg); got.Content != user.Content {
+		t.Fatalf("expected user message to remain unchanged, got %#v", got)
+	}
+
+	tool := types.Message{Role: types.RoleTool, ToolResult: &types.ToolResult{CallID: "call-1", Content: "123456789"}}
+	got := pruneMessage(tool, cfg)
+	if got.ToolResult == nil || got.ToolResult.Content == tool.ToolResult.Content {
+		t.Fatalf("expected tool result to be trimmed, got %#v", got.ToolResult)
+	}
+}
+
+func TestBeforeModelMicroCompactFreezesBoundaryOnceSelected(t *testing.T) {
+	group1Tool := strings.Repeat("group-1 ", 80)
+	group2Tool := strings.Repeat("group-2 ", 20)
+
+	sess := session.New("sess-micro-boundary", nil, session.WithHistory(
+		types.Message{Role: types.RoleUser, Content: "group 1"},
+		types.Message{Role: types.RoleTool, ToolResult: &types.ToolResult{CallID: "call-1", Content: group1Tool}},
+		types.Message{Role: types.RoleUser, Content: "group 2"},
+		types.Message{Role: types.RoleTool, ToolResult: &types.ToolResult{CallID: "call-2", Content: group2Tool}},
+		types.Message{Role: types.RoleUser, Content: "group 3"},
+		types.Message{Role: types.RoleAssistant, Content: "group 3 reply"},
+		types.Message{Role: types.RoleUser, Content: "group 4"},
+		types.Message{Role: types.RoleAssistant, Content: "group 4 reply"},
+		types.Message{Role: types.RoleUser, Content: "group 5"},
+		types.Message{Role: types.RoleAssistant, Content: "group 5 reply"},
+	))
+
+	mgr := New(nil, Config{
+		ContextWindow:      2000,
+		SoftThresholdRatio: 0.20,
+		HardThresholdRatio: 0.95,
+		MaxToolResultChars: 32,
+	})
+
+	req1 := providers.NewRequest("", sess.GetHistory()...)
+	if err := mgr.BeforeModel(stdctx.Background(), sess, req1); err != nil {
+		t.Fatalf("first BeforeModel failed: %v", err)
+	}
+
+	sess.AppendMessage(
+		&types.Message{Role: types.RoleUser, Content: "group 6"},
+		&types.Message{Role: types.RoleAssistant, Content: "group 6 reply"},
+	)
+
+	req2 := providers.NewRequest("", sess.GetHistory()...)
+	if err := mgr.BeforeModel(stdctx.Background(), sess, req2); err != nil {
+		t.Fatalf("second BeforeModel failed: %v", err)
+	}
+
+	if !historyContainsToolResult(req2.History(), group2Tool) {
+		t.Fatalf("expected second group's tool result to remain unpruned after microcompact boundary is frozen")
 	}
 }
 
@@ -502,6 +609,15 @@ func captureRequestPrompt(req providers.Request) string {
 func containsTaggedMessage(history []types.Message, tag string) bool {
 	for _, msg := range history {
 		if strings.Contains(msg.Content, tag) {
+			return true
+		}
+	}
+	return false
+}
+
+func historyContainsToolResult(history []types.Message, want string) bool {
+	for _, msg := range history {
+		if msg.ToolResult != nil && msg.ToolResult.Content == want {
 			return true
 		}
 	}

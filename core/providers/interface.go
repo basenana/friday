@@ -41,10 +41,12 @@ type Request interface {
 	History() []types.Message
 	ToolDefines() []ToolDefine
 	SystemPrompt() string
+	PromptCacheKey() string
 
 	SetHistory([]types.Message)
 	SetToolDefines([]ToolDefine)
 	SetSystemPrompt(string)
+	SetPromptCacheKey(string)
 	AppendHistory(...types.Message)
 	AppendToolDefines(...ToolDefine)
 	AppendSystemPrompt(...string)
@@ -76,9 +78,10 @@ type ToolDefine interface {
 }
 
 type Tokens struct {
-	CompletionTokens int64
-	PromptTokens     int64
-	TotalTokens      int64
+	CompletionTokens   int64
+	PromptTokens       int64
+	CachedPromptTokens int64
+	TotalTokens        int64
 }
 
 type Apply struct {

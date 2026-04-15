@@ -13,8 +13,10 @@ const (
 )
 
 type ContextState struct {
-	SessionMemory    []types.Message
-	PromptBudget     PromptBudget
+	SessionMemory              []types.Message
+	PromptBudget               PromptBudget
+	MicroCompactPrefix         []types.Message
+	MicroCompactSourceMessages int
 
 	LastCompactionAt     time.Time
 	LastCompactionTokens int64
@@ -66,7 +68,8 @@ type FileRef struct {
 
 func newContextState() *ContextState {
 	return &ContextState{
-		SessionMemory: make([]types.Message, 0),
+		SessionMemory:      make([]types.Message, 0),
+		MicroCompactPrefix: make([]types.Message, 0),
 	}
 }
 
@@ -93,6 +96,7 @@ func cloneContextState(src *ContextState) *ContextState {
 
 	dst := *src
 	dst.SessionMemory = append([]types.Message(nil), src.SessionMemory...)
+	dst.MicroCompactPrefix = append([]types.Message(nil), src.MicroCompactPrefix...)
 	dst.pendingMu = sync.Mutex{} // fresh mutex for the clone
 	dst.PendingMemory = nil      // fork starts with no pending
 	return &dst
@@ -112,3 +116,7 @@ func (cs *ContextState) DrainPendingMemory() any {
 	return v
 }
 
+func (cs *ContextState) ResetMicroCompact() {
+	cs.MicroCompactPrefix = nil
+	cs.MicroCompactSourceMessages = 0
+}

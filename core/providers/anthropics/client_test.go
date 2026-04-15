@@ -1,6 +1,7 @@
 package anthropics
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/anthropics/anthropic-sdk-go"
@@ -59,5 +60,54 @@ func TestMessageCreateParamsTurnsPromptOnlyRequestIntoUserMessage(t *testing.T) 
 	}
 	if got := params.Messages[0].Content[0].GetText(); got == nil || *got != "summarize this conversation" {
 		t.Fatalf("expected synthesized user message to preserve prompt text, got %#v", params.Messages[0].Content[0])
+	}
+}
+
+func TestMessageCreateParamsDowngradesInvalidHistoricalToolCallAndResultToText(t *testing.T) {
+	cli := &client{model: Model{Name: "claude-test"}}
+	req := providers.NewRequest("",
+		types.Message{
+			Role:    types.RoleAssistant,
+			Content: "I inspected the file.",
+			ToolCalls: []types.ToolCall{{
+				ID:        "call-1",
+				Name:      "read_file",
+				Arguments: `{"path":"core/session/compact.go"...`,
+			}},
+		},
+		types.Message{
+			Role:       types.RoleTool,
+			ToolResult: &types.ToolResult{CallID: "call-1", Content: "file content"},
+		},
+	)
+
+	params := cli.messageCreateParams(req)
+	if len(params.Messages) != 2 {
+		t.Fatalf("expected assistant and user messages, got %d", len(params.Messages))
+	}
+
+	assistant := params.Messages[0]
+	if len(assistant.Content) < 2 {
+		t.Fatalf("expected assistant message to preserve text and include fallback note, got %#v", assistant.Content)
+	}
+	if got := assistant.Content[0].GetText(); got == nil || *got != "I inspected the file." {
+		t.Fatalf("expected assistant text to be preserved, got %#v", assistant.Content[0])
+	}
+	if assistant.Content[1].OfToolUse != nil {
+		t.Fatalf("expected invalid tool call to be downgraded to text, got %#v", assistant.Content[1])
+	}
+	if got := assistant.Content[1].GetText(); got == nil || !strings.Contains(*got, "invalid tool call") {
+		t.Fatalf("expected fallback note for invalid tool call, got %#v", assistant.Content[1])
+	}
+
+	toolResult := params.Messages[1]
+	if len(toolResult.Content) != 1 {
+		t.Fatalf("expected one downgraded tool result block, got %#v", toolResult.Content)
+	}
+	if toolResult.Content[0].OfToolResult != nil {
+		t.Fatalf("expected tool result referencing invalid call to be downgraded to text, got %#v", toolResult.Content[0])
+	}
+	if got := toolResult.Content[0].GetText(); got == nil || !strings.Contains(*got, "file content") {
+		t.Fatalf("expected downgraded tool result text to preserve content, got %#v", toolResult.Content[0])
 	}
 }

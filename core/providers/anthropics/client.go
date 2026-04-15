@@ -166,6 +166,8 @@ func (c *client) messageCreateParams(request providers.Request) *anthropic.Messa
 		maxTokens = *c.model.MaxTokens
 	}
 	systemPrompt := strings.TrimSpace(request.SystemPrompt())
+	validToolUseIDs := make(map[string]struct{})
+	invalidToolUseNames := make(map[string]string)
 
 	params := anthropic.MessageNewParams{
 		Model:     anthropic.Model(c.model.Name),
@@ -252,17 +254,15 @@ func (c *client) messageCreateParams(request providers.Request) *anthropic.Messa
 				contentBlocks = append(contentBlocks, anthropic.NewTextBlock(msg.Content))
 			}
 			for _, tc := range msg.ToolCalls {
-				toolUse := anthropic.ToolUseBlockParam{
-					ID:   tc.ID,
-					Name: tc.Name,
+				if block, ok := buildHistoricalToolUseBlock(tc); ok {
+					contentBlocks = append(contentBlocks, block)
+					validToolUseIDs[tc.ID] = struct{}{}
+					continue
 				}
-				if tc.Arguments != "" {
-					var args any
-					if err := json.Unmarshal([]byte(tc.Arguments), &args); err == nil {
-						toolUse.Input = args
-					}
+				if tc.ID != "" {
+					invalidToolUseNames[tc.ID] = tc.Name
 				}
-				contentBlocks = append(contentBlocks, anthropic.ContentBlockParamUnion{OfToolUse: &toolUse})
+				contentBlocks = append(contentBlocks, anthropic.NewTextBlock(formatInvalidHistoricalToolCall(tc)))
 			}
 			if len(contentBlocks) == 0 {
 				contentBlocks = append(contentBlocks, anthropic.NewTextBlock(msg.Content))
@@ -274,6 +274,15 @@ func (c *client) messageCreateParams(request providers.Request) *anthropic.Messa
 
 		case types.RoleTool:
 			if msg.ToolResult != nil {
+				if _, ok := validToolUseIDs[msg.ToolResult.CallID]; !ok {
+					params.Messages = append(params.Messages, anthropic.MessageParam{
+						Role: anthropic.MessageParamRoleUser,
+						Content: []anthropic.ContentBlockParamUnion{
+							anthropic.NewTextBlock(formatOrphanedHistoricalToolResult(msg.ToolResult, invalidToolUseNames[msg.ToolResult.CallID])),
+						},
+					})
+					continue
+				}
 				params.Messages = append(params.Messages, anthropic.MessageParam{
 					Role:    anthropic.MessageParamRoleUser,
 					Content: []anthropic.ContentBlockParamUnion{anthropic.NewToolResultBlock(msg.ToolResult.CallID, msg.ToolResult.Content, false)},
@@ -324,6 +333,50 @@ func (c *client) messageCreateParams(request providers.Request) *anthropic.Messa
 	}
 
 	return &params
+}
+
+func buildHistoricalToolUseBlock(tc types.ToolCall) (anthropic.ContentBlockParamUnion, bool) {
+	if tc.ID == "" || tc.Name == "" {
+		return anthropic.ContentBlockParamUnion{}, false
+	}
+
+	var args any
+	if tc.Arguments == "" || json.Unmarshal([]byte(tc.Arguments), &args) != nil {
+		return anthropic.ContentBlockParamUnion{}, false
+	}
+
+	toolUse := anthropic.ToolUseBlockParam{
+		ID:    tc.ID,
+		Input: args,
+		Name:  tc.Name,
+	}
+	return anthropic.ContentBlockParamUnion{OfToolUse: &toolUse}, true
+}
+
+func formatInvalidHistoricalToolCall(tc types.ToolCall) string {
+	name := tc.Name
+	if name == "" {
+		name = "unknown_tool"
+	}
+	args := strings.TrimSpace(tc.Arguments)
+	if args == "" {
+		return fmt.Sprintf("[historical invalid tool call omitted: %s]", name)
+	}
+	return fmt.Sprintf("[historical invalid tool call omitted: %s(%s)]", name, args)
+}
+
+func formatOrphanedHistoricalToolResult(result *types.ToolResult, toolName string) string {
+	if result == nil {
+		return "[historical tool result omitted]"
+	}
+	if toolName == "" {
+		toolName = "unknown_tool"
+	}
+	content := strings.TrimSpace(result.Content)
+	if content == "" {
+		return fmt.Sprintf("[historical tool result omitted for invalid tool call: %s]", toolName)
+	}
+	return fmt.Sprintf("[historical tool result for invalid tool call %s] %s", toolName, content)
 }
 
 func New(host, apiKey string, model Model) providers.Client {

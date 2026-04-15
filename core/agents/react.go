@@ -172,6 +172,7 @@ WaitMessage:
 
 	a.logger.Infow("message finish",
 		"fuzzyTokens", sess.Tokens(), "promptTokens", stream.Tokens().PromptTokens,
+		"cachedPromptTokens", stream.Tokens().CachedPromptTokens,
 		"completionTokens", stream.Tokens().CompletionTokens, "budget", budget, "session", sess.ID)
 
 	// Record token checkpoint when LLM returns actual usage data.

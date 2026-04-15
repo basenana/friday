@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 
@@ -176,6 +177,9 @@ func (c *client) chatCompletionNewParams(request providers.Request) *openai.Chat
 	if c.model.PresencePenalty != nil {
 		p.PresencePenalty = param.NewOpt(*c.model.PresencePenalty)
 	}
+	if key := request.PromptCacheKey(); key != "" {
+		p.PromptCacheKey = param.NewOpt(key)
+	}
 
 	messages := request.Messages()
 	for _, msg := range messages {
@@ -232,7 +236,7 @@ func (c *client) chatCompletionNewParams(request providers.Request) *openai.Chat
 		}
 	}
 
-	tools := request.ToolDefines()
+	tools := sortedToolDefines(request.ToolDefines())
 	for _, t := range tools {
 		p.Tools = append(p.Tools, openai.ChatCompletionToolParam{
 			Function: shared.FunctionDefinitionParam{
@@ -373,6 +377,7 @@ func (r *response) flushToolUse() {
 func (r *response) updateUsage(chunk openai.CompletionUsage) {
 	r.Token.CompletionTokens += chunk.CompletionTokens
 	r.Token.PromptTokens += chunk.PromptTokens
+	r.Token.CachedPromptTokens += chunk.PromptTokensDetails.CachedTokens
 	r.Token.TotalTokens += chunk.TotalTokens
 }
 
@@ -395,3 +400,14 @@ func newResponse() *response {
 }
 
 var _ providers.Response = (*response)(nil)
+
+func sortedToolDefines(tools []providers.ToolDefine) []providers.ToolDefine {
+	if len(tools) == 0 {
+		return nil
+	}
+	sorted := append([]providers.ToolDefine(nil), tools...)
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i].GetName() < sorted[j].GetName()
+	})
+	return sorted
+}

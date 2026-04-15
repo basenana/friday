@@ -3,6 +3,7 @@ package skills
 import (
 	"bytes"
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -56,6 +57,11 @@ func builtSkillsSystemPrompt(registry *Registry, skills []*Skill) string {
 		return ""
 	}
 
+	sortedSkills := append([]*Skill(nil), skills...)
+	sort.Slice(sortedSkills, func(i, j int) bool {
+		return sortedSkills[i].Name < sortedSkills[j].Name
+	})
+
 	var (
 		content = SKILL_SYSTEM_PROMPT
 		buf     = &bytes.Buffer{}
@@ -71,7 +77,7 @@ func builtSkillsSystemPrompt(registry *Registry, skills []*Skill) string {
 
 	buf.Reset()
 	buf.WriteString("<available_skills>\n")
-	for _, skill := range skills {
+	for _, skill := range sortedSkills {
 		buf.WriteString("<skill>\n")
 		buf.WriteString(fmt.Sprintf("<name>%s</name>\n", skill.Name))
 		buf.WriteString(fmt.Sprintf("<description>%s</description>\n", skill.Description))

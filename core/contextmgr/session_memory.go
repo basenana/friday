@@ -333,6 +333,7 @@ func (m *Manager) compactWithSessionMemory(ctx context.Context, sess *session.Se
 	st = sess.EnsureContextState()
 	st.LastCompactionAt = time.Now()
 	st.LastCompactionTokens = historyTokens
+	st.ResetMicroCompact()
 
 	m.logger.Infow("session memory compaction complete",
 		"session", sess.ID,
