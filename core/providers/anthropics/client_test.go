@@ -111,3 +111,158 @@ func TestMessageCreateParamsDowngradesInvalidHistoricalToolCallAndResultToText(t
 		t.Fatalf("expected downgraded tool result text to preserve content, got %#v", toolResult.Content[0])
 	}
 }
+
+func TestMessageCreateParamsCacheControl(t *testing.T) {
+	tests := []struct {
+		name                  string
+		promptCacheKey        string
+		messages              []types.Message
+		expectSystemCache     bool
+		expectMessageCache    bool
+	}{
+		{
+			name:           "with cache key, system and user messages",
+			promptCacheKey: "session:test-123",
+			messages: []types.Message{
+				{Role: types.RoleSystem, Content: "You are a helpful assistant."},
+				{Role: types.RoleSystem, Content: "Additional context."},
+				{Role: types.RoleUser, Content: "Hello"},
+			},
+			expectSystemCache:  true,
+			expectMessageCache: true,
+		},
+		{
+			name:           "without cache key",
+			promptCacheKey: "",
+			messages: []types.Message{
+				{Role: types.RoleSystem, Content: "You are a helpful assistant."},
+				{Role: types.RoleUser, Content: "Hello"},
+			},
+			expectSystemCache:  false,
+			expectMessageCache: false,
+		},
+		{
+			name:           "no system messages, cache on message only",
+			promptCacheKey: "session:test-123",
+			messages: []types.Message{
+				{Role: types.RoleUser, Content: "Hello"},
+			},
+			expectSystemCache:  false,
+			expectMessageCache: true,
+		},
+		{
+			name:           "multi-turn conversation",
+			promptCacheKey: "session:test-123",
+			messages: []types.Message{
+				{Role: types.RoleSystem, Content: "You are a helpful assistant."},
+				{Role: types.RoleUser, Content: "Hello"},
+				{Role: types.RoleAssistant, Content: "Hi there!"},
+				{Role: types.RoleUser, Content: "How are you?"},
+			},
+			expectSystemCache:  true,
+			expectMessageCache: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cli := &client{model: Model{Name: "claude-3-5-sonnet-20241022"}}
+			req := providers.NewRequest("", tt.messages...)
+			req.SetPromptCacheKey(tt.promptCacheKey)
+
+			params := cli.messageCreateParams(req)
+
+			if tt.expectSystemCache {
+				if len(params.System) == 0 {
+					t.Fatal("expected system blocks but got none")
+				}
+				lastBlock := params.System[len(params.System)-1]
+				if lastBlock.CacheControl.Type == "" {
+					t.Error("expected last system block to have cache_control")
+				}
+			} else if len(params.System) > 0 {
+				lastBlock := params.System[len(params.System)-1]
+				if lastBlock.CacheControl.Type != "" {
+					t.Error("did not expect system block cache_control")
+				}
+			}
+
+			if tt.expectMessageCache {
+				if len(params.Messages) == 0 {
+					t.Fatal("expected messages but got none")
+				}
+				lastMsg := params.Messages[len(params.Messages)-1]
+				if len(lastMsg.Content) == 0 {
+					t.Fatal("expected content blocks in last message")
+				}
+				lastContentBlock := lastMsg.Content[len(lastMsg.Content)-1]
+				hasCache := false
+				if lastContentBlock.OfText != nil && lastContentBlock.OfText.CacheControl.Type != "" {
+					hasCache = true
+				}
+				if lastContentBlock.OfToolResult != nil && lastContentBlock.OfToolResult.CacheControl.Type != "" {
+					hasCache = true
+				}
+				if !hasCache {
+					t.Error("expected last message content block to have cache_control")
+				}
+			} else if len(params.Messages) > 0 {
+				for _, msg := range params.Messages {
+					for _, block := range msg.Content {
+						if block.OfText != nil && block.OfText.CacheControl.Type != "" {
+							t.Error("did not expect message cache_control")
+						}
+						if block.OfToolResult != nil && block.OfToolResult.CacheControl.Type != "" {
+							t.Error("did not expect message cache_control")
+						}
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestMessageCreateParamsCacheControlOnlyOnLastBlocks(t *testing.T) {
+	cli := &client{model: Model{Name: "claude-3-5-sonnet-20241022"}}
+	req := providers.NewRequest("", []types.Message{
+		{Role: types.RoleSystem, Content: "First system prompt."},
+		{Role: types.RoleSystem, Content: "Second system prompt."},
+		{Role: types.RoleUser, Content: "Hello"},
+		{Role: types.RoleAssistant, Content: "Hi!"},
+		{Role: types.RoleUser, Content: "How are you?"},
+	}...)
+	req.SetPromptCacheKey("session:test-456")
+
+	params := cli.messageCreateParams(req)
+
+	if len(params.System) != 2 {
+		t.Fatalf("expected 2 system blocks, got %d", len(params.System))
+	}
+	if params.System[0].CacheControl.Type != "" {
+		t.Error("first system block should not have cache_control")
+	}
+	if params.System[1].CacheControl.Type == "" {
+		t.Error("last system block should have cache_control")
+	}
+
+	if len(params.Messages) != 3 {
+		t.Fatalf("expected 3 messages, got %d", len(params.Messages))
+	}
+
+	for i, msg := range params.Messages[:2] {
+		for _, block := range msg.Content {
+			if block.OfText != nil && block.OfText.CacheControl.Type != "" {
+				t.Errorf("message %d should not have cache_control", i)
+			}
+		}
+	}
+
+	lastMsg := params.Messages[2]
+	if len(lastMsg.Content) == 0 {
+		t.Fatal("expected content in last message")
+	}
+	lastBlock := lastMsg.Content[len(lastMsg.Content)-1]
+	if lastBlock.OfText == nil || lastBlock.OfText.CacheControl.Type == "" {
+		t.Error("last message last content block should have cache_control")
+	}
+}

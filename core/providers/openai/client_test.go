@@ -45,7 +45,7 @@ func TestAssistantMessageParamIncludesContentToolCallsAndReasoning(t *testing.T)
 }
 
 func TestResponseNextChoiceEmitsContentAndToolCallsFromSameChunk(t *testing.T) {
-	resp := newResponse()
+	resp := newResponse(nil)
 	resp.nextChoice(openaisdk.ChatCompletionChunkChoice{
 		Delta: openaisdk.ChatCompletionChunkChoiceDelta{
 			Content: "I will inspect the file.",
@@ -94,7 +94,7 @@ func TestResponseNextChoiceEmitsContentAndToolCallsFromSameChunk(t *testing.T) {
 }
 
 func TestResponseUpdateUsageTracksCachedPromptTokens(t *testing.T) {
-	resp := newResponse()
+	resp := newResponse(nil)
 	resp.updateUsage(openaisdk.CompletionUsage{
 		PromptTokens:     120,
 		CompletionTokens: 30,

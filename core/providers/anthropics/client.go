@@ -15,6 +15,7 @@ import (
 	"github.com/basenana/friday/core/logger"
 	"github.com/basenana/friday/core/providers"
 	"github.com/basenana/friday/core/providers/common"
+	"github.com/basenana/friday/core/session"
 	"github.com/basenana/friday/core/types"
 	"github.com/invopop/jsonschema"
 	"golang.org/x/time/rate"
@@ -43,7 +44,7 @@ func (c *client) ContextWindow() int64 {
 
 func (c *client) Completion(ctx context.Context, request providers.Request) providers.Response {
 	c.logger.Infow("llm processing...")
-	resp := newResponse()
+	resp := newResponse(request)
 	go func() {
 		defer resp.close()
 		var (
@@ -291,6 +292,24 @@ func (c *client) messageCreateParams(request providers.Request) *anthropic.Messa
 		}
 	}
 
+	if request.PromptCacheKey() != "" {
+		if len(params.System) > 0 {
+			params.System[len(params.System)-1].CacheControl = anthropic.NewCacheControlEphemeralParam()
+		}
+		if len(params.Messages) > 0 {
+			lastMsg := &params.Messages[len(params.Messages)-1]
+			if len(lastMsg.Content) > 0 {
+				lastBlock := &lastMsg.Content[len(lastMsg.Content)-1]
+				switch {
+				case lastBlock.OfText != nil:
+					lastBlock.OfText.CacheControl = anthropic.NewCacheControlEphemeralParam()
+				case lastBlock.OfToolResult != nil:
+					lastBlock.OfToolResult.CacheControl = anthropic.NewCacheControlEphemeralParam()
+				}
+			}
+		}
+	}
+
 	tools := request.ToolDefines()
 	for _, t := range tools {
 		// GetParameters returns full schema with type/properties/required
@@ -421,6 +440,8 @@ var _ providers.Client = (*client)(nil)
 type response struct {
 	*providers.CommonResponse
 
+	request providers.Request
+
 	incompleteTool struct {
 		ID        string
 		Name      string
@@ -438,6 +459,7 @@ func (r *response) handleEvent(event anthropic.MessageStreamEventUnion) {
 		r.Token.PromptTokens = msg.Message.Usage.InputTokens +
 			msg.Message.Usage.CacheReadInputTokens +
 			msg.Message.Usage.CacheCreationInputTokens
+		r.Token.CachedPromptTokens = msg.Message.Usage.CacheReadInputTokens
 
 	case "message_delta":
 		delta := event.AsMessageDelta()
@@ -487,8 +509,9 @@ func (r *response) flushToolUse() {
 
 // applyTokenFallback fills in token counts using FuzzyTokens if API didn't return them
 func (r *response) applyTokenFallback(requestMessages []types.Message) {
+	overhead := session.EstimateRequestOverhead(r.request)
 	r.Token.PromptTokens, r.Token.CompletionTokens, r.Token.TotalTokens =
-		common.ApplyTokenFallback(r.Token.PromptTokens, r.Token.CompletionTokens, r.accumulatedContent, requestMessages)
+		common.ApplyTokenFallback(r.Token.PromptTokens, r.Token.CompletionTokens, r.accumulatedContent, requestMessages, overhead)
 }
 
 func (r *response) fail(err error) { r.Err <- err }
@@ -499,8 +522,8 @@ func (r *response) close() {
 	close(r.Err)
 }
 
-func newResponse() *response {
-	return &response{CommonResponse: providers.NewCommonResponse()}
+func newResponse(req providers.Request) *response {
+	return &response{CommonResponse: providers.NewCommonResponse(), request: req}
 }
 
 var _ providers.Response = (*response)(nil)

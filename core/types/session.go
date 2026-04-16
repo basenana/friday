@@ -134,7 +134,7 @@ func (m Message) EstimatedTokens() int64 {
 		total += len([]rune(cp.ToolResult.CallID)) + len([]rune(cp.ToolResult.Content))
 	}
 
-	return int64(float64(total) * 0.6)
+	return int64(float64(total) * 0.5)
 }
 
 func NewID() string {

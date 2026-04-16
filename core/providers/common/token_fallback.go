@@ -13,12 +13,14 @@ const TokenEstimateFactor = 0.6
 // completionTokens: tokens from API response (0 if not returned)
 // accumulatedContent: the accumulated content for completion token estimation
 // requestMessages: the request messages for prompt token estimation
-func ApplyTokenFallback(promptTokens, completionTokens int64, accumulatedContent string, requestMessages []types.Message) (promptResult, completionResult, totalResult int64) {
+// promptOverhead: estimated tokens for system prompt and tool definitions
+func ApplyTokenFallback(promptTokens, completionTokens int64, accumulatedContent string, requestMessages []types.Message, promptOverhead int64) (promptResult, completionResult, totalResult int64) {
 	// Only estimate prompt tokens if API didn't return them
 	if promptTokens == 0 {
 		for _, msg := range requestMessages {
 			promptTokens += msg.FuzzyTokens()
 		}
+		promptTokens += promptOverhead
 	}
 
 	// Only estimate completion tokens if API didn't return them

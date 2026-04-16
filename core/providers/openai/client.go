@@ -14,6 +14,7 @@ import (
 	"github.com/basenana/friday/core/logger"
 	"github.com/basenana/friday/core/providers"
 	"github.com/basenana/friday/core/providers/common"
+	"github.com/basenana/friday/core/session"
 	"github.com/basenana/friday/core/types"
 	"github.com/invopop/jsonschema"
 	"github.com/openai/openai-go"
@@ -36,7 +37,7 @@ func (c *client) ContextWindow() int64 {
 
 func (c *client) Completion(ctx context.Context, request providers.Request) providers.Response {
 	c.logger.Infow("llm processing...")
-	resp := newResponse()
+	resp := newResponse(request)
 	go func() {
 		defer resp.close()
 		var (
@@ -326,6 +327,8 @@ func assistantMessageParam(msg types.Message) openai.ChatCompletionMessageParamU
 type response struct {
 	*providers.CommonResponse
 
+	request providers.Request
+
 	incompleteTool struct {
 		ID        string
 		Name      string
@@ -383,8 +386,9 @@ func (r *response) updateUsage(chunk openai.CompletionUsage) {
 
 // applyTokenFallback fills in token counts using FuzzyTokens if API didn't return them
 func (r *response) applyTokenFallback(requestMessages []types.Message) {
+	overhead := session.EstimateRequestOverhead(r.request)
 	r.Token.PromptTokens, r.Token.CompletionTokens, r.Token.TotalTokens =
-		common.ApplyTokenFallback(r.Token.PromptTokens, r.Token.CompletionTokens, r.accumulatedContent, requestMessages)
+		common.ApplyTokenFallback(r.Token.PromptTokens, r.Token.CompletionTokens, r.accumulatedContent, requestMessages, overhead)
 }
 
 func (r *response) fail(err error) { r.Err <- err }
@@ -395,8 +399,8 @@ func (r *response) close() {
 	close(r.Err)
 }
 
-func newResponse() *response {
-	return &response{CommonResponse: providers.NewCommonResponse()}
+func newResponse(req providers.Request) *response {
+	return &response{CommonResponse: providers.NewCommonResponse(), request: req}
 }
 
 var _ providers.Response = (*response)(nil)
