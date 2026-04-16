@@ -64,6 +64,9 @@ func (s *Session) CompactHistory(ctx context.Context) error {
 
 	ctxState := s.EnsureContextState()
 
+	// Reset token checkpoint since history will be replaced.
+	ctxState.TokenCheckpoint = TokenCheckpoint{}
+
 	// Without an LLM, fallback to keeping the last N messages instead of guessing.
 	if s.llm == nil {
 		compacted := truncateToLastN(history, compactFallbackKeepMessages)

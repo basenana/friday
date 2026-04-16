@@ -146,16 +146,23 @@ func TestReactCalibratesMessageTokensFromAPI(t *testing.T) {
 		t.Fatalf("ReadAllContent() error = %v", err)
 	}
 
-	history := sess.GetHistory()
+	ctxState := sess.EnsureContextState()
 
-	// User message (index 0) should have been backfilled with calibrated tokens
-	if history[0].Tokens == 0 {
-		t.Fatalf("expected user message Tokens to be backfilled from API prompt_tokens, got 0")
+	// Token checkpoint should be recorded with the LLM's actual prompt_tokens
+	if ctxState.TokenCheckpoint.PromptTokens != 150 {
+		t.Fatalf("expected TokenCheckpoint.PromptTokens=150, got %d", ctxState.TokenCheckpoint.PromptTokens)
 	}
 
-	// Assistant message (index 1) should have completion tokens
-	if history[1].Tokens != 30 {
-		t.Fatalf("expected assistant message Tokens=30, got %d", history[1].Tokens)
+	// Checkpoint index should match history length at the time (1 user message)
+	if ctxState.TokenCheckpoint.Index != 1 {
+		t.Fatalf("expected TokenCheckpoint.Index=1, got %d", ctxState.TokenCheckpoint.Index)
+	}
+
+	// Session.Tokens() should return checkpoint base + estimated new messages
+	// Checkpoint base=150, new messages = 1 assistant message ("Hello back.")
+	totalTokens := sess.Tokens()
+	if totalTokens <= 150 {
+		t.Fatalf("expected total tokens > 150 (checkpoint base + new msg estimate), got %d", totalTokens)
 	}
 }
 

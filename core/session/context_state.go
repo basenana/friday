@@ -34,6 +34,19 @@ type ContextState struct {
 	// Protected by pendingMu since it's written by the async goroutine and read by the main goroutine.
 	pendingMu     sync.Mutex
 	PendingMemory any
+
+	// TokenCheckpoint stores the last known accurate token count from an LLM response.
+	// When PromptTokens > 0, the total context size can be calculated as:
+	//   PromptTokens + estimated tokens for messages added since Index
+	TokenCheckpoint TokenCheckpoint
+}
+
+// TokenCheckpoint records the exact token usage from the last LLM response,
+// along with the history length at that point. This enables fast, accurate
+// token counting: use the checkpoint value + estimate for new messages only.
+type TokenCheckpoint struct {
+	Index        int   // len(History) when checkpoint was recorded
+	PromptTokens int64 // actual prompt_tokens from LLM response
 }
 
 type PromptBudget struct {

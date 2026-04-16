@@ -382,7 +382,9 @@ func (r *response) handleEvent(event anthropic.MessageStreamEventUnion) {
 	switch event.Type {
 	case "message_start":
 		msg := event.AsMessageStart()
-		r.Token.PromptTokens = msg.Message.Usage.InputTokens
+		r.Token.PromptTokens = msg.Message.Usage.InputTokens +
+			msg.Message.Usage.CacheReadInputTokens +
+			msg.Message.Usage.CacheCreationInputTokens
 
 	case "message_delta":
 		delta := event.AsMessageDelta()

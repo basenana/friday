@@ -114,8 +114,32 @@ func (s *Session) Tokens() int64 {
 	history := make([]types.Message, len(s.History))
 	copy(history, s.History)
 	factor := normalizedCalibrationFactor(s.tokenCalibration.CalibrationFactor)
+	var checkpoint TokenCheckpoint
+	if s.Context != nil {
+		checkpoint = s.Context.TokenCheckpoint
+	}
 	s.mu.RUnlock()
+
+	if checkpoint.PromptTokens > 0 && checkpoint.Index <= len(history) {
+		base := checkpoint.PromptTokens
+		newMsgs := history[checkpoint.Index:]
+		if len(newMsgs) == 0 {
+			return base
+		}
+		return base + estimatedTokensForMessages(newMsgs)
+	}
+
 	return CalibratedTokenCount(history, factor)
+}
+
+// estimatedTokensForMessages returns a fuzzy token estimate for a slice of messages.
+// Used for incremental estimation of messages added after the last token checkpoint.
+func estimatedTokensForMessages(msgs []types.Message) int64 {
+	var total int64
+	for _, msg := range msgs {
+		total += msg.EstimatedTokens()
+	}
+	return total
 }
 
 func (s *Session) GetHistory() []types.Message {
@@ -124,6 +148,13 @@ func (s *Session) GetHistory() []types.Message {
 	history := make([]types.Message, len(s.History))
 	copy(history, s.History)
 	return history
+}
+
+// HistoryLen returns the number of messages in the session history.
+func (s *Session) HistoryLen() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.History)
 }
 
 func (s *Session) CountTokens(history []types.Message) int64 {

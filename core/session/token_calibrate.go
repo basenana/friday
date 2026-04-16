@@ -15,6 +15,8 @@ import (
 const MaxCalibrationSamples = 20
 
 // TokenCalibration tracks runtime token calibration state.
+//
+// Deprecated: Superseded by TokenCheckpoint. Retained for backward compatibility.
 type TokenCalibration struct {
 	LastActualPromptTokens   int64   // Last API-returned prompt_tokens
 	LastFuzzyPromptTokens    int64   // Last estimated history tokens for the same request
@@ -61,6 +63,11 @@ func normalizedCalibrationFactor(factor float64) float64 {
 // CalibrateAndBackfill updates runtime token calibration using the exact
 // request payload that was sent to the provider. Only request messages that can
 // be mapped back to unchanged session history receive exact per-message tokens.
+//
+// Deprecated: This function is superseded by the TokenCheckpoint mechanism in
+// ContextState. It is retained for backward compatibility but is no longer called
+// in the main agent loop. It may be removed in a future version along with
+// TokenCalibration, CalibratedTokenCount, and related helpers.
 func CalibrateAndBackfill(sess *Session, req providers.Request, actualPromptTokens int64) {
 	if sess == nil || req == nil || actualPromptTokens <= 0 {
 		return

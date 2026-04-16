@@ -1,6 +1,7 @@
 package session
 
 import (
+	"context"
 	"testing"
 
 	"github.com/basenana/friday/core/providers"
@@ -152,5 +153,93 @@ func TestCountTokens_UsesSessionCalibrationFactor(t *testing.T) {
 	msg := types.Message{Role: types.RoleUser, Content: "hello"}
 	if got, want := sess.CountTokens([]types.Message{msg}), int64(msg.EstimatedTokens())*2; got != want {
 		t.Fatalf("expected CountTokens=%d, got %d", want, got)
+	}
+}
+
+func TestTokens_UsesCheckpointWhenAvailable(t *testing.T) {
+	sess := New("test", nil, WithHistory(
+		types.Message{Role: types.RoleUser, Content: "hello"},
+	))
+
+	// Simulate a checkpoint from an LLM response
+	ctxState := sess.EnsureContextState()
+	ctxState.TokenCheckpoint = TokenCheckpoint{
+		Index:        1, // len(History) was 1 when checkpoint was recorded
+		PromptTokens: 500,
+	}
+
+	// No new messages → should return exact checkpoint value
+	if got := sess.Tokens(); got != 500 {
+		t.Fatalf("expected Tokens=500 (checkpoint only), got %d", got)
+	}
+}
+
+func TestTokens_CheckpointWithNewMessages(t *testing.T) {
+	sess := New("test", nil, WithHistory(
+		types.Message{Role: types.RoleUser, Content: "hello"},
+	))
+
+	// Set checkpoint at index 1
+	ctxState := sess.EnsureContextState()
+	ctxState.TokenCheckpoint = TokenCheckpoint{
+		Index:        1,
+		PromptTokens: 500,
+	}
+
+	// Add new messages after checkpoint
+	newMsg := types.Message{Role: types.RoleAssistant, Content: "world response here"}
+	sess.AppendMessage(&newMsg)
+
+	tokens := sess.Tokens()
+	expectedNew := newMsg.EstimatedTokens()
+	if tokens != 500+expectedNew {
+		t.Fatalf("expected Tokens=%d (500 + %d), got %d", 500+expectedNew, expectedNew, tokens)
+	}
+}
+
+func TestTokens_FallsBackToCalibratedWhenNoCheckpoint(t *testing.T) {
+	sess := New("test", nil, WithHistory(
+		types.Message{Role: types.RoleUser, Content: "hello world"},
+	))
+
+	// No checkpoint set → should use CalibratedTokenCount
+	tokens := sess.Tokens()
+	if tokens <= 0 {
+		t.Fatalf("expected positive tokens from CalibratedTokenCount, got %d", tokens)
+	}
+
+	// Should match CalibratedTokenCount exactly
+	factor := sess.CalibrationFactor()
+	history := sess.GetHistory()
+	if tokens != CalibratedTokenCount(history, factor) {
+		t.Fatalf("expected fallback to match CalibratedTokenCount")
+	}
+}
+
+func TestCompactHistory_ResetsTokenCheckpoint(t *testing.T) {
+	sess := New("test", nil, WithHistory(
+		types.Message{Role: types.RoleUser, Content: "hello"},
+		types.Message{Role: types.RoleAssistant, Content: "hi there"},
+		types.Message{Role: types.RoleUser, Content: "how are you"},
+		types.Message{Role: types.RoleAssistant, Content: "I'm fine"},
+	))
+
+	// Set a checkpoint
+	ctxState := sess.EnsureContextState()
+	ctxState.TokenCheckpoint = TokenCheckpoint{
+		Index:        2,
+		PromptTokens: 300,
+	}
+
+	// Compact without LLM (truncation fallback)
+	if err := sess.CompactHistory(context.Background()); err != nil {
+		t.Fatalf("CompactHistory error: %v", err)
+	}
+
+	// Checkpoint should be reset
+	ctxState = sess.EnsureContextState()
+	if ctxState.TokenCheckpoint.PromptTokens != 0 || ctxState.TokenCheckpoint.Index != 0 {
+		t.Fatalf("expected checkpoint reset after compaction, got PromptTokens=%d Index=%d",
+			ctxState.TokenCheckpoint.PromptTokens, ctxState.TokenCheckpoint.Index)
 	}
 }

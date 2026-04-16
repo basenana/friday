@@ -174,8 +174,16 @@ WaitMessage:
 		"fuzzyTokens", sess.Tokens(), "promptTokens", stream.Tokens().PromptTokens,
 		"completionTokens", stream.Tokens().CompletionTokens, "budget", budget, "session", sess.ID)
 
-	// Calibrate message tokens using the exact request sent to the provider.
-	session.CalibrateAndBackfill(sess, llmReq, stream.Tokens().PromptTokens)
+	// Record token checkpoint when LLM returns actual usage data.
+	// Providers that don't return PromptTokens will fall back to
+	// fuzzy estimation via CalibratedTokenCount in Session.Tokens().
+	if stream.Tokens().PromptTokens > 0 {
+		ctxState := sess.EnsureContextState()
+		ctxState.TokenCheckpoint = session.TokenCheckpoint{
+			Index:        sess.HistoryLen(),
+			PromptTokens: stream.Tokens().PromptTokens,
+		}
+	}
 
 	content = strings.TrimSpace(content)
 	reasoning = strings.TrimSpace(reasoning)
