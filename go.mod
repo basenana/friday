@@ -4,7 +4,7 @@ go 1.25.0
 
 require (
 	github.com/a2aproject/a2a-go v0.3.13
-	github.com/basenana/friday/core v0.0.0-20260414155108-d300aa6a594a
+	github.com/basenana/friday/core v0.0.0-20260416131423-e7931de751eb
 	github.com/davecgh/go-spew v1.1.1
 	github.com/hyponet/eventbus v1.1.0
 	github.com/mark3labs/mcp-go v0.43.2
