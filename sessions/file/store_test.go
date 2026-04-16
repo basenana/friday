@@ -7,8 +7,6 @@ import (
 	"time"
 
 	"github.com/basenana/friday/core/contextmgr"
-	"github.com/basenana/friday/core/providers"
-	coresession "github.com/basenana/friday/core/session"
 	"github.com/basenana/friday/core/types"
 )
 
@@ -176,9 +174,7 @@ func TestCalibratedMessageTokensPersistAcrossReload(t *testing.T) {
 		t.Fatalf("failed to create session: %v", err)
 	}
 
-	sess.AppendMessage(&types.Message{Role: types.RoleUser, Content: "Hello world"})
-	req := providers.NewRequest("", sess.GetHistory()...)
-	coresession.CalibrateAndBackfill(sess, req, 42)
+	sess.AppendMessage(&types.Message{Role: types.RoleUser, Content: "Hello world", Tokens: 42})
 
 	reloaded, err := store.Load(sessionID, nil)
 	if err != nil {

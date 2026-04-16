@@ -16,19 +16,16 @@ const (
 	defaultContextWindow          int64   = 128 * 1000
 	defaultSoftThresholdRatio     float64 = 0.70
 	defaultHardThresholdRatio     float64 = 0.85
-	defaultCompletionRatio        float64 = 0.18
-	defaultToolReserveRatio       float64 = 0.07
 	defaultMaxToolResultChars     int     = 600
 	defaultSessionMemoryThreshold int64   = 15_000
 	projectionTailGroups          int     = 4
+	tokensSkipCompact             int64   = -1
 )
 
 type Config struct {
 	ContextWindow          int64
 	SoftThresholdRatio     float64
 	HardThresholdRatio     float64
-	CompletionRatio        float64
-	ToolReserveRatio       float64
 	MaxToolResultChars     int
 	SessionMemoryThreshold int64
 
@@ -51,12 +48,6 @@ func New(llm providers.Client, cfg Config) *Manager {
 	if cfg.HardThresholdRatio == 0 {
 		cfg.HardThresholdRatio = defaultHardThresholdRatio
 	}
-	if cfg.CompletionRatio == 0 {
-		cfg.CompletionRatio = defaultCompletionRatio
-	}
-	if cfg.ToolReserveRatio == 0 {
-		cfg.ToolReserveRatio = defaultToolReserveRatio
-	}
 	if cfg.MaxToolResultChars == 0 {
 		cfg.MaxToolResultChars = defaultMaxToolResultChars
 	}
@@ -74,20 +65,25 @@ func New(llm providers.Client, cfg Config) *Manager {
 func (m *Manager) BeforeModel(ctx stdctx.Context, sess *session.Session, req providers.Request) error {
 	st := sess.EnsureContextState()
 	st.PromptBudget = m.buildBudget()
-	if req.PromptCacheKey() == "" {
-		req.SetPromptCacheKey(promptCacheKeyForSession(sess))
+	history := req.History()
+	budget := st.PromptBudget
+
+	projected := history
+	projectedTokens := sess.Tokens()
+	if sessLen := sess.HistoryLen(); len(history) > sessLen {
+		projectedTokens += session.EstimateHistoryTokens(history[sessLen:])
 	}
 
-	history := req.History()
-	promptOverhead := session.EstimateRequestOverhead(req)
-	budget := st.PromptBudget
+	if req.PromptCacheKey() == "" && projectedTokens > defaultSessionMemoryThreshold {
+		req.SetPromptCacheKey(promptCacheKeyForSession(sess))
+	}
 
 	m.logger.Infow("starting context projection",
 		"session", sess.ID,
 		"history_messages", len(history),
-		"history_tokens", countTokens(sess, history),
 		"session_memory_messages", len(st.SessionMemory),
 		"last_synced_at", st.LastSyncedAt,
+		"projected_tokens", projectedTokens,
 		"context_window", budget.ContextWindow,
 		"soft_threshold", budget.SoftThreshold,
 		"hard_threshold", budget.HardThreshold,
@@ -96,15 +92,12 @@ func (m *Manager) BeforeModel(ctx stdctx.Context, sess *session.Session, req pro
 	m.ensureSessionMemory(ctx, sess)
 	m.maybeStartAsyncSessionMemory(sess, st, history)
 
-	projected := history
-	projectedTokens := countTokens(sess, history) + promptOverhead
-
 	if projectedTokens > budget.SoftThreshold {
-		projected, projectedTokens = m.applyMicroCompact(sess, sess.ID, st, history, projectedTokens, promptOverhead)
+		projected, projectedTokens = m.applyMicroCompact(sess.ID, st, history, projectedTokens)
 	}
 
 	if projectedTokens > budget.HardThreshold {
-		projected, projectedTokens = m.applyHardCompact(ctx, sess, history, promptOverhead)
+		projected, projectedTokens = m.applyHardCompact(ctx, sess, history)
 	}
 
 	req.SetHistory(projected)
@@ -116,12 +109,15 @@ func (m *Manager) BeforeModel(ctx stdctx.Context, sess *session.Session, req pro
 	return nil
 }
 
-func (m *Manager) applyMicroCompact(sess *session.Session, sessionID string, st *session.ContextState, history []types.Message, fullTokens int64, promptOverhead int64) ([]types.Message, int64) {
-	micro := m.buildMicroProjected(sessionID, st, history)
-	microTokens := countTokens(sess, micro) + promptOverhead
+func (m *Manager) applyMicroCompact(sessionID string, st *session.ContextState, history []types.Message, fullTokens int64) ([]types.Message, int64) {
+	micro, savedTokens := m.buildMicroProjected(sessionID, st, history)
+	if savedTokens < 0 {
+		return micro, fullTokens // already micro compact
+	}
 
+	microTokens := fullTokens - savedTokens
 	if fullTokens > 0 && float64(microTokens)/float64(fullTokens) < 0.8 {
-		m.logger.Infow("microcompact applied",
+		m.logger.Infow("[COMPACT] microcompact applied",
 			"session", sessionID,
 			"projected_tokens", microTokens,
 			"saved_tokens", fullTokens-microTokens,
@@ -137,14 +133,14 @@ func (m *Manager) applyMicroCompact(sess *session.Session, sessionID string, st 
 	return history, fullTokens
 }
 
-func (m *Manager) buildMicroProjected(sessionID string, st *session.ContextState, history []types.Message) []types.Message {
+func (m *Manager) buildMicroProjected(sessionID string, st *session.ContextState, history []types.Message) ([]types.Message, int64) {
 	if projected, ok := frozenMicroCompactProjection(st, history); ok {
 		m.logger.Infow("using frozen microcompact",
 			"session", sessionID,
 			"projected_messages", len(projected),
 			"projected_tokens", countTokens(nil, projected),
 		)
-		return projected
+		return projected, tokensSkipCompact
 	}
 
 	groups := groupHistory(history)
@@ -156,7 +152,7 @@ func (m *Manager) buildMicroProjected(sessionID string, st *session.ContextState
 	return m.buildMicroCompactProjection(st, groups[:tailStart], groups[tailStart:])
 }
 
-func (m *Manager) applyHardCompact(ctx stdctx.Context, sess *session.Session, history []types.Message, promptOverhead int64) ([]types.Message, int64) {
+func (m *Manager) applyHardCompact(ctx stdctx.Context, sess *session.Session, history []types.Message) ([]types.Message, int64) {
 	m.logger.Warnw("hard threshold exceeded",
 		"session", sess.ID,
 		"hard_threshold", sess.EnsureContextState().PromptBudget.HardThreshold,
@@ -164,8 +160,8 @@ func (m *Manager) applyHardCompact(ctx stdctx.Context, sess *session.Session, hi
 
 	if err := m.compactWithSessionMemory(ctx, sess, history); err == nil {
 		projected := sess.GetHistory()
-		tokens := countTokens(sess, projected) + promptOverhead
-		m.logger.Infow("session memory compact applied",
+		tokens := countTokens(sess, projected)
+		m.logger.Infow("[COMPACT] session memory compact applied",
 			"session", sess.ID,
 			"projected_tokens", tokens,
 		)
@@ -174,8 +170,8 @@ func (m *Manager) applyHardCompact(ctx stdctx.Context, sess *session.Session, hi
 
 	if err := m.compactWithSummary(ctx, sess, history); err == nil {
 		projected := sess.GetHistory()
-		tokens := countTokens(sess, projected) + promptOverhead
-		m.logger.Infow("summary compact applied",
+		tokens := countTokens(sess, projected)
+		m.logger.Infow("[COMPACT] summary compact applied",
 			"session", sess.ID,
 			"projected_tokens", tokens,
 		)
@@ -185,7 +181,7 @@ func (m *Manager) applyHardCompact(ctx stdctx.Context, sess *session.Session, hi
 	m.logger.Errorw("all compaction methods failed",
 		"session", sess.ID,
 	)
-	return history, countTokens(sess, history) + promptOverhead
+	return history, tokensSkipCompact
 }
 
 func (m *Manager) ensureSessionMemory(_ stdctx.Context, sess *session.Session) {
@@ -298,12 +294,10 @@ func (m *Manager) buildBudget() session.PromptBudget {
 		window = provider.ContextWindow()
 	}
 	return session.PromptBudget{
-		ContextWindow:     window,
-		CompletionReserve: int64(float64(window) * m.cfg.CompletionRatio),
-		ToolReserve:       int64(float64(window) * m.cfg.ToolReserveRatio),
-		SoftThreshold:     int64(float64(window) * m.cfg.SoftThresholdRatio),
-		HardThreshold:     int64(float64(window) * m.cfg.HardThresholdRatio),
-		TailTarget:        maxInt64(window/5, 8*1024),
+		ContextWindow: window,
+		SoftThreshold: int64(float64(window) * m.cfg.SoftThresholdRatio),
+		HardThreshold: int64(float64(window) * m.cfg.HardThresholdRatio),
+		TailTarget:    maxInt64(window/5, 8*1024),
 	}
 }
 
@@ -313,11 +307,16 @@ type conversationGroup struct {
 	Tokens    int64
 }
 
-func (m *Manager) buildMicroCompactProjection(st *session.ContextState, oldGroups, tailGroups []conversationGroup) []types.Message {
+func (m *Manager) buildMicroCompactProjection(st *session.ContextState, oldGroups, tailGroups []conversationGroup) ([]types.Message, int64) {
 	var pruned []types.Message
+	var savedTokens int64
 	for _, group := range oldGroups {
 		for _, msg := range group.Messages {
-			pruned = append(pruned, pruneMessage(msg, m.cfg))
+			prunedMsg := pruneMessage(msg, m.cfg)
+			if before, after := msg.FuzzyTokens(), prunedMsg.FuzzyTokens(); before > after {
+				savedTokens += before - after
+			}
+			pruned = append(pruned, prunedMsg)
 		}
 	}
 	pruned = cloneMessages(pruned)
@@ -325,7 +324,7 @@ func (m *Manager) buildMicroCompactProjection(st *session.ContextState, oldGroup
 		st.MicroCompactPrefix = pruned
 		st.MicroCompactSourceMessages = len(flattenGroups(oldGroups))
 	}
-	return append(pruned, flattenGroups(tailGroups)...)
+	return append(pruned, flattenGroups(tailGroups)...), savedTokens
 }
 
 func flattenGroups(groups []conversationGroup) []types.Message {
@@ -371,7 +370,7 @@ func countTokens(sess *session.Session, history []types.Message) int64 {
 		return sess.CountTokens(history)
 	}
 
-	return session.CalibratedTokenCount(history, 1)
+	return session.EstimateHistoryTokens(history)
 }
 
 func maxInt64(a, b int64) int64 {

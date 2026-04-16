@@ -177,7 +177,7 @@ WaitMessage:
 
 	// Record token checkpoint when LLM returns actual usage data.
 	// Providers that don't return PromptTokens will fall back to
-	// fuzzy estimation via CalibratedTokenCount in Session.Tokens().
+	// fuzzy estimation via EstimateHistoryTokens in Session.Tokens().
 	if stream.Tokens().PromptTokens > 0 {
 		ctxState := sess.EnsureContextState()
 		ctxState.TokenCheckpoint = session.TokenCheckpoint{

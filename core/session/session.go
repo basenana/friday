@@ -35,7 +35,6 @@ type Session struct {
 	Temporary bool
 
 	compactThreshold int64
-	tokenCalibration TokenCalibration
 
 	hooks  []Hook
 	llm    providers.Client
@@ -113,7 +112,6 @@ func (s *Session) Tokens() int64 {
 	s.mu.RLock()
 	history := make([]types.Message, len(s.History))
 	copy(history, s.History)
-	factor := normalizedCalibrationFactor(s.tokenCalibration.CalibrationFactor)
 	var checkpoint TokenCheckpoint
 	if s.Context != nil {
 		checkpoint = s.Context.TokenCheckpoint
@@ -129,7 +127,7 @@ func (s *Session) Tokens() int64 {
 		return base + estimatedTokensForMessages(newMsgs)
 	}
 
-	return CalibratedTokenCount(history, factor)
+	return EstimateHistoryTokens(history)
 }
 
 // estimatedTokensForMessages returns a fuzzy token estimate for a slice of messages.
@@ -158,13 +156,7 @@ func (s *Session) HistoryLen() int {
 }
 
 func (s *Session) CountTokens(history []types.Message) int64 {
-	return CalibratedTokenCount(history, s.CalibrationFactor())
-}
-
-func (s *Session) CalibrationFactor() float64 {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return normalizedCalibrationFactor(s.tokenCalibration.CalibrationFactor)
+	return EstimateHistoryTokens(history)
 }
 
 func (s *Session) RegisterHook(handler Hook) {
