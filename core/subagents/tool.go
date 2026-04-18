@@ -8,6 +8,7 @@ import (
 	"github.com/basenana/friday/core/api"
 	"github.com/basenana/friday/core/session"
 	"github.com/basenana/friday/core/tools"
+	"github.com/basenana/friday/core/tracing"
 )
 
 func fuzzyMatching(s1, s2 string) bool {
@@ -29,6 +30,15 @@ func callSubagentTool(agents []ExpertAgent, sess *session.Session, subagentTools
 		}
 
 		subSession := sess.Fork()
+		ctx, span := tracing.Start(ctx, "subagent.call",
+			tracing.WithAttributes(
+				tracing.String("subagent.name", agentName),
+				tracing.String("session.id", subSession.ID),
+				tracing.String("parent_session.id", sess.ID),
+			),
+		)
+		defer span.End()
+
 		subTask := injectStructuredReportRequest(userMessage)
 
 		for _, agt := range agents {

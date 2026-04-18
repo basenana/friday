@@ -13,6 +13,7 @@ import (
 
 	"github.com/basenana/friday/core/logger"
 	"github.com/basenana/friday/core/providers"
+	"github.com/basenana/friday/core/tracing"
 	"github.com/basenana/friday/core/providers/common"
 	"github.com/basenana/friday/core/session"
 	"github.com/basenana/friday/core/types"
@@ -37,8 +38,12 @@ func (c *client) ContextWindow() int64 {
 
 func (c *client) Completion(ctx context.Context, request providers.Request) providers.Response {
 	c.logger.Infow("llm processing...")
+	ctx, span := tracing.Start(ctx, "llm.openai.completion",
+		tracing.WithAttributes(tracing.String("model", string(c.model.Name))),
+	)
 	resp := newResponse(request)
 	go func() {
+		defer span.End()
 		defer resp.close()
 		var (
 			p       = c.chatCompletionNewParams(request)
@@ -47,6 +52,10 @@ func (c *client) Completion(ctx context.Context, request providers.Request) prov
 		)
 
 		defer func() {
+			span.SetAttributes(
+				tracing.Int("prompt_tokens", resp.Token.PromptTokens),
+				tracing.Int("completion_tokens", resp.Token.CompletionTokens),
+			)
 			sec := time.Since(startAt).Seconds()
 			if sec < 1 {
 				sec = 1
@@ -97,6 +106,11 @@ func (c *client) Completion(ctx context.Context, request providers.Request) prov
 }
 
 func (c *client) CompletionNonStreaming(ctx context.Context, request providers.Request) (string, error) {
+	ctx, span := tracing.Start(ctx, "llm.openai.completion_sync",
+		tracing.WithAttributes(tracing.String("model", string(c.model.Name))),
+	)
+	defer span.End()
+
 	c.logger.Infow("llm processing...")
 	var (
 		p       = c.chatCompletionNewParams(request)
@@ -139,6 +153,11 @@ Retry:
 }
 
 func (c *client) StructuredPredict(ctx context.Context, request providers.Request, model any) error {
+	ctx, span := tracing.Start(ctx, "llm.openai.structured_predict",
+		tracing.WithAttributes(tracing.String("model", string(c.model.Name))),
+	)
+	defer span.End()
+
 	messages := request.Messages()
 	if len(messages) == 0 || messages[0].Content == "" {
 		return fmt.Errorf("user request is empty")

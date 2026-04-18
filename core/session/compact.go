@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/basenana/friday/core/providers"
+	"github.com/basenana/friday/core/tracing"
 	"github.com/basenana/friday/core/types"
 )
 
@@ -57,6 +58,14 @@ func (s *Session) autoCompactHistory(ctx context.Context, req providers.Request)
 }
 
 func (s *Session) CompactHistory(ctx context.Context) error {
+	ctx, span := tracing.Start(ctx, "session.compact",
+		tracing.WithAttributes(
+			tracing.String("session.id", s.ID),
+			tracing.Int("history_len", int64(len(s.GetHistory()))),
+		),
+	)
+	defer span.End()
+
 	history := s.GetHistory()
 	if len(history) == 0 {
 		return nil
@@ -108,6 +117,11 @@ func (s *Session) CompactHistory(ctx context.Context) error {
 // SummarizeToCompactSummary produces a natural-language summary of the conversation
 // history suitable for the Claude-style compact format.
 func SummarizeToCompactSummary(ctx context.Context, llm providers.Client, history []types.Message) (string, error) {
+	ctx, span := tracing.Start(ctx, "session.summarize",
+		tracing.WithAttributes(tracing.Int("history_len", int64(len(history)))),
+	)
+	defer span.End()
+
 	if len(history) == 0 {
 		return "", nil
 	}

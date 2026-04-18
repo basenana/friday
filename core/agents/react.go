@@ -12,6 +12,7 @@ import (
 	"github.com/basenana/friday/core/providers"
 	"github.com/basenana/friday/core/session"
 	"github.com/basenana/friday/core/tools"
+	"github.com/basenana/friday/core/tracing"
 	"github.com/basenana/friday/core/types"
 )
 
@@ -30,6 +31,11 @@ func (a *react) Chat(ctx context.Context, req *api.Request) *api.Response {
 		sess = session.New(types.NewID(), a.llm)
 	}
 
+	ctx, span := tracing.Start(ctx, "agent.react.chat",
+		tracing.WithAttributes(tracing.String("session.id", sess.ID)),
+	)
+	defer span.End()
+
 	err := sess.RunHooks(ctx, types.SessionHookBeforeAgent, session.HookPayload{AgentRequest: req})
 	if err != nil {
 		resp.Fail(err)
@@ -44,6 +50,13 @@ func (a *react) Chat(ctx context.Context, req *api.Request) *api.Response {
 
 func (a *react) reactLoop(ctx context.Context, sess *session.Session, resp *api.Response, reqTools []*tools.Tool) {
 	defer resp.Close()
+
+	ctx, span := tracing.Start(ctx, "agent.react.loop",
+		tracing.WithAttributes(
+			tracing.String("session.id", sess.ID),
+		),
+	)
+	defer span.End()
 
 	// Merge agent tools with request tools (request tools take precedence)
 	mergedTools := make([]*tools.Tool, 0, len(a.tools)+len(reqTools))
@@ -69,8 +82,13 @@ func (a *react) reactLoop(ctx context.Context, sess *session.Session, resp *api.
 	)
 
 	defer func() {
+		elapsed := time.Since(startAt).String()
+		span.SetAttributes(
+			tracing.Int("loop_times", int64(loopTimes)),
+			tracing.String("elapsed", elapsed),
+		)
 		a.logger.Infow("react loop finish",
-			"loopTimes", loopTimes, "maxLoopTimes", a.option.MaxLoopTimes, "session", sess.ID, "elapsed", time.Since(startAt).String())
+			"loopTimes", loopTimes, "maxLoopTimes", a.option.MaxLoopTimes, "session", sess.ID, "elapsed", elapsed)
 	}()
 
 	for {
@@ -105,6 +123,14 @@ func (a *react) reactLoop(ctx context.Context, sess *session.Session, resp *api.
 }
 
 func (a *react) doAct(ctx context.Context, sess *session.Session, resp *api.Response, toolList []*tools.Tool, budget int) (bool, error) {
+	ctx, span := tracing.Start(ctx, "agent.react.act",
+		tracing.WithAttributes(
+			tracing.String("session.id", sess.ID),
+			tracing.Int("budget", int64(budget)),
+		),
+	)
+	defer span.End()
+
 	var (
 		content      string
 		reasoning    string
@@ -174,6 +200,11 @@ WaitMessage:
 		"fuzzyTokens", sess.Tokens(), "promptTokens", stream.Tokens().PromptTokens,
 		"cachedPromptTokens", stream.Tokens().CachedPromptTokens,
 		"completionTokens", stream.Tokens().CompletionTokens, "budget", budget, "session", sess.ID)
+	span.SetAttributes(
+		tracing.Int("prompt_tokens", stream.Tokens().PromptTokens),
+		tracing.Int("completion_tokens", stream.Tokens().CompletionTokens),
+		tracing.Int("tool_calls", int64(len(toolUse))),
+	)
 
 	// Record token checkpoint when LLM returns actual usage data.
 	// Providers that don't return PromptTokens will fall back to
@@ -239,6 +270,14 @@ WaitMessage:
 }
 
 func (a *react) doToolCalls(ctx context.Context, sess *session.Session, toolUses []providers.ToolCall, reasoning string, toolList []*tools.Tool) {
+	ctx, span := tracing.Start(ctx, "tools.call",
+		tracing.WithAttributes(
+			tracing.String("session.id", sess.ID),
+			tracing.Int("tool_count", int64(len(toolUses))),
+		),
+	)
+	defer span.End()
+
 	var (
 		result []*types.Message
 		update = make(chan toolExecutionResult, len(toolUses))
@@ -291,6 +330,15 @@ func (a *react) doToolCalls(ctx context.Context, sess *session.Session, toolUses
 }
 
 func (a *react) tryToolCall(ctx context.Context, sess *session.Session, use providers.ToolCall, reasoning string, toolList []*tools.Tool) []*types.Message {
+	ctx, span := tracing.Start(ctx, "tools.execute",
+		tracing.WithAttributes(
+			tracing.String("tool.name", use.Name),
+			tracing.String("tool.id", use.ID),
+			tracing.String("session.id", sess.ID),
+		),
+	)
+	defer span.End()
+
 	var (
 		result  []*types.Message
 		useMark = use.ID
@@ -325,10 +373,12 @@ func (a *react) tryToolCall(ctx context.Context, sess *session.Session, use prov
 	a.logger.Infow("using tool", "tool", toolUse.Name, "args", toolUse.Arguments, "session", sess.ID)
 	msg, isSucceed, err := toolCall(ctx, sess, toolUse, td)
 	if err != nil {
+		span.RecordError(err)
 		result = append(result, &types.Message{Role: types.RoleTool, ToolResult: &types.ToolResult{CallID: toolUse.ID(), Content: fmt.Sprintf("using tool failed: %s", err)}})
 		a.logger.Warnw("using tool failed", "tool", use.Name, "error", err, "session", sess.ID)
 		return result
 	}
+	span.SetStatus(tracing.StatusOK, "")
 
 	result = append(result, &types.Message{Role: types.RoleTool, ToolResult: &types.ToolResult{CallID: toolUse.ID(), Content: msg, Success: isSucceed}})
 	return result

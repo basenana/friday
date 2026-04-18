@@ -11,6 +11,7 @@ import (
 	"github.com/basenana/friday/core/providers"
 	"github.com/basenana/friday/core/session"
 	"github.com/basenana/friday/core/tools"
+	"github.com/basenana/friday/core/tracing"
 	"github.com/basenana/friday/core/types"
 )
 
@@ -38,6 +39,11 @@ func (t *ToolUse) ID() string {
 }
 
 func toolCall(ctx context.Context, sess *session.Session, use *ToolUse, td *tools.Tool) (string, bool, error) {
+	ctx, span := tracing.Start(ctx, "tools.run",
+		tracing.WithAttributes(tracing.String("tool.name", use.Name)),
+	)
+	defer span.End()
+
 	req := &tools.Request{Arguments: make(map[string]interface{}), SessionID: sess.ID}
 	if err := json.Unmarshal([]byte(use.Arguments), &req.Arguments); err != nil {
 		return "", false, fmt.Errorf("unmarshal json argument failed: %s", err)
