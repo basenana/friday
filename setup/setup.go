@@ -152,6 +152,7 @@ func NewAgent(sessionMgr SessionManager, cfg *config.Config, opts ...Option) (*A
 	skillHook := skills.NewHook(skillRegistry)
 	sess.RegisterHook(skillHook)
 	sess.RegisterHook(contextmgr.New(client, contextmgr.Config{
+		ContextWindow:      cfg.Model.ContextWindow,
 		SessionMemoryStore: sessionMemoryStoreFromManager(sessionMgr),
 	}))
 
