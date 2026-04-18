@@ -61,7 +61,7 @@ func (s *Session) CompactHistory(ctx context.Context) error {
 	ctx, span := tracing.Start(ctx, "session.compact",
 		tracing.WithAttributes(
 			tracing.String("session.id", s.ID),
-			tracing.Int("history_len", int64(len(s.GetHistory()))),
+			tracing.IntVal("history_len", len(s.GetHistory())),
 		),
 	)
 	defer span.End()
@@ -118,7 +118,7 @@ func (s *Session) CompactHistory(ctx context.Context) error {
 // history suitable for the Claude-style compact format.
 func SummarizeToCompactSummary(ctx context.Context, llm providers.Client, history []types.Message) (string, error) {
 	ctx, span := tracing.Start(ctx, "session.summarize",
-		tracing.WithAttributes(tracing.Int("history_len", int64(len(history)))),
+		tracing.WithAttributes(tracing.IntVal("history_len", len(history))),
 	)
 	defer span.End()
 

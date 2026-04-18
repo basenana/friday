@@ -39,7 +39,7 @@ func (t *ToolUse) ID() string {
 }
 
 func toolCall(ctx context.Context, sess *session.Session, use *ToolUse, td *tools.Tool) (string, bool, error) {
-	ctx, span := tracing.Start(ctx, "tools.run",
+	ctx, span := tracing.Start(ctx, "tools.handler",
 		tracing.WithAttributes(tracing.String("tool.name", use.Name)),
 	)
 	defer span.End()

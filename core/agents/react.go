@@ -31,11 +31,6 @@ func (a *react) Chat(ctx context.Context, req *api.Request) *api.Response {
 		sess = session.New(types.NewID(), a.llm)
 	}
 
-	ctx, span := tracing.Start(ctx, "agent.react.chat",
-		tracing.WithAttributes(tracing.String("session.id", sess.ID)),
-	)
-	defer span.End()
-
 	err := sess.RunHooks(ctx, types.SessionHookBeforeAgent, session.HookPayload{AgentRequest: req})
 	if err != nil {
 		resp.Fail(err)
@@ -51,7 +46,7 @@ func (a *react) Chat(ctx context.Context, req *api.Request) *api.Response {
 func (a *react) reactLoop(ctx context.Context, sess *session.Session, resp *api.Response, reqTools []*tools.Tool) {
 	defer resp.Close()
 
-	ctx, span := tracing.Start(ctx, "agent.react.loop",
+	ctx, span := tracing.Start(ctx, "agent.react.chat",
 		tracing.WithAttributes(
 			tracing.String("session.id", sess.ID),
 		),
@@ -84,7 +79,7 @@ func (a *react) reactLoop(ctx context.Context, sess *session.Session, resp *api.
 	defer func() {
 		elapsed := time.Since(startAt).String()
 		span.SetAttributes(
-			tracing.Int("loop_times", int64(loopTimes)),
+			tracing.IntVal("loop_times", loopTimes),
 			tracing.String("elapsed", elapsed),
 		)
 		a.logger.Infow("react loop finish",
@@ -126,7 +121,7 @@ func (a *react) doAct(ctx context.Context, sess *session.Session, resp *api.Resp
 	ctx, span := tracing.Start(ctx, "agent.react.act",
 		tracing.WithAttributes(
 			tracing.String("session.id", sess.ID),
-			tracing.Int("budget", int64(budget)),
+			tracing.IntVal("budget", budget),
 		),
 	)
 	defer span.End()
@@ -203,7 +198,7 @@ WaitMessage:
 	span.SetAttributes(
 		tracing.Int("prompt_tokens", stream.Tokens().PromptTokens),
 		tracing.Int("completion_tokens", stream.Tokens().CompletionTokens),
-		tracing.Int("tool_calls", int64(len(toolUse))),
+		tracing.IntVal("tool_calls", len(toolUse)),
 	)
 
 	// Record token checkpoint when LLM returns actual usage data.
@@ -270,10 +265,10 @@ WaitMessage:
 }
 
 func (a *react) doToolCalls(ctx context.Context, sess *session.Session, toolUses []providers.ToolCall, reasoning string, toolList []*tools.Tool) {
-	ctx, span := tracing.Start(ctx, "tools.call",
+	ctx, span := tracing.Start(ctx, "tools.batch",
 		tracing.WithAttributes(
 			tracing.String("session.id", sess.ID),
-			tracing.Int("tool_count", int64(len(toolUses))),
+			tracing.IntVal("tool_count", len(toolUses)),
 		),
 	)
 	defer span.End()
@@ -330,7 +325,7 @@ func (a *react) doToolCalls(ctx context.Context, sess *session.Session, toolUses
 }
 
 func (a *react) tryToolCall(ctx context.Context, sess *session.Session, use providers.ToolCall, reasoning string, toolList []*tools.Tool) []*types.Message {
-	ctx, span := tracing.Start(ctx, "tools.execute",
+	ctx, span := tracing.Start(ctx, "tools.invoke",
 		tracing.WithAttributes(
 			tracing.String("tool.name", use.Name),
 			tracing.String("tool.id", use.ID),

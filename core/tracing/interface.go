@@ -18,11 +18,12 @@ type Attribute struct {
 	Value any
 }
 
-// String constructors for Attribute with type safety at call sites.
-func String(key, value string) Attribute  { return Attribute{Key: key, Value: value} }
-func Int(key string, value int64) Attribute    { return Attribute{Key: key, Value: value} }
+// Attribute constructors with type safety at call sites.
+func String(key, value string) Attribute   { return Attribute{Key: key, Value: value} }
+func Int(key string, value int64) Attribute     { return Attribute{Key: key, Value: value} }
+func IntVal(key string, value int) Attribute    { return Attribute{Key: key, Value: int64(value)} }
 func Float(key string, value float64) Attribute { return Attribute{Key: key, Value: value} }
-func Bool(key string, value bool) Attribute    { return Attribute{Key: key, Value: value} }
+func Bool(key string, value bool) Attribute     { return Attribute{Key: key, Value: value} }
 
 // SpanOption configures span creation.
 type SpanOption func(*spanConfig)
@@ -50,6 +51,11 @@ func WithAttributes(attrs ...Attribute) SpanOption {
 type Tracer interface {
 	// Start creates a new span. The returned context carries the span
 	// so subsequent Start calls discover their parent.
+	//
+	// Note: Implementations should NOT extract attributes from opts.
+	// The tracing.Start() convenience function applies WithAttributes
+	// to the span automatically after creation. Parsing opts in the
+	// Tracer would cause attributes to be set twice.
 	Start(ctx context.Context, name string, opts ...SpanOption) (context.Context, Span)
 }
 

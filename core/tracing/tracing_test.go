@@ -110,13 +110,13 @@ func TestSpanParentChild(t *testing.T) {
 	ctx := context.Background()
 
 	ctx, parent := Start(ctx, "parent")
-	if mock.lastCtx != ctx {
-		t.Error("parent span should be in context")
+	if SpanFromContext(ctx) != parent {
+		t.Error("parent span should be retrievable from context")
 	}
 
 	childCtx, child := Start(ctx, "child")
-	if mock.lastCtx != childCtx {
-		t.Error("child span should be in context")
+	if SpanFromContext(childCtx) != child {
+		t.Error("child span should be retrievable from context")
 	}
 
 	// The mock tracer should have been called twice
@@ -174,6 +174,71 @@ func TestApplySpanOptionsEmpty(t *testing.T) {
 	}
 }
 
+func TestStartAppliesAttributesToSpan(t *testing.T) {
+	mock := &mockTracer{}
+	SetGlobalTracer(mock)
+	defer SetGlobalTracer(nil)
+
+	ctx := context.Background()
+	_, span := Start(ctx, "test.op",
+		WithAttributes(String("k1", "v1"), Int("k2", 42)),
+	)
+
+	ms, ok := span.(*mockSpan)
+	if !ok {
+		t.Fatal("expected *mockSpan")
+	}
+
+	// mockTracer.Start does NOT parse opts (per contract),
+	// so all attributes come from Start()'s SetAttributes call.
+	if len(ms.attrs) != 2 {
+		t.Fatalf("expected 2 attributes, got %d", len(ms.attrs))
+	}
+	if ms.attrs[0].Key != "k1" || ms.attrs[0].Value != "v1" {
+		t.Errorf("attr[0] = %v, want {k1, v1}", ms.attrs[0])
+	}
+	if ms.attrs[1].Key != "k2" || ms.attrs[1].Value != int64(42) {
+		t.Errorf("attr[1] = %v, want {k2, 42}", ms.attrs[1])
+	}
+}
+
+func TestStartNoAttributesSkipsSetAttributes(t *testing.T) {
+	mock := &mockTracer{}
+	SetGlobalTracer(mock)
+	defer SetGlobalTracer(nil)
+
+	ctx := context.Background()
+	_, span := Start(ctx, "test.no-attrs")
+
+	ms := span.(*mockSpan)
+	if len(ms.attrs) != 0 {
+		t.Errorf("expected 0 attributes, got %d", len(ms.attrs))
+	}
+}
+
+func TestIntValConstructor(t *testing.T) {
+	attr := IntVal("count", 7)
+	if attr.Key != "count" {
+		t.Errorf("key = %q, want %q", attr.Key, "count")
+	}
+	if attr.Value != int64(7) {
+		t.Errorf("value = %v (type %T), want int64(7)", attr.Value, attr.Value)
+	}
+}
+
+func TestSpanFromContextAfterStartWithNoop(t *testing.T) {
+	// With noop tracer, Start() still stores span in context
+	SetGlobalTracer(nil)
+
+	ctx := context.Background()
+	ctx, _ = Start(ctx, "test")
+
+	span := SpanFromContext(ctx)
+	if _, ok := span.(noopSpan); !ok {
+		t.Error("SpanFromContext should return noopSpan when using noop tracer")
+	}
+}
+
 // Mock implementation for testing
 
 type mockTracer struct {
@@ -184,8 +249,8 @@ type mockTracer struct {
 func (m *mockTracer) Start(ctx context.Context, name string, opts ...SpanOption) (context.Context, Span) {
 	m.startCount++
 	span := &mockSpan{name: name, tracer: m}
-	cfg := applySpanOptions(opts)
-	span.attrs = cfg.attributes
+	// Per Tracer contract: do NOT parse opts here.
+	// tracing.Start() applies WithAttributes automatically.
 	newCtx := ContextWithSpan(ctx, span)
 	m.lastCtx = newCtx
 	return newCtx, span

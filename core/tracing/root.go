@@ -36,5 +36,12 @@ func GlobalTracer() Tracer {
 //	ctx, span := tracing.Start(ctx, "agent.react.chat")
 //	defer span.End()
 func Start(ctx context.Context, name string, opts ...SpanOption) (context.Context, Span) {
-	return GlobalTracer().Start(ctx, name, opts...)
+	ctx, span := GlobalTracer().Start(ctx, name, opts...)
+	// Ensure span is always retrievable via SpanFromContext,
+	// regardless of whether the Tracer implementation stores it.
+	ctx = ContextWithSpan(ctx, span)
+	if cfg := applySpanOptions(opts); len(cfg.attributes) > 0 {
+		span.SetAttributes(cfg.attributes...)
+	}
+	return ctx, span
 }
