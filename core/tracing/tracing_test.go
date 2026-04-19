@@ -3,8 +3,48 @@ package tracing
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 )
+
+func TestTruncateAttr(t *testing.T) {
+	t.Run("short value unchanged", func(t *testing.T) {
+		attr := TruncateAttr("k", "hello")
+		if attr.Value != "hello" {
+			t.Errorf("expected %q, got %q", "hello", attr.Value)
+		}
+	})
+
+	t.Run("exact limit unchanged", func(t *testing.T) {
+		val := strings.Repeat("x", maxSpanAttrLen)
+		attr := TruncateAttr("k", val)
+		if attr.Value != val {
+			t.Errorf("value at exact limit should be unchanged")
+		}
+	})
+
+	t.Run("over limit gets truncated with marker", func(t *testing.T) {
+		val := strings.Repeat("x", maxSpanAttrLen+100)
+		attr := TruncateAttr("k", val)
+		got, ok := attr.Value.(string)
+		if !ok {
+			t.Fatal("expected string value")
+		}
+		if len(got) >= len(val) {
+			t.Error("expected value to be shorter than input")
+		}
+		if !strings.HasSuffix(got, "...[truncated]") {
+			t.Errorf("expected truncation marker, got suffix: %q", got[len(got)-20:])
+		}
+	})
+
+	t.Run("key is preserved", func(t *testing.T) {
+		attr := TruncateAttr("my.key", "value")
+		if attr.Key != "my.key" {
+			t.Errorf("expected key %q, got %q", "my.key", attr.Key)
+		}
+	})
+}
 
 func TestNoopTracerIsZeroCost(t *testing.T) {
 	tracer := nopTracer{}

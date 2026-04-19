@@ -47,6 +47,21 @@ func DeferStatus(span Span, errPtr *error) {
 	}
 }
 
+// maxSpanAttrLen is the maximum byte length for span attribute string values.
+// Most tracing backends (OTLP, Jaeger) cap attribute values around 4KB;
+// we use 2048 to stay well within that limit.
+const maxSpanAttrLen = 2048
+
+// TruncateAttr returns a String attribute whose value is capped at maxSpanAttrLen
+// bytes. If the value is within the limit it is returned unchanged; otherwise a
+// truncation marker is appended so observers know the value was cut.
+func TruncateAttr(key, value string) Attribute {
+	if len(value) <= maxSpanAttrLen {
+		return String(key, value)
+	}
+	return String(key, value[:maxSpanAttrLen]+"...[truncated]")
+}
+
 // Start is a convenience function that calls GlobalTracer().Start().
 // This is the primary entry point for instrumentation code:
 //

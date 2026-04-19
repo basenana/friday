@@ -42,6 +42,7 @@ func toolCall(ctx context.Context, sess *session.Session, use *ToolUse, td *tool
 	ctx, span := tracing.Start(ctx, "tools.handler",
 		tracing.WithAttributes(
 			tracing.String("tool.name", use.Name),
+			tracing.TruncateAttr("tool.input", use.Arguments),
 			tracing.String("session.id", sess.ID),
 			tracing.String("session.root_id", sess.Root.ID),
 		),
@@ -64,6 +65,7 @@ func toolCall(ctx context.Context, sess *session.Session, use *ToolUse, td *tool
 		return "", false, fmt.Errorf("marshal tool %s result failed: %s", use.Name, err)
 	}
 
+	span.SetAttributes(tracing.TruncateAttr("tool.output", string(content)))
 	return string(content), !result.IsError, nil
 }
 

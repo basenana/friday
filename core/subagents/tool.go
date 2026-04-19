@@ -33,6 +33,7 @@ func callSubagentTool(agents []ExpertAgent, sess *session.Session, subagentTools
 		ctx, span := tracing.Start(ctx, "subagent.call",
 			tracing.WithAttributes(
 				tracing.String("subagent.name", agentName),
+				tracing.TruncateAttr("subagent.input", userMessage),
 				tracing.String("session.id", subSession.ID),
 				tracing.String("parent_session.id", sess.ID),
 				tracing.String("session.root_id", subSession.Root.ID),
@@ -55,8 +56,10 @@ func callSubagentTool(agents []ExpertAgent, sess *session.Session, subagentTools
 					return tools.NewToolResultError(err.Error()), nil
 				}
 
+				output := FormatReport(BuildReport(userMessage, content))
+				span.SetAttributes(tracing.TruncateAttr("subagent.output", output))
 				span.SetStatus(tracing.StatusOK, "")
-				return tools.NewToolResultText(FormatReport(BuildReport(userMessage, content))), nil
+				return tools.NewToolResultText(output), nil
 			}
 		}
 
