@@ -10,6 +10,18 @@ import (
 	"github.com/basenana/friday/core/types"
 )
 
+func TestNewClientInsecureSkipVerify(t *testing.T) {
+	secure := newClient("https://api.openai.com", "key", Model{Name: "gpt-test", InsecureSkipVerify: false})
+	if secure == nil {
+		t.Fatal("expected client to be initialized")
+	}
+
+	insecure := newClient("https://api.openai.com", "key", Model{Name: "gpt-test", InsecureSkipVerify: true})
+	if insecure == nil {
+		t.Fatal("expected insecure client to be initialized")
+	}
+}
+
 func TestAssistantMessageParamIncludesContentToolCallsAndReasoning(t *testing.T) {
 	msg := types.Message{
 		Role:      types.RoleAssistant,

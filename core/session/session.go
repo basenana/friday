@@ -68,11 +68,14 @@ func New(id string, llm providers.Client, options ...Option) *Session {
 
 func (s *Session) Fork() *Session {
 	s.mu.Lock()
+	history := make([]types.Message, len(s.History))
+	copy(history, s.History)
+	history = trimOrphanedToolCalls(history)
 	fork := &Session{
 		ID:               types.NewID(),
 		Root:             s.Root,
 		Parent:           s,
-		History:          make([]types.Message, len(s.History)),
+		History:          history,
 		Context:          cloneContextState(s.Context),
 		State:            s.State,
 		CreatedAt:        time.Now(),
@@ -81,11 +84,49 @@ func (s *Session) Fork() *Session {
 		hooks:            s.hooks,
 		llm:              s.llm,
 	}
-	copy(fork.History, s.History)
 	s.Children = append(s.Children, fork)
 	s.mu.Unlock()
 
 	return fork
+}
+
+// trimOrphanedToolCalls removes the last assistant tool-call message if any of
+// its calls lack a corresponding tool result. Only the final tool-call message
+// is inspected — this is sufficient because orphaned calls only arise at the
+// tail of history (Fork is called mid-execution, before the result is appended).
+func trimOrphanedToolCalls(history []types.Message) []types.Message {
+	// Collect all tool result call IDs present in history
+	resultIDs := make(map[string]bool)
+	for _, msg := range history {
+		if msg.IsToolResult() && msg.ToolResult != nil {
+			resultIDs[msg.ToolResult.CallID] = true
+		}
+	}
+
+	// Find the last assistant message with tool calls that has unpaired calls
+	cutAt := -1
+	for i := len(history) - 1; i >= 0; i-- {
+		msg := history[i]
+		if !msg.IsToolCall() {
+			continue
+		}
+		allPaired := true
+		for _, tc := range msg.ToolCalls {
+			if !resultIDs[tc.ID] {
+				allPaired = false
+				break
+			}
+		}
+		if !allPaired {
+			cutAt = i
+		}
+		break
+	}
+
+	if cutAt < 0 {
+		return history
+	}
+	return history[:cutAt]
 }
 
 func (s *Session) AppendMessage(msgList ...*types.Message) {

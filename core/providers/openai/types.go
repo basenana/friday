@@ -13,6 +13,7 @@ type Model struct {
 	QPM              int64
 	Proxy            string
 	ContextWindow    int64
+	InsecureSkipVerify bool
 }
 
 type ToolUse struct {

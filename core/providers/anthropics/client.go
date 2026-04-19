@@ -23,13 +23,14 @@ import (
 )
 
 type Model struct {
-	Name          string
-	Temperature   *float64
-	MaxTokens     *int64
-	StrictMode    bool
-	QPM           int64
-	Proxy         string
-	ContextWindow int64
+	Name               string
+	Temperature        *float64
+	MaxTokens          *int64
+	StrictMode         bool
+	QPM                int64
+	Proxy              string
+	ContextWindow      int64
+	InsecureSkipVerify bool
 }
 
 type client struct {
@@ -65,6 +66,7 @@ func (c *client) Completion(ctx context.Context, request providers.Request) prov
 			)
 			if err != nil {
 				span.RecordError(err)
+				span.SetStatus(tracing.StatusError, err.Error())
 			} else {
 				span.SetStatus(tracing.StatusOK, "")
 			}
@@ -429,7 +431,7 @@ func New(host, apiKey string, model Model) providers.Client {
 }
 
 func newClient(host, apiKey string, model Model) *client {
-	tp := &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}
+	tp := &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: model.InsecureSkipVerify}}
 	if model.Proxy == "" {
 		tp.Proxy = http.ProxyFromEnvironment
 	} else {

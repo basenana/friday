@@ -12,6 +12,7 @@ import (
 	"github.com/basenana/friday/core/types"
 )
 
+
 func TestExtractFileRefsFromHistory(t *testing.T) {
 	now := time.Now()
 	history := []types.Message{

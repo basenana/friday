@@ -9,6 +9,18 @@ import (
 	"github.com/basenana/friday/core/types"
 )
 
+func TestNewClientInsecureSkipVerify(t *testing.T) {
+	secure := newClient("https://api.anthropic.com", "key", Model{Name: "claude-test", InsecureSkipVerify: false})
+	if secure == nil {
+		t.Fatal("expected client to be initialized")
+	}
+
+	insecure := newClient("https://api.anthropic.com", "key", Model{Name: "claude-test", InsecureSkipVerify: true})
+	if insecure == nil {
+		t.Fatal("expected insecure client to be initialized")
+	}
+}
+
 func TestMessageCreateParamsKeepsMixedAssistantTextAndToolUseInSingleMessage(t *testing.T) {
 	cli := &client{model: Model{Name: "claude-test"}}
 	req := providers.NewRequest("", types.Message{

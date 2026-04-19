@@ -58,6 +58,7 @@ func (c *client) Completion(ctx context.Context, request providers.Request) prov
 			)
 			if err != nil {
 				span.RecordError(err)
+				span.SetStatus(tracing.StatusError, err.Error())
 			} else {
 				span.SetStatus(tracing.StatusOK, "")
 			}
@@ -284,7 +285,7 @@ func New(host, apiKey string, model Model) providers.Client {
 }
 
 func newClient(host, apiKey string, model Model) *client {
-	tp := &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}
+	tp := &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: model.InsecureSkipVerify}}
 	// Use system proxy by default if no explicit proxy is configured
 	if model.Proxy == "" {
 		tp.Proxy = http.ProxyFromEnvironment

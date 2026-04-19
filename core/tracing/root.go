@@ -42,6 +42,7 @@ func GlobalTracer() Tracer {
 func DeferStatus(span Span, errPtr *error) {
 	if *errPtr != nil {
 		span.RecordError(*errPtr)
+		span.SetStatus(StatusError, (*errPtr).Error())
 	} else {
 		span.SetStatus(StatusOK, "")
 	}
