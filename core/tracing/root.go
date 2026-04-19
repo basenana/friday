@@ -30,6 +30,23 @@ func GlobalTracer() Tracer {
 	return globalTracer
 }
 
+// DeferStatus is a helper for the common defer pattern that records error
+// status on a span. Use with named return values:
+//
+//	func foo() (retErr error) {
+//	    ctx, span := tracing.Start(ctx, "op")
+//	    defer span.End()
+//	    defer tracing.DeferStatus(span, &retErr)
+//	    ...
+//	}
+func DeferStatus(span Span, errPtr *error) {
+	if *errPtr != nil {
+		span.RecordError(*errPtr)
+	} else {
+		span.SetStatus(StatusOK, "")
+	}
+}
+
 // Start is a convenience function that calls GlobalTracer().Start().
 // This is the primary entry point for instrumentation code:
 //

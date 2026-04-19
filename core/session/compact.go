@@ -61,6 +61,7 @@ func (s *Session) CompactHistory(ctx context.Context) error {
 	ctx, span := tracing.Start(ctx, "session.compact",
 		tracing.WithAttributes(
 			tracing.String("session.id", s.ID),
+			tracing.String("session.root_id", s.Root.ID),
 			tracing.IntVal("history_len", len(s.GetHistory())),
 		),
 	)

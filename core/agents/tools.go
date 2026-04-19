@@ -38,11 +38,16 @@ func (t *ToolUse) ID() string {
 	return t.GenID
 }
 
-func toolCall(ctx context.Context, sess *session.Session, use *ToolUse, td *tools.Tool) (string, bool, error) {
+func toolCall(ctx context.Context, sess *session.Session, use *ToolUse, td *tools.Tool) (_ string, _ bool, retErr error) {
 	ctx, span := tracing.Start(ctx, "tools.handler",
-		tracing.WithAttributes(tracing.String("tool.name", use.Name)),
+		tracing.WithAttributes(
+			tracing.String("tool.name", use.Name),
+			tracing.String("session.id", sess.ID),
+			tracing.String("session.root_id", sess.Root.ID),
+		),
 	)
 	defer span.End()
+	defer func() { tracing.DeferStatus(span, &retErr) }()
 
 	req := &tools.Request{Arguments: make(map[string]interface{}), SessionID: sess.ID}
 	if err := json.Unmarshal([]byte(use.Arguments), &req.Arguments); err != nil {

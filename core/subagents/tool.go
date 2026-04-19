@@ -35,6 +35,7 @@ func callSubagentTool(agents []ExpertAgent, sess *session.Session, subagentTools
 				tracing.String("subagent.name", agentName),
 				tracing.String("session.id", subSession.ID),
 				tracing.String("parent_session.id", sess.ID),
+				tracing.String("session.root_id", subSession.Root.ID),
 			),
 		)
 		defer span.End()
@@ -50,13 +51,16 @@ func callSubagentTool(agents []ExpertAgent, sess *session.Session, subagentTools
 				}
 				content, err := api.ReadAllContent(ctx, agt.Agent.Chat(ctx, req))
 				if err != nil {
+					span.SetStatus(tracing.StatusError, err.Error())
 					return tools.NewToolResultError(err.Error()), nil
 				}
 
+				span.SetStatus(tracing.StatusOK, "")
 				return tools.NewToolResultText(FormatReport(BuildReport(userMessage, content))), nil
 			}
 		}
 
+		span.SetStatus(tracing.StatusError, fmt.Sprintf("subagent %s not found", agentName))
 		return tools.NewToolResultError(fmt.Sprintf("subagent %s not found", agentName)), nil
 	}
 }

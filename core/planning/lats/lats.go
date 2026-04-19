@@ -83,7 +83,7 @@ func (a *Agent) runStep(ctx context.Context) (string, bool, error) {
 	for _, candidate := range candidates {
 		a.logger.Infow("[TREE] generated new reasoning step", "candidate", candidate)
 		n := newNode(candidate)
-		crtNode.Expend(n, nil)
+		crtNode.Expend(ctx, n, nil)
 		nextMove = append(nextMove, n)
 	}
 
@@ -141,7 +141,7 @@ func (a *Agent) runStep(ctx context.Context) (string, bool, error) {
 
 			a.logger.Infow("[TREE] node evaluate finish", "score", e.Score, "isDone", e.IsDone, "reasoning", e.Reasoning)
 			nn := newNode(reasoning)
-			node.Expend(nn, e)
+			node.Expend(batchCtx, nn, e)
 			if nn.evaluation.IsDone {
 				a.logger.Infow("[TREE] found solution node", "node", nn.Latest())
 				solutionQueue <- nn

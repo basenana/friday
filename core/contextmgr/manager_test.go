@@ -110,11 +110,15 @@ func TestBeforeModelKeepsFullHistoryBelowSoftThreshold(t *testing.T) {
 }
 
 func TestBeforeModelSetsPromptCacheKeyFromRootSession(t *testing.T) {
+	// Need projectedTokens > defaultSessionMemoryThreshold (15000) to trigger cache key.
+	// FuzzyTokens = runes * 0.5, so 31000 chars yields ~15500 tokens.
+	bigContent := strings.Repeat("x", 31000)
+
 	rootSess := session.New("root-session", nil, session.WithHistory(
-		types.Message{Role: types.RoleUser, Content: "Root user request."},
+		types.Message{Role: types.RoleUser, Content: bigContent},
 	))
 	forkedSess := session.New("forked-session", nil, session.WithHistory(
-		types.Message{Role: types.RoleUser, Content: "Forked user request."},
+		types.Message{Role: types.RoleUser, Content: bigContent},
 	))
 	forkedSess.Root = rootSess
 

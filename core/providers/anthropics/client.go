@@ -63,6 +63,11 @@ func (c *client) Completion(ctx context.Context, request providers.Request) prov
 				tracing.Int("prompt_tokens", resp.Token.PromptTokens),
 				tracing.Int("completion_tokens", resp.Token.CompletionTokens),
 			)
+			if err != nil {
+				span.RecordError(err)
+			} else {
+				span.SetStatus(tracing.StatusOK, "")
+			}
 			sec := time.Since(startAt).Seconds()
 			if sec < 1 {
 				sec = 1
@@ -105,11 +110,12 @@ func (c *client) Completion(ctx context.Context, request providers.Request) prov
 	return resp
 }
 
-func (c *client) CompletionNonStreaming(ctx context.Context, request providers.Request) (string, error) {
+func (c *client) CompletionNonStreaming(ctx context.Context, request providers.Request) (_ string, retErr error) {
 	ctx, span := tracing.Start(ctx, "llm.anthropic.completion_sync",
 		tracing.WithAttributes(tracing.String("model", c.model.Name)),
 	)
 	defer span.End()
+	defer func() { tracing.DeferStatus(span, &retErr) }()
 
 	c.logger.Infow("llm processing...")
 	var (
@@ -155,11 +161,12 @@ Retry:
 	return "", fmt.Errorf("no text content returned")
 }
 
-func (c *client) StructuredPredict(ctx context.Context, request providers.Request, model any) error {
+func (c *client) StructuredPredict(ctx context.Context, request providers.Request, model any) (retErr error) {
 	ctx, span := tracing.Start(ctx, "llm.anthropic.structured_predict",
 		tracing.WithAttributes(tracing.String("model", c.model.Name)),
 	)
 	defer span.End()
+	defer func() { tracing.DeferStatus(span, &retErr) }()
 
 	messages := request.Messages()
 	if len(messages) == 0 || messages[0].Content == "" {

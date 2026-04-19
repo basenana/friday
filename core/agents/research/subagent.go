@@ -10,6 +10,7 @@ import (
 	"github.com/basenana/friday/core/session"
 	"github.com/basenana/friday/core/subagents"
 	"github.com/basenana/friday/core/tools"
+	"github.com/basenana/friday/core/tracing"
 )
 
 func newResearchLeader(agt *Agent, sess *session.Session, agentTools []*tools.Tool) agents.Agent {
@@ -62,10 +63,22 @@ func blockingSubagentTool(worker agents.Agent, sess *session.Session, agentTools
 		)
 
 		subRoot := sess.Fork()
+		tracing.SpanFromContext(ctx).AddEvent("session.fork",
+			tracing.String("session.id", subRoot.ID),
+			tracing.String("parent_session.id", sess.ID),
+			tracing.String("session.root_id", subRoot.Root.ID),
+			tracing.String("source", "research.batch"),
+		)
 
 		for _, t := range taskDescList {
 			func(task string) {
 				subSession := subRoot.Fork()
+				tracing.SpanFromContext(ctx).AddEvent("session.fork",
+					tracing.String("session.id", subSession.ID),
+					tracing.String("parent_session.id", subRoot.ID),
+					tracing.String("session.root_id", subSession.Root.ID),
+					tracing.String("source", "research.task"),
+				)
 				content, err := agtapi.ReadAllContent(ctx, worker.Chat(ctx, &agtapi.Request{
 					Session:     subSession,
 					UserMessage: injectResearchReportRequest(task),

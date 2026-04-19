@@ -49,6 +49,7 @@ func (a *react) reactLoop(ctx context.Context, sess *session.Session, resp *api.
 	ctx, span := tracing.Start(ctx, "agent.react.chat",
 		tracing.WithAttributes(
 			tracing.String("session.id", sess.ID),
+			tracing.String("session.root_id", sess.Root.ID),
 		),
 	)
 	defer span.End()
@@ -121,6 +122,7 @@ func (a *react) doAct(ctx context.Context, sess *session.Session, resp *api.Resp
 	ctx, span := tracing.Start(ctx, "agent.react.act",
 		tracing.WithAttributes(
 			tracing.String("session.id", sess.ID),
+			tracing.String("session.root_id", sess.Root.ID),
 			tracing.IntVal("budget", budget),
 		),
 	)
@@ -268,6 +270,7 @@ func (a *react) doToolCalls(ctx context.Context, sess *session.Session, toolUses
 	ctx, span := tracing.Start(ctx, "tools.batch",
 		tracing.WithAttributes(
 			tracing.String("session.id", sess.ID),
+			tracing.String("session.root_id", sess.Root.ID),
 			tracing.IntVal("tool_count", len(toolUses)),
 		),
 	)
@@ -330,6 +333,7 @@ func (a *react) tryToolCall(ctx context.Context, sess *session.Session, use prov
 			tracing.String("tool.name", use.Name),
 			tracing.String("tool.id", use.ID),
 			tracing.String("session.id", sess.ID),
+			tracing.String("session.root_id", sess.Root.ID),
 		),
 	)
 	defer span.End()
@@ -353,12 +357,14 @@ func (a *react) tryToolCall(ctx context.Context, sess *session.Session, use prov
 	td := getToolByName(toolList, use.Name)
 	if td == nil {
 		msg := fmt.Sprintf("tool %s not found", use.Name)
+		span.SetStatus(tracing.StatusError, msg)
 		result = append(result, &types.Message{Role: types.RoleTool, ToolResult: &types.ToolResult{CallID: useMark, Content: msg}})
 		a.logger.Warnw(msg, "tool", use.Name, "session", sess.ID)
 		return result
 	}
 
 	if use.Error != "" {
+		span.SetStatus(tracing.StatusError, use.Error)
 		result = append(result, &types.Message{Role: types.RoleTool, ToolResult: &types.ToolResult{CallID: useMark, Content: use.Error}})
 		a.logger.Warnw("try tool call error", "tool", use.Name, "error", use.Error, "session", sess.ID)
 		return result

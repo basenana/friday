@@ -239,6 +239,60 @@ func TestSpanFromContextAfterStartWithNoop(t *testing.T) {
 	}
 }
 
+func TestDeferStatusWithNilError(t *testing.T) {
+	mock := &mockTracer{}
+	SetGlobalTracer(mock)
+	defer SetGlobalTracer(nil)
+
+	ctx := context.Background()
+	_, span := Start(ctx, "test.ok")
+	ms := span.(*mockSpan)
+
+	var err error
+	DeferStatus(span, &err)
+
+	if ms.status != StatusOK {
+		t.Errorf("expected StatusOK, got %v", ms.status)
+	}
+	if ms.err != nil {
+		t.Errorf("expected nil error, got %v", ms.err)
+	}
+}
+
+func TestDeferStatusWithError(t *testing.T) {
+	mock := &mockTracer{}
+	SetGlobalTracer(mock)
+	defer SetGlobalTracer(nil)
+
+	ctx := context.Background()
+	_, span := Start(ctx, "test.err")
+	ms := span.(*mockSpan)
+
+	err := errors.New("something failed")
+	DeferStatus(span, &err)
+
+	if ms.status != StatusError {
+		t.Errorf("expected StatusError, got %v", ms.status)
+	}
+	if ms.err == nil || ms.err.Error() != "something failed" {
+		t.Errorf("expected recorded error, got %v", ms.err)
+	}
+}
+
+func TestDeferStatusWithNoopSpan(t *testing.T) {
+	SetGlobalTracer(nil)
+
+	ctx := context.Background()
+	_, span := Start(ctx, "test.noop")
+
+	// Should not panic with noop span
+	var err error
+	DeferStatus(span, &err)
+
+	err = errors.New("fail")
+	DeferStatus(span, &err)
+}
+
 // Mock implementation for testing
 
 type mockTracer struct {

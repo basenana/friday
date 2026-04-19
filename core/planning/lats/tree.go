@@ -1,10 +1,12 @@
 package lats
 
 import (
+	"context"
 	"encoding/xml"
 	"math"
 
 	"github.com/basenana/friday/core/session"
+	"github.com/basenana/friday/core/tracing"
 	"github.com/basenana/friday/core/types"
 	"github.com/google/uuid"
 )
@@ -35,7 +37,7 @@ func newNode(reasoning string) *SearchNode {
 	return &SearchNode{id: uuid.New().String(), reasoning: []string{reasoning}}
 }
 
-func (n *SearchNode) Expend(node *SearchNode, evaluation *Evaluation) {
+func (n *SearchNode) Expend(ctx context.Context, node *SearchNode, evaluation *Evaluation) {
 	if evaluation == nil { // new candidate
 		evaluation = &Evaluation{Score: 1}
 	}
@@ -50,6 +52,12 @@ func (n *SearchNode) Expend(node *SearchNode, evaluation *Evaluation) {
 	node.parent = n
 	n.children = append(n.children, node)
 	node.sess = n.sess.Fork()
+	tracing.SpanFromContext(ctx).AddEvent("session.fork",
+		tracing.String("session.id", node.sess.ID),
+		tracing.String("parent_session.id", n.sess.ID),
+		tracing.String("session.root_id", node.sess.Root.ID),
+		tracing.String("source", "lats"),
+	)
 	if msg := node.Latest(); msg != "" {
 		node.sess.AppendMessage(&types.Message{Role: types.RoleAssistant, Content: msg})
 	}
