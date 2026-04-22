@@ -1,45 +1,34 @@
 package types
 
 import (
-	"encoding/json"
 	"time"
 )
 
+type EventType string
+
+const (
+	EventAgentStart     EventType = "agent.start"
+	EventAgentFinish    EventType = "agent.finish"
+	EventLoopStart      EventType = "loop.start"
+	EventModelStart     EventType = "model.start"
+	EventModelFinish    EventType = "model.finish"
+	EventToolStart      EventType = "tool.start"
+	EventToolFinish     EventType = "tool.finish"
+	EventCompactStart   EventType = "compact.start"
+	EventCompactFinish  EventType = "compact.finish"
+	EventCompactSkip    EventType = "compact.skip"
+	EventSubagentStart  EventType = "subagent.start"
+	EventSubagentFinish EventType = "subagent.finish"
+	EventTodoUpdate     EventType = "todo.update"
+)
+
 type Event struct {
-	Id              string            `json:"id"`
-	Type            string            `json:"type"`
-	Source          string            `json:"source"`
-	SpecVersion     string            `json:"specversion"`
-	DataContentType string            `json:"datacontenttype"`
-	Data            string            `json:"data"`
-	ExtraValue      map[string]string `json:"extra_value,omitempty"`
-	Time            time.Time         `json:"time"`
-}
-
-func NewEvent(source, msg string) *Event {
-	return &Event{
-		Id:              NewID(),
-		Type:            "event",
-		Source:          source,
-		SpecVersion:     "1.0",
-		DataContentType: "text/plain",
-		Data:            msg,
-		Time:            time.Now(),
-	}
-}
-
-func NewEventData(evtType, source string, obj any) *Event {
-	data, _ := json.Marshal(obj)
-	evt := &Event{
-		Id:              NewID(),
-		Type:            evtType,
-		Source:          source,
-		SpecVersion:     "1.0",
-		DataContentType: "application/json",
-		Data:            string(data),
-		Time:            time.Now(),
-	}
-	return evt
+	Type      EventType         `json:"type"`
+	SessionID string            `json:"session_id"`
+	RootID    string            `json:"root_id"`
+	Seq       int64             `json:"seq"`
+	Data      map[string]string `json:"data,omitempty"`
+	Time      time.Time         `json:"time"`
 }
 
 type Delta struct {

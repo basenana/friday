@@ -3,6 +3,7 @@ package session
 import (
 	"testing"
 
+	corelogger "github.com/basenana/friday/core/logger"
 	"github.com/basenana/friday/core/types"
 )
 
@@ -238,6 +239,115 @@ func TestFork_RegisteredInParentChildren(t *testing.T) {
 	}
 	if parent.Children[0] != f1 || parent.Children[1] != f2 {
 		t.Fatal("children not registered in order")
+	}
+}
+
+type captureLogger struct {
+	warns []string
+}
+
+func (l *captureLogger) Named(name string) corelogger.Logger { return l }
+func (l *captureLogger) With(keysAndValues ...interface{}) corelogger.Logger {
+	return l
+}
+func (l *captureLogger) Info(args ...interface{})                        {}
+func (l *captureLogger) Warn(args ...interface{})                        {}
+func (l *captureLogger) Error(args ...interface{})                       {}
+func (l *captureLogger) Infof(template string, args ...interface{})      {}
+func (l *captureLogger) Warnf(template string, args ...interface{})      {}
+func (l *captureLogger) Errorf(template string, args ...interface{})     {}
+func (l *captureLogger) Infow(msg string, keysAndValues ...interface{})  {}
+func (l *captureLogger) Errorw(msg string, keysAndValues ...interface{}) {}
+func (l *captureLogger) Warnw(msg string, keysAndValues ...interface{}) {
+	l.warns = append(l.warns, msg)
+}
+
+func TestPublishEvent_AssignsSeqAndSessionMetadata(t *testing.T) {
+	ch := make(chan types.Event, 2)
+	sess := New("test-session", nil, WithEvents(ch))
+
+	sess.PublishEvent(types.Event{Type: types.EventAgentStart})
+	sess.PublishEvent(types.Event{Type: types.EventModelStart})
+
+	first := <-ch
+	second := <-ch
+
+	if first.SessionID != sess.ID {
+		t.Fatalf("expected session_id %q, got %q", sess.ID, first.SessionID)
+	}
+	if first.RootID != sess.Root.ID {
+		t.Fatalf("expected root_id %q, got %q", sess.Root.ID, first.RootID)
+	}
+	if first.Seq <= 0 {
+		t.Fatalf("expected positive seq, got %d", first.Seq)
+	}
+	if second.Seq != first.Seq+1 {
+		t.Fatalf("expected seq to increment by 1, got first=%d second=%d", first.Seq, second.Seq)
+	}
+}
+
+func TestPublishEvent_UsesRootScopedSequence(t *testing.T) {
+	rootCh := make(chan types.Event, 2)
+	root := New("root-session", nil, WithEvents(rootCh))
+	child := root.Fork()
+
+	root.PublishEvent(types.Event{Type: types.EventAgentStart})
+	child.PublishEvent(types.Event{Type: types.EventToolStart})
+
+	rootFirst := <-rootCh
+	rootSecond := <-rootCh
+	if rootFirst.Seq != 1 || rootSecond.Seq != 2 {
+		t.Fatalf("expected root-scoped sequence [1,2], got [%d,%d]", rootFirst.Seq, rootSecond.Seq)
+	}
+	if rootSecond.RootID != root.ID {
+		t.Fatalf("expected child event root_id %q, got %q", root.ID, rootSecond.RootID)
+	}
+
+	otherCh := make(chan types.Event, 1)
+	otherRoot := New("other-root", nil, WithEvents(otherCh))
+	otherRoot.PublishEvent(types.Event{Type: types.EventAgentStart})
+
+	otherEvt := <-otherCh
+	if otherEvt.Seq != 1 {
+		t.Fatalf("expected independent root sequence to start at 1, got %d", otherEvt.Seq)
+	}
+}
+
+func TestSubscribeEventsOnRootAfterForkReceivesChildEvents(t *testing.T) {
+	root := New("root-session", nil)
+	child := root.Fork()
+	ch := make(chan types.Event, 1)
+
+	root.SubscribeEvents(ch)
+	child.PublishEvent(types.Event{Type: types.EventToolStart})
+
+	evt := <-ch
+	if evt.SessionID != child.ID {
+		t.Fatalf("expected child session_id %q, got %q", child.ID, evt.SessionID)
+	}
+	if evt.RootID != root.ID {
+		t.Fatalf("expected root_id %q, got %q", root.ID, evt.RootID)
+	}
+	if evt.Type != types.EventToolStart {
+		t.Fatalf("expected event type %q, got %q", types.EventToolStart, evt.Type)
+	}
+}
+
+func TestPublishEvent_LogsWhenSubscriberChannelIsBlocked(t *testing.T) {
+	oldRoot := corelogger.Root()
+	testLogger := &captureLogger{}
+	corelogger.SetRoot(testLogger)
+	defer corelogger.SetRoot(oldRoot)
+
+	ch := make(chan types.Event)
+	sess := New("test-session", nil, WithEvents(ch))
+	sess.PublishEvent(types.Event{Type: types.EventAgentStart})
+
+	if len(testLogger.warns) == 0 {
+		t.Fatal("expected warning log when event channel is blocked")
+	}
+	if testLogger.warns[0] != "failed to publish session event" {
+		t.Fatalf("unexpected warning message: %q", testLogger.warns[0])
 	}
 }
 

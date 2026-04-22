@@ -3,6 +3,7 @@ package agents
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -38,6 +39,10 @@ func (a *react) Chat(ctx context.Context, req *api.Request) *api.Response {
 	}
 
 	sess.AppendMessage(&types.Message{Role: types.RoleUser, Content: req.UserMessage, Image: req.Image})
+	sess.PublishEvent(types.Event{
+		Type: types.EventAgentStart,
+		Data: map[string]string{"message": logger.FirstLine(req.UserMessage)},
+	})
 	a.logger.Infow("handle request", "message", logger.FirstLine(req.UserMessage), "session", sess.ID)
 	go a.reactLoop(ctx, sess, resp, req.Tools)
 	return resp
@@ -85,6 +90,10 @@ func (a *react) reactLoop(ctx context.Context, sess *session.Session, resp *api.
 		)
 		a.logger.Infow("react loop finish",
 			"loopTimes", loopTimes, "maxLoopTimes", a.option.MaxLoopTimes, "session", sess.ID, "elapsed", elapsed)
+		sess.PublishEvent(types.Event{
+			Type: types.EventAgentFinish,
+			Data: map[string]string{"loop_times": strconv.Itoa(loopTimes), "elapsed": elapsed},
+		})
 	}()
 
 	for {
@@ -128,6 +137,11 @@ func (a *react) doAct(ctx context.Context, sess *session.Session, resp *api.Resp
 	)
 	defer span.End()
 
+	sess.PublishEvent(types.Event{
+		Type: types.EventLoopStart,
+		Data: map[string]string{"budget": strconv.Itoa(budget)},
+	})
+
 	var (
 		content      string
 		reasoning    string
@@ -154,7 +168,8 @@ func (a *react) doAct(ctx context.Context, sess *session.Session, resp *api.Resp
 			"This is your final response. Please provide a comprehensive summary including: " +
 			"1) Task objective, 2) Progress made, 3) Key findings, 4) Remaining issues. " +
 			"After this response, the session will end. From now on, every character you output will become part of the final report:"})
-	}
+		}
+	sess.PublishEvent(types.Event{Type: types.EventModelStart})
 	stream := a.llm.Completion(ctx, llmReq)
 
 WaitMessage:
@@ -204,6 +219,14 @@ WaitMessage:
 	)
 
 	// Record token checkpoint when LLM returns actual usage data.
+	sess.PublishEvent(types.Event{
+		Type: types.EventModelFinish,
+		Data: map[string]string{
+			"prompt_tokens":     strconv.FormatInt(stream.Tokens().PromptTokens, 10),
+			"completion_tokens": strconv.FormatInt(stream.Tokens().CompletionTokens, 10),
+			"tool_calls":        strconv.Itoa(len(toolUse)),
+		},
+	})
 	// Providers that don't return PromptTokens will fall back to
 	// fuzzy estimation via EstimateHistoryTokens in Session.Tokens().
 	if stream.Tokens().PromptTokens > 0 {
@@ -338,6 +361,17 @@ func (a *react) tryToolCall(ctx context.Context, sess *session.Session, use prov
 	)
 	defer span.End()
 
+	// Audit subscribers require the raw tool input/output for traceability.
+	// External event consumers are responsible for masking, storage, and transport safety.
+	sess.PublishEvent(types.Event{
+		Type: types.EventToolStart,
+		Data: map[string]string{
+			"id":    use.ID,
+			"tool":  use.Name,
+			"input": use.Arguments,
+		},
+	})
+
 	var (
 		result  []*types.Message
 		useMark = use.ID
@@ -360,6 +394,12 @@ func (a *react) tryToolCall(ctx context.Context, sess *session.Session, use prov
 		span.SetStatus(tracing.StatusError, msg)
 		result = append(result, &types.Message{Role: types.RoleTool, ToolResult: &types.ToolResult{CallID: useMark, Content: msg}})
 		a.logger.Warnw(msg, "tool", use.Name, "session", sess.ID)
+		// Intentionally forward the full tool result for audit use cases.
+		// External subscribers must enforce their own security controls.
+		sess.PublishEvent(types.Event{
+			Type: types.EventToolFinish,
+			Data: map[string]string{"id": use.ID, "tool": use.Name, "success": "false", "output": msg},
+		})
 		return result
 	}
 
@@ -367,6 +407,12 @@ func (a *react) tryToolCall(ctx context.Context, sess *session.Session, use prov
 		span.SetStatus(tracing.StatusError, use.Error)
 		result = append(result, &types.Message{Role: types.RoleTool, ToolResult: &types.ToolResult{CallID: useMark, Content: use.Error}})
 		a.logger.Warnw("try tool call error", "tool", use.Name, "error", use.Error, "session", sess.ID)
+		// Intentionally forward the full tool result for audit use cases.
+		// External subscribers must enforce their own security controls.
+		sess.PublishEvent(types.Event{
+			Type: types.EventToolFinish,
+			Data: map[string]string{"id": use.ID, "tool": use.Name, "success": "false", "output": use.Error},
+		})
 		return result
 	}
 
@@ -375,13 +421,26 @@ func (a *react) tryToolCall(ctx context.Context, sess *session.Session, use prov
 	msg, isSucceed, err := toolCall(ctx, sess, toolUse, td)
 	if err != nil {
 		span.RecordError(err)
-		result = append(result, &types.Message{Role: types.RoleTool, ToolResult: &types.ToolResult{CallID: toolUse.ID(), Content: fmt.Sprintf("using tool failed: %s", err)}})
+		errMsg := fmt.Sprintf("using tool failed: %s", err)
+		result = append(result, &types.Message{Role: types.RoleTool, ToolResult: &types.ToolResult{CallID: toolUse.ID(), Content: errMsg}})
 		a.logger.Warnw("using tool failed", "tool", use.Name, "error", err, "session", sess.ID)
+		// Intentionally forward the full tool result for audit use cases.
+		// External subscribers must enforce their own security controls.
+		sess.PublishEvent(types.Event{
+			Type: types.EventToolFinish,
+			Data: map[string]string{"id": use.ID, "tool": use.Name, "success": "false", "output": errMsg},
+		})
 		return result
 	}
 	span.SetStatus(tracing.StatusOK, "")
 
 	result = append(result, &types.Message{Role: types.RoleTool, ToolResult: &types.ToolResult{CallID: toolUse.ID(), Content: msg, Success: isSucceed}})
+	// Intentionally forward the full tool result for audit use cases.
+	// External subscribers must enforce their own security controls.
+	sess.PublishEvent(types.Event{
+		Type: types.EventToolFinish,
+		Data: map[string]string{"id": use.ID, "tool": use.Name, "success": strconv.FormatBool(isSucceed), "output": msg},
+	})
 	return result
 }
 

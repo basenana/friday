@@ -72,6 +72,14 @@ func (s *Session) CompactHistory(ctx context.Context) error {
 		return nil
 	}
 
+	s.PublishEvent(types.Event{
+		Type: types.EventCompactStart,
+		Data: map[string]string{
+			"history_len": strconv.Itoa(len(history)),
+			"trigger":     "threshold",
+		},
+	})
+
 	ctxState := s.EnsureContextState()
 
 	// Reset token checkpoint since history will be replaced.
@@ -86,6 +94,10 @@ func (s *Session) CompactHistory(ctx context.Context) error {
 		ctxState = s.EnsureContextState()
 		ctxState.LastCompactionAt = nowOr(history[len(history)-1].Time)
 		ctxState.LastCompactionTokens = tokenCount(history)
+		s.PublishEvent(types.Event{
+			Type: types.EventCompactFinish,
+			Data: map[string]string{"method": "truncate"},
+		})
 		return nil
 	}
 
@@ -102,6 +114,10 @@ func (s *Session) CompactHistory(ctx context.Context) error {
 		ctxState = s.EnsureContextState()
 		ctxState.LastCompactionAt = nowOr(history[len(history)-1].Time)
 		ctxState.LastCompactionTokens = tokenCount(history)
+		s.PublishEvent(types.Event{
+			Type: types.EventCompactFinish,
+			Data: map[string]string{"method": "truncate"},
+		})
 		return nil
 	}
 
@@ -112,6 +128,10 @@ func (s *Session) CompactHistory(ctx context.Context) error {
 	ctxState = s.EnsureContextState()
 	ctxState.LastCompactionAt = nowOr(history[len(history)-1].Time)
 	ctxState.LastCompactionTokens = tokenCount(history)
+	s.PublishEvent(types.Event{
+		Type: types.EventCompactFinish,
+		Data: map[string]string{"method": "summary"},
+	})
 	return nil
 }
 

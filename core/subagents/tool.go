@@ -9,6 +9,7 @@ import (
 	"github.com/basenana/friday/core/session"
 	"github.com/basenana/friday/core/tools"
 	"github.com/basenana/friday/core/tracing"
+	"github.com/basenana/friday/core/types"
 )
 
 func fuzzyMatching(s1, s2 string) bool {
@@ -41,6 +42,17 @@ func callSubagentTool(agents []ExpertAgent, sess *session.Session, subagentTools
 		)
 		defer span.End()
 
+		// Audit subscribers require the raw subagent task/report for traceability.
+		// External event consumers are responsible for masking, storage, and transport safety.
+		sess.PublishEvent(types.Event{
+			Type: types.EventSubagentStart,
+			Data: map[string]string{
+				"agent":      agentName,
+				"input":      userMessage,
+				"session_id": subSession.ID,
+			},
+		})
+
 		subTask := injectStructuredReportRequest(userMessage)
 
 		for _, agt := range agents {
@@ -53,12 +65,32 @@ func callSubagentTool(agents []ExpertAgent, sess *session.Session, subagentTools
 				content, err := api.ReadAllContent(ctx, agt.Agent.Chat(ctx, req))
 				if err != nil {
 					span.SetStatus(tracing.StatusError, err.Error())
+					// Intentionally forward the full subagent output for audit use cases.
+					// External subscribers must enforce their own security controls.
+					sess.PublishEvent(types.Event{
+						Type: types.EventSubagentFinish,
+						Data: map[string]string{
+							"agent":      agentName,
+							"session_id": subSession.ID,
+							"output":     err.Error(),
+						},
+					})
 					return tools.NewToolResultError(err.Error()), nil
 				}
 
 				output := FormatReport(BuildReport(userMessage, content))
 				span.SetAttributes(tracing.TruncateAttr("subagent.output", output))
 				span.SetStatus(tracing.StatusOK, "")
+				// Intentionally forward the full subagent output for audit use cases.
+				// External subscribers must enforce their own security controls.
+				sess.PublishEvent(types.Event{
+					Type: types.EventSubagentFinish,
+					Data: map[string]string{
+						"agent":      agentName,
+						"session_id": subSession.ID,
+						"output":     output,
+					},
+				})
 				return tools.NewToolResultText(output), nil
 			}
 		}

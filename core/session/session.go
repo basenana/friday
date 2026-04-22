@@ -3,8 +3,10 @@ package session
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/basenana/friday/core/logger"
 	"github.com/basenana/friday/core/providers"
 	"github.com/basenana/friday/core/state"
 	"github.com/basenana/friday/core/types"
@@ -36,10 +38,12 @@ type Session struct {
 
 	compactThreshold int64
 
-	hooks  []Hook
-	llm    providers.Client
-	writer MessageWriter // for auto-persisting messages
-	mu     sync.RWMutex
+	hooks     []Hook
+	llm       providers.Client
+	writer    MessageWriter
+	eventSeq  int64
+	eventSubs []chan<- types.Event
+	mu        sync.RWMutex
 }
 
 func New(id string, llm providers.Client, options ...Option) *Session {
@@ -288,6 +292,60 @@ func WithTemporary(v bool) Option {
 	}
 }
 
+func WithEvents(chs ...chan<- types.Event) Option {
+	return func(s *Session) {
+		owner := s.eventBusOwner()
+		owner.mu.Lock()
+		defer owner.mu.Unlock()
+		owner.eventSubs = append(owner.eventSubs, chs...)
+	}
+}
+
+func (s *Session) SubscribeEvents(ch chan<- types.Event) {
+	owner := s.eventBusOwner()
+	owner.mu.Lock()
+	defer owner.mu.Unlock()
+	owner.eventSubs = append(owner.eventSubs, ch)
+}
+
+func (s *Session) PublishEvent(evt types.Event) {
+	root := s.eventBusOwner()
+
+	root.mu.RLock()
+	subs := append([]chan<- types.Event(nil), root.eventSubs...)
+	root.mu.RUnlock()
+
+	if len(subs) == 0 {
+		return
+	}
+	if evt.Time.IsZero() {
+		evt.Time = time.Now()
+	}
+	if evt.SessionID == "" {
+		evt.SessionID = s.ID
+	}
+	if evt.RootID == "" {
+		evt.RootID = root.ID
+	}
+	if evt.Seq == 0 {
+		evt.Seq = atomic.AddInt64(&root.eventSeq, 1)
+	}
+
+	eventLogger := logger.New("session.events")
+	for _, ch := range subs {
+		select {
+		case ch <- evt:
+		default:
+			eventLogger.Warnw("failed to publish session event",
+				"type", evt.Type,
+				"seq", evt.Seq,
+				"session_id", evt.SessionID,
+				"root_id", evt.RootID,
+			)
+		}
+	}
+}
+
 func (s *Session) ReplaceHistory(msgs ...types.Message) error {
 	s.mu.Lock()
 	s.History = msgs
@@ -302,6 +360,16 @@ func (s *Session) ReplaceHistory(msgs ...types.Message) error {
 		return s.writer.ReplaceMessages(s.ID, msgs...)
 	}
 	return nil
+}
+
+func (s *Session) eventBusOwner() *Session {
+	if s == nil {
+		return nil
+	}
+	if s.Root != nil {
+		return s.Root
+	}
+	return s
 }
 
 // EnsureContextState returns the session's ContextState, initializing it if nil.

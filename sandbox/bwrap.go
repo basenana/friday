@@ -68,8 +68,12 @@ func (b *Bwrap) buildArgs(workdir string) []string {
 		"--die-with-parent",
 	)
 
-	// Proc filesystem
-	args = append(args, "--proc", "/proc")
+	// Proc filesystem — use bind mount as fallback when --proc is not permitted (e.g., in containers)
+	if os.Getenv("FRIDAY_SANDBOX_PROC_BIND") != "" {
+		args = append(args, "--bind", "/proc", "/proc")
+	} else {
+		args = append(args, "--proc", "/proc")
+	}
 
 	// Devtmpfs for /dev
 	args = append(args, "--dev", "/dev")

@@ -14,6 +14,7 @@ import (
 	"github.com/basenana/friday/core/providers"
 	coreSession "github.com/basenana/friday/core/session"
 	"github.com/basenana/friday/core/tools"
+	"github.com/basenana/friday/core/types"
 	"github.com/basenana/friday/memory"
 	"github.com/basenana/friday/sandbox"
 	"github.com/basenana/friday/sessions"
@@ -38,6 +39,7 @@ type options struct {
 	temporary  bool
 	verbose    bool
 	extraTools []*tools.Tool
+	eventChs   []chan<- types.Event
 }
 
 type SessionManager interface {
@@ -78,6 +80,12 @@ func WithExtraTools(t []*tools.Tool) Option {
 	}
 }
 
+func WithEventChannels(chs ...chan<- types.Event) Option {
+	return func(o *options) {
+		o.eventChs = append(o.eventChs, chs...)
+	}
+}
+
 func NewAgent(sessionMgr SessionManager, cfg *config.Config, opts ...Option) (*AgentContext, error) {
 	options := &options{}
 	for _, opt := range opts {
@@ -98,6 +106,9 @@ func NewAgent(sessionMgr SessionManager, cfg *config.Config, opts ...Option) (*A
 
 	fileState := workspace.NewFileState(cfg.StatePath())
 	sessionOpts := []coreSession.Option{coreSession.WithState(fileState)}
+	if len(options.eventChs) > 0 {
+		sessionOpts = append(sessionOpts, coreSession.WithEvents(options.eventChs...))
+	}
 
 	var sess *coreSession.Session
 	switch {

@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"strconv"
 
 	"github.com/basenana/friday/core/session"
 	"github.com/basenana/friday/core/tools"
+	"github.com/basenana/friday/core/types"
 )
 
 func writeTodoListHandler(t *Todo, sess *session.Session) tools.ToolHandlerFunc {
@@ -39,6 +41,27 @@ func writeTodoListHandler(t *Todo, sess *session.Session) tools.ToolHandlerFunc 
 		t.mu.Lock()
 		t.todoMaps[key] = todo
 		t.mu.Unlock()
+
+		var pending, inProgress, completed int
+		for _, item := range todo.Todos {
+			switch item.Status {
+			case "pending":
+				pending++
+			case "in_progress":
+				inProgress++
+			case "completed":
+				completed++
+			}
+		}
+		sess.PublishEvent(types.Event{
+			Type: types.EventTodoUpdate,
+			Data: map[string]string{
+				"count":       strconv.Itoa(len(todo.Todos)),
+				"pending":     strconv.Itoa(pending),
+				"in_progress": strconv.Itoa(inProgress),
+				"completed":   strconv.Itoa(completed),
+			},
+		})
 
 		return tools.NewToolResultText(fmt.Sprintf("Updated todo list to:\n %s", displayTodoList(todo))), nil
 	}

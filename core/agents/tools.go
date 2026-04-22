@@ -6,13 +6,11 @@ import (
 	"encoding/xml"
 	"fmt"
 	"hash/fnv"
-	"time"
 
 	"github.com/basenana/friday/core/providers"
 	"github.com/basenana/friday/core/session"
 	"github.com/basenana/friday/core/tools"
 	"github.com/basenana/friday/core/tracing"
-	"github.com/basenana/friday/core/types"
 )
 
 var (
@@ -82,17 +80,4 @@ func newLLMRequest(systemMessage string, sess *session.Session, toolList []*tool
 	req := providers.NewRequest(systemMessage, sess.GetHistory()...)
 	req.SetToolDefines(toolDef)
 	return req
-}
-
-func NewToolUseEvent(source string, use *ToolUse) *types.Event {
-	data, _ := json.Marshal(use)
-	return &types.Event{
-		Id:              types.NewID(),
-		Type:            "tool_use",
-		Source:          source,
-		SpecVersion:     "1.0",
-		DataContentType: "application/json",
-		Data:            string(data),
-		Time:            time.Now(),
-	}
 }

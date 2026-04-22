@@ -3,6 +3,7 @@ package contextmgr
 import (
 	stdctx "context"
 	"reflect"
+	"strconv"
 	"strings"
 	"time"
 
@@ -93,10 +94,39 @@ func (m *Manager) BeforeModel(ctx stdctx.Context, sess *session.Session, req pro
 	m.maybeStartAsyncSessionMemory(sess, st, history)
 
 	if projectedTokens > budget.SoftThreshold {
-		projected, projectedTokens = m.applyMicroCompact(sess.ID, st, history, projectedTokens)
+		sess.PublishEvent(types.Event{
+			Type: types.EventCompactStart,
+			Data: map[string]string{
+				"history_len": strconv.Itoa(len(history)),
+				"trigger":     "soft",
+			},
+		})
+		var applied bool
+		projected, projectedTokens, applied = m.applyMicroCompact(sess, st, history, projectedTokens)
+		if applied {
+			sess.PublishEvent(types.Event{
+				Type: types.EventCompactFinish,
+				Data: map[string]string{"method": "micro_compact"},
+			})
+		} else {
+			sess.PublishEvent(types.Event{
+				Type: types.EventCompactSkip,
+				Data: map[string]string{
+					"method": "micro_compact",
+					"reason": "not_beneficial",
+				},
+			})
+		}
 	}
 
 	if projectedTokens > budget.HardThreshold {
+		sess.PublishEvent(types.Event{
+			Type: types.EventCompactStart,
+			Data: map[string]string{
+				"history_len": strconv.Itoa(len(history)),
+				"trigger":     "hard",
+			},
+		})
 		projected, projectedTokens = m.applyHardCompact(ctx, sess, history)
 	}
 
@@ -109,28 +139,28 @@ func (m *Manager) BeforeModel(ctx stdctx.Context, sess *session.Session, req pro
 	return nil
 }
 
-func (m *Manager) applyMicroCompact(sessionID string, st *session.ContextState, history []types.Message, fullTokens int64) ([]types.Message, int64) {
-	micro, savedTokens := m.buildMicroProjected(sessionID, st, history)
+func (m *Manager) applyMicroCompact(sess *session.Session, st *session.ContextState, history []types.Message, fullTokens int64) ([]types.Message, int64, bool) {
+	micro, savedTokens := m.buildMicroProjected(sess.ID, st, history)
 	if savedTokens < 0 {
-		return micro, fullTokens // already micro compact
+		return micro, fullTokens, true // already micro compact
 	}
 
 	microTokens := fullTokens - savedTokens
 	if fullTokens > 0 && float64(microTokens)/float64(fullTokens) < 0.8 {
 		m.logger.Infow("[COMPACT] microcompact applied",
-			"session", sessionID,
+			"session", sess.ID,
 			"projected_tokens", microTokens,
 			"saved_tokens", fullTokens-microTokens,
 		)
-		return micro, microTokens
+		return micro, microTokens, true
 	}
 
 	m.logger.Warnw("microcompact not beneficial, keeping full projection",
-		"session", sessionID,
+		"session", sess.ID,
 		"full_tokens", fullTokens,
 		"micro_tokens", microTokens,
 	)
-	return history, fullTokens
+	return history, fullTokens, false
 }
 
 func (m *Manager) buildMicroProjected(sessionID string, st *session.ContextState, history []types.Message) ([]types.Message, int64) {
@@ -165,6 +195,10 @@ func (m *Manager) applyHardCompact(ctx stdctx.Context, sess *session.Session, hi
 			"session", sess.ID,
 			"projected_tokens", tokens,
 		)
+		sess.PublishEvent(types.Event{
+			Type: types.EventCompactFinish,
+			Data: map[string]string{"method": "session_memory"},
+		})
 		return projected, tokens
 	}
 
@@ -175,6 +209,10 @@ func (m *Manager) applyHardCompact(ctx stdctx.Context, sess *session.Session, hi
 			"session", sess.ID,
 			"projected_tokens", tokens,
 		)
+		sess.PublishEvent(types.Event{
+			Type: types.EventCompactFinish,
+			Data: map[string]string{"method": "summary"},
+		})
 		return projected, tokens
 	}
 

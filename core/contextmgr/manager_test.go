@@ -60,6 +60,46 @@ func TestBeforeModelMicroCompactPrunesOldToolResults(t *testing.T) {
 	}
 }
 
+func TestBeforeModelPublishesCompactFinishOnlyWhenMicroCompactApplies(t *testing.T) {
+	events := make(chan types.Event, 4)
+	largeToolResult := strings.Repeat("tool output ", 200)
+	sess := session.New("sess-micro-events", nil, session.WithEvents(events), session.WithHistory(
+		types.Message{Role: types.RoleUser, Content: "Investigate core/session/compact.go."},
+		types.Message{Role: types.RoleAssistant, ToolCalls: []types.ToolCall{{Name: "read_file", Arguments: `{"path":"core/session/compact.go"}`}}},
+		types.Message{Role: types.RoleTool, ToolResult: &types.ToolResult{CallID: "call-1", Content: largeToolResult}},
+		types.Message{Role: types.RoleAssistant, Content: "Found the file."},
+		types.Message{Role: types.RoleUser, Content: "Now summarize the changes."},
+		types.Message{Role: types.RoleAssistant, Content: "I'm preparing the summary."},
+		types.Message{Role: types.RoleUser, Content: "Give me the final answer."},
+		types.Message{Role: types.RoleAssistant, Content: "I'm drafting the final response."},
+		types.Message{Role: types.RoleUser, Content: "Double check the result."},
+		types.Message{Role: types.RoleAssistant, Content: "I'm reviewing the result."},
+		types.Message{Role: types.RoleUser, Content: "Deliver it."},
+		types.Message{Role: types.RoleAssistant, Content: "Delivering the response."},
+	))
+
+	mgr := New(nil, Config{
+		ContextWindow:      1200,
+		SoftThresholdRatio: 0.40,
+		HardThresholdRatio: 0.60,
+		MaxToolResultChars: 80,
+	})
+
+	req := providers.NewRequest("", sess.GetHistory()...)
+	if err := mgr.BeforeModel(stdctx.Background(), sess, req); err != nil {
+		t.Fatalf("BeforeModel failed: %v", err)
+	}
+
+	got := drainEvents(events)
+	assertEventTypes(t, got, types.EventCompactStart)
+	if !containsEventWithMethod(got, types.EventCompactFinish, "micro_compact") {
+		t.Fatalf("expected compact.finish(method=micro_compact) in %#v", got)
+	}
+	if containsEventType(got, types.EventCompactSkip) {
+		t.Fatalf("did not expect compact.skip when micro-compact applies: %#v", got)
+	}
+}
+
 func TestPruneMessageClearsStaleTokensWhenProjectionTrimsContent(t *testing.T) {
 	msg := types.Message{
 		Role:   types.RoleTool,
@@ -106,6 +146,43 @@ func TestBeforeModelKeepsFullHistoryBelowSoftThreshold(t *testing.T) {
 	}
 	if projected[1].ToolResult == nil || projected[1].ToolResult.Content != toolResult {
 		t.Fatalf("expected old tool result to remain unpruned below soft threshold, got %#v", projected[1].ToolResult)
+	}
+}
+
+func TestBeforeModelPublishesCompactSkipWhenMicroCompactDoesNotApply(t *testing.T) {
+	events := make(chan types.Event, 4)
+	sess := session.New("sess-micro-skip", nil, session.WithEvents(events), session.WithHistory(
+		types.Message{Role: types.RoleUser, Content: strings.Repeat("group 1 ", 40)},
+		types.Message{Role: types.RoleAssistant, Content: "reply 1"},
+		types.Message{Role: types.RoleUser, Content: strings.Repeat("group 2 ", 40)},
+		types.Message{Role: types.RoleAssistant, Content: "reply 2"},
+		types.Message{Role: types.RoleUser, Content: strings.Repeat("group 3 ", 40)},
+		types.Message{Role: types.RoleAssistant, Content: "reply 3"},
+		types.Message{Role: types.RoleUser, Content: strings.Repeat("group 4 ", 40)},
+		types.Message{Role: types.RoleAssistant, Content: "reply 4"},
+		types.Message{Role: types.RoleUser, Content: strings.Repeat("group 5 ", 40)},
+		types.Message{Role: types.RoleAssistant, Content: "reply 5"},
+	))
+
+	mgr := New(nil, Config{
+		ContextWindow:      900,
+		SoftThresholdRatio: 0.20,
+		HardThresholdRatio: 0.95,
+		MaxToolResultChars: 32,
+	})
+
+	req := providers.NewRequest("", sess.GetHistory()...)
+	if err := mgr.BeforeModel(stdctx.Background(), sess, req); err != nil {
+		t.Fatalf("BeforeModel failed: %v", err)
+	}
+
+	got := drainEvents(events)
+	assertEventTypes(t, got, types.EventCompactStart)
+	if !containsEventWithMethod(got, types.EventCompactSkip, "micro_compact") {
+		t.Fatalf("expected compact.skip(method=micro_compact) in %#v", got)
+	}
+	if containsEventWithMethod(got, types.EventCompactFinish, "micro_compact") {
+		t.Fatalf("did not expect compact.finish when micro-compact is skipped: %#v", got)
 	}
 }
 
@@ -457,6 +534,45 @@ func TestGenerateSessionMemoryRecordIncrementalOnlySendsNewHistory(t *testing.T)
 	}
 	if strings.Contains(llm.capturedPrompt, "message 0") {
 		t.Fatalf("expected incremental history NOT to include message 0 (already synced)")
+	}
+}
+
+func drainEvents(ch <-chan types.Event) []types.Event {
+	var events []types.Event
+	for {
+		select {
+		case evt := <-ch:
+			events = append(events, evt)
+		default:
+			return events
+		}
+	}
+}
+
+func containsEventType(events []types.Event, target types.EventType) bool {
+	for _, evt := range events {
+		if evt.Type == target {
+			return true
+		}
+	}
+	return false
+}
+
+func containsEventWithMethod(events []types.Event, target types.EventType, method string) bool {
+	for _, evt := range events {
+		if evt.Type == target && evt.Data["method"] == method {
+			return true
+		}
+	}
+	return false
+}
+
+func assertEventTypes(t *testing.T, events []types.Event, want ...types.EventType) {
+	t.Helper()
+	for _, target := range want {
+		if !containsEventType(events, target) {
+			t.Fatalf("expected event %q in %#v", target, events)
+		}
 	}
 }
 
