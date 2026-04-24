@@ -59,9 +59,11 @@ type Response interface {
 }
 
 type Delta struct {
-	Content   string
-	Reasoning string
-	ToolUse   []ToolCall
+	Content            string
+	Reasoning          string
+	ReasoningSignature string
+	RedactedThinking   string
+	ToolUse            []ToolCall
 }
 
 type ToolCall struct {

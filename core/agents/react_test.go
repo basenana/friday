@@ -75,6 +75,60 @@ func TestReactPersistsAssistantContentReasoningAndToolCallsInSingleMessage(t *te
 	}
 }
 
+func TestReactPreservesReasoningSignatureAndWhitespace(t *testing.T) {
+	llm := &fakeLLMClient{
+		completions: [][]providers.Delta{
+			{
+				{Reasoning: "  Need to inspect the file first.\n"},
+				{ReasoningSignature: "sig-123"},
+				{RedactedThinking: "opaque-redacted-payload"},
+				{Content: "I will inspect the file."},
+				{ToolUse: []providers.ToolCall{{
+					ID:        "call-1",
+					Name:      "read_file",
+					Arguments: `{"path":"core/session/compact.go"}`,
+				}}},
+			},
+			{
+				{Content: "Done."},
+			},
+		},
+	}
+
+	tool := tools.NewTool("read_file",
+		tools.WithToolHandler(func(ctx context.Context, request *tools.Request) (*tools.Result, error) {
+			return tools.NewToolResultText("file content"), nil
+		}),
+	)
+
+	sess := session.New("sess-react-thinking", llm)
+	resp := New(llm, Option{SystemPrompt: "system prompt", MaxLoopTimes: 4}).Chat(context.Background(), &api.Request{
+		Session:     sess,
+		UserMessage: "Inspect the file.",
+		Tools:       []*tools.Tool{tool},
+	})
+
+	if _, err := api.ReadAllContent(context.Background(), resp); err != nil {
+		t.Fatalf("ReadAllContent() error = %v", err)
+	}
+
+	history := sess.GetHistory()
+	if len(history) != 4 {
+		t.Fatalf("expected 4 history messages, got %#v", history)
+	}
+
+	firstAssistant := history[1]
+	if firstAssistant.Reasoning != "  Need to inspect the file first.\n" {
+		t.Fatalf("expected assistant reasoning whitespace to be preserved, got %#v", firstAssistant.Reasoning)
+	}
+	if firstAssistant.ReasoningSignature != "sig-123" {
+		t.Fatalf("expected assistant reasoning signature to be preserved, got %#v", firstAssistant.ReasoningSignature)
+	}
+	if firstAssistant.RedactedThinking != "opaque-redacted-payload" {
+		t.Fatalf("expected assistant redacted thinking to be preserved, got %#v", firstAssistant.RedactedThinking)
+	}
+}
+
 func TestCanonicalizeToolCallsMakesDuplicateFallbackIDsUnique(t *testing.T) {
 	toolUses := canonicalizeToolCalls([]providers.ToolCall{
 		{Name: "read_file", Arguments: `{"path":"core/session/compact.go"}`},

@@ -64,9 +64,13 @@ type ImageContent struct {
 // It may store exact completion tokens from the provider or calibrated prompt
 // token counts when a request message can be mapped back to session history.
 type Message struct {
-	Role      MessageRole `json:"role"`
-	Content   string      `json:"content,omitempty"`
-	Reasoning string      `json:"reasoning,omitempty"`
+	Role               MessageRole `json:"role"`
+	Content            string      `json:"content,omitempty"`
+	Reasoning          string      `json:"reasoning,omitempty"`
+	ReasoningSignature string      `json:"reasoning_signature,omitempty"`
+	// RedactedThinking stores Anthropic's opaque redacted_thinking payload for replay.
+	// Other providers should ignore this field.
+	RedactedThinking string `json:"redacted_thinking,omitempty"`
 
 	// Multimedia content
 	Image *ImageContent `json:"image,omitempty"`
@@ -115,7 +119,10 @@ func (m Message) EstimatedTokens() int64 {
 	cp := m
 	cp.Tokens = 0
 
-	total := len([]rune(cp.Content)) + len([]rune(cp.Reasoning))
+	total := len([]rune(cp.Content))
+	total += len([]rune(cp.Reasoning))
+	total += len([]rune(cp.ReasoningSignature))
+	total += len([]rune(cp.RedactedThinking))
 
 	// Count image tokens (rough estimate)
 	if cp.Image != nil {

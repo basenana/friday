@@ -18,6 +18,21 @@ func TestEstimateHistoryTokens_UsesBackfilledTokens(t *testing.T) {
 	}
 }
 
+func TestEstimatedTokens_UsesReasoningFields(t *testing.T) {
+	msg := types.Message{
+		Role:               types.RoleAssistant,
+		Content:            "done",
+		Reasoning:          "abc",
+		ReasoningSignature: "sig",
+		RedactedThinking:   "opaque",
+	}
+
+	// len("doneabcsigopaque") * 0.5 = 8
+	if got := msg.EstimatedTokens(); got != 8 {
+		t.Fatalf("expected EstimatedTokens=8, got %d", got)
+	}
+}
+
 func TestTokens_UsesCheckpointWhenAvailable(t *testing.T) {
 	sess := New("test", nil, WithHistory(
 		types.Message{Role: types.RoleUser, Content: "hello"},

@@ -12,7 +12,6 @@ import (
 	"github.com/basenana/friday/core/types"
 )
 
-
 func TestExtractFileRefsFromHistory(t *testing.T) {
 	now := time.Now()
 	history := []types.Message{
@@ -154,4 +153,29 @@ func (f *fakeCompactClient) CompletionNonStreaming(_ context.Context, _ provider
 
 func (f *fakeCompactClient) StructuredPredict(_ context.Context, _ providers.Request, _ any) error {
 	return errors.New("structured predict not supported")
+}
+
+func TestTruncateToLastNReturnsTailVerbatim(t *testing.T) {
+	history := []types.Message{
+		{Role: types.RoleUser, Content: "msg-0"},
+		{Role: types.RoleAssistant, ToolCalls: []types.ToolCall{{ID: "tc-1", Name: "foo", Arguments: `{}`}}},
+		{Role: types.RoleTool, ToolResult: &types.ToolResult{CallID: "tc-1", Content: "result"}},
+		{Role: types.RoleUser, Content: "msg-3"},
+		{Role: types.RoleAssistant, ToolCalls: []types.ToolCall{{ID: "tc-2", Name: "bar", Arguments: `{}`}}}, // orphaned — no result
+		{Role: types.RoleUser, Content: "msg-5"},
+	}
+
+	compacted := truncateToLastN(history, 3)
+	if len(compacted) != 3 {
+		t.Fatalf("expected 3 tail messages, got %d: %+v", len(compacted), compacted)
+	}
+	if compacted[0].Role != types.RoleUser || compacted[0].Content != "msg-3" {
+		t.Fatalf("expected first retained message to be msg-3, got %+v", compacted[0])
+	}
+	if compacted[1].Role != types.RoleAssistant || len(compacted[1].ToolCalls) != 1 || compacted[1].ToolCalls[0].ID != "tc-2" {
+		t.Fatalf("expected middle retained message to keep orphaned tool call verbatim, got %+v", compacted[1])
+	}
+	if compacted[2].Role != types.RoleUser || compacted[2].Content != "msg-5" {
+		t.Fatalf("expected last retained message to be msg-5, got %+v", compacted[2])
+	}
 }

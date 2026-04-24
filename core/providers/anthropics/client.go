@@ -14,9 +14,9 @@ import (
 	"github.com/anthropics/anthropic-sdk-go/option"
 	"github.com/basenana/friday/core/logger"
 	"github.com/basenana/friday/core/providers"
-	"github.com/basenana/friday/core/tracing"
 	"github.com/basenana/friday/core/providers/common"
 	"github.com/basenana/friday/core/session"
+	"github.com/basenana/friday/core/tracing"
 	"github.com/basenana/friday/core/types"
 	"github.com/invopop/jsonschema"
 	"golang.org/x/time/rate"
@@ -279,6 +279,8 @@ func (c *client) messageCreateParams(request providers.Request) *anthropic.Messa
 
 		case types.RoleAssistant:
 			var contentBlocks []anthropic.ContentBlockParamUnion
+			// Thinking block must precede text/tool_use blocks per Anthropic API requirements
+			contentBlocks = append(contentBlocks, anthropicThinkingBlocks(msg)...)
 			if msg.Content != "" {
 				contentBlocks = append(contentBlocks, anthropic.NewTextBlock(msg.Content))
 			}
@@ -319,6 +321,11 @@ func (c *client) messageCreateParams(request providers.Request) *anthropic.Messa
 			}
 		}
 	}
+
+	// Normalize historical tool calls/results into Anthropic's required shape:
+	// one assistant tool_use message followed immediately by one user message
+	// containing the paired tool_result blocks.
+	params.Messages = normalizeAnthropicToolMessages(params.Messages)
 
 	if request.PromptCacheKey() != "" {
 		if len(params.System) > 0 {
@@ -478,6 +485,10 @@ type response struct {
 
 	// accumulatedContent tracks the content for token fallback calculation
 	accumulatedContent string
+
+	currentThinking  bool
+	currentSignature string
+	currentRedacted  string
 }
 
 func (r *response) handleEvent(event anthropic.MessageStreamEventUnion) {
@@ -498,23 +509,61 @@ func (r *response) handleEvent(event anthropic.MessageStreamEventUnion) {
 
 	case "content_block_start":
 		block := event.AsContentBlockStart()
-		if block.ContentBlock.ID != "" {
+		switch block.ContentBlock.Type {
+		case "thinking":
+			r.currentThinking = true
+			r.currentSignature = block.ContentBlock.Signature
+		case "redacted_thinking":
+			r.currentThinking = false
+			r.currentSignature = ""
+			r.currentRedacted = block.ContentBlock.Data
+		default:
+			if block.ContentBlock.ID == "" {
+				break
+			}
 			r.incompleteTool.ID = block.ContentBlock.ID
 			r.incompleteTool.Name = block.ContentBlock.Name
 		}
 
 	case "content_block_delta":
 		delta := event.AsContentBlockDelta()
-		if delta.Delta.Type == "text_delta" {
+		switch delta.Delta.Type {
+		case "text_delta":
 			r.accumulatedContent += delta.Delta.Text
 			r.Stream <- providers.Delta{Content: delta.Delta.Text}
-		} else if delta.Delta.Type == "input_json_delta" {
+		case "input_json_delta":
 			r.incompleteTool.Arguments += delta.Delta.PartialJSON
+		case "thinking_delta":
+			r.Stream <- providers.Delta{Reasoning: delta.Delta.Thinking}
+		case "signature_delta":
+			if r.currentThinking {
+				r.currentSignature += delta.Delta.Signature
+			}
 		}
 
 	case "content_block_stop":
+		if r.currentThinking && r.currentSignature != "" {
+			r.Stream <- providers.Delta{ReasoningSignature: r.currentSignature}
+		}
+		if r.currentRedacted != "" {
+			r.Stream <- providers.Delta{RedactedThinking: r.currentRedacted}
+		}
+		r.currentThinking = false
+		r.currentSignature = ""
+		r.currentRedacted = ""
 		r.flushToolUse()
 	}
+}
+
+func anthropicThinkingBlocks(msg types.Message) []anthropic.ContentBlockParamUnion {
+	var blocks []anthropic.ContentBlockParamUnion
+	if msg.Reasoning != "" && msg.ReasoningSignature != "" {
+		blocks = append(blocks, anthropic.NewThinkingBlock(msg.ReasoningSignature, msg.Reasoning))
+	}
+	if msg.RedactedThinking != "" {
+		blocks = append(blocks, anthropic.NewRedactedThinkingBlock(msg.RedactedThinking))
+	}
+	return blocks
 }
 
 func (r *response) flushToolUse() {
@@ -545,6 +594,15 @@ func (r *response) applyTokenFallback(requestMessages []types.Message) {
 func (r *response) fail(err error) { r.Err <- err }
 
 func (r *response) close() {
+	if r.currentThinking && r.currentSignature != "" {
+		r.Stream <- providers.Delta{ReasoningSignature: r.currentSignature}
+	}
+	if r.currentRedacted != "" {
+		r.Stream <- providers.Delta{RedactedThinking: r.currentRedacted}
+	}
+	r.currentThinking = false
+	r.currentSignature = ""
+	r.currentRedacted = ""
 	r.flushToolUse()
 	close(r.Stream)
 	close(r.Err)
@@ -561,4 +619,185 @@ func isRateLimitError(err error) bool {
 		return false
 	}
 	return strings.Contains(err.Error(), "rate_limit") || strings.Contains(err.Error(), "429")
+}
+
+func normalizeAnthropicToolMessages(messages []anthropic.MessageParam) []anthropic.MessageParam {
+	if len(messages) == 0 {
+		return messages
+	}
+
+	normalized := make([]anthropic.MessageParam, 0, len(messages))
+	for i := 0; i < len(messages); i++ {
+		msg := messages[i]
+
+		if msg.Role == anthropic.MessageParamRoleAssistant && messageHasToolUse(msg) {
+			resultMessages := collectImmediateToolResultMessages(messages, i+1)
+			assistantMsg, pairedToolNames := normalizeAssistantToolUseMessage(msg, resultMessages)
+			normalized = append(normalized, assistantMsg)
+
+			if len(resultMessages) > 0 {
+				if mergedResultMsg, ok := mergeToolResultMessages(resultMessages, pairedToolNames); ok {
+					normalized = append(normalized, mergedResultMsg)
+				}
+				i += len(resultMessages)
+			}
+			continue
+		}
+
+		if msg.Role == anthropic.MessageParamRoleUser && messageHasToolResult(msg) {
+			normalized = append(normalized, convertToolResultMessageToText(msg, nil))
+			continue
+		}
+
+		normalized = append(normalized, msg)
+	}
+
+	return normalized
+}
+
+func collectImmediateToolResultMessages(messages []anthropic.MessageParam, start int) []anthropic.MessageParam {
+	var collected []anthropic.MessageParam
+	for i := start; i < len(messages); i++ {
+		if messages[i].Role != anthropic.MessageParamRoleUser || !messageHasToolResult(messages[i]) {
+			break
+		}
+		collected = append(collected, messages[i])
+	}
+	return collected
+}
+
+func normalizeAssistantToolUseMessage(msg anthropic.MessageParam, resultMessages []anthropic.MessageParam) (anthropic.MessageParam, map[string]string) {
+	resultIDs := make(map[string]struct{})
+	for _, resultMsg := range resultMessages {
+		for _, block := range resultMsg.Content {
+			if block.OfToolResult != nil {
+				resultIDs[block.OfToolResult.ToolUseID] = struct{}{}
+			}
+		}
+	}
+
+	pairedToolNames := make(map[string]string)
+	normalized := msg
+	normalized.Content = make([]anthropic.ContentBlockParamUnion, 0, len(msg.Content))
+	for _, block := range msg.Content {
+		if block.OfToolUse == nil {
+			normalized.Content = append(normalized.Content, block)
+			continue
+		}
+
+		toolUse := block.OfToolUse
+		if _, ok := resultIDs[toolUse.ID]; ok {
+			pairedToolNames[toolUse.ID] = toolUse.Name
+			normalized.Content = append(normalized.Content, block)
+			continue
+		}
+
+		normalized.Content = append(normalized.Content, anthropic.NewTextBlock(formatAnthropicToolUseFallback(toolUse)))
+	}
+	return normalized, pairedToolNames
+}
+
+func mergeToolResultMessages(messages []anthropic.MessageParam, pairedToolNames map[string]string) (anthropic.MessageParam, bool) {
+	merged := anthropic.MessageParam{
+		Role: anthropic.MessageParamRoleUser,
+	}
+
+	for _, msg := range messages {
+		for _, block := range msg.Content {
+			if block.OfToolResult == nil {
+				merged.Content = append(merged.Content, block)
+				continue
+			}
+
+			toolResult := block.OfToolResult
+			if _, ok := pairedToolNames[toolResult.ToolUseID]; ok {
+				merged.Content = append(merged.Content, block)
+				continue
+			}
+
+			merged.Content = append(merged.Content, anthropic.NewTextBlock(
+				formatAnthropicToolResultFallback(toolResult, pairedToolNames[toolResult.ToolUseID]),
+			))
+		}
+	}
+
+	return merged, len(merged.Content) > 0
+}
+
+func convertToolResultMessageToText(msg anthropic.MessageParam, toolNames map[string]string) anthropic.MessageParam {
+	converted := msg
+	converted.Content = make([]anthropic.ContentBlockParamUnion, 0, len(msg.Content))
+	for _, block := range msg.Content {
+		if block.OfToolResult == nil {
+			converted.Content = append(converted.Content, block)
+			continue
+		}
+
+		converted.Content = append(converted.Content, anthropic.NewTextBlock(
+			formatAnthropicToolResultFallback(block.OfToolResult, toolNames[block.OfToolResult.ToolUseID]),
+		))
+	}
+	return converted
+}
+
+func messageHasToolUse(msg anthropic.MessageParam) bool {
+	for _, block := range msg.Content {
+		if block.OfToolUse != nil {
+			return true
+		}
+	}
+	return false
+}
+
+func messageHasToolResult(msg anthropic.MessageParam) bool {
+	for _, block := range msg.Content {
+		if block.OfToolResult != nil {
+			return true
+		}
+	}
+	return false
+}
+
+func formatAnthropicToolUseFallback(toolUse *anthropic.ToolUseBlockParam) string {
+	if toolUse == nil {
+		return "[tool call result omitted]"
+	}
+
+	name := toolUse.Name
+	if name == "" {
+		name = "unknown_tool"
+	}
+	args, err := json.Marshal(toolUse.Input)
+	if err != nil || string(args) == "" || string(args) == "null" {
+		return fmt.Sprintf("[tool call %s result omitted]", name)
+	}
+	return fmt.Sprintf("[tool call %s(%s) result omitted]", name, string(args))
+}
+
+func formatAnthropicToolResultFallback(toolResult *anthropic.ToolResultBlockParam, toolName string) string {
+	if toolResult == nil {
+		return "[historical tool result omitted]"
+	}
+	return formatOrphanedHistoricalToolResult(&types.ToolResult{
+		CallID:  toolResult.ToolUseID,
+		Content: anthropicToolResultText(toolResult),
+	}, toolName)
+}
+
+func anthropicToolResultText(toolResult *anthropic.ToolResultBlockParam) string {
+	if toolResult == nil {
+		return ""
+	}
+
+	var parts []string
+	for _, block := range toolResult.Content {
+		if text := block.GetText(); text != nil {
+			parts = append(parts, *text)
+			continue
+		}
+		if blockType := block.GetType(); blockType != nil {
+			parts = append(parts, fmt.Sprintf("[non-text tool result block: %s]", *blockType))
+		}
+	}
+	return strings.TrimSpace(strings.Join(parts, "\n"))
 }

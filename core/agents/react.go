@@ -143,12 +143,14 @@ func (a *react) doAct(ctx context.Context, sess *session.Session, resp *api.Resp
 	})
 
 	var (
-		content      string
-		reasoning    string
-		agentMessage string
-		messageCount int
-		toolUse      []providers.ToolCall
-		err          error
+		content            string
+		reasoning          string
+		reasoningSignature string
+		redactedThinking   string
+		agentMessage       string
+		messageCount       int
+		toolUse            []providers.ToolCall
+		err                error
 
 		keepRun    = false
 		llmReq     = newLLMRequest(a.option.SystemPrompt, sess, toolList)
@@ -168,7 +170,7 @@ func (a *react) doAct(ctx context.Context, sess *session.Session, resp *api.Resp
 			"This is your final response. Please provide a comprehensive summary including: " +
 			"1) Task objective, 2) Progress made, 3) Key findings, 4) Remaining issues. " +
 			"After this response, the session will end. From now on, every character you output will become part of the final report:"})
-		}
+	}
 	sess.PublishEvent(types.Event{Type: types.EventModelStart})
 	stream := a.llm.Completion(ctx, llmReq)
 
@@ -190,20 +192,26 @@ WaitMessage:
 			}
 
 			messageCount += 1
-			switch {
-			case len(msg.Content) > 0:
+			// Process each field independently — a single Delta may carry multiple fields.
+			if len(msg.Content) > 0 {
 				content += msg.Content
 				api.SendDelta(resp, types.Delta{Content: msg.Content})
-
-			case len(msg.ToolUse) > 0:
+			}
+			if len(msg.ToolUse) > 0 {
 				for i := range msg.ToolUse {
 					tool := msg.ToolUse[i]
 					toolUse = append(toolUse, tool)
 				}
-
-			case len(msg.Reasoning) > 0:
+			}
+			if len(msg.Reasoning) > 0 {
 				reasoning += msg.Reasoning
 				api.SendDelta(resp, types.Delta{Reasoning: msg.Reasoning})
+			}
+			if msg.ReasoningSignature != "" {
+				reasoningSignature = msg.ReasoningSignature
+			}
+			if msg.RedactedThinking != "" {
+				redactedThinking = msg.RedactedThinking
 			}
 		}
 	}
@@ -238,7 +246,6 @@ WaitMessage:
 	}
 
 	content = strings.TrimSpace(content)
-	reasoning = strings.TrimSpace(reasoning)
 
 	if strings.Contains(content, "<tool_use") {
 		a.logger.Warnw("tool use incorrect", "content", content, "session", sess.ID)
@@ -253,7 +260,7 @@ WaitMessage:
 	}
 	toolUse = canonicalizeToolCalls(appl.ToolUse)
 
-	if reasoning != "" || len(content) > 0 || len(toolUse) > 0 {
+	if reasoning != "" || reasoningSignature != "" || redactedThinking != "" || len(content) > 0 || len(toolUse) > 0 {
 		toolCalls := make([]types.ToolCall, 0, len(toolUse))
 		for _, use := range toolUse {
 			toolCalls = append(toolCalls, types.ToolCall{
@@ -263,11 +270,13 @@ WaitMessage:
 			})
 		}
 		msg := &types.Message{
-			Role:      types.RoleAssistant,
-			Content:   content,
-			Reasoning: reasoning,
-			ToolCalls: toolCalls,
-			Tokens:    stream.Tokens().CompletionTokens,
+			Role:               types.RoleAssistant,
+			Content:            content,
+			Reasoning:          reasoning,
+			ReasoningSignature: reasoningSignature,
+			RedactedThinking:   redactedThinking,
+			ToolCalls:          toolCalls,
+			Tokens:             stream.Tokens().CompletionTokens,
 		}
 		sess.AppendMessage(msg)
 	}
@@ -278,7 +287,7 @@ WaitMessage:
 
 	if len(toolUse) > 0 {
 		keepRun = true
-		a.doToolCalls(ctx, sess, toolUse, reasoning, toolList)
+		a.doToolCalls(ctx, sess, toolUse, reasoning, reasoningSignature, redactedThinking, toolList)
 	}
 	if appl.Continue {
 		keepRun = true
@@ -289,7 +298,7 @@ WaitMessage:
 	return keepRun, nil
 }
 
-func (a *react) doToolCalls(ctx context.Context, sess *session.Session, toolUses []providers.ToolCall, reasoning string, toolList []*tools.Tool) {
+func (a *react) doToolCalls(ctx context.Context, sess *session.Session, toolUses []providers.ToolCall, reasoning string, reasoningSignature string, redactedThinking string, toolList []*tools.Tool) {
 	ctx, span := tracing.Start(ctx, "tools.batch",
 		tracing.WithAttributes(
 			tracing.String("session.id", sess.ID),
@@ -314,7 +323,7 @@ func (a *react) doToolCalls(ctx context.Context, sess *session.Session, toolUses
 			update <- toolExecutionResult{
 				Index:    idx,
 				Call:     use,
-				Messages: a.tryToolCall(ctx, sess, use, reasoning, toolList),
+				Messages: a.tryToolCall(ctx, sess, use, reasoning, reasoningSignature, redactedThinking, toolList),
 			}
 		}()
 	}
@@ -350,7 +359,7 @@ func (a *react) doToolCalls(ctx context.Context, sess *session.Session, toolUses
 	}
 }
 
-func (a *react) tryToolCall(ctx context.Context, sess *session.Session, use providers.ToolCall, reasoning string, toolList []*tools.Tool) []*types.Message {
+func (a *react) tryToolCall(ctx context.Context, sess *session.Session, use providers.ToolCall, reasoning string, reasoningSignature string, redactedThinking string, toolList []*tools.Tool) []*types.Message {
 	ctx, span := tracing.Start(ctx, "tools.invoke",
 		tracing.WithAttributes(
 			tracing.String("tool.name", use.Name),
@@ -383,9 +392,11 @@ func (a *react) tryToolCall(ctx context.Context, sess *session.Session, use prov
 
 	// Tool call message (assistant role with tool calls)
 	result = append(result, &types.Message{
-		Role:      types.RoleAssistant,
-		Reasoning: reasoning,
-		ToolCalls: []types.ToolCall{{ID: useMark, Name: use.Name, Arguments: use.Arguments}},
+		Role:               types.RoleAssistant,
+		Reasoning:          reasoning,
+		ReasoningSignature: reasoningSignature,
+		RedactedThinking:   redactedThinking,
+		ToolCalls:          []types.ToolCall{{ID: useMark, Name: use.Name, Arguments: use.Arguments}},
 	})
 
 	td := getToolByName(toolList, use.Name)

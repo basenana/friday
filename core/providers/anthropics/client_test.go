@@ -1,6 +1,7 @@
 package anthropics
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -23,19 +24,25 @@ func TestNewClientInsecureSkipVerify(t *testing.T) {
 
 func TestMessageCreateParamsKeepsMixedAssistantTextAndToolUseInSingleMessage(t *testing.T) {
 	cli := &client{model: Model{Name: "claude-test"}}
-	req := providers.NewRequest("", types.Message{
-		Role:    types.RoleAssistant,
-		Content: "I will inspect the file.",
-		ToolCalls: []types.ToolCall{{
-			ID:        "call-1",
-			Name:      "read_file",
-			Arguments: `{"path":"core/session/compact.go"}`,
-		}},
-	})
+	req := providers.NewRequest("",
+		types.Message{
+			Role:    types.RoleAssistant,
+			Content: "I will inspect the file.",
+			ToolCalls: []types.ToolCall{{
+				ID:        "call-1",
+				Name:      "read_file",
+				Arguments: `{"path":"core/session/compact.go"}`,
+			}},
+		},
+		types.Message{
+			Role:       types.RoleTool,
+			ToolResult: &types.ToolResult{CallID: "call-1", Content: "file content"},
+		},
+	)
 
 	params := cli.messageCreateParams(req)
-	if len(params.Messages) != 1 {
-		t.Fatalf("expected one assistant message, got %d", len(params.Messages))
+	if len(params.Messages) != 2 {
+		t.Fatalf("expected assistant + tool result messages, got %d", len(params.Messages))
 	}
 
 	msg := params.Messages[0]
@@ -72,6 +79,59 @@ func TestMessageCreateParamsTurnsPromptOnlyRequestIntoUserMessage(t *testing.T) 
 	}
 	if got := params.Messages[0].Content[0].GetText(); got == nil || *got != "summarize this conversation" {
 		t.Fatalf("expected synthesized user message to preserve prompt text, got %#v", params.Messages[0].Content[0])
+	}
+}
+
+func TestMessageCreateParamsBuildsThinkingFromReasoningFields(t *testing.T) {
+	cli := &client{model: Model{Name: "claude-test"}}
+	req := providers.NewRequest("",
+		types.Message{
+			Role:               types.RoleAssistant,
+			Content:            "I will inspect the file.",
+			Reasoning:          "  keep leading and trailing whitespace \n",
+			ReasoningSignature: "sig-123",
+			RedactedThinking:   "opaque-redacted-payload",
+			ToolCalls: []types.ToolCall{{
+				ID:        "call-1",
+				Name:      "read_file",
+				Arguments: `{"path":"core/session/compact.go"}`,
+			}},
+		},
+		types.Message{
+			Role:       types.RoleTool,
+			ToolResult: &types.ToolResult{CallID: "call-1", Content: "file content"},
+		},
+	)
+
+	params := cli.messageCreateParams(req)
+	if len(params.Messages) != 2 {
+		t.Fatalf("expected assistant + tool result messages, got %d", len(params.Messages))
+	}
+
+	msg := params.Messages[0]
+	if len(msg.Content) != 4 {
+		t.Fatalf("expected thinking, redacted_thinking, text and tool_use blocks, got %#v", msg.Content)
+	}
+	if msg.Content[0].OfThinking == nil {
+		t.Fatalf("expected first block to be thinking, got %#v", msg.Content[0])
+	}
+	if got := msg.Content[0].OfThinking.Thinking; got != "  keep leading and trailing whitespace \n" {
+		t.Fatalf("expected thinking text to be preserved verbatim, got %#v", got)
+	}
+	if got := msg.Content[0].OfThinking.Signature; got != "sig-123" {
+		t.Fatalf("expected thinking signature to be preserved, got %#v", got)
+	}
+	if msg.Content[1].OfRedactedThinking == nil {
+		t.Fatalf("expected second block to be redacted_thinking, got %#v", msg.Content[1])
+	}
+	if got := msg.Content[1].OfRedactedThinking.Data; got != "opaque-redacted-payload" {
+		t.Fatalf("expected redacted thinking payload to be preserved, got %#v", got)
+	}
+	if got := msg.Content[2].GetText(); got == nil || *got != "I will inspect the file." {
+		t.Fatalf("expected text block after thinking block, got %#v", msg.Content[2])
+	}
+	if msg.Content[3].OfToolUse == nil || msg.Content[3].OfToolUse.Name != "read_file" {
+		t.Fatalf("expected tool_use block after text, got %#v", msg.Content[3])
 	}
 }
 
@@ -126,11 +186,11 @@ func TestMessageCreateParamsDowngradesInvalidHistoricalToolCallAndResultToText(t
 
 func TestMessageCreateParamsCacheControl(t *testing.T) {
 	tests := []struct {
-		name                  string
-		promptCacheKey        string
-		messages              []types.Message
-		expectSystemCache     bool
-		expectMessageCache    bool
+		name               string
+		promptCacheKey     string
+		messages           []types.Message
+		expectSystemCache  bool
+		expectMessageCache bool
 	}{
 		{
 			name:           "with cache key, system and user messages",
@@ -234,6 +294,72 @@ func TestMessageCreateParamsCacheControl(t *testing.T) {
 	}
 }
 
+func TestResponseHandleEventAggregatesThinkingSignatureAndRedactedThinking(t *testing.T) {
+	resp := newResponse(nil)
+	resp.handleEvent(mustMessageStreamEvent(t, `{
+		"type":"content_block_start",
+		"index":0,
+		"content_block":{"type":"thinking","thinking":"","signature":"sig-"}
+	}`))
+	resp.handleEvent(mustMessageStreamEvent(t, `{
+		"type":"content_block_delta",
+		"index":0,
+		"delta":{"type":"thinking_delta","thinking":"  reasoning body \n"}
+	}`))
+	resp.handleEvent(mustMessageStreamEvent(t, `{
+		"type":"content_block_delta",
+		"index":0,
+		"delta":{"type":"signature_delta","signature":"part-1"}
+	}`))
+	resp.handleEvent(mustMessageStreamEvent(t, `{
+		"type":"content_block_delta",
+		"index":0,
+		"delta":{"type":"signature_delta","signature":"part-2"}
+	}`))
+	resp.handleEvent(mustMessageStreamEvent(t, `{
+		"type":"content_block_stop",
+		"index":0
+	}`))
+	resp.handleEvent(mustMessageStreamEvent(t, `{
+		"type":"content_block_start",
+		"index":1,
+		"content_block":{"type":"redacted_thinking","data":"opaque-redacted-payload"}
+	}`))
+	resp.handleEvent(mustMessageStreamEvent(t, `{
+		"type":"content_block_stop",
+		"index":1
+	}`))
+	resp.close()
+
+	var deltas []providers.Delta
+	for delta := range resp.Message() {
+		deltas = append(deltas, delta)
+	}
+
+	if len(deltas) != 3 {
+		t.Fatalf("expected reasoning delta, signature delta, and redacted thinking delta, got %#v", deltas)
+	}
+	if deltas[0].Reasoning != "  reasoning body \n" {
+		t.Fatalf("expected reasoning delta to preserve whitespace, got %#v", deltas[0])
+	}
+	if deltas[1].ReasoningSignature != "sig-part-1part-2" {
+		t.Fatalf("expected signature fragments to be appended, got %#v", deltas[1])
+	}
+	if deltas[2].RedactedThinking != "opaque-redacted-payload" {
+		t.Fatalf("expected redacted thinking payload to be preserved, got %#v", deltas[2])
+	}
+}
+
+func mustMessageStreamEvent(t *testing.T, body string) anthropic.MessageStreamEventUnion {
+	t.Helper()
+
+	var event anthropic.MessageStreamEventUnion
+	if err := json.Unmarshal([]byte(body), &event); err != nil {
+		t.Fatalf("failed to unmarshal message stream event: %v", err)
+	}
+	return event
+}
+
 func TestMessageCreateParamsCacheControlOnlyOnLastBlocks(t *testing.T) {
 	cli := &client{model: Model{Name: "claude-3-5-sonnet-20241022"}}
 	req := providers.NewRequest("", []types.Message{
@@ -276,5 +402,188 @@ func TestMessageCreateParamsCacheControlOnlyOnLastBlocks(t *testing.T) {
 	lastBlock := lastMsg.Content[len(lastMsg.Content)-1]
 	if lastBlock.OfText == nil || lastBlock.OfText.CacheControl.Type == "" {
 		t.Error("last message last content block should have cache_control")
+	}
+}
+
+func TestMessageCreateParamsSanitizesOrphanedToolUse(t *testing.T) {
+	cli := &client{model: Model{Name: "claude-test"}}
+	// First assistant has tool_use "tc-orphan" with no corresponding tool_result,
+	// and it's NOT the last assistant message — so it's truly orphaned.
+	req := providers.NewRequest("",
+		types.Message{
+			Role:    types.RoleAssistant,
+			Content: "I called a tool.",
+			ToolCalls: []types.ToolCall{
+				{ID: "tc-orphan", Name: "read_file", Arguments: `{"path":"a.go"}`},
+			},
+		},
+		types.Message{
+			Role:    types.RoleUser,
+			Content: "What happened?",
+		},
+		types.Message{
+			Role:    types.RoleAssistant,
+			Content: "Here is the answer.",
+		},
+	)
+
+	params := cli.messageCreateParams(req)
+	// Should have 3 messages: first assistant, user, second assistant
+	if len(params.Messages) != 3 {
+		t.Fatalf("expected 3 messages, got %d", len(params.Messages))
+	}
+	// The first assistant message should have text + converted-to-text orphaned tool_use
+	assistant := params.Messages[0]
+	if len(assistant.Content) != 2 {
+		t.Fatalf("expected 2 content blocks (text + converted tool_use), got %d", len(assistant.Content))
+	}
+	if assistant.Content[1].OfToolUse != nil {
+		t.Fatalf("expected orphaned tool_use to be converted to text, got tool_use block")
+	}
+	if got := assistant.Content[1].GetText(); got == nil || !strings.Contains(*got, "tool call") {
+		t.Fatalf("expected converted text to mention tool call, got %#v", got)
+	}
+}
+
+func TestMessageCreateParamsMergesImmediateToolResultsIntoSingleUserMessage(t *testing.T) {
+	cli := &client{model: Model{Name: "claude-test"}}
+	req := providers.NewRequest("",
+		types.Message{
+			Role:    types.RoleAssistant,
+			Content: "I'll inspect both files.",
+			ToolCalls: []types.ToolCall{
+				{ID: "call-1", Name: "read_file", Arguments: `{"path":"a.go"}`},
+				{ID: "call-2", Name: "read_file", Arguments: `{"path":"b.go"}`},
+			},
+		},
+		types.Message{
+			Role:       types.RoleTool,
+			ToolResult: &types.ToolResult{CallID: "call-1", Content: "file a"},
+		},
+		types.Message{
+			Role:       types.RoleTool,
+			ToolResult: &types.ToolResult{CallID: "call-2", Content: "file b"},
+		},
+	)
+
+	params := cli.messageCreateParams(req)
+	if len(params.Messages) != 2 {
+		t.Fatalf("expected assistant + merged user tool result messages, got %d", len(params.Messages))
+	}
+
+	assistant := params.Messages[0]
+	var toolUseCount int
+	for _, block := range assistant.Content {
+		if block.OfToolUse != nil {
+			toolUseCount++
+		}
+	}
+	if toolUseCount != 2 {
+		t.Fatalf("expected 2 tool_use blocks, got %#v", assistant.Content)
+	}
+
+	user := params.Messages[1]
+	if user.Role != anthropic.MessageParamRoleUser {
+		t.Fatalf("expected merged tool result role=user, got %q", user.Role)
+	}
+
+	var toolResultIDs []string
+	for _, block := range user.Content {
+		if block.OfToolResult != nil {
+			toolResultIDs = append(toolResultIDs, block.OfToolResult.ToolUseID)
+		}
+	}
+	if len(toolResultIDs) != 2 {
+		t.Fatalf("expected 2 tool_result blocks in one user message, got %#v", user.Content)
+	}
+	if toolResultIDs[0] != "call-1" || toolResultIDs[1] != "call-2" {
+		t.Fatalf("expected merged tool_result IDs to preserve order, got %#v", toolResultIDs)
+	}
+}
+
+func TestMessageCreateParamsKeepsOnlyToolUsesWithImmediateResults(t *testing.T) {
+	cli := &client{model: Model{Name: "claude-test"}}
+	req := providers.NewRequest("",
+		types.Message{
+			Role:    types.RoleAssistant,
+			Content: "I'll inspect both files.",
+			ToolCalls: []types.ToolCall{
+				{ID: "call-1", Name: "read_file", Arguments: `{"path":"a.go"}`},
+				{ID: "call-2", Name: "read_file", Arguments: `{"path":"b.go"}`},
+			},
+		},
+		types.Message{
+			Role:       types.RoleTool,
+			ToolResult: &types.ToolResult{CallID: "call-1", Content: "file a"},
+		},
+		types.Message{
+			Role:    types.RoleUser,
+			Content: "continue",
+		},
+	)
+
+	params := cli.messageCreateParams(req)
+	if len(params.Messages) != 3 {
+		t.Fatalf("expected assistant, merged tool result, and user text messages, got %d", len(params.Messages))
+	}
+
+	assistant := params.Messages[0]
+	var (
+		toolUseIDs     []string
+		fallbackBlocks []string
+	)
+	for _, block := range assistant.Content {
+		if block.OfToolUse != nil {
+			toolUseIDs = append(toolUseIDs, block.OfToolUse.ID)
+		}
+		if text := block.GetText(); text != nil && strings.Contains(*text, "tool call") {
+			fallbackBlocks = append(fallbackBlocks, *text)
+		}
+	}
+	if len(toolUseIDs) != 1 || toolUseIDs[0] != "call-1" {
+		t.Fatalf("expected only immediately paired tool_use to remain, got %#v", toolUseIDs)
+	}
+	if len(fallbackBlocks) != 1 || !strings.Contains(fallbackBlocks[0], "b.go") {
+		t.Fatalf("expected missing tool_use to be converted to text fallback, got %#v", fallbackBlocks)
+	}
+
+	user := params.Messages[1]
+	var toolResultCount int
+	for _, block := range user.Content {
+		if block.OfToolResult != nil {
+			toolResultCount++
+		}
+	}
+	if toolResultCount != 1 {
+		t.Fatalf("expected only one immediate tool_result block, got %#v", user.Content)
+	}
+}
+
+func TestMessageCreateParamsConvertsUnresolvedFinalToolUseToText(t *testing.T) {
+	cli := &client{model: Model{Name: "claude-test"}}
+	req := providers.NewRequest("",
+		types.Message{
+			Role:    types.RoleAssistant,
+			Content: "I called a tool.",
+			ToolCalls: []types.ToolCall{
+				{ID: "call-1", Name: "read_file", Arguments: `{"path":"a.go"}`},
+			},
+		},
+	)
+
+	params := cli.messageCreateParams(req)
+	if len(params.Messages) != 1 {
+		t.Fatalf("expected one assistant message, got %d", len(params.Messages))
+	}
+
+	assistant := params.Messages[0]
+	if len(assistant.Content) != 2 {
+		t.Fatalf("expected text + fallback block, got %#v", assistant.Content)
+	}
+	if assistant.Content[1].OfToolUse != nil {
+		t.Fatalf("expected unresolved final tool_use to be converted to text, got %#v", assistant.Content[1])
+	}
+	if got := assistant.Content[1].GetText(); got == nil || !strings.Contains(*got, "tool call") {
+		t.Fatalf("expected fallback text for unresolved final tool_use, got %#v", assistant.Content[1])
 	}
 }

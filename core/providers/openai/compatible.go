@@ -16,6 +16,7 @@ import (
 	"github.com/basenana/friday/core/logger"
 )
 
+// Deprecated: compatibleClient is not used. Do not use for new integrations.
 type compatibleClient struct {
 	*client
 	logger logger.Logger
@@ -95,7 +96,7 @@ func (c *compatibleClient) chatCompletionNewParams(request providers.Request) *o
 		p.PromptCacheKey = param.NewOpt(key)
 	}
 
-	messages := request.Messages()
+	messages := normalizeOpenAIToolMessages(request.Messages())
 	for _, msg := range messages {
 		switch msg.Role {
 		case types.RoleSystem:
@@ -139,7 +140,7 @@ func (c *compatibleClient) chatCompletionNewParams(request providers.Request) *o
 			)
 
 		case types.RoleAssistant:
-			p.Messages = append(p.Messages, assistantMessageParam(msg))
+			p.Messages = append(p.Messages, assistantMessageParam(msg, false))
 
 		case types.RoleTool:
 			if msg.ToolResult != nil {
@@ -164,7 +165,7 @@ func (c *compatibleClient) chatCompletionNewParams(request providers.Request) *o
 		p.Tools = nil
 
 		buf := &bytes.Buffer{}
-		messages = request.Messages()
+		messages = normalizeOpenAIToolMessages(request.Messages())
 		if len(messages) == 0 || messages[0].Role != types.RoleSystem {
 			c.logger.Warnw("no system prompt found")
 			return p
@@ -197,6 +198,7 @@ func (c *compatibleClient) chatCompletionNewParams(request providers.Request) *o
 	return p
 }
 
+// Deprecated: NewCompatible is not used. Do not use for new integrations.
 func NewCompatible(host, apiKey string, model Model) providers.Client {
 	return &compatibleClient{
 		client: newClient(host, apiKey, model),
