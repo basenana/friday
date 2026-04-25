@@ -3,6 +3,7 @@ package planning
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"strconv"
 
@@ -53,6 +54,8 @@ func writeTodoListHandler(t *Todo, sess *session.Session) tools.ToolHandlerFunc 
 				completed++
 			}
 		}
+
+		todoData, _ := json.Marshal(todo)
 		sess.PublishEvent(types.Event{
 			Type: types.EventTodoUpdate,
 			Data: map[string]string{
@@ -60,6 +63,7 @@ func writeTodoListHandler(t *Todo, sess *session.Session) tools.ToolHandlerFunc 
 				"pending":     strconv.Itoa(pending),
 				"in_progress": strconv.Itoa(inProgress),
 				"completed":   strconv.Itoa(completed),
+				"todo_list":   string(todoData),
 			},
 		})
 
