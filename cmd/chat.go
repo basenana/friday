@@ -106,6 +106,7 @@ Message can be provided as:
 			os.Exit(1)
 		}
 		defer agentCtx.TaskManager.KillAll()
+		defer agentCtx.Session.Close()
 
 		// Normalize image reference if provided. The agent will inspect it through the image tool.
 		var imageRef string

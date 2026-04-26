@@ -61,9 +61,8 @@ func TestBeforeModelMicroCompactPrunesOldToolResults(t *testing.T) {
 }
 
 func TestBeforeModelPublishesCompactFinishOnlyWhenMicroCompactApplies(t *testing.T) {
-	events := make(chan types.Event, 4)
 	largeToolResult := strings.Repeat("tool output ", 200)
-	sess := session.New("sess-micro-events", nil, session.WithEvents(events), session.WithHistory(
+	sess := session.New("sess-micro-events", nil, session.WithHistory(
 		types.Message{Role: types.RoleUser, Content: "Investigate core/session/compact.go."},
 		types.Message{Role: types.RoleAssistant, ToolCalls: []types.ToolCall{{Name: "read_file", Arguments: `{"path":"core/session/compact.go"}`}}},
 		types.Message{Role: types.RoleTool, ToolResult: &types.ToolResult{CallID: "call-1", Content: largeToolResult}},
@@ -77,6 +76,8 @@ func TestBeforeModelPublishesCompactFinishOnlyWhenMicroCompactApplies(t *testing
 		types.Message{Role: types.RoleUser, Content: "Deliver it."},
 		types.Message{Role: types.RoleAssistant, Content: "Delivering the response."},
 	))
+	events, unsub := sess.SubscribeEvents()
+	defer unsub()
 
 	mgr := New(nil, Config{
 		ContextWindow:      1200,
@@ -150,8 +151,7 @@ func TestBeforeModelKeepsFullHistoryBelowSoftThreshold(t *testing.T) {
 }
 
 func TestBeforeModelPublishesCompactSkipWhenMicroCompactDoesNotApply(t *testing.T) {
-	events := make(chan types.Event, 4)
-	sess := session.New("sess-micro-skip", nil, session.WithEvents(events), session.WithHistory(
+	sess := session.New("sess-micro-skip", nil, session.WithHistory(
 		types.Message{Role: types.RoleUser, Content: strings.Repeat("group 1 ", 40)},
 		types.Message{Role: types.RoleAssistant, Content: "reply 1"},
 		types.Message{Role: types.RoleUser, Content: strings.Repeat("group 2 ", 40)},
@@ -163,6 +163,8 @@ func TestBeforeModelPublishesCompactSkipWhenMicroCompactDoesNotApply(t *testing.
 		types.Message{Role: types.RoleUser, Content: strings.Repeat("group 5 ", 40)},
 		types.Message{Role: types.RoleAssistant, Content: "reply 5"},
 	))
+	events, unsub := sess.SubscribeEvents()
+	defer unsub()
 
 	mgr := New(nil, Config{
 		ContextWindow:      900,

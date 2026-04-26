@@ -43,6 +43,7 @@ type Session struct {
 	writer    MessageWriter
 	eventSeq  int64
 	eventSubs []chan<- types.Event
+	closed    bool
 	mu        sync.RWMutex
 }
 
@@ -292,20 +293,43 @@ func WithTemporary(v bool) Option {
 	}
 }
 
-func WithEvents(chs ...chan<- types.Event) Option {
-	return func(s *Session) {
-		owner := s.eventBusOwner()
-		owner.mu.Lock()
-		defer owner.mu.Unlock()
-		owner.eventSubs = append(owner.eventSubs, chs...)
-	}
-}
+// defaultEventBufSize is the buffer size for each subscriber channel.
+// 64 is sufficient to absorb event bursts during a single agent loop.
+const defaultEventBufSize = 64
 
-func (s *Session) SubscribeEvents(ch chan<- types.Event) {
+// SubscribeEvents creates a new event channel owned by the session and returns
+// a read-only channel for the caller to consume, plus an unsubscribe function.
+// Calling unsubscribe removes the channel from the session's subscriber list and
+// closes it. The session's Close() method will also close any remaining channels.
+func (s *Session) SubscribeEvents() (<-chan types.Event, func()) {
 	owner := s.eventBusOwner()
 	owner.mu.Lock()
-	defer owner.mu.Unlock()
+	if owner.closed {
+		owner.mu.Unlock()
+		ch := make(chan types.Event)
+		close(ch)
+		return ch, func() {}
+	}
+	ch := make(chan types.Event, defaultEventBufSize)
 	owner.eventSubs = append(owner.eventSubs, ch)
+	owner.mu.Unlock()
+
+	unsubscribe := func() {
+		owner.mu.Lock()
+		found := false
+		for i, sub := range owner.eventSubs {
+			if sub == ch {
+				owner.eventSubs = append(owner.eventSubs[:i], owner.eventSubs[i+1:]...)
+				found = true
+				break
+			}
+		}
+		owner.mu.Unlock()
+		if found {
+			close(ch)
+		}
+	}
+	return ch, unsubscribe
 }
 
 func (s *Session) PublishEvent(evt types.Event) {
@@ -343,6 +367,21 @@ func (s *Session) PublishEvent(evt types.Event) {
 				"root_id", evt.RootID,
 			)
 		}
+	}
+}
+
+// Close shuts down the session's event bus by closing all subscriber channels.
+// It is safe to call multiple times. Individual subscribers can also be removed
+// earlier via the unsubscribe function returned by SubscribeEvents.
+func (s *Session) Close() {
+	owner := s.eventBusOwner()
+	owner.mu.Lock()
+	owner.closed = true
+	subs := owner.eventSubs
+	owner.eventSubs = nil
+	owner.mu.Unlock()
+	for _, ch := range subs {
+		close(ch)
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/xml"
 	"math"
+	"sync"
 
 	"github.com/basenana/friday/core/session"
 	"github.com/basenana/friday/core/tracing"
@@ -12,6 +13,7 @@ import (
 )
 
 type SearchNode struct {
+	mu         sync.Mutex
 	id         string
 	visits     int
 	evaluation *Evaluation
@@ -25,7 +27,7 @@ func newRoot(reasoning string, sess *session.Session) *SearchNode {
 	sess.AppendMessage(&types.Message{Role: types.RoleAgent, Content: reasoning})
 	return &SearchNode{
 		id:         uuid.New().String(),
-		evaluation: &Evaluation{Score: 1},
+		evaluation: &Evaluation{Score: 1.0},
 		parent:     nil,
 		children:   make([]*SearchNode, 0, 2),
 		reasoning:  []string{reasoning},
@@ -37,9 +39,9 @@ func newNode(reasoning string) *SearchNode {
 	return &SearchNode{id: uuid.New().String(), reasoning: []string{reasoning}}
 }
 
-func (n *SearchNode) Expend(ctx context.Context, node *SearchNode, evaluation *Evaluation) {
+func (n *SearchNode) Expand(ctx context.Context, node *SearchNode, evaluation *Evaluation) {
 	if evaluation == nil { // new candidate
-		evaluation = &Evaluation{Score: 1}
+		evaluation = &Evaluation{Score: 1.0}
 	}
 
 	reasoning := make([]string, 0, len(n.reasoning)+len(node.reasoning))
@@ -50,7 +52,9 @@ func (n *SearchNode) Expend(ctx context.Context, node *SearchNode, evaluation *E
 	node.reasoning = reasoning
 
 	node.parent = n
+	n.mu.Lock()
 	n.children = append(n.children, node)
+	n.mu.Unlock()
 	node.sess = n.sess.Fork()
 	tracing.SpanFromContext(ctx).AddEvent("session.fork",
 		tracing.String("session.id", node.sess.ID),
@@ -73,26 +77,48 @@ func (n *SearchNode) Latest() string {
 	return n.reasoning[len(n.reasoning)-1]
 }
 
-func (n *SearchNode) BackPropagate(reward int) {
+func (n *SearchNode) BackPropagate(reward float64) {
 	var crt = n
 	for crt != nil {
+		crt.mu.Lock()
 		crt.visits += 1
-		crt.evaluation.Score = reward + (crt.visits-1)*crt.evaluation.Score
+		// Running average: (reward + (visits-1)*oldScore) / visits
+		crt.evaluation.Score = (reward + float64(crt.visits-1)*crt.evaluation.Score) / float64(crt.visits)
+		crt.mu.Unlock()
 		crt = crt.parent
 	}
 }
 
-func (n *SearchNode) upperConfidenceBound() int {
+func (n *SearchNode) upperConfidenceBound() float64 {
 	if n.evaluation == nil || n.parent == nil {
-		return 1
+		return 1.0
 	}
-	return int(float64(n.evaluation.Score) * math.Sqrt(math.Log(float64(n.parent.visits))/float64(n.visits)))
+	n.mu.Lock()
+	score := n.evaluation.Score
+	visits := n.visits
+	n.mu.Unlock()
+
+	if visits == 0 {
+		return math.MaxFloat64 // unvisited nodes get highest priority
+	}
+
+	n.parent.mu.Lock()
+	parentVisits := n.parent.visits
+	n.parent.mu.Unlock()
+
+	if parentVisits == 0 {
+		return score
+	}
+
+	exploitation := score
+	exploration := 2.0 * math.Sqrt(math.Log(float64(parentVisits))/float64(visits))
+	return exploitation + exploration
 }
 
 func (n *SearchNode) GetBestNode() *SearchNode {
 	var (
 		maxOne   *SearchNode
-		maxScore int
+		maxScore float64
 	)
 	for _, child := range n.children {
 		if child.evaluation == nil || child.evaluation.IsDone {
@@ -114,9 +140,9 @@ func (n *SearchNode) GetBestNode() *SearchNode {
 }
 
 type Evaluation struct {
-	Score     int    `json:"score" jsonschema:"required,description=Rate from 1-100 where 1 is incorrect and 100 is correct"`
-	IsDone    bool   `json:"is_done" jsonschema:"required,description=Whether the final answer is found yet"`
-	Reasoning string `json:"reasoning" jsonschema:"required,description=Your reasoning and analysis in detail DON'T more than 50 words'"`
+	Score     float64 `json:"score" jsonschema:"required,description=Rate from 1-100 where 1 is incorrect and 100 is correct"`
+	IsDone    bool    `json:"is_done" jsonschema:"required,description=Whether the final answer is found yet"`
+	Reasoning string  `json:"reasoning" jsonschema:"required,description=Your reasoning and analysis in detail DON'T more than 50 words'"`
 }
 
 type Candidates struct {

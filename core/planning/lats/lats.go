@@ -48,7 +48,7 @@ func (a *Agent) Chat(ctx context.Context, req *agtapi.Request) *agtapi.Response 
 	a.logger.Infow("handle request", "message", logger.FirstLine(req.UserMessage), "session", sess.ID)
 	go func() {
 		defer resp.Close()
-		for {
+		for step := 0; step < a.option.MaxSteps; step++ {
 			ans, finish, err := a.runStep(ctx)
 			if err != nil {
 				resp.Fail(err)
@@ -56,10 +56,13 @@ func (a *Agent) Chat(ctx context.Context, req *agtapi.Request) *agtapi.Response 
 			}
 
 			if finish {
-				a.sendFinalAnswer(ctx, ans, sess)
+				a.sendFinalAnswer(ctx, ans, sess, resp)
 				return
 			}
 		}
+		a.logger.Warnw("[LATS] max steps reached", "maxSteps", a.option.MaxSteps)
+		best := a.root.GetBestNode()
+		a.sendFinalAnswer(ctx, best.Latest(), sess, resp)
 	}()
 	return resp
 }
@@ -83,7 +86,7 @@ func (a *Agent) runStep(ctx context.Context) (string, bool, error) {
 	for _, candidate := range candidates {
 		a.logger.Infow("[TREE] generated new reasoning step", "candidate", candidate)
 		n := newNode(candidate)
-		crtNode.Expend(ctx, n, nil)
+		crtNode.Expand(ctx, n, nil)
 		nextMove = append(nextMove, n)
 	}
 
@@ -92,7 +95,7 @@ func (a *Agent) runStep(ctx context.Context) (string, bool, error) {
 		finishCollect         = make(chan struct{})
 		solutionQueue         = make(chan *SearchNode, 5)
 		ans                   *SearchNode
-		bestAns               int
+		bestAns               float64
 		parallel              = make(chan struct{}, a.option.MaxParallel)
 		batchCtx, cancelBatch = context.WithCancel(ctx)
 	)
@@ -141,7 +144,7 @@ func (a *Agent) runStep(ctx context.Context) (string, bool, error) {
 
 			a.logger.Infow("[TREE] node evaluate finish", "score", e.Score, "isDone", e.IsDone, "reasoning", e.Reasoning)
 			nn := newNode(reasoning)
-			node.Expend(batchCtx, nn, e)
+			node.Expand(batchCtx, nn, e)
 			if nn.evaluation.IsDone {
 				a.logger.Infow("[TREE] found solution node", "node", nn.Latest())
 				solutionQueue <- nn
@@ -193,7 +196,11 @@ func (a *Agent) extendCandidates(ctx context.Context, node *SearchNode) ([]strin
 		if err == nil {
 			break
 		}
-		time.Sleep(time.Second)
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(time.Second):
+		}
 	}
 	if err != nil {
 		return nil, err
@@ -253,7 +260,7 @@ func (a *Agent) evaluate(ctx context.Context, node *SearchNode, reasoning string
 	var (
 		prompt = a.option.ReflectionPrompt
 		nowAt  = time.Now()
-		eva    = &Evaluation{Score: 1}
+		eva    = &Evaluation{Score: 1.0}
 		buf    = &bytes.Buffer{}
 		err    error
 	)
@@ -279,12 +286,16 @@ func (a *Agent) evaluate(ctx context.Context, node *SearchNode, reasoning string
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		default:
-			err = a.llm.StructuredPredict(ctx, providers.NewPromptRequest(prompt), eva)
+			err = a.llm.StructuredPredict(ctx, providers.NewPromptRequest(buf.String()), eva)
 		}
 		if err == nil {
 			break
 		}
-		time.Sleep(time.Second)
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(time.Second):
+		}
 	}
 	if err != nil {
 		return nil, err
@@ -293,10 +304,11 @@ func (a *Agent) evaluate(ctx context.Context, node *SearchNode, reasoning string
 	return eva, nil
 }
 
-func (a *Agent) sendFinalAnswer(ctx context.Context, ans string, sess *session.Session) {
+func (a *Agent) sendFinalAnswer(ctx context.Context, ans string, sess *session.Session, resp *agtapi.Response) {
 	if sess != nil {
 		sess.AppendMessage(&types.Message{Role: types.RoleAssistant, Content: ans})
 	}
+	agtapi.SendDelta(resp, types.Delta{Content: ans})
 }
 
 func New(llm providers.Client, worker agents.Agent, opt Option) *Agent {
@@ -308,6 +320,9 @@ func New(llm providers.Client, worker agents.Agent, opt Option) *Agent {
 	}
 	if opt.MaxParallel == 0 {
 		opt.MaxParallel = 5
+	}
+	if opt.MaxSteps == 0 {
+		opt.MaxSteps = 50
 	}
 	if opt.ExpansionPrompt == "" {
 		opt.ExpansionPrompt = DEFAULT_CANDIDATES_PROMPT
@@ -328,6 +343,7 @@ type Option struct {
 	Expansions  int
 	MaxRollouts int
 	MaxParallel int
+	MaxSteps    int
 	FastMode    bool
 
 	SystemPrompt     string

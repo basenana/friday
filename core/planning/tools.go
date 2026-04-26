@@ -55,7 +55,10 @@ func writeTodoListHandler(t *Todo, sess *session.Session) tools.ToolHandlerFunc 
 			}
 		}
 
-		todoData, _ := json.Marshal(todo)
+		todoData, err := json.Marshal(todo)
+		if err != nil {
+			t.logger.Errorw("failed to marshal todo list", "err", err)
+		}
 		sess.PublishEvent(types.Event{
 			Type: types.EventTodoUpdate,
 			Data: map[string]string{

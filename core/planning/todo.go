@@ -39,6 +39,9 @@ func (a *Todo) BeforeModel(ctx context.Context, sess *session.Session, req provi
 	}
 
 	messages := req.History()
+	if len(messages) == 0 {
+		return nil
+	}
 	lastMessage := messages[len(messages)-1]
 	if lastMessage.Role == types.RoleTool || lastMessage.IsToolCall() {
 		messages = append(messages, types.Message{Role: types.RoleAgent, Content: displayTodoList(todo)})
@@ -46,7 +49,8 @@ func (a *Todo) BeforeModel(ctx context.Context, sess *session.Session, req provi
 		return nil
 	}
 
-	newMessage := messages[:len(messages)-1]
+	newMessage := make([]types.Message, len(messages)-1, len(messages)+1)
+	copy(newMessage, messages[:len(messages)-1])
 	newMessage = append(newMessage, types.Message{Role: types.RoleAgent, Content: displayTodoList(todo)})
 	newMessage = append(newMessage, lastMessage)
 	req.SetHistory(newMessage)
@@ -82,7 +86,7 @@ func (a *Todo) planningTools(sess *session.Session) []*tools.Tool {
 	}
 }
 
-func New(llm providers.Client, option Option) *Todo {
+func New(option Option) *Todo {
 	if option.SystemPrompt == "" {
 		option.SystemPrompt = DEFAULT_PLANNING_PROMPT
 	}
@@ -96,6 +100,13 @@ func New(llm providers.Client, option Option) *Todo {
 		todoMaps: make(map[string]*TodoList),
 		logger:   logger.New("planning"),
 	}
+}
+
+func (a *Todo) RemoveTodo(sess *session.Session) {
+	key := todoStateKey(sess)
+	a.mu.Lock()
+	delete(a.todoMaps, key)
+	a.mu.Unlock()
 }
 
 type Option struct {

@@ -263,8 +263,9 @@ func (l *captureLogger) Warnw(msg string, keysAndValues ...interface{}) {
 }
 
 func TestPublishEvent_AssignsSeqAndSessionMetadata(t *testing.T) {
-	ch := make(chan types.Event, 2)
-	sess := New("test-session", nil, WithEvents(ch))
+	sess := New("test-session", nil)
+	ch, unsub := sess.SubscribeEvents()
+	defer unsub()
 
 	sess.PublishEvent(types.Event{Type: types.EventAgentStart})
 	sess.PublishEvent(types.Event{Type: types.EventModelStart})
@@ -287,8 +288,9 @@ func TestPublishEvent_AssignsSeqAndSessionMetadata(t *testing.T) {
 }
 
 func TestPublishEvent_UsesRootScopedSequence(t *testing.T) {
-	rootCh := make(chan types.Event, 2)
-	root := New("root-session", nil, WithEvents(rootCh))
+	root := New("root-session", nil)
+	rootCh, rootUnsub := root.SubscribeEvents()
+	defer rootUnsub()
 	child := root.Fork()
 
 	root.PublishEvent(types.Event{Type: types.EventAgentStart})
@@ -303,8 +305,9 @@ func TestPublishEvent_UsesRootScopedSequence(t *testing.T) {
 		t.Fatalf("expected child event root_id %q, got %q", root.ID, rootSecond.RootID)
 	}
 
-	otherCh := make(chan types.Event, 1)
-	otherRoot := New("other-root", nil, WithEvents(otherCh))
+	otherRoot := New("other-root", nil)
+	otherCh, otherUnsub := otherRoot.SubscribeEvents()
+	defer otherUnsub()
 	otherRoot.PublishEvent(types.Event{Type: types.EventAgentStart})
 
 	otherEvt := <-otherCh
@@ -316,9 +319,9 @@ func TestPublishEvent_UsesRootScopedSequence(t *testing.T) {
 func TestSubscribeEventsOnRootAfterForkReceivesChildEvents(t *testing.T) {
 	root := New("root-session", nil)
 	child := root.Fork()
-	ch := make(chan types.Event, 1)
+	ch, unsub := root.SubscribeEvents()
+	defer unsub()
 
-	root.SubscribeEvents(ch)
 	child.PublishEvent(types.Event{Type: types.EventToolStart})
 
 	evt := <-ch
@@ -339,15 +342,67 @@ func TestPublishEvent_LogsWhenSubscriberChannelIsBlocked(t *testing.T) {
 	corelogger.SetRoot(testLogger)
 	defer corelogger.SetRoot(oldRoot)
 
-	ch := make(chan types.Event)
-	sess := New("test-session", nil, WithEvents(ch))
-	sess.PublishEvent(types.Event{Type: types.EventAgentStart})
+	sess := New("test-session", nil)
+	ch, _ := sess.SubscribeEvents() // unsub intentionally ignored: session.Close() will clean up
+	// Fill the buffer to overflow
+	for i := 0; i < cap(ch)+1; i++ {
+		sess.PublishEvent(types.Event{Type: types.EventAgentStart})
+	}
 
 	if len(testLogger.warns) == 0 {
 		t.Fatal("expected warning log when event channel is blocked")
 	}
 	if testLogger.warns[0] != "failed to publish session event" {
 		t.Fatalf("unexpected warning message: %q", testLogger.warns[0])
+	}
+}
+
+func TestClose_IsIdempotent(t *testing.T) {
+	sess := New("close-idempotent", nil)
+	ch, unsub := sess.SubscribeEvents()
+	defer unsub()
+
+	sess.Close()
+	sess.Close() // must not panic
+
+	// Channel should be closed
+	_, ok := <-ch
+	if ok {
+		t.Fatal("expected channel to be closed after Close()")
+	}
+}
+
+func TestUnsubscribe_AfterClose_DoesNotPanic(t *testing.T) {
+	sess := New("unsub-after-close", nil)
+	_, unsub := sess.SubscribeEvents()
+
+	sess.Close()
+	unsub() // must not panic
+}
+
+func TestUnsubscribe_Twice_DoesNotPanic(t *testing.T) {
+	sess := New("unsub-twice", nil)
+	ch, unsub := sess.SubscribeEvents()
+
+	unsub()
+	unsub() // must not panic
+
+	_, ok := <-ch
+	if ok {
+		t.Fatal("expected channel to be closed after first unsubscribe")
+	}
+}
+
+func TestSubscribeEvents_AfterClose_ReturnsClosed(t *testing.T) {
+	sess := New("sub-after-close", nil)
+	sess.Close()
+
+	ch, unsub := sess.SubscribeEvents()
+	defer unsub()
+
+	_, ok := <-ch
+	if ok {
+		t.Fatal("expected channel to be closed immediately when subscribing after Close()")
 	}
 }
 

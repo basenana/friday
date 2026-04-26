@@ -33,7 +33,7 @@ func (a *Agent) Chat(ctx context.Context, req *api.Request) *api.Response {
 
 	if sess == nil {
 		sess = session.New(types.NewID(), a.llm)
-		sess.RegisterHook(planning.New(a.llm, planning.Option{}))
+		sess.RegisterHook(planning.New(planning.Option{}))
 	}
 
 	mergedTools := make([]*tools.Tool, 0)
