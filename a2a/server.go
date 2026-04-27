@@ -144,7 +144,7 @@ func (e *fridayExecutor) Execute(ctx context.Context, reqCtx *a2asrv.RequestCont
 		_ = queue.Write(ctx, a2a.NewStatusUpdateEvent(reqCtx, a2a.TaskStateFailed, errorMessage(err.Error())))
 		return nil
 	}
-	defer agentCtx.TaskManager.KillAll()
+	defer agentCtx.Close()
 
 	// Run Friday chat
 	resp := agentCtx.Chat(ctx, userText)

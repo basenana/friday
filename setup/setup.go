@@ -193,6 +193,13 @@ func NewAgent(sessionMgr SessionManager, cfg *config.Config, opts ...Option) (*A
 	}, nil
 }
 
+// Close releases all resources owned by the AgentContext.
+// KillAll runs first so in-flight tasks are stopped before the session event bus is torn down.
+func (ac *AgentContext) Close() {
+	ac.TaskManager.KillAll()
+	ac.Session.Close()
+}
+
 func (ac *AgentContext) Chat(ctx context.Context, message string) *api.Response {
 	req := &api.Request{
 		Session:     ac.Session,

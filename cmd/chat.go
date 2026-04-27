@@ -105,8 +105,7 @@ Message can be provided as:
 			fmt.Fprintf(os.Stderr, "%v\n", err)
 			os.Exit(1)
 		}
-		defer agentCtx.TaskManager.KillAll()
-		defer agentCtx.Session.Close()
+		defer agentCtx.Close()
 
 		// Normalize image reference if provided. The agent will inspect it through the image tool.
 		var imageRef string
