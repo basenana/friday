@@ -39,7 +39,7 @@ github.com/anthropics/anthropic-sdk-go/shared/constant
 # github.com/bahlo/generic-list-go v0.2.0
 ## explicit; go 1.18
 github.com/bahlo/generic-list-go
-# github.com/basenana/friday/core v0.0.0-20260424130333-05cc425bf35e
+# github.com/basenana/friday/core v0.0.0-20260428142732-5749099427ca
 ## explicit; go 1.25.0
 # github.com/buger/jsonparser v1.1.1
 ## explicit; go 1.13
