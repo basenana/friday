@@ -7,10 +7,23 @@ import (
 	"fmt"
 	"hash/fnv"
 
+	"github.com/basenana/friday/core/logger"
 	"github.com/basenana/friday/core/providers"
 	"github.com/basenana/friday/core/session"
 	"github.com/basenana/friday/core/tools"
 	"github.com/basenana/friday/core/tracing"
+)
+
+const (
+	// defaultMaxToolResultChars is the fallback when PromptBudget is not yet initialized.
+	defaultMaxToolResultChars = 30000
+	// minToolResultChars is used when the session is already over budget
+	// (remaining tokens <= 0) to avoid injecting a full 30K default.
+	minToolResultChars = 4000
+	// charsPerToken is a conservative character-to-token ratio.
+	// English averages ~3.5-4 chars/token; CJK is lower (~1.5-2).
+	// We use 2 to err on the side of truncating earlier rather than blowing the context.
+	charsPerToken = 2
 )
 
 var (
@@ -63,8 +76,28 @@ func toolCall(ctx context.Context, sess *session.Session, use *ToolUse, td *tool
 		return "", false, fmt.Errorf("marshal tool %s result failed: %s", use.Name, err)
 	}
 
-	span.SetAttributes(tracing.TruncateAttr("tool.output", string(content)))
-	return string(content), !result.IsError, nil
+	msg := truncateToolResult(sess, string(content))
+	span.SetAttributes(tracing.TruncateAttr("tool.output", msg))
+	return msg, !result.IsError, nil
+}
+
+func truncateToolResult(sess *session.Session, content string) string {
+	limit := defaultMaxToolResultChars
+	if st := sess.EnsureContextState(); st.PromptBudget.ContextWindow > 0 {
+		remaining := st.PromptBudget.ContextWindow - sess.Tokens()
+		if remaining > 0 {
+			limit = int(remaining) * charsPerToken
+		} else {
+			limit = minToolResultChars
+		}
+	}
+	runes := []rune(content)
+	if len(runes) <= limit {
+		return content
+	}
+	logger.New("tools").Warnw("tool output truncated", "showing", limit, "total", len(runes))
+	return fmt.Sprintf("%s\n[Tool output truncated: showing %d of %d chars]",
+		string(runes[:limit]), limit, len(runes))
 }
 
 func newLLMRequest(systemMessage string, sess *session.Session, toolList []*tools.Tool) providers.Request {
