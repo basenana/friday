@@ -3,7 +3,6 @@ package a2a
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -15,8 +14,8 @@ import (
 	"github.com/a2aproject/a2a-go/a2a"
 	"github.com/a2aproject/a2a-go/a2asrv"
 	"github.com/a2aproject/a2a-go/a2asrv/eventqueue"
-	coreapi "github.com/basenana/friday/core/api"
-	coretypes "github.com/basenana/friday/core/types"
+
+	"github.com/basenana/friday/actor"
 )
 
 // --- Agent Card Tests ---
@@ -152,35 +151,31 @@ func TestAuthMiddlewareAcceptsCorrectToken(t *testing.T) {
 
 // --- Cancel Propagation Test ---
 
-func TestFridayExecutorCancelPropagates(t *testing.T) {
-	executor := &fridayExecutor{}
+func TestFridayExecutorCancelShutsDownActor(t *testing.T) {
+	registry := newFakeRegistry(4)
+	executor := newFridayExecutor(registry)
+
 	taskID := a2a.TaskID("cancel-prop-test")
-
-	// Simulate a running task by registering a cancel func
-	ctx, cancel := context.WithCancel(context.Background())
-	executor.cancels.Store(taskID, cancel)
-
-	// Verify context is not yet canceled
-	if ctx.Err() != nil {
-		t.Fatal("expected context to be active before cancel")
-	}
-
-	// Cancel via the executor
 	reqCtx := &a2asrv.RequestContext{TaskID: taskID, ContextID: "ctx-1"}
 	queue := newTestQueue()
-	err := executor.Cancel(context.Background(), reqCtx, queue)
-	if err != nil {
+
+	if err := executor.Cancel(context.Background(), reqCtx, queue); err != nil {
 		t.Fatalf("Cancel() error = %v", err)
 	}
 
-	// Verify context was canceled
-	if ctx.Err() == nil {
-		t.Error("expected context to be canceled after Cancel()")
+	events := queue.events()
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event from cancel, got %d", len(events))
 	}
-
-	// Verify the cancel entry was cleaned up
-	if _, ok := executor.cancels.Load(taskID); ok {
-		t.Error("expected cancel entry to be removed after Cancel()")
+	statusUpdate, ok := events[0].(*a2a.TaskStatusUpdateEvent)
+	if !ok {
+		t.Fatalf("expected TaskStatusUpdateEvent, got %T", events[0])
+	}
+	if statusUpdate.Status.State != a2a.TaskStateCanceled {
+		t.Errorf("expected canceled state, got %q", statusUpdate.Status.State)
+	}
+	if !registry.wasShutdown(string(taskID)) {
+		t.Fatalf("expected registry shutdown for task %q", taskID)
 	}
 }
 
@@ -227,173 +222,20 @@ func TestExtractTextFromMessage(t *testing.T) {
 	}
 }
 
-// --- Stream Bridge Tests ---
-
-func TestBridgeResponseCompleted(t *testing.T) {
-	resp := coreapi.NewResponse()
-	reqCtx := &a2asrv.RequestContext{TaskID: "test-task-1", ContextID: "ctx-1"}
-	queue := newTestQueue()
-
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		time.Sleep(10 * time.Millisecond)
-		coreapi.SendDelta(resp, coretypes.Delta{Content: "Hello "})
-		coreapi.SendDelta(resp, coretypes.Delta{Content: "World"})
-		resp.Close()
-	}()
-
-	err := bridgeResponse(context.Background(), reqCtx, queue, resp)
-	wg.Wait()
-
-	if err != nil {
-		t.Fatalf("bridgeResponse() error = %v", err)
-	}
-
-	events := queue.events()
-	if len(events) == 0 {
-		t.Fatal("expected at least one event")
-	}
-
-	// Last event should be a completed status update
-	last := events[len(events)-1]
-	statusUpdate, ok := last.(*a2a.TaskStatusUpdateEvent)
-	if !ok {
-		t.Fatalf("expected TaskStatusUpdateEvent, got %T", last)
-	}
-	if statusUpdate.Status.State != a2a.TaskStateCompleted {
-		t.Errorf("expected completed state, got %q", statusUpdate.Status.State)
-	}
-	if !statusUpdate.Final {
-		t.Error("expected final=true on completed event")
-	}
-}
-
-func TestBridgeResponseWithError(t *testing.T) {
-	resp := coreapi.NewResponse()
-	reqCtx := &a2asrv.RequestContext{TaskID: "test-task-2", ContextID: "ctx-2"}
-	queue := newTestQueue()
-
-	go func() {
-		time.Sleep(10 * time.Millisecond)
-		resp.Fail(fmt.Errorf("something went wrong"))
-	}()
-
-	err := bridgeResponse(context.Background(), reqCtx, queue, resp)
-	if err != nil {
-		t.Fatalf("bridgeResponse() error = %v", err)
-	}
-
-	events := queue.events()
-	last := events[len(events)-1]
-	statusUpdate, ok := last.(*a2a.TaskStatusUpdateEvent)
-	if !ok {
-		t.Fatalf("expected TaskStatusUpdateEvent, got %T", last)
-	}
-	if statusUpdate.Status.State != a2a.TaskStateFailed {
-		t.Errorf("expected failed state, got %q", statusUpdate.Status.State)
-	}
-}
-
-func TestBridgeResponseCanceled(t *testing.T) {
-	resp := coreapi.NewResponse()
-	reqCtx := &a2asrv.RequestContext{TaskID: "test-task-3", ContextID: "ctx-3"}
-	queue := newTestQueue()
-
-	ctx, cancel := context.WithCancel(context.Background())
-	go func() {
-		time.Sleep(10 * time.Millisecond)
-		cancel()
-	}()
-
-	err := bridgeResponse(ctx, reqCtx, queue, resp)
-	if err != nil {
-		t.Fatalf("bridgeResponse() error = %v", err)
-	}
-
-	events := queue.events()
-	if len(events) == 0 {
-		t.Fatal("expected at least one event")
-	}
-	last := events[len(events)-1]
-	statusUpdate, ok := last.(*a2a.TaskStatusUpdateEvent)
-	if !ok {
-		t.Fatalf("expected TaskStatusUpdateEvent, got %T", last)
-	}
-	if statusUpdate.Status.State != a2a.TaskStateCanceled {
-		t.Errorf("expected canceled state, got %q", statusUpdate.Status.State)
-	}
-}
-
-func TestBridgeResponseEmptyDeltasSkipped(t *testing.T) {
-	resp := coreapi.NewResponse()
-	reqCtx := &a2asrv.RequestContext{TaskID: "test-task-4", ContextID: "ctx-4"}
-	queue := newTestQueue()
-
-	go func() {
-		time.Sleep(10 * time.Millisecond)
-		coreapi.SendDelta(resp, coretypes.Delta{Content: "  "})
-		coreapi.SendDelta(resp, coretypes.Delta{Content: "real content"})
-		resp.Close()
-	}()
-
-	err := bridgeResponse(context.Background(), reqCtx, queue, resp)
-	if err != nil {
-		t.Fatalf("bridgeResponse() error = %v", err)
-	}
-
-	events := queue.events()
-	// Should have artifact events + terminal event
-	artifactCount := 0
-	for _, e := range events {
-		if _, ok := e.(*a2a.TaskArtifactUpdateEvent); ok {
-			artifactCount++
-		}
-	}
-	// Both empty and real content deltas produce events since "  " is non-empty
-	if artifactCount < 1 {
-		t.Errorf("expected at least 1 artifact event, got %d", artifactCount)
-	}
-}
-
-func TestBridgeResponseStreamingChunks(t *testing.T) {
-	resp := coreapi.NewResponse()
-	reqCtx := &a2asrv.RequestContext{TaskID: "test-task-5", ContextID: "ctx-5"}
-	queue := newTestQueue()
-
-	go func() {
-		coreapi.SendDelta(resp, coretypes.Delta{Content: "chunk1"})
-		coreapi.SendDelta(resp, coretypes.Delta{Content: "chunk2"})
-		coreapi.SendDelta(resp, coretypes.Delta{Content: "chunk3"})
-		resp.Close()
-	}()
-
-	err := bridgeResponse(context.Background(), reqCtx, queue, resp)
-	if err != nil {
-		t.Fatalf("bridgeResponse() error = %v", err)
-	}
-
-	events := queue.events()
-	artifactCount := 0
-	for _, e := range events {
-		if ae, ok := e.(*a2a.TaskArtifactUpdateEvent); ok {
-			artifactCount++
-			// First artifact should have an ID, subsequent should reference same
-			if ae.Artifact == nil {
-				t.Error("artifact update event has nil artifact")
-			}
-		}
-	}
-	if artifactCount != 3 {
-		t.Errorf("expected 3 artifact events, got %d", artifactCount)
-	}
-}
-
 // --- Executor Integration Tests ---
 
-func TestExecutorExecuteWithFakeRunner(t *testing.T) {
-	executor := &fakeExecutor{response: "Hello from Friday!"}
+func TestFridayExecutorExecuteCompleted(t *testing.T) {
+	registry := newFakeRegistry(8)
+	registry.actor.send = func(msg actor.Message) bool {
+		go func() {
+			registry.events <- actor.Event{Type: actor.EventTextMessageContent, Data: map[string]any{"delta": "Hello "}}
+			registry.events <- actor.Event{Type: actor.EventTextMessageContent, Data: map[string]any{"delta": "Friday"}}
+			registry.events <- actor.Event{Type: actor.EventRunFinished, Data: map[string]any{"stop_reason": "end_turn"}}
+		}()
+		return msg.Content == "hi"
+	}
+
+	executor := newFridayExecutor(registry)
 	reqCtx := &a2asrv.RequestContext{
 		TaskID:    "test-exec-1",
 		ContextID: "ctx-exec-1",
@@ -410,21 +252,94 @@ func TestExecutorExecuteWithFakeRunner(t *testing.T) {
 	if len(events) == 0 {
 		t.Fatal("expected events from executor")
 	}
+
+	last := events[len(events)-1]
+	statusUpdate, ok := last.(*a2a.TaskStatusUpdateEvent)
+	if !ok {
+		t.Fatalf("expected final TaskStatusUpdateEvent, got %T", last)
+	}
+	if statusUpdate.Status.State != a2a.TaskStateCompleted {
+		t.Fatalf("expected completed state, got %q", statusUpdate.Status.State)
+	}
+	if statusUpdate.Status.Message == nil {
+		t.Fatal("expected final response message")
+	}
+	if got := extractTextFromMessage(statusUpdate.Status.Message); got != "Hello Friday" {
+		t.Fatalf("unexpected final message: %q", got)
+	}
+
+	var artifactCount int
+	for _, evt := range events {
+		if _, ok := evt.(*a2a.TaskArtifactUpdateEvent); ok {
+			artifactCount++
+		}
+	}
+	if artifactCount != 2 {
+		t.Fatalf("expected 2 artifact events, got %d", artifactCount)
+	}
 }
 
-func TestExecutorCancel(t *testing.T) {
-	executor := &fakeExecutor{response: "hi"}
-	reqCtx := &a2asrv.RequestContext{TaskID: "test-cancel-1", ContextID: "ctx-cancel-1"}
+func TestFridayExecutorExecuteFailed(t *testing.T) {
+	registry := newFakeRegistry(4)
+	registry.actor.send = func(msg actor.Message) bool {
+		go func() {
+			registry.events <- actor.Event{Type: actor.EventRunError, Data: map[string]any{"message": "boom"}}
+			registry.events <- actor.Event{Type: actor.EventRunFinished, Data: map[string]any{"stop_reason": "error"}}
+		}()
+		return true
+	}
+
+	executor := newFridayExecutor(registry)
+	reqCtx := &a2asrv.RequestContext{TaskID: "test-fail-1", ContextID: "ctx-fail-1"}
 	queue := newTestQueue()
 
-	err := executor.Cancel(context.Background(), reqCtx, queue)
+	err := executor.Execute(context.Background(), reqCtx, queue)
 	if err != nil {
-		t.Fatalf("Cancel() error = %v", err)
+		t.Fatalf("Execute() error = %v", err)
 	}
 
 	events := queue.events()
 	if len(events) == 0 {
-		t.Fatal("expected at least one event from cancel")
+		t.Fatal("expected failure events")
+	}
+
+	last := events[len(events)-1]
+	statusUpdate, ok := last.(*a2a.TaskStatusUpdateEvent)
+	if !ok {
+		t.Fatalf("expected TaskStatusUpdateEvent, got %T", last)
+	}
+	if statusUpdate.Status.State != a2a.TaskStateFailed {
+		t.Fatalf("expected failed state, got %q", statusUpdate.Status.State)
+	}
+	if got := extractTextFromMessage(statusUpdate.Status.Message); got != "boom" {
+		t.Fatalf("unexpected failure message: %q", got)
+	}
+}
+
+func TestFridayExecutorExecuteCanceledOnContextDone(t *testing.T) {
+	registry := newFakeRegistry(2)
+	registry.actor.send = func(msg actor.Message) bool {
+		return true
+	}
+
+	executor := newFridayExecutor(registry)
+	reqCtx := &a2asrv.RequestContext{TaskID: "test-cancel-1", ContextID: "ctx-cancel-1"}
+	queue := newTestQueue()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		cancel()
+	}()
+
+	err := executor.Execute(ctx, reqCtx, queue)
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	events := queue.events()
+	if len(events) == 0 {
+		t.Fatal("expected canceled terminal event")
 	}
 
 	last := events[len(events)-1]
@@ -433,7 +348,10 @@ func TestExecutorCancel(t *testing.T) {
 		t.Fatalf("expected TaskStatusUpdateEvent, got %T", last)
 	}
 	if statusUpdate.Status.State != a2a.TaskStateCanceled {
-		t.Errorf("expected canceled state, got %q", statusUpdate.Status.State)
+		t.Fatalf("expected canceled state, got %q", statusUpdate.Status.State)
+	}
+	if !registry.wasShutdown(string(reqCtx.TaskID)) {
+		t.Fatalf("expected shutdown for task %q", reqCtx.TaskID)
 	}
 }
 
@@ -551,4 +469,57 @@ func (q *testQueue) events() []a2a.Event {
 	result := make([]a2a.Event, len(q.items))
 	copy(result, q.items)
 	return result
+}
+
+type fakeRegistry struct {
+	actor  *fakeActorSession
+	events chan actor.Event
+
+	mu          sync.Mutex
+	shutdownIDs []string
+}
+
+func newFakeRegistry(buffer int) *fakeRegistry {
+	return &fakeRegistry{
+		actor:  &fakeActorSession{},
+		events: make(chan actor.Event, buffer),
+	}
+}
+
+func (r *fakeRegistry) GetOrCreate(sessionID string) actorSession {
+	return r.actor
+}
+
+func (r *fakeRegistry) Subscribe(sessionID string, buffer int) (<-chan actor.Event, func(), error) {
+	return r.events, func() {}, nil
+}
+
+func (r *fakeRegistry) Shutdown(sessionID string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.shutdownIDs = append(r.shutdownIDs, sessionID)
+}
+
+func (r *fakeRegistry) ShutdownAll() {}
+
+func (r *fakeRegistry) wasShutdown(sessionID string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, id := range r.shutdownIDs {
+		if id == sessionID {
+			return true
+		}
+	}
+	return false
+}
+
+type fakeActorSession struct {
+	send func(actor.Message) bool
+}
+
+func (a *fakeActorSession) Send(msg actor.Message) bool {
+	if a.send == nil {
+		return true
+	}
+	return a.send(msg)
 }

@@ -38,10 +38,13 @@ The server supports:
 			channelPublicURL += "/"
 		}
 
+		registry := a2a.NewRegistry(cfg, sessMgr)
+		defer registry.ShutdownAll()
+
 		server, err := a2a.NewServer(a2a.Config{
 			BaseURL: channelPublicURL,
 			Listen:  channelListen,
-		}, cfg, sessMgr, channelAuthToken)
+		}, registry, channelAuthToken)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "failed to create A2A server: %v\n", err)
 			os.Exit(1)
