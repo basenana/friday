@@ -4,7 +4,7 @@ go 1.25.0
 
 require (
 	github.com/a2aproject/a2a-go v0.3.13
-	github.com/basenana/friday/core v0.0.0-20260428142732-5749099427ca
+	github.com/basenana/friday/core v0.0.0-20260702124215-2d8e154af31f
 	github.com/charmbracelet/bubbles v1.0.0
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/glamour v1.0.0

@@ -1,3 +1,4 @@
+## workspace
 # github.com/a2aproject/a2a-go v0.3.13
 ## explicit; go 1.24.4
 github.com/a2aproject/a2a-go/a2a
@@ -57,22 +58,8 @@ github.com/aymerick/douceur/parser
 # github.com/bahlo/generic-list-go v0.2.0
 ## explicit; go 1.18
 github.com/bahlo/generic-list-go
-# github.com/basenana/friday/core v0.0.0-20260428142732-5749099427ca
+# github.com/basenana/friday/core v0.0.0-20260702124215-2d8e154af31f
 ## explicit; go 1.25.0
-github.com/basenana/friday/core/agents
-github.com/basenana/friday/core/api
-github.com/basenana/friday/core/contextmgr
-github.com/basenana/friday/core/logger
-github.com/basenana/friday/core/planning
-github.com/basenana/friday/core/providers
-github.com/basenana/friday/core/providers/anthropics
-github.com/basenana/friday/core/providers/common
-github.com/basenana/friday/core/providers/openai
-github.com/basenana/friday/core/session
-github.com/basenana/friday/core/state
-github.com/basenana/friday/core/tools
-github.com/basenana/friday/core/tracing
-github.com/basenana/friday/core/types
 # github.com/buger/jsonparser v1.1.1
 ## explicit; go 1.13
 github.com/buger/jsonparser
@@ -148,6 +135,8 @@ github.com/inconshreveable/mousetrap
 # github.com/invopop/jsonschema v0.13.0
 ## explicit; go 1.18
 github.com/invopop/jsonschema
+# github.com/kr/pretty v0.3.1
+## explicit; go 1.12
 # github.com/lucasb-eyer/go-colorful v1.3.0
 ## explicit; go 1.12
 github.com/lucasb-eyer/go-colorful
@@ -216,6 +205,8 @@ github.com/openai/openai-go/webhooks
 # github.com/rivo/uniseg v0.4.7
 ## explicit; go 1.18
 github.com/rivo/uniseg
+# github.com/rogpeppe/go-internal v1.14.1
+## explicit; go 1.23
 # github.com/spf13/cast v1.7.1
 ## explicit; go 1.19
 github.com/spf13/cast
@@ -225,6 +216,8 @@ github.com/spf13/cobra
 # github.com/spf13/pflag v1.0.9
 ## explicit; go 1.12
 github.com/spf13/pflag
+# github.com/stretchr/testify v1.9.0
+## explicit; go 1.17
 # github.com/tidwall/gjson v1.18.0
 ## explicit; go 1.12
 github.com/tidwall/gjson
@@ -304,6 +297,10 @@ golang.org/x/text/unicode/norm
 # golang.org/x/time v0.14.0
 ## explicit; go 1.24.0
 golang.org/x/time/rate
+# gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c
+## explicit; go 1.11
+# gopkg.in/yaml.v2 v2.4.0
+## explicit; go 1.15
 # gopkg.in/yaml.v3 v3.0.1
 ## explicit
 gopkg.in/yaml.v3
