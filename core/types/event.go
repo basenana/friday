@@ -12,6 +12,7 @@ const (
 	EventLoopStart      EventType = "loop.start"
 	EventModelStart     EventType = "model.start"
 	EventModelFinish    EventType = "model.finish"
+	EventModelTimeout   EventType = "model.timeout"
 	EventToolStart      EventType = "tool.start"
 	EventToolFinish     EventType = "tool.finish"
 	EventCompactStart   EventType = "compact.start"

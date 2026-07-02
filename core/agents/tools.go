@@ -9,6 +9,7 @@ import (
 
 	"github.com/basenana/friday/core/logger"
 	"github.com/basenana/friday/core/providers"
+	"github.com/basenana/friday/core/providers/common"
 	"github.com/basenana/friday/core/session"
 	"github.com/basenana/friday/core/tools"
 	"github.com/basenana/friday/core/tracing"
@@ -16,14 +17,20 @@ import (
 
 const (
 	// defaultMaxToolResultChars is the fallback when PromptBudget is not yet initialized.
-	defaultMaxToolResultChars = 30000
+	defaultMaxToolResultChars int64 = 30000
 	// minToolResultChars is used when the session is already over budget
 	// (remaining tokens <= 0) to avoid injecting a full 30K default.
-	minToolResultChars = 4000
+	minToolResultChars int64 = 4000
+	// maxSingleToolResultChars is the absolute hard cap for any single tool result,
+	// even when the context window still has budget. Keeps room for compact/summary.
+	maxSingleToolResultChars int64 = 80000
+	// reservedTokensForSummary reserves token budget for session compact/summary
+	// so a large tool result cannot squeeze out the summarizer.
+	reservedTokensForSummary int64 = 20_000
 	// charsPerToken is a conservative character-to-token ratio.
 	// English averages ~3.5-4 chars/token; CJK is lower (~1.5-2).
 	// We use 2 to err on the side of truncating earlier rather than blowing the context.
-	charsPerToken = 2
+	charsPerToken int64 = 2
 )
 
 var (
@@ -61,10 +68,12 @@ func toolCall(ctx context.Context, sess *session.Session, use *ToolUse, td *tool
 	defer span.End()
 	defer func() { tracing.DeferStatus(span, &retErr) }()
 
-	req := &tools.Request{Arguments: make(map[string]interface{}), SessionID: sess.ID}
-	if err := json.Unmarshal([]byte(use.Arguments), &req.Arguments); err != nil {
-		return "", false, fmt.Errorf("unmarshal json argument failed: %s", err)
+	req := &tools.Request{SessionID: sess.ID}
+	args, ok := common.ParseToolUseArguments(use.Arguments)
+	if !ok {
+		return "", false, fmt.Errorf("tool %s arguments must be a JSON object, got: %.80s", use.Name, use.Arguments)
 	}
+	req.Arguments = args
 
 	result, err := td.Handler(ctx, req)
 	if err != nil {
@@ -84,20 +93,23 @@ func toolCall(ctx context.Context, sess *session.Session, use *ToolUse, td *tool
 func truncateToolResult(sess *session.Session, content string) string {
 	limit := defaultMaxToolResultChars
 	if st := sess.EnsureContextState(); st.PromptBudget.ContextWindow > 0 {
-		remaining := st.PromptBudget.ContextWindow - sess.Tokens()
+		remaining := st.PromptBudget.ContextWindow - sess.Tokens() - reservedTokensForSummary
 		if remaining > 0 {
-			limit = int(remaining) * charsPerToken
+			limit = remaining * charsPerToken
 		} else {
 			limit = minToolResultChars
 		}
 	}
+	if limit > maxSingleToolResultChars {
+		limit = maxSingleToolResultChars
+	}
 	runes := []rune(content)
-	if len(runes) <= limit {
+	if int64(len(runes)) <= limit {
 		return content
 	}
 	logger.New("tools").Warnw("tool output truncated", "showing", limit, "total", len(runes))
 	return fmt.Sprintf("%s\n[Tool output truncated: showing %d of %d chars]",
-		string(runes[:limit]), limit, len(runes))
+		string(runes[:limit]), limit, int64(len(runes)))
 }
 
 func newLLMRequest(systemMessage string, sess *session.Session, toolList []*tools.Tool) providers.Request {

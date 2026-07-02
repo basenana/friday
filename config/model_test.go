@@ -1,6 +1,10 @@
 package config
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 func TestModelConfigHasInput(t *testing.T) {
 	cfg := ModelConfig{Input: "text, image ; audio"}
@@ -107,6 +111,40 @@ func TestResolveImageModel(t *testing.T) {
 	}
 }
 
+func TestResolveImageModelPrefersPrimaryModelFromModelsList(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Model = ModelConfig{
+		Provider: "openai",
+		Key:      "default-key",
+		Model:    "default-model",
+	}
+	cfg.Models = []ModelConfig{
+		{
+			Provider: "anthropic",
+			Key:      "models-key",
+			Model:    "claude-sonnet",
+			Input:    "text,image",
+		},
+	}
+	cfg.ImageModel = ModelConfig{
+		Model: "claude-vision",
+	}
+
+	got, err := cfg.ResolveImageModel("")
+	if err != nil {
+		t.Fatalf("ResolveImageModel() error = %v", err)
+	}
+	if got.Provider != "anthropic" {
+		t.Fatalf("ResolveImageModel() provider = %q, want %q", got.Provider, "anthropic")
+	}
+	if got.Key != "models-key" {
+		t.Fatalf("ResolveImageModel() key = %q, want %q", got.Key, "models-key")
+	}
+	if got.Model != "claude-vision" {
+		t.Fatalf("ResolveImageModel() model = %q, want %q", got.Model, "claude-vision")
+	}
+}
+
 func TestExpandEnvIncludesImageModel(t *testing.T) {
 	t.Setenv("FRIDAY_IMAGE_KEY", "img-key")
 	t.Setenv("FRIDAY_IMAGE_BASE", "https://example.com")
@@ -130,5 +168,47 @@ func TestExpandEnvIncludesImageModel(t *testing.T) {
 	}
 	if cfg.ImageModel.Model != "vision-model" {
 		t.Fatalf("image_model.model not expanded, got %q", cfg.ImageModel.Model)
+	}
+}
+
+func TestLoadExpandsEnvInModelsList(t *testing.T) {
+	t.Setenv("FRIDAY_MODELS_KEY", "models-key")
+	t.Setenv("FRIDAY_MODELS_BASE", "https://models.example.com")
+	t.Setenv("FRIDAY_MODELS_NAME", "models-name")
+	t.Setenv("FRIDAY_MODELS_PROXY", "http://proxy.example.com:8080")
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "friday.yaml")
+	data := []byte(`
+models:
+  - provider: openai
+    key: $FRIDAY_MODELS_KEY
+    base_url: $FRIDAY_MODELS_BASE
+    model: $FRIDAY_MODELS_NAME
+    input: text,image
+    proxy: $FRIDAY_MODELS_PROXY
+`)
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if len(cfg.Models) != 1 {
+		t.Fatalf("expected 1 model, got %d", len(cfg.Models))
+	}
+	if cfg.Models[0].Key != "models-key" {
+		t.Fatalf("models[0].key = %q, want %q", cfg.Models[0].Key, "models-key")
+	}
+	if cfg.Models[0].BaseURL != "https://models.example.com" {
+		t.Fatalf("models[0].base_url = %q, want %q", cfg.Models[0].BaseURL, "https://models.example.com")
+	}
+	if cfg.Models[0].Model != "models-name" {
+		t.Fatalf("models[0].model = %q, want %q", cfg.Models[0].Model, "models-name")
+	}
+	if cfg.Models[0].Proxy != "http://proxy.example.com:8080" {
+		t.Fatalf("models[0].proxy = %q, want %q", cfg.Models[0].Proxy, "http://proxy.example.com:8080")
 	}
 }

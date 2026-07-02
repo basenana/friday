@@ -10,6 +10,7 @@ import (
 	"github.com/basenana/friday/config"
 	"github.com/basenana/friday/core/providers"
 	"github.com/basenana/friday/core/providers/anthropics"
+	"github.com/basenana/friday/core/providers/fallback"
 	"github.com/basenana/friday/core/providers/openai"
 	"github.com/basenana/friday/core/types"
 )
@@ -78,7 +79,25 @@ func (a *imageAnalyzer) clientForModel(modelCfg config.ModelConfig) (providers.C
 }
 
 func CreateProviderClient(cfg *config.Config) (providers.Client, error) {
-	return CreateProviderClientFromModel(cfg.Model)
+	models := cfg.ChatModels()
+	if len(models) <= 1 {
+		// Single model — no fallback needed.
+		if len(models) == 1 {
+			return CreateProviderClientFromModel(models[0])
+		}
+		return CreateProviderClientFromModel(cfg.PrimaryModel())
+	}
+
+	// Multiple models — wrap in FallbackClient.
+	entries := make([]fallback.ModelEntry, 0, len(models))
+	for _, m := range models {
+		c, err := CreateProviderClientFromModel(m)
+		if err != nil {
+			return nil, fmt.Errorf("create provider client for model %s: %w", m.Model, err)
+		}
+		entries = append(entries, fallback.ModelEntry{Client: c, Name: m.Model})
+	}
+	return fallback.NewFallbackClient(entries), nil
 }
 
 func CreateProviderClientFromModel(modelCfg config.ModelConfig) (providers.Client, error) {
@@ -109,6 +128,7 @@ func CreateProviderClientFromModel(modelCfg config.ModelConfig) (providers.Clien
 		return openai.New(host, modelCfg.Key, openai.Model{
 			Name:          modelCfg.Model,
 			Temperature:   &temp,
+			MaxTokens:     int64(modelCfg.MaxTokens),
 			QPM:           modelCfg.QPM,
 			Proxy:         modelCfg.Proxy,
 			ContextWindow: modelCfg.ContextWindow,

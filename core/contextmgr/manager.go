@@ -76,7 +76,19 @@ func (m *Manager) BeforeModel(ctx stdctx.Context, sess *session.Session, req pro
 	}
 
 	if req.PromptCacheKey() == "" && projectedTokens > defaultSessionMemoryThreshold {
-		req.SetPromptCacheKey(promptCacheKeyForSession(sess))
+		// Only enable prompt caching once the conversation has more than a
+		// trivial number of turns. Tiny histories don't benefit from caching,
+		// and setting a cache key too early creates churn as the conversation
+		// grows past the breakpoint.
+		nonSystem := 0
+		for _, msg := range history {
+			if msg.Role != types.RoleSystem {
+				nonSystem++
+			}
+		}
+		if nonSystem > 3 {
+			req.SetPromptCacheKey(promptCacheKeyForSession(sess))
+		}
 	}
 
 	m.logger.Infow("starting context projection",

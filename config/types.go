@@ -4,6 +4,7 @@ import "github.com/basenana/friday/sandbox"
 
 type Config struct {
 	Model      ModelConfig     `yaml:"model" json:"model"`
+	Models     []ModelConfig   `yaml:"models" json:"models"`
 	ImageModel ModelConfig     `yaml:"image_model" json:"image_model"`
 	DataDir    string          `yaml:"data_dir" json:"data_dir"`
 	Workspace  string          `yaml:"workspace" json:"workspace"`

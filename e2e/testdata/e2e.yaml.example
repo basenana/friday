@@ -1,0 +1,61 @@
+# friday e2e test configuration
+#
+# Copy this file to .local/e2e.yaml and fill in real credentials.
+# String values support ${ENV_VAR} expansion.
+#
+# Models is a map of role -> ModelConfig. Tests pick models by role
+# name (e.g. "chat", "anthropic", "cheap", "image"). Only the roles
+# referenced by a test need to be configured; others are skipped.
+
+models:
+  chat:
+    provider: "openai"
+    base_url: "${OPENAI_BASE_URL}"
+    key: "${OPENAI_API_KEY}"
+    model: "gpt-4o-mini"
+    context_window: 128000
+    max_tokens: 4096
+    temperature: 0.3
+    qpm: 60
+
+  anthropic:
+    provider: "anthropic"
+    base_url: ""
+    key: "${ANTHROPIC_API_KEY}"
+    model: "claude-sonnet-4-20250514"
+    context_window: 200000
+    max_tokens: 4096
+    temperature: 0.3
+    qpm: 40
+
+  cheap:
+    provider: "openai"
+    base_url: "${OPENAI_BASE_URL}"
+    key: "${OPENAI_API_KEY}"
+    model: "gpt-4o-mini"
+    context_window: 128000
+    max_tokens: 2048
+    temperature: 0.2
+    qpm: 120
+
+  image:
+    provider: "openai"
+    base_url: "${OPENAI_BASE_URL}"
+    key: "${OPENAI_API_KEY}"
+    model: "gpt-4o-mini"
+    input: "text,image"
+    context_window: 128000
+    max_tokens: 1024
+    temperature: 0.3
+    qpm: 30
+
+sandbox:
+  enabled: true          # set to false to skip bwrap/seatbelt isolation
+
+retry:
+  max_attempts: 3        # retries for non-deterministic LLM assertions
+  backoff: "5s"
+
+timeout:
+  per_test: "120s"
+  per_suite: "30m"

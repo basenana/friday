@@ -69,11 +69,13 @@ func TestCallSubagentToolTruncatesLongInput(t *testing.T) {
 	tracing.SetGlobalTracer(rec)
 	defer tracing.SetGlobalTracer(nil)
 
+	sess := newTestSession(t)
 	longInput := strings.Repeat("a", 3000)
 	agents := []ExpertAgent{{Name: "worker", Agent: &fakeAgent{response: "done"}}}
-	handler := callSubagentTool(agents, newTestSession(t), nil)
+	handler := callSubagentTool(agents, sess, nil)
 
 	req := &tools.Request{
+		SessionID: sess.Root.ID,
 		Arguments: map[string]interface{}{
 			"agent_name":    "worker",
 			"task_describe": longInput,
@@ -102,10 +104,12 @@ func TestCallSubagentToolTruncatesLongOutput(t *testing.T) {
 	defer tracing.SetGlobalTracer(nil)
 
 	longOutput := strings.Repeat("b", 3000)
+	sess := newTestSession(t)
 	agents := []ExpertAgent{{Name: "worker", Agent: &fakeAgent{response: longOutput}}}
-	handler := callSubagentTool(agents, newTestSession(t), nil)
+	handler := callSubagentTool(agents, sess, nil)
 
 	req := &tools.Request{
+		SessionID: sess.Root.ID,
 		Arguments: map[string]interface{}{
 			"agent_name":    "worker",
 			"task_describe": "short task",
@@ -134,9 +138,11 @@ func TestCallSubagentToolShortValuesUnchanged(t *testing.T) {
 	defer tracing.SetGlobalTracer(nil)
 
 	agents := []ExpertAgent{{Name: "worker", Agent: &fakeAgent{response: "short output"}}}
-	handler := callSubagentTool(agents, newTestSession(t), nil)
+	sess := newTestSession(t)
+	handler := callSubagentTool(agents, sess, nil)
 
 	req := &tools.Request{
+		SessionID: sess.Root.ID,
 		Arguments: map[string]interface{}{
 			"agent_name":    "worker",
 			"task_describe": "short input",
@@ -159,4 +165,46 @@ func max(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func TestCallSubagentTool_AntiNestingGuard(t *testing.T) {
+	sess := newTestSession(t)
+	agents := []ExpertAgent{{Name: "worker", Agent: &fakeAgent{response: "should-not-happen"}}}
+	handler := callSubagentTool(agents, sess, nil)
+
+	// Simulate a forked sub-session request by setting a different SessionID.
+	req := &tools.Request{
+		SessionID: "forked-" + sess.Root.ID,
+		Arguments: map[string]interface{}{
+			"agent_name":    "worker",
+			"task_describe": "nested call",
+		},
+	}
+	result, err := handler(context.Background(), req)
+	if err != nil {
+		t.Fatalf("handler returned error: %v", err)
+	}
+	if result == nil || !result.IsError {
+		t.Fatalf("expected error tool result from anti-nesting guard, got %#v", result)
+	}
+}
+
+func TestCallExploreTool_AntiNestingGuard(t *testing.T) {
+	sess := newTestSession(t)
+	self := &ExpertAgent{Name: "explore", Agent: &fakeAgent{response: "should-not-happen"}}
+	handler := callExploreTool(self, sess, nil)
+
+	req := &tools.Request{
+		SessionID: "forked-" + sess.Root.ID,
+		Arguments: map[string]interface{}{
+			"task_describe": "nested explore",
+		},
+	}
+	result, err := handler(context.Background(), req)
+	if err != nil {
+		t.Fatalf("handler returned error: %v", err)
+	}
+	if result == nil || !result.IsError {
+		t.Fatalf("expected error tool result from anti-nesting guard, got %#v", result)
+	}
 }

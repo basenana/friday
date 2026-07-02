@@ -199,6 +199,9 @@ func (c *client) chatCompletionNewParams(request providers.Request) *openai.Chat
 	if c.model.Temperature != nil {
 		p.Temperature = param.NewOpt(*c.model.Temperature)
 	}
+	if c.model.MaxTokens > 0 {
+		p.MaxCompletionTokens = param.NewOpt(c.model.MaxTokens)
+	}
 	if c.model.FrequencyPenalty != nil {
 		p.FrequencyPenalty = param.NewOpt(*c.model.FrequencyPenalty)
 	}
@@ -209,7 +212,7 @@ func (c *client) chatCompletionNewParams(request providers.Request) *openai.Chat
 		p.PromptCacheKey = param.NewOpt(key)
 	}
 
-	messages := normalizeOpenAIToolMessages(request.Messages())
+	messages := normalizeOpenAIToolMessages(common.RepairToolHistory(request.Messages()))
 
 	thinkingMode := false
 	for _, msg := range messages {

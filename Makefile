@@ -14,3 +14,39 @@ build:
 
 test:
 	go test ./...
+
+E2E_CONFIG ?= .local/e2e.yaml
+E2E_TIMEOUT ?= 30m
+
+test-e2e:
+	E2E_CONFIG=$(E2E_CONFIG) go test -tags=e2e -timeout=$(E2E_TIMEOUT) -v ./e2e/...
+
+test-e2e-provider:
+	E2E_CONFIG=$(E2E_CONFIG) go test -tags=e2e -timeout=10m -v -run "TestProvider" ./e2e/...
+
+test-e2e-react:
+	E2E_CONFIG=$(E2E_CONFIG) go test -tags=e2e -timeout=$(E2E_TIMEOUT) -v -run "TestReact" ./e2e/...
+
+test-e2e-session:
+	E2E_CONFIG=$(E2E_CONFIG) go test -tags=e2e -timeout=$(E2E_TIMEOUT) -v -run "TestSession" ./e2e/...
+
+test-e2e-context:
+	E2E_CONFIG=$(E2E_CONFIG) go test -tags=e2e -timeout=$(E2E_TIMEOUT) -v -run "TestContextMgr" ./e2e/...
+
+test-e2e-planning:
+	E2E_CONFIG=$(E2E_CONFIG) go test -tags=e2e -timeout=$(E2E_TIMEOUT) -v -run "TestPlanning|TestSimpleAgent|TestResearch" ./e2e/...
+
+test-e2e-subagent:
+	E2E_CONFIG=$(E2E_CONFIG) go test -tags=e2e -timeout=$(E2E_TIMEOUT) -v -run "TestSubagent" ./e2e/...
+
+test-e2e-actor:
+	E2E_CONFIG=$(E2E_CONFIG) go test -tags=e2e -timeout=$(E2E_TIMEOUT) -v -run "TestActor" ./e2e/...
+
+test-e2e-a2a:
+	E2E_CONFIG=$(E2E_CONFIG) go test -tags=e2e -timeout=$(E2E_TIMEOUT) -v -run "TestA2A" ./e2e/...
+
+test-e2e-memory:
+	E2E_CONFIG=$(E2E_CONFIG) go test -tags=e2e -timeout=$(E2E_TIMEOUT) -v -run "TestMemory" ./e2e/...
+
+test-e2e-skills:
+	E2E_CONFIG=$(E2E_CONFIG) go test -tags=e2e -timeout=$(E2E_TIMEOUT) -v -run "TestSkills" ./e2e/...

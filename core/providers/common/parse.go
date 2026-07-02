@@ -8,6 +8,44 @@ import (
 	"strings"
 )
 
+// ParseToolUseArguments strictly parses raw as a JSON object.
+// Returns nil, false if raw is empty, invalid JSON, or not an object.
+func ParseToolUseArguments(raw string) (map[string]any, bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, false
+	}
+	var v any
+	if json.Unmarshal([]byte(raw), &v) != nil {
+		return nil, false
+	}
+	m, ok := v.(map[string]any)
+	if !ok {
+		return nil, false
+	}
+	return m, true
+}
+
+// NormalizeToolUseArguments replaces non-object args with "{}" and returns an error string.
+// Returns (normalized, errorMessage, ok). When ok is true, the input was a valid object.
+func NormalizeToolUseArguments(raw, toolName string) (string, string, bool) {
+	if _, ok := ParseToolUseArguments(raw); ok {
+		return raw, "", true
+	}
+	return "{}", FormatToolUseArgumentsError(toolName, raw), false
+}
+
+// FormatToolUseArgumentsError builds a human-readable error for invalid tool arguments.
+func FormatToolUseArgumentsError(toolName, raw string) string {
+	const max = 80
+	trimmed := raw
+	if len(trimmed) > max {
+		trimmed = trimmed[:max] + "..."
+	}
+	return fmt.Sprintf("tool %s: arguments must be a JSON object, got: %s", toolName, trimmed)
+}
+
+
 func ExtractJSON(jsonContent string, model any) error {
 	candidates := extractJSONCandidates(jsonContent)
 	if len(candidates) == 0 {

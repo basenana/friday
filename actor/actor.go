@@ -193,7 +193,6 @@ func (a *Actor) runAgent(msgs []Message) {
 
 	// Bridge core session events → AG-UI events.
 	coreEvents, unsubscribeEvents := agentCtx.Session.SubscribeEvents()
-	defer unsubscribeEvents()
 
 	bridgeDone := make(chan struct{})
 	go func() {
@@ -209,6 +208,13 @@ func (a *Actor) runAgent(msgs []Message) {
 	}
 
 	a.bridgeResponseDeltas(resp, runID)
+
+	// Chat is done; tear down the event bridge by unsubscribing (closes the
+	// channel) and wait for bridgeCoreEvents to drain. Without this the
+	// goroutine would block forever waiting on an event channel that is only
+	// closed by session.Close() — which itself is deferred until after this
+	// function returns.
+	unsubscribeEvents()
 	<-bridgeDone
 
 	stopReason := "end_turn"

@@ -12,10 +12,10 @@ import (
 func TestTruncateToolResult(t *testing.T) {
 	t.Run("fallback to default when PromptBudget not initialized", func(t *testing.T) {
 		sess := session.New("sess-trunc-default", &fakeLLMClient{})
-		long := strings.Repeat("a", defaultMaxToolResultChars+100)
+		long := strings.Repeat("a", int(defaultMaxToolResultChars)+100)
 
 		result := truncateToolResult(sess, long)
-		if !strings.HasSuffix(result, fmt.Sprintf("showing %d of %d chars]", defaultMaxToolResultChars, defaultMaxToolResultChars+100)) {
+		if !strings.HasSuffix(result, fmt.Sprintf("showing %d of %d chars]", defaultMaxToolResultChars, int64(int(defaultMaxToolResultChars)+100))) {
 			t.Fatalf("expected truncation suffix, got tail: %q", result[len(result)-80:])
 		}
 		// Truncated body should be exactly defaultMaxToolResultChars runes
@@ -24,7 +24,7 @@ func TestTruncateToolResult(t *testing.T) {
 		if len(lines) != 2 {
 			t.Fatalf("expected body + suffix line, got %d parts", len(lines))
 		}
-		if len([]rune(lines[0])) != defaultMaxToolResultChars {
+		if int64(len([]rune(lines[0]))) != defaultMaxToolResultChars {
 			t.Fatalf("expected body length %d, got %d", defaultMaxToolResultChars, len([]rune(lines[0])))
 		}
 	})
@@ -34,17 +34,22 @@ func TestTruncateToolResult(t *testing.T) {
 		st := sess.EnsureContextState()
 		st.PromptBudget.ContextWindow = 1000
 		// Session tokens will be ~0 for empty history, so remaining ~ 1000
-		// char limit = 1000 * 2 = 2000
-		charLimit := 1000 * charsPerToken
+		// char limit = 1000 * 2 = 2000, then further reduced by reservedTokensForSummary (20000) → negative → minToolResultChars.
+		// To exercise the budget path cleanly, set a much larger ContextWindow.
+		st.PromptBudget.ContextWindow = 100000
+		charLimit := int64(100000)*charsPerToken
+		if charLimit > maxSingleToolResultChars {
+			charLimit = maxSingleToolResultChars
+		}
 
-		long := strings.Repeat("b", charLimit+500)
+		long := strings.Repeat("b", int(charLimit)+500)
 		result := truncateToolResult(sess, long)
 
-		if !strings.HasSuffix(result, fmt.Sprintf("showing %d of %d chars]", charLimit, charLimit+500)) {
+		if !strings.HasSuffix(result, fmt.Sprintf("showing %d of %d chars]", charLimit, int64(int(charLimit)+500))) {
 			t.Fatalf("expected truncation suffix, got tail: %q", result[len(result)-80:])
 		}
 		lines := strings.SplitN(result, "\n", 2)
-		if len([]rune(lines[0])) != charLimit {
+		if int64(len([]rune(lines[0]))) != charLimit {
 			t.Fatalf("expected body length %d, got %d", charLimit, len([]rune(lines[0])))
 		}
 	})
@@ -61,8 +66,8 @@ func TestTruncateToolResult(t *testing.T) {
 
 	t.Run("truncation message includes lengths", func(t *testing.T) {
 		sess := session.New("sess-trunc-msg", &fakeLLMClient{})
-		extra := 200
-		long := strings.Repeat("c", defaultMaxToolResultChars+extra)
+		extra := int64(200)
+		long := strings.Repeat("c", int(defaultMaxToolResultChars+extra))
 
 		result := truncateToolResult(sess, long)
 		expectedTotal := defaultMaxToolResultChars + extra
@@ -82,15 +87,30 @@ func TestTruncateToolResult(t *testing.T) {
 			Content: strings.Repeat("x", 2000),
 		})
 
-		long := strings.Repeat("d", minToolResultChars+500)
+		long := strings.Repeat("d", int(minToolResultChars)+500)
 		result := truncateToolResult(sess, long)
 
-		if !strings.Contains(result, fmt.Sprintf("showing %d of %d chars]", minToolResultChars, minToolResultChars+500)) {
+		if !strings.Contains(result, fmt.Sprintf("showing %d of %d chars]", minToolResultChars, int64(int(minToolResultChars)+500))) {
 			t.Fatalf("expected minToolResultChars limit, got tail: %q", result[len(result)-80:])
 		}
 		lines := strings.SplitN(result, "\n", 2)
-		if len([]rune(lines[0])) != minToolResultChars {
+		if int64(len([]rune(lines[0]))) != minToolResultChars {
 			t.Fatalf("expected body length %d, got %d", minToolResultChars, len([]rune(lines[0])))
+		}
+	})
+
+	t.Run("hard cap clamps to maxSingleToolResultChars", func(t *testing.T) {
+		sess := session.New("sess-trunc-cap", &fakeLLMClient{})
+		st := sess.EnsureContextState()
+		// Huge context window would normally produce a huge limit; the hard cap
+		// should clamp it to maxSingleToolResultChars.
+		st.PromptBudget.ContextWindow = 10_000_000
+
+		long := strings.Repeat("z", int(maxSingleToolResultChars)+500)
+		result := truncateToolResult(sess, long)
+
+		if !strings.Contains(result, fmt.Sprintf("showing %d of %d chars]", maxSingleToolResultChars, int64(int(maxSingleToolResultChars)+500))) {
+			t.Fatalf("expected maxSingleToolResultChars cap, got tail: %q", result[len(result)-100:])
 		}
 	})
 }

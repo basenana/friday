@@ -3,8 +3,10 @@ package agents
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/basenana/friday/core/api"
 	"github.com/basenana/friday/core/providers"
@@ -260,4 +262,200 @@ func (f *calibratingFakeLLM) CompletionNonStreaming(context.Context, providers.R
 
 func (f *calibratingFakeLLM) StructuredPredict(context.Context, providers.Request, any) error {
 	return errors.New("not implemented")
+}
+
+// idleFakeLLM sends one delta then waits for cancellation, simulating a stuck LLM.
+type idleFakeLLM struct {
+	calls    int
+	content  string
+	canceled chan int
+	mu       sync.Mutex
+}
+
+func (f *idleFakeLLM) Completion(ctx context.Context, _ providers.Request) providers.Response {
+	f.mu.Lock()
+	call := f.calls
+	f.calls++
+	f.mu.Unlock()
+
+	content := f.content
+	if content == "" {
+		content = "partial"
+	}
+	resp := providers.NewCommonResponse()
+	go func() {
+		defer close(resp.Stream)
+		defer close(resp.Err)
+
+		select {
+		case resp.Stream <- providers.Delta{Content: content}:
+		case <-ctx.Done():
+			f.notifyCanceled(call)
+			return
+		}
+
+		<-ctx.Done()
+		f.notifyCanceled(call)
+	}()
+	return resp
+}
+
+func (f *idleFakeLLM) notifyCanceled(call int) {
+	if f.canceled == nil {
+		return
+	}
+	select {
+	case f.canceled <- call:
+	default:
+	}
+}
+
+func (f *idleFakeLLM) CompletionNonStreaming(context.Context, providers.Request) (string, error) {
+	return "", errors.New("not implemented")
+}
+func (f *idleFakeLLM) StructuredPredict(context.Context, providers.Request, any) error {
+	return errors.New("not implemented")
+}
+
+func TestReact_StreamIdleTimeout(t *testing.T) {
+	llm := &idleFakeLLM{canceled: make(chan int, 8)}
+	sess := session.New("sess-idle", llm)
+
+	agent := New(llm, Option{
+		SystemPrompt:      "system",
+		MaxLoopTimes:      2,
+		StreamIdleTimeout: 50 * time.Millisecond,
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	resp := agent.Chat(ctx, &api.Request{
+		Session:     sess,
+		UserMessage: "Say hi.",
+	})
+	// ReadAllContent returns when the response closes; the react loop should retry
+	// and eventually exhaust MaxLoopTimes and close the response.
+	_, _ = api.ReadAllContent(ctx, resp)
+
+	// The agent should have invoked the LLM at least twice (1 retry after idle timeout).
+	llm.mu.Lock()
+	calls := llm.calls
+	llm.mu.Unlock()
+	if calls < 2 {
+		t.Fatalf("expected at least 2 llm calls after idle timeout retry, got %d", calls)
+	}
+	waitForCanceledCall(t, llm.canceled, 0)
+}
+
+// emptyFakeLLM immediately closes the stream with zero tokens, simulating an empty response.
+type emptyFakeLLM struct{}
+
+func (f *emptyFakeLLM) Completion(_ context.Context, _ providers.Request) providers.Response {
+	resp := providers.NewCommonResponse()
+	go func() {
+		defer close(resp.Stream)
+		defer close(resp.Err)
+		// No deltas at all.
+	}()
+	return resp
+}
+
+func (f *emptyFakeLLM) CompletionNonStreaming(context.Context, providers.Request) (string, error) {
+	return "", errors.New("not implemented")
+}
+func (f *emptyFakeLLM) StructuredPredict(context.Context, providers.Request, any) error {
+	return errors.New("not implemented")
+}
+
+func TestReact_EmptyResponseFallback(t *testing.T) {
+	llm := &emptyFakeLLM{}
+	sess := session.New("sess-empty", llm)
+	resp := New(llm, Option{SystemPrompt: "system", MaxLoopTimes: 1}).Chat(context.Background(), &api.Request{
+		Session:     sess,
+		UserMessage: "Say hi.",
+	})
+	content, _ := api.ReadAllContent(context.Background(), resp)
+	if !strings.Contains(content, "failed to generate a valid response") {
+		t.Fatalf("expected fallback message, got: %q", content)
+	}
+	last := sess.GetHistory()[len(sess.GetHistory())-1]
+	if last.Role != types.RoleAssistant || !strings.Contains(last.Content, "failed to generate") {
+		t.Fatalf("expected fallback message persisted in history; got %#v", last)
+	}
+}
+
+func TestReact_CancelsStreamWhenMaxTokensExceeded(t *testing.T) {
+	llm := &idleFakeLLM{
+		content:  strings.Repeat("x", 32),
+		canceled: make(chan int, 1),
+	}
+	sess := session.New("sess-max-tokens", llm)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	resp := New(llm, Option{
+		SystemPrompt: "system",
+		MaxLoopTimes: 1,
+		MaxTokens:    4,
+	}).Chat(ctx, &api.Request{
+		Session:     sess,
+		UserMessage: "Say hi.",
+	})
+	content, err := api.ReadAllContent(ctx, resp)
+	if err != nil {
+		t.Fatalf("ReadAllContent() error = %v", err)
+	}
+	if !strings.Contains(content, "response interrupted because the model exceeded the configured max tokens") {
+		t.Fatalf("expected max-tokens warning, got %q", content)
+	}
+	waitForCanceledCall(t, llm.canceled, 0)
+}
+
+func TestIsContextWindowExceeded(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil", nil, false},
+		{"unrelated", errors.New("network blip"), false},
+		{"openai style", errors.New("This model's maximum context length is 8192 tokens"), true},
+		{"deepseek style", errors.New("exceed max message tokens: 64000"), true},
+		{"anthropic style", errors.New("prompt is too long: 300000 > 200000"), true},
+		{"generic context_length_exceeded", errors.New("context_length_exceeded"), true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isContextWindowExceeded(tc.err); got != tc.want {
+				t.Fatalf("isContextWindowExceeded(%v)=%v want %v", tc.err, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestIsStreamIdleTimeout(t *testing.T) {
+	if !isStreamIdleTimeout(&StreamIdleTimeoutError{Timeout: time.Second, Received: 2}) {
+		t.Fatalf("expected StreamIdleTimeoutError to be detected")
+	}
+	if isStreamIdleTimeout(errors.New("other")) {
+		t.Fatalf("plain error should not match")
+	}
+	wrapped := errors.New("wrap: ") // not unwrapped
+	_ = wrapped
+	if isStreamIdleTimeout(errors.New("stream idle timeout: text")) {
+		// Note: isStreamIdleTimeout uses errors.As, so a non-wrapped plain error
+		// with the same text should NOT match. This confirms behavior.
+		t.Fatalf("stringly-typed error should not be matched by errors.As")
+	}
+}
+
+func waitForCanceledCall(t *testing.T, ch <-chan int, want int) {
+	t.Helper()
+	select {
+	case got := <-ch:
+		if got != want {
+			t.Fatalf("expected canceled call %d, got %d", want, got)
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("timed out waiting for canceled call %d", want)
+	}
 }

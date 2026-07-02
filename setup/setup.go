@@ -13,6 +13,7 @@ import (
 	"github.com/basenana/friday/core/planning"
 	"github.com/basenana/friday/core/providers"
 	coreSession "github.com/basenana/friday/core/session"
+	"github.com/basenana/friday/core/subagents"
 	"github.com/basenana/friday/core/tools"
 	"github.com/basenana/friday/memory"
 	"github.com/basenana/friday/sandbox"
@@ -182,6 +183,18 @@ func NewAgent(sessionMgr SessionManager, cfg *config.Config, opts ...Option) (*A
 		SystemPrompt: workspace.ComposeSystemPrompt(loaded),
 		Tools:        allTools,
 	})
+
+	// Register subagent hook (explore forks main agent for research; run_task delegates to experts).
+	// explore reuses the main agent's system prompt + tool set so forked sessions share the same
+	// cache prefix. Recursion is prevented at the tool-handler level via anti-nesting guards.
+	exploreAgent := agents.New(client, agents.Option{
+		SystemPrompt: workspace.ComposeSystemPrompt(loaded),
+	})
+	sess.RegisterHook(subagents.NewHook(client, subagents.Option{
+		SelfAgent:    &subagents.ExpertAgent{Name: "explore", Agent: exploreAgent},
+		ExploreTools: allTools,
+		ExpertTools:  allTools,
+	}))
 
 	return &AgentContext{
 		Client:      client,

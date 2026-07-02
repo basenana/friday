@@ -29,6 +29,10 @@ func (s *Server) Connect() error {
 	return nil
 }
 
+// Client returns the underlying MCP client, exposing it so callers can run
+// protocol initialization (Start + Initialize) before invoking InitTools.
+func (s *Server) Client() *client.Client { return s.client }
+
 func (s *Server) InitTools(ctx context.Context) ([]*tools.Tool, error) {
 	result, err := s.client.ListTools(ctx, mcp.ListToolsRequest{Header: s.sseHeaders()})
 	if err != nil {
@@ -60,7 +64,7 @@ func (s *Server) mcpToolAdaptor(mcpTool *mcp.Tool) tools.ToolHandlerFunc {
 			Request: mcp.Request{},
 			Header:  s.sseHeaders(),
 			Params: mcp.CallToolParams{
-				Name:      "",
+				Name:      mcpTool.Name,
 				Arguments: request.Arguments,
 				Meta:      nil,
 			},

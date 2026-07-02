@@ -189,15 +189,22 @@ func TestBeforeModelPublishesCompactSkipWhenMicroCompactDoesNotApply(t *testing.
 }
 
 func TestBeforeModelSetsPromptCacheKeyFromRootSession(t *testing.T) {
-	// Need projectedTokens > defaultSessionMemoryThreshold (15000) to trigger cache key.
+	// Need projectedTokens > defaultSessionMemoryThreshold (15000) to trigger cache key,
+	// AND non-system message count > 3 (cache key gate avoids churn for tiny histories).
 	// FuzzyTokens = runes * 0.5, so 31000 chars yields ~15500 tokens.
 	bigContent := strings.Repeat("x", 31000)
 
 	rootSess := session.New("root-session", nil, session.WithHistory(
 		types.Message{Role: types.RoleUser, Content: bigContent},
+		types.Message{Role: types.RoleAssistant, Content: "first reply"},
+		types.Message{Role: types.RoleUser, Content: "second question"},
+		types.Message{Role: types.RoleAssistant, Content: "second reply"},
 	))
 	forkedSess := session.New("forked-session", nil, session.WithHistory(
 		types.Message{Role: types.RoleUser, Content: bigContent},
+		types.Message{Role: types.RoleAssistant, Content: "first reply"},
+		types.Message{Role: types.RoleUser, Content: "second question"},
+		types.Message{Role: types.RoleAssistant, Content: "second reply"},
 	))
 	forkedSess.Root = rootSess
 
@@ -209,6 +216,23 @@ func TestBeforeModelSetsPromptCacheKeyFromRootSession(t *testing.T) {
 
 	if got := req.PromptCacheKey(); got != "session:root-session" {
 		t.Fatalf("expected prompt cache key to use root session, got %q", got)
+	}
+}
+
+func TestBeforeModelDoesNotSetCacheKeyForTinyHistory(t *testing.T) {
+	// Even when projected tokens exceed threshold, very small histories should
+	// not get a cache key — it creates churn as the conversation grows.
+	bigContent := strings.Repeat("x", 31000)
+	sess := session.New("sess-tiny", nil, session.WithHistory(
+		types.Message{Role: types.RoleUser, Content: bigContent},
+	))
+	req := providers.NewRequest("", sess.GetHistory()...)
+	mgr := New(nil, Config{})
+	if err := mgr.BeforeModel(stdctx.Background(), sess, req); err != nil {
+		t.Fatalf("BeforeModel failed: %v", err)
+	}
+	if got := req.PromptCacheKey(); got != "" {
+		t.Fatalf("expected no cache key for tiny history, got %q", got)
 	}
 }
 
@@ -708,11 +732,13 @@ func (c *capturePromptClient) CompletionNonStreaming(_ stdctx.Context, req provi
 func (c *capturePromptClient) StructuredPredict(_ stdctx.Context, req providers.Request, model any) error {
 	c.structuredCalls++
 	c.capturedPrompt = captureRequestPrompt(req)
-	record, ok := model.(*SessionMemoryRecord)
-	if !ok {
-		return errors.New("model is not *SessionMemoryRecord")
+	// Round-trip the configured result through JSON so any struct with
+	// matching field tags is populated (the production code may predict into
+	// a schema-only struct that is a subset of SessionMemoryRecord).
+	data, _ := json.Marshal(c.structuredResult)
+	if err := json.Unmarshal(data, model); err != nil {
+		return err
 	}
-	*record = c.structuredResult
 	return nil
 }
 

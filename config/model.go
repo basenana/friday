@@ -5,6 +5,34 @@ import (
 	"strings"
 )
 
+// ChatModels returns the configured primary/fallback model list for text chat.
+// Completely empty placeholder entries are ignored.
+func (c *Config) ChatModels() []ModelConfig {
+	if len(c.Models) == 0 {
+		return []ModelConfig{c.Model}
+	}
+
+	models := make([]ModelConfig, 0, len(c.Models))
+	for _, model := range c.Models {
+		if model.IsConfigured() {
+			models = append(models, model)
+		}
+	}
+	if len(models) > 0 {
+		return models
+	}
+	return []ModelConfig{c.Model}
+}
+
+// PrimaryModel returns the first effective chat model.
+func (c *Config) PrimaryModel() ModelConfig {
+	models := c.ChatModels()
+	if len(models) == 0 {
+		return ModelConfig{}
+	}
+	return models[0]
+}
+
 // IsConfigured returns true when any meaningful model field is set.
 func (m ModelConfig) IsConfigured() bool {
 	return strings.TrimSpace(m.Provider) != "" ||
@@ -35,15 +63,16 @@ func (m ModelConfig) HasInput(kind string) bool {
 // image_model takes precedence when configured; otherwise a multimodal primary model is used.
 func (c *Config) ResolveImageModel(modelOverride string) (ModelConfig, error) {
 	var selected ModelConfig
+	base := c.PrimaryModel()
 
 	switch {
 	case c.ImageModel.IsConfigured():
-		selected = c.Model
+		selected = base
 		selected.overlay(c.ImageModel)
-	case c.Model.HasInput("image"):
-		selected = c.Model
+	case base.HasInput("image"):
+		selected = base
 	default:
-		return ModelConfig{}, fmt.Errorf("no image-capable model configured: set image_model or add image to model.input")
+		return ModelConfig{}, fmt.Errorf("no image-capable model configured: set image_model or add image to the primary model input")
 	}
 
 	if modelOverride != "" {

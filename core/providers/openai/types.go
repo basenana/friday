@@ -5,14 +5,15 @@ import (
 )
 
 type Model struct {
-	Name             string
-	Temperature      *float64
-	FrequencyPenalty *float64
-	PresencePenalty  *float64
-	StrictMode       bool
-	QPM              int64
-	Proxy            string
-	ContextWindow    int64
+	Name               string
+	Temperature        *float64
+	FrequencyPenalty   *float64
+	PresencePenalty    *float64
+	MaxTokens          int64
+	StrictMode         bool
+	QPM                int64
+	Proxy              string
+	ContextWindow      int64
 	InsecureSkipVerify bool
 }
 

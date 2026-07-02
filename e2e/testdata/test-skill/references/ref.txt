@@ -1,0 +1,3 @@
+This is a reference resource file for the test-skill.
+It is used by the load_skill_resource tool tests to verify that arbitrary
+files inside a skill directory can be read by the agent.

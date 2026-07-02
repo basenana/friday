@@ -207,7 +207,7 @@ func (c *client) messageCreateParams(request providers.Request) *anthropic.Messa
 		params.Temperature = anthropic.Float(*c.model.Temperature)
 	}
 
-	messages := request.Messages()
+	messages := common.RepairToolHistory(request.Messages())
 	for _, msg := range messages {
 		switch msg.Role {
 		case types.RoleSystem:
@@ -327,24 +327,6 @@ func (c *client) messageCreateParams(request providers.Request) *anthropic.Messa
 	// containing the paired tool_result blocks.
 	params.Messages = normalizeAnthropicToolMessages(params.Messages)
 
-	if request.PromptCacheKey() != "" {
-		if len(params.System) > 0 {
-			params.System[len(params.System)-1].CacheControl = anthropic.NewCacheControlEphemeralParam()
-		}
-		if len(params.Messages) > 0 {
-			lastMsg := &params.Messages[len(params.Messages)-1]
-			if len(lastMsg.Content) > 0 {
-				lastBlock := &lastMsg.Content[len(lastMsg.Content)-1]
-				switch {
-				case lastBlock.OfText != nil:
-					lastBlock.OfText.CacheControl = anthropic.NewCacheControlEphemeralParam()
-				case lastBlock.OfToolResult != nil:
-					lastBlock.OfToolResult.CacheControl = anthropic.NewCacheControlEphemeralParam()
-				}
-			}
-		}
-	}
-
 	tools := request.ToolDefines()
 	for _, t := range tools {
 		// GetParameters returns full schema with type/properties/required
@@ -373,6 +355,25 @@ func (c *client) messageCreateParams(request providers.Request) *anthropic.Messa
 		toolUnion := anthropic.ToolUnionParamOfTool(inputSchema, t.GetName())
 		toolUnion.OfTool.Description = anthropic.String(t.GetDescription())
 		params.Tools = append(params.Tools, toolUnion)
+	}
+
+	if request.PromptCacheKey() != "" {
+		// Cache breakpoints: place them on stable prefixes so hooks that append
+		// trailing messages don't invalidate the entire cache. Cache the last
+		// system block, the last tool definition, and a message breakpoint
+		// several positions from the end (so newly added trailing messages
+		// don't shift the breakpoint each turn).
+		const cacheTrailMessages = 3
+		if len(params.System) > 0 {
+			params.System[len(params.System)-1].CacheControl = anthropic.NewCacheControlEphemeralParam()
+		}
+		if len(params.Tools) > 0 {
+			lastTool := &params.Tools[len(params.Tools)-1]
+			if lastTool.OfTool != nil {
+				lastTool.OfTool.CacheControl = anthropic.NewCacheControlEphemeralParam()
+			}
+		}
+		setAnthropicMessageCacheBreakpoint(params.Messages, cacheTrailMessages)
 	}
 
 	// Anthropic requires at least one non-system message. Some internal callers
@@ -800,4 +801,36 @@ func anthropicToolResultText(toolResult *anthropic.ToolResultBlockParam) string 
 		}
 	}
 	return strings.TrimSpace(strings.Join(parts, "\n"))
+}
+
+// setAnthropicMessageCacheBreakpoint marks a cache breakpoint on the last
+// content block of the message at index (len-messages-1-trailMessages). If
+// that message has no cacheable block, walk backward until one is found.
+// This keeps the cache prefix stable as new messages are appended.
+func setAnthropicMessageCacheBreakpoint(messages []anthropic.MessageParam, trailMessages int) {
+	cacheIdx := len(messages) - trailMessages - 1
+	if cacheIdx < 0 {
+		return
+	}
+	for msgIdx := cacheIdx; msgIdx >= 0; msgIdx-- {
+		if setAnthropicCacheControlOnMessage(&messages[msgIdx]) {
+			return
+		}
+	}
+}
+
+func setAnthropicCacheControlOnMessage(msg *anthropic.MessageParam) bool {
+	if len(msg.Content) == 0 {
+		return false
+	}
+	lastBlock := &msg.Content[len(msg.Content)-1]
+	switch {
+	case lastBlock.OfText != nil:
+		lastBlock.OfText.CacheControl = anthropic.NewCacheControlEphemeralParam()
+		return true
+	case lastBlock.OfToolResult != nil:
+		lastBlock.OfToolResult.CacheControl = anthropic.NewCacheControlEphemeralParam()
+		return true
+	}
+	return false
 }

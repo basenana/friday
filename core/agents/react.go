@@ -2,6 +2,7 @@ package agents
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -104,7 +105,20 @@ func (a *react) reactLoop(ctx context.Context, sess *session.Session, resp *api.
 			keepRun, err = a.doAct(ctx, sess, resp, mergedTools, a.option.MaxLoopTimes-loopTimes)
 		}
 		if err != nil {
-			if strings.Contains(strings.ToLower(err.Error()), "exceed max message tokens") {
+			if isStreamIdleTimeout(err) {
+				a.logger.Warnw("stream idle timeout, retrying", "session", sess.ID, "error", err)
+				sess.PublishEvent(types.Event{
+					Type: types.EventModelTimeout,
+					Data: map[string]string{"timeout": err.Error()},
+				})
+				loopTimes++
+				if loopTimes > a.option.MaxLoopTimes {
+					resp.Fail(err)
+					return
+				}
+				continue
+			}
+			if isContextWindowExceeded(err) {
 				compactErr := sess.CompactHistory(ctx)
 				if compactErr == nil {
 					continue
@@ -155,9 +169,18 @@ func (a *react) doAct(ctx context.Context, sess *session.Session, resp *api.Resp
 		keepRun    = false
 		llmReq     = newLLMRequest(a.option.SystemPrompt, sess, toolList)
 		warnTicker = time.NewTicker(time.Minute)
+
+		idleTimeout = a.option.StreamIdleTimeout
+		maxTokens   = a.option.MaxTokens
 	)
 
+	if idleTimeout == 0 {
+		idleTimeout = 3 * time.Minute
+	}
+	idleTimer := time.NewTimer(idleTimeout)
+
 	defer warnTicker.Stop()
+	defer idleTimer.Stop()
 
 	// before_model hooks
 	err = sess.RunHooks(ctx, types.SessionHookBeforeModel, session.HookPayload{ModelRequest: llmReq})
@@ -172,7 +195,16 @@ func (a *react) doAct(ctx context.Context, sess *session.Session, resp *api.Resp
 			"After this response, the session will end. From now on, every character you output will become part of the final report:"})
 	}
 	sess.PublishEvent(types.Event{Type: types.EventModelStart})
-	stream := a.llm.Completion(ctx, llmReq)
+	streamCtx, cancelStream := context.WithCancel(ctx)
+	defer cancelStream()
+	stream := a.llm.Completion(streamCtx, llmReq)
+
+	// estComplTokens is a rough character-based estimate of received completion tokens,
+	// used only to break out of runaway streams (esp. models that loop forever when
+	// context breaks). charsPerToken=2 is conservative; see agents/tools.go.
+	const charsPerToken = 2
+	var estComplTokens int64
+	maxTokensExceeded := false
 
 WaitMessage:
 	for {
@@ -186,16 +218,30 @@ WaitMessage:
 		case <-warnTicker.C:
 			a.logger.Warnw("still waiting llm completed", "receivedMessage", messageCount, "session", sess.ID)
 
+		case <-idleTimer.C:
+			a.logger.Errorw("stream idle timeout exceeded",
+				"timeout", idleTimeout, "received", messageCount, "session", sess.ID)
+			return false, &StreamIdleTimeoutError{Timeout: idleTimeout, Received: messageCount}
+
 		case msg, ok := <-stream.Message():
 			if !ok {
 				break WaitMessage
 			}
 
 			messageCount += 1
+			if !idleTimer.Stop() {
+				select {
+				case <-idleTimer.C:
+				default:
+				}
+			}
+			idleTimer.Reset(idleTimeout)
+
 			// Process each field independently — a single Delta may carry multiple fields.
 			if len(msg.Content) > 0 {
 				content += msg.Content
 				api.SendDelta(resp, types.Delta{Content: msg.Content})
+				estComplTokens += int64(len([]rune(msg.Content))) / charsPerToken
 			}
 			if len(msg.ToolUse) > 0 {
 				for i := range msg.ToolUse {
@@ -212,6 +258,15 @@ WaitMessage:
 			}
 			if msg.RedactedThinking != "" {
 				redactedThinking = msg.RedactedThinking
+			}
+
+			// Real-time cap: if the model has streamed far past MaxTokens, stop reading.
+			// This prevents runaway loops that repeat content until the budget is exhausted.
+			if maxTokens > 0 && estComplTokens > maxTokens {
+				a.logger.Warnw("stream exceeded max tokens, interrupting",
+					"estimated_tokens", estComplTokens, "max_tokens", maxTokens, "session", sess.ID)
+				maxTokensExceeded = true
+				break WaitMessage
 			}
 		}
 	}
@@ -269,9 +324,16 @@ WaitMessage:
 				Arguments: use.Arguments,
 			})
 		}
+		finalContent := content
+		if maxTokensExceeded {
+			finalContent = strings.TrimSpace(content) +
+				"\n\n[Warning: response interrupted because the model exceeded the configured max tokens (" +
+				strconv.FormatInt(maxTokens, 10) + "). The above may be incomplete or repetitive.]"
+			api.SendDelta(resp, types.Delta{Content: "\n\n[Warning: response interrupted because the model exceeded the configured max tokens.]"})
+		}
 		msg := &types.Message{
 			Role:               types.RoleAssistant,
-			Content:            content,
+			Content:            finalContent,
 			Reasoning:          reasoning,
 			ReasoningSignature: reasoningSignature,
 			RedactedThinking:   redactedThinking,
@@ -279,6 +341,13 @@ WaitMessage:
 			Tokens:             stream.Tokens().CompletionTokens,
 		}
 		sess.AppendMessage(msg)
+	} else if stream.Tokens().CompletionTokens == 0 && agentMessage == "" {
+		// Model returned nothing — fall back so the user sees a clear message instead of silence.
+		a.logger.Warnw("model returned empty response",
+			"promptTokens", stream.Tokens().PromptTokens, "session", sess.ID)
+		fallback := "Sorry, the model failed to generate a valid response. Please retry or simplify your request."
+		api.SendDelta(resp, types.Delta{Content: fallback})
+		sess.AppendMessage(&types.Message{Role: types.RoleAssistant, Content: fallback})
 	}
 	if agentMessage != "" {
 		keepRun = true
@@ -308,11 +377,8 @@ func (a *react) doToolCalls(ctx context.Context, sess *session.Session, toolUses
 	)
 	defer span.End()
 
-	var (
-		result []*types.Message
-		update = make(chan toolExecutionResult, len(toolUses))
-		wg     = &sync.WaitGroup{}
-	)
+	update := make(chan toolExecutionResult, len(toolUses))
+	wg := &sync.WaitGroup{}
 
 	for i := range toolUses {
 		use := toolUses[i]
@@ -327,33 +393,46 @@ func (a *react) doToolCalls(ctx context.Context, sess *session.Session, toolUses
 			}
 		}()
 	}
-	wg.Wait()
-	close(update)
+	// Closing update from a separate goroutine prevents the range-below from
+	// deadlocking while concurrent producers are still running.
+	go func() {
+		wg.Wait()
+		close(update)
+	}()
 
+	// Flush results to session history in call-order as soon as a consecutive
+	// prefix becomes ready. Strict ordering matters for providers (e.g. DeepSeek)
+	// that verify tool result order and call IDs against the assistant message.
 	outcomes := make([]toolExecutionResult, len(toolUses))
+	ready := make([]bool, len(toolUses))
+	var (
+		nextFlush  int
+		executions []session.ToolExecution
+	)
+
 	for outcome := range update {
 		outcomes[outcome.Index] = outcome
-	}
+		ready[outcome.Index] = true
 
-	var executions []session.ToolExecution
-	for _, outcome := range outcomes {
-		if len(outcome.Messages) == 0 {
-			continue
-		}
-
-		for _, msg := range outcome.Messages {
-			if msg != nil && msg.Role == types.RoleTool {
-				result = append(result, msg)
+		for nextFlush < len(outcomes) && ready[nextFlush] {
+			flushed := outcomes[nextFlush]
+			var toolMsgs []*types.Message
+			for _, msg := range flushed.Messages {
+				if msg != nil && msg.Role == types.RoleTool {
+					toolMsgs = append(toolMsgs, msg)
+				}
 			}
+			if len(toolMsgs) > 0 {
+				sess.AppendMessage(toolMsgs...)
+			}
+			executions = append(executions, session.ToolExecution{
+				Call:     flushed.Call,
+				Messages: cloneMessages(flushed.Messages),
+			})
+			nextFlush++
 		}
-
-		executions = append(executions, session.ToolExecution{
-			Call:     outcome.Call,
-			Messages: cloneMessages(outcome.Messages),
-		})
 	}
 
-	sess.AppendMessage(result...)
 	if err := sess.RunHooks(ctx, types.SessionHookAfterTool, session.HookPayload{Executions: executions}); err != nil {
 		a.logger.Errorw("failed to run after tool hooks", "error", err)
 	}
@@ -521,6 +600,54 @@ func New(llm providers.Client, option Option) Agent {
 type Option struct {
 	SystemPrompt string
 	MaxLoopTimes int
+	// MaxTokens caps the LLM completion length per turn. If the streamed output
+	// exceeds this rough token estimate, the stream is interrupted to prevent
+	// runaway loops (esp. some models that loop forever when context breaks).
+	MaxTokens int64
+	// StreamIdleTimeout is the max duration to wait without any streamed delta.
+	// On idle timeout the loop retries (up to MaxLoopTimes).
+	StreamIdleTimeout time.Duration
 
 	Tools []*tools.Tool
+}
+
+// StreamIdleTimeoutError is returned when the LLM stream produces no data for
+// StreamIdleTimeout. The reactLoop treats it as retryable.
+type StreamIdleTimeoutError struct {
+	Timeout  time.Duration
+	Received int
+}
+
+func (e *StreamIdleTimeoutError) Error() string {
+	return fmt.Sprintf("stream idle timeout: no data for %s (%d messages received)", e.Timeout, e.Received)
+}
+
+func isStreamIdleTimeout(err error) bool {
+	var e *StreamIdleTimeoutError
+	return errors.As(err, &e)
+}
+
+// isContextWindowExceeded detects API errors indicating the request exceeded
+// the model's context window. Different providers phrase this differently:
+//   - OpenAI / DeepSeek: "context_length_exceeded", "maximum context length"
+//   - Anthropic: "context length", "too long"
+//   - DeepSeek variant: "exceed max message tokens"
+func isContextWindowExceeded(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	for _, pattern := range []string{
+		"context_length_exceeded",
+		"maximum context length",
+		"exceed max message tokens",
+		"context window",
+		"prompt is too long",
+		"request too large",
+	} {
+		if strings.Contains(msg, pattern) {
+			return true
+		}
+	}
+	return false
 }

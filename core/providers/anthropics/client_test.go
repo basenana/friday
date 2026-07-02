@@ -230,6 +230,8 @@ func TestMessageCreateParamsCacheControl(t *testing.T) {
 				{Role: types.RoleUser, Content: "Hello"},
 				{Role: types.RoleAssistant, Content: "Hi there!"},
 				{Role: types.RoleUser, Content: "How are you?"},
+				{Role: types.RoleAssistant, Content: "Doing well, thanks!"},
+				{Role: types.RoleUser, Content: "Tell me a joke."},
 			},
 			expectSystemCache:  true,
 			expectMessageCache: true,
@@ -263,20 +265,30 @@ func TestMessageCreateParamsCacheControl(t *testing.T) {
 				if len(params.Messages) == 0 {
 					t.Fatal("expected messages but got none")
 				}
-				lastMsg := params.Messages[len(params.Messages)-1]
-				if len(lastMsg.Content) == 0 {
-					t.Fatal("expected content blocks in last message")
+				// Cache breakpoint is set on the 4th-from-last message (trail=3).
+				// For short histories that don't have a 4th-from-last message,
+				// no breakpoint is set — that's expected.
+				const cacheTrail = 3
+				cacheIdx := len(params.Messages) - cacheTrail - 1
+				if cacheIdx < 0 {
+					// Not enough messages for a message-level breakpoint; only
+					// the system block is cached. This is by design.
+					return
 				}
-				lastContentBlock := lastMsg.Content[len(lastMsg.Content)-1]
+				msg := params.Messages[cacheIdx]
+				if len(msg.Content) == 0 {
+					t.Fatalf("expected content blocks in message at cache idx %d", cacheIdx)
+				}
+				block := msg.Content[len(msg.Content)-1]
 				hasCache := false
-				if lastContentBlock.OfText != nil && lastContentBlock.OfText.CacheControl.Type != "" {
+				if block.OfText != nil && block.OfText.CacheControl.Type != "" {
 					hasCache = true
 				}
-				if lastContentBlock.OfToolResult != nil && lastContentBlock.OfToolResult.CacheControl.Type != "" {
+				if block.OfToolResult != nil && block.OfToolResult.CacheControl.Type != "" {
 					hasCache = true
 				}
 				if !hasCache {
-					t.Error("expected last message content block to have cache_control")
+					t.Errorf("expected cache breakpoint at message idx %d, last block had no cache_control", cacheIdx)
 				}
 			} else if len(params.Messages) > 0 {
 				for _, msg := range params.Messages {
@@ -368,6 +380,8 @@ func TestMessageCreateParamsCacheControlOnlyOnLastBlocks(t *testing.T) {
 		{Role: types.RoleUser, Content: "Hello"},
 		{Role: types.RoleAssistant, Content: "Hi!"},
 		{Role: types.RoleUser, Content: "How are you?"},
+		{Role: types.RoleAssistant, Content: "Doing well!"},
+		{Role: types.RoleUser, Content: "Bye"},
 	}...)
 	req.SetPromptCacheKey("session:test-456")
 
@@ -383,25 +397,73 @@ func TestMessageCreateParamsCacheControlOnlyOnLastBlocks(t *testing.T) {
 		t.Error("last system block should have cache_control")
 	}
 
-	if len(params.Messages) != 3 {
-		t.Fatalf("expected 3 messages, got %d", len(params.Messages))
+	// params.Messages contains user/assistant messages (no system). For 5 messages
+	// and cacheTrail=3, the breakpoint sits at idx = 5 - 3 - 1 = 1.
+	msgCount := len(params.Messages)
+	if msgCount != 5 {
+		t.Fatalf("expected 5 messages (excluding system), got %d", msgCount)
+	}
+	const cacheTrail = 3
+	cacheIdx := msgCount - cacheTrail - 1
+	if cacheIdx < 0 {
+		t.Fatalf("test setup: not enough messages for cache breakpoint")
 	}
 
-	for i, msg := range params.Messages[:2] {
+	for i, msg := range params.Messages {
 		for _, block := range msg.Content {
-			if block.OfText != nil && block.OfText.CacheControl.Type != "" {
-				t.Errorf("message %d should not have cache_control", i)
+			if block.OfText == nil {
+				continue
+			}
+			if i == cacheIdx {
+				// The cache breakpoint must be set on this message's last block.
+				if block.OfText.CacheControl.Type == "" {
+					// only the last block of the cache message must be set; skip non-last blocks
+				}
+			} else if block.OfText.CacheControl.Type != "" {
+				t.Errorf("message idx %d should not carry cache_control", i)
 			}
 		}
 	}
 
-	lastMsg := params.Messages[2]
-	if len(lastMsg.Content) == 0 {
-		t.Fatal("expected content in last message")
+	cacheMsg := params.Messages[cacheIdx]
+	if len(cacheMsg.Content) == 0 {
+		t.Fatal("expected content blocks in cache message")
 	}
-	lastBlock := lastMsg.Content[len(lastMsg.Content)-1]
+	lastBlock := cacheMsg.Content[len(cacheMsg.Content)-1]
 	if lastBlock.OfText == nil || lastBlock.OfText.CacheControl.Type == "" {
-		t.Error("last message last content block should have cache_control")
+		t.Errorf("expected cache breakpoint on message idx %d last block", cacheIdx)
+	}
+}
+
+func TestMessageCreateParamsCacheControlMarksLastTool(t *testing.T) {
+	cli := &client{model: Model{Name: "claude-3-5-sonnet-20241022"}}
+	req := providers.NewRequest("",
+		types.Message{Role: types.RoleUser, Content: "Hello"},
+	)
+	req.SetPromptCacheKey("session:test-tools")
+	req.SetToolDefines([]providers.ToolDefine{
+		providers.NewToolDefine("alpha", "first tool", map[string]any{
+			"type":       "object",
+			"properties": map[string]any{},
+		}),
+		providers.NewToolDefine("omega", "last tool", map[string]any{
+			"type":       "object",
+			"properties": map[string]any{},
+		}),
+	})
+
+	params := cli.messageCreateParams(req)
+	if len(params.Tools) != 2 {
+		t.Fatalf("expected 2 tools, got %d", len(params.Tools))
+	}
+	if params.Tools[0].OfTool == nil || params.Tools[1].OfTool == nil {
+		t.Fatalf("expected tool definitions to be populated, got %#v", params.Tools)
+	}
+	if params.Tools[0].OfTool.CacheControl.Type != "" {
+		t.Fatalf("expected only last tool to have cache_control, got %#v", params.Tools[0].OfTool.CacheControl)
+	}
+	if params.Tools[1].OfTool.CacheControl.Type == "" {
+		t.Fatalf("expected last tool to have cache_control")
 	}
 }
 

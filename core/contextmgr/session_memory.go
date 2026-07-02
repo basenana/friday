@@ -65,9 +65,30 @@ func generateSessionMemoryRecord(ctx context.Context, llm providers.Client, hist
 	prompt := sessionMemoryPrompt(incremental, existingRecord)
 	req := providers.NewPromptRequest(prompt)
 
-	var record SessionMemoryRecord
-	if err := llm.StructuredPredict(ctx, req, &record); err != nil {
+	// Predict into a struct without time fields. The LLM cannot reliably
+	// produce RFC3339 timestamps, and GeneratedAt/LastSyncAt are overwritten
+	// below anyway. Including them in the schema caused empty-string parse
+	// failures ("parsing time as 2006-01-02T15:04:05Z07:00").
+	var predicted struct {
+		TaskObjective  string   `json:"task_objective"`
+		CurrentStatus  string   `json:"current_status"`
+		KeyDecisions   []string `json:"key_decisions"`
+		RecentWork     []string `json:"recent_work"`
+		PendingItems   []string `json:"pending_items"`
+		FileReferences []string `json:"file_references"`
+		ImportantCtx   string   `json:"important_context"`
+	}
+	if err := llm.StructuredPredict(ctx, req, &predicted); err != nil {
 		return nil
+	}
+	record := SessionMemoryRecord{
+		TaskObjective:  predicted.TaskObjective,
+		CurrentStatus:  predicted.CurrentStatus,
+		KeyDecisions:   predicted.KeyDecisions,
+		RecentWork:     predicted.RecentWork,
+		PendingItems:   predicted.PendingItems,
+		FileReferences: predicted.FileReferences,
+		ImportantCtx:   predicted.ImportantCtx,
 	}
 	if record.IsZero() {
 		return nil
