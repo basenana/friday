@@ -206,3 +206,50 @@ func TestManager_CreateIsolated_DoesNotAffectCurrent(t *testing.T) {
 		t.Error("isolated and current sessions should have different IDs")
 	}
 }
+
+func TestManager_GetOrCreateDetachedByID_DoesNotAffectCurrent(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "manager_test")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	store := newMockStore()
+	currentFile := filepath.Join(tmpDir, "current")
+	mgr := NewManager(store, currentFile, "")
+
+	_, currentID, _, err := mgr.GetOrCreateCurrent()
+	if err != nil {
+		t.Fatalf("GetOrCreateCurrent failed: %v", err)
+	}
+
+	detached, created, err := mgr.GetOrCreateDetachedByID("proposal-1")
+	if err != nil {
+		t.Fatalf("GetOrCreateDetachedByID create failed: %v", err)
+	}
+	if !created {
+		t.Fatal("expected detached session to be newly created")
+	}
+	if detached.ID != "proposal-1" {
+		t.Fatalf("detached session ID = %q, want proposal-1", detached.ID)
+	}
+
+	storedCurrentID, err := mgr.GetCurrentID()
+	if err != nil {
+		t.Fatalf("GetCurrentID failed: %v", err)
+	}
+	if storedCurrentID != currentID {
+		t.Fatalf("current session should remain %s, got %s", currentID, storedCurrentID)
+	}
+
+	detached, created, err = mgr.GetOrCreateDetachedByID("proposal-1")
+	if err != nil {
+		t.Fatalf("GetOrCreateDetachedByID load failed: %v", err)
+	}
+	if created {
+		t.Fatal("expected second detached lookup to load existing session")
+	}
+	if detached.ID != "proposal-1" {
+		t.Fatalf("detached session ID = %q, want proposal-1", detached.ID)
+	}
+}

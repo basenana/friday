@@ -117,6 +117,22 @@ func (m *Manager) generateAlias() string {
 // GetOrCreateByID gets a session by ID, or creates it if it doesn't exist.
 // Returns the session and whether it was newly created.
 func (m *Manager) GetOrCreateByID(sessionID string, opts ...coresession.Option) (*coresession.Session, bool, error) {
+	sess, created, err := m.GetOrCreateDetachedByID(sessionID, opts...)
+	if err != nil {
+		return nil, false, err
+	}
+	if !created {
+		return sess, false, nil
+	}
+	if err := m.SetCurrentID(sessionID); err != nil {
+		return nil, false, err
+	}
+	return sess, true, nil
+}
+
+// GetOrCreateDetachedByID gets a session by ID, or creates it if it doesn't
+// exist, without changing the manager's current session pointer.
+func (m *Manager) GetOrCreateDetachedByID(sessionID string, opts ...coresession.Option) (*coresession.Session, bool, error) {
 	if err := m.store.EnsureDir(); err != nil {
 		return nil, false, err
 	}
@@ -140,11 +156,6 @@ func (m *Manager) GetOrCreateByID(sessionID string, opts ...coresession.Option) 
 			return nil, false, err
 		}
 	}
-
-	if err := m.SetCurrentID(sessionID); err != nil {
-		return nil, false, err
-	}
-
 	return sess, true, nil
 }
 

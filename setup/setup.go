@@ -16,9 +16,11 @@ import (
 	"github.com/basenana/friday/core/subagents"
 	"github.com/basenana/friday/core/tools"
 	"github.com/basenana/friday/memory"
+	"github.com/basenana/friday/proposals"
 	"github.com/basenana/friday/sandbox"
 	"github.com/basenana/friday/sessions"
 	"github.com/basenana/friday/skills"
+	"github.com/basenana/friday/teams"
 	"github.com/basenana/friday/workspace"
 )
 
@@ -44,6 +46,7 @@ type options struct {
 type SessionManager interface {
 	SetLLM(llm providers.Client)
 	GetOrCreateByID(sessionID string, opts ...coreSession.Option) (*coreSession.Session, bool, error)
+	GetOrCreateDetachedByID(sessionID string, opts ...coreSession.Option) (*coreSession.Session, bool, error)
 	CreateIsolated(opts ...coreSession.Option) (*coreSession.Session, string, error)
 	CreateTemporary(opts ...coreSession.Option) (*coreSession.Session, string, error)
 	GetOrCreateCurrent(opts ...coreSession.Option) (*coreSession.Session, string, bool, error)
@@ -143,19 +146,29 @@ func NewAgent(sessionMgr SessionManager, cfg *config.Config, opts ...Option) (*A
 		return nil, fmt.Errorf("load workspace content: %w", err)
 	}
 
-	sess.RegisterHook(planning.New(planning.Option{}))
-
+	planningHook := planning.New(planning.Option{})
 	skillLoader := skills.NewLoader(ws.SkillsPath())
 	if err := skillLoader.Load(); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: failed to load skills: %v\n", err)
 	}
 	skillRegistry := skills.NewRegistry(skillLoader)
 	skillHook := skills.NewHook(skillRegistry)
-	sess.RegisterHook(skillHook)
-	sess.RegisterHook(contextmgr.New(client, contextmgr.Config{
+
+	// Team system: provides team_load/team_list/team_comment tools and the
+	// active-team system prompt hint. The registry is shared with the proposal
+	// strategy so proposal_run can pick the active team.
+	teamLoader := teams.NewLoader(cfg.TeamsPath())
+	if err := teamLoader.Load(); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to load teams: %v\n", err)
+	}
+	teamRegistry := teams.NewRegistry(teamLoader)
+	teamRegistry.Refresh()
+	teamHook := teams.NewHook(teamRegistry, cfg.TeamsPath())
+
+	contextHook := contextmgr.New(client, contextmgr.Config{
 		ContextWindow:      cfg.Model.ContextWindow,
 		SessionMemoryStore: sessionMemoryStoreFromManager(sessionMgr),
-	}))
+	})
 
 	workdir, _ := os.Getwd()
 
@@ -190,11 +203,29 @@ func NewAgent(sessionMgr SessionManager, cfg *config.Config, opts ...Option) (*A
 	exploreAgent := agents.New(client, agents.Option{
 		SystemPrompt: workspace.ComposeSystemPrompt(loaded),
 	})
-	sess.RegisterHook(subagents.NewHook(client, subagents.Option{
+	subagentHook := subagents.NewHook(client, subagents.Option{
 		SelfAgent:    &subagents.ExpertAgent{Name: "explore", Agent: exploreAgent},
 		ExploreTools: allTools,
 		ExpertTools:  allTools,
-	}))
+	})
+	sharedHooks := []coreSession.Hook{
+		planningHook,
+		skillHook,
+		teamHook,
+		contextHook,
+		subagentHook,
+	}
+	replaceSessionHooks(sess, sharedHooks...)
+
+	// Proposal system: a RunnerFactory picks SingleAgent vs Team strategy at
+	// call time based on whether the agent supplied a `team` argument. The
+	// factory closes over client + tools + session manager so the proposal
+	// package stays free of agent-construction concerns.
+	proposalLoader := proposals.NewLoader(cfg.ProposalsPath())
+	proposalRunnerFactory := buildProposalRunnerFactory(
+		client, allTools, sharedHooks, sessionMgr, teamRegistry, cfg, loaded,
+	)
+	sess.RegisterHook(proposals.NewHook(proposalLoader, proposalRunnerFactory))
 
 	return &AgentContext{
 		Client:      client,
@@ -285,4 +316,113 @@ func appendImageRefsToMessage(message string, imageRefs []string) string {
 	}
 	builder.WriteString("If you need to inspect image contents, use the image tool with the relevant image reference instead of guessing.")
 	return builder.String()
+}
+
+// buildProposalRunnerFactory constructs a proposals.RunnerFactory. The factory
+// inspects proposal.OwningTeam to pick a strategy: if a team is named, it
+// loads the team + members and uses TeamStrategy; otherwise it uses
+// SingleAgentStrategy against a detached proposal session.
+//
+// Both branches close over the same client, tool set, and session manager so
+// the proposals package never needs to import agents/providers directly.
+func buildProposalRunnerFactory(
+	client providers.Client,
+	allTools []*tools.Tool,
+	sharedHooks []coreSession.Hook,
+	sessionMgr SessionManager,
+	teamRegistry *teams.Registry,
+	cfg *config.Config,
+	loaded *workspace.LoadedContent,
+) proposals.RunnerFactory {
+	agentFactory := func(systemPrompt string, tools []*tools.Tool) agents.Agent {
+		return agents.New(client, agents.Option{
+			SystemPrompt: systemPrompt,
+			Tools:        tools,
+		})
+	}
+	systemPrompt := workspace.ComposeSystemPrompt(loaded)
+
+	return func(proposal *proposals.Proposal, designDoc string) (*proposals.Runner, proposals.ExecutionStrategy, error) {
+		loader := proposals.NewLoader(cfg.ProposalsPath())
+
+		if proposal.OwningTeam != "" {
+			team, ok := teamRegistry.Get(proposal.OwningTeam)
+			if !ok {
+				// Refresh once in case the team was added after setup.
+				if err := teamRegistry.Loader().Load(); err != nil {
+					return nil, nil, fmt.Errorf("load teams: %w", err)
+				}
+				teamRegistry.Refresh()
+				team, ok = teamRegistry.Get(proposal.OwningTeam)
+			}
+			if !ok {
+				return nil, nil, fmt.Errorf("team not found: %s", proposal.OwningTeam)
+			}
+			members, err := teams.LoadMembers(cfg.TeamsPath(), team.Name, team.Members)
+			if err != nil {
+				return nil, nil, fmt.Errorf("load members: %w", err)
+			}
+			sessionFactory := proposals.SessionFactory(func(proposalID, assignee string) (*coreSession.Session, error) {
+				key := fmt.Sprintf("proposal-%s-%s", proposalID, assignee)
+				s, _, err := getOrCreateManagedSession(
+					sessionMgr, key, sharedHooks, coreSession.WithState(workspace.NewFileState(cfg.StatePath())),
+				)
+				if err != nil {
+					return nil, err
+				}
+				if proposal.Sessions == nil {
+					proposal.Sessions = map[string]string{}
+				}
+				proposal.Sessions[assignee] = s.ID
+				return s, nil
+			})
+			strategy, err := proposals.NewTeamStrategy(
+				client, agentFactory, team, members, allTools,
+				cfg.TeamsPath(), teamRegistry, sessionFactory,
+			)
+			if err != nil {
+				return nil, nil, fmt.Errorf("team strategy: %w", err)
+			}
+			return proposals.NewRunner(proposal, loader, strategy), strategy, nil
+		}
+
+		// Single-agent mode: one detached session for the whole proposal.
+		proposalKey := fmt.Sprintf("proposal-%s", proposal.ID)
+		proposalSession, _, err := getOrCreateManagedSession(
+			sessionMgr, proposalKey, sharedHooks,
+			coreSession.WithState(workspace.NewFileState(cfg.StatePath())),
+		)
+		if err != nil {
+			return nil, nil, fmt.Errorf("create proposal session: %w", err)
+		}
+		if proposal.Sessions == nil {
+			proposal.Sessions = map[string]string{}
+		}
+		proposal.Sessions["self"] = proposalSession.ID
+		strategy := proposals.NewSingleAgentStrategy(
+			client, agentFactory, allTools, proposalSession, systemPrompt,
+		)
+		return proposals.NewRunner(proposal, loader, strategy), strategy, nil
+	}
+}
+
+func getOrCreateManagedSession(
+	sessionMgr SessionManager,
+	sessionID string,
+	hooks []coreSession.Hook,
+	opts ...coreSession.Option,
+) (*coreSession.Session, bool, error) {
+	sess, created, err := sessionMgr.GetOrCreateDetachedByID(sessionID, opts...)
+	if err != nil {
+		return nil, false, err
+	}
+	replaceSessionHooks(sess, hooks...)
+	return sess, created, nil
+}
+
+func replaceSessionHooks(sess *coreSession.Session, hooks ...coreSession.Hook) {
+	sess.CleanHooks()
+	for _, hook := range hooks {
+		sess.RegisterHook(hook)
+	}
 }

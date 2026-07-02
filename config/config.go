@@ -117,6 +117,14 @@ func (c *Config) StatePath() string {
 	return filepath.Join(c.DataDirPath(), "states")
 }
 
+func (c *Config) TeamsPath() string {
+	return filepath.Join(c.DataDirPath(), "teams")
+}
+
+func (c *Config) ProposalsPath() string {
+	return filepath.Join(c.DataDirPath(), "proposals")
+}
+
 func LogPath() string {
 	return filepath.Join("/tmp", fmt.Sprintf("friday-%s.log", time.Now().Format(time.DateOnly)))
 }
