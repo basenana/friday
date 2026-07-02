@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/basenana/friday/actor"
+	codercmds "github.com/basenana/friday/coder/commands"
 	"github.com/basenana/friday/config"
 	"github.com/basenana/friday/sessions"
 )
@@ -35,7 +36,12 @@ func Run(sessMgr *sessions.Manager, cfg *config.Config, sessionID string) error 
 	registry := actor.NewRegistry(sessMgr, cfg, actor.DefaultRegistryConfig())
 	defer registry.ShutdownAll()
 
-	m, err := initialModel(sessMgr, registry, sessionID)
+	cmdRegistry := codercmds.NewRegistry()
+	codercmds.RegisterBuiltins(cmdRegistry)
+	codercmds.RegisterInfoCommands(cmdRegistry)
+	codercmds.RegisterAgentCommands(cmdRegistry)
+
+	m, err := initialModel(sessMgr, registry, cmdRegistry, cfg, sessionID)
 	if err != nil {
 		return err
 	}
@@ -50,6 +56,9 @@ type model struct {
 	actor     *actor.Actor
 	sessionID string
 	events    <-chan actor.Event
+
+	cmdRegistry *codercmds.Registry
+	cfg         *config.Config
 
 	unsubscribe       func()
 	subscriptionToken uint64
@@ -72,7 +81,7 @@ type model struct {
 	quitting      bool
 }
 
-func initialModel(sessMgr *sessions.Manager, registry *actor.Registry, sessionID string) (*model, error) {
+func initialModel(sessMgr *sessions.Manager, registry *actor.Registry, cmdRegistry *codercmds.Registry, cfg *config.Config, sessionID string) (*model, error) {
 	ta := textarea.New()
 	ta.Placeholder = "Send a message... (Enter to send, Ctrl+C to cancel/quit, / for commands)"
 	ta.Focus()
@@ -91,13 +100,15 @@ func initialModel(sessMgr *sessions.Manager, registry *actor.Registry, sessionID
 	)
 
 	m := &model{
-		sessMgr:   sessMgr,
-		registry:  registry,
-		sessionID: sessionID,
-		textarea:  ta,
-		viewport:  vp,
-		spinner:   sp,
-		toolCalls: make(map[string]*toolCallBlock),
+		sessMgr:     sessMgr,
+		registry:    registry,
+		cmdRegistry: cmdRegistry,
+		cfg:         cfg,
+		sessionID:   sessionID,
+		textarea:    ta,
+		viewport:    vp,
+		spinner:     sp,
+		toolCalls:   make(map[string]*toolCallBlock),
 	}
 	if err := m.bindSession(sessionID); err != nil {
 		return nil, err
