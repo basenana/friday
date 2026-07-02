@@ -33,6 +33,19 @@ func (c *Config) PrimaryModel() ModelConfig {
 	return models[0]
 }
 
+// AgentModel returns the effective ModelConfig for the named agent.
+// The per-agent entry (if configured) overlays the primary model, allowing
+// partial overrides (e.g. only setting the model name to a cheaper variant).
+// Unconfigured or missing agents fall back to PrimaryModel.
+func (c *Config) AgentModel(name string) ModelConfig {
+	if m, ok := c.Agents[name]; ok && m.IsConfigured() {
+		base := c.PrimaryModel()
+		base.overlay(m)
+		return base
+	}
+	return c.PrimaryModel()
+}
+
 // IsConfigured returns true when any meaningful model field is set.
 func (m ModelConfig) IsConfigured() bool {
 	return strings.TrimSpace(m.Provider) != "" ||

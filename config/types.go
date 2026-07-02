@@ -6,6 +6,7 @@ type Config struct {
 	Model      ModelConfig     `yaml:"model" json:"model"`
 	Models     []ModelConfig   `yaml:"models" json:"models"`
 	ImageModel ModelConfig     `yaml:"image_model" json:"image_model"`
+	Agents     map[string]ModelConfig `yaml:"agents" json:"agents"`
 	DataDir    string          `yaml:"data_dir" json:"data_dir"`
 	Workspace  string          `yaml:"workspace" json:"workspace"`
 	Memory     MemoryConfig    `yaml:"memory" json:"memory"`

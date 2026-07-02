@@ -50,3 +50,6 @@ test-e2e-memory:
 
 test-e2e-skills:
 	E2E_CONFIG=$(E2E_CONFIG) go test -tags=e2e -timeout=$(E2E_TIMEOUT) -v -run "TestSkills" ./e2e/...
+
+test-e2e-coder:
+	E2E_CONFIG=$(E2E_CONFIG) go test -tags=e2e -timeout=$(E2E_TIMEOUT) -v -run "TestCoder" ./e2e/...

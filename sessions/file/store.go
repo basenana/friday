@@ -90,7 +90,7 @@ func (s *FileSessionStore) Load(sessionID string, llm providers.Client, opts ...
 	data, err := os.ReadFile(metaPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("session not found: %s", sessionID)
+			return nil, fmt.Errorf("session not found: %s: %w", sessionID, err)
 		}
 		return nil, err
 	}
@@ -390,6 +390,9 @@ func (s *FileSessionStore) loadMeta(sessionID string) (*sessions.SessionMeta, er
 	metaPath := s.metaPath(sessionID)
 	data, err := os.ReadFile(metaPath)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("session not found: %s: %w", sessionID, err)
+		}
 		return nil, err
 	}
 	var meta sessions.SessionMeta

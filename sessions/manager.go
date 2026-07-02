@@ -1,6 +1,7 @@
 package sessions
 
 import (
+	"errors"
 	"os"
 	"strings"
 
@@ -188,4 +189,18 @@ func (m *Manager) CreateTemporary(opts ...coresession.Option) (*coresession.Sess
 	sessionID := types.NewID()
 	sess := coresession.New(sessionID, m.llm, opts...)
 	return sess, sessionID, nil
+}
+
+// Exists reports whether a persisted session with sessionID exists.
+func (m *Manager) Exists(sessionID string) (bool, error) {
+	if err := m.store.EnsureDir(); err != nil {
+		return false, err
+	}
+	if _, err := m.store.GetMeta(sessionID); err != nil {
+		if errors.Is(err, os.ErrNotExist) || os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
 }

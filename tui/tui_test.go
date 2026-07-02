@@ -3,11 +3,14 @@ package tui
 import (
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/basenana/friday/actor"
+	codercmds "github.com/basenana/friday/coder/commands"
+	"github.com/basenana/friday/config"
 	"github.com/basenana/friday/sessions"
 	sessionfile "github.com/basenana/friday/sessions/file"
 )
@@ -27,7 +30,12 @@ func newTestModel(t *testing.T) (*model, *sessions.Manager, *sessionfile.FileSes
 	registry := actor.NewRegistry(mgr, nil, actor.DefaultRegistryConfig())
 	t.Cleanup(registry.ShutdownAll)
 
-	m, err := initialModel(mgr, registry, sessionID)
+	cmdRegistry := codercmds.NewRegistry()
+	codercmds.RegisterBuiltins(cmdRegistry)
+	codercmds.RegisterInfoCommands(cmdRegistry)
+	codercmds.RegisterAgentCommands(cmdRegistry)
+
+	m, err := initialModel(mgr, registry, cmdRegistry, config.DefaultConfig(), sessionID)
 	if err != nil {
 		t.Fatalf("initialModel() failed: %v", err)
 	}
@@ -47,6 +55,7 @@ func TestHandleSlashNewCreatesAndSwitchesCurrentSession(t *testing.T) {
 	m, mgr, store := newTestModel(t)
 	oldID := m.sessionID
 	oldToken := m.subscriptionToken
+	m.appendBlock(chatBlock{kind: blockAssistant, content: "stale"})
 
 	gotModel, cmd := m.handleSlash("/new")
 	if cmd == nil {
@@ -74,6 +83,27 @@ func TestHandleSlashNewCreatesAndSwitchesCurrentSession(t *testing.T) {
 
 	if _, err := store.GetMeta(got.sessionID); err != nil {
 		t.Fatalf("GetMeta(%q) failed: %v", got.sessionID, err)
+	}
+	if len(got.messages) != 0 {
+		t.Fatalf("messages = %#v, want cleared view after /new", got.messages)
+	}
+}
+
+func TestHandleSlashSessionNewKeepsPostSwitchNotice(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	m.appendBlock(chatBlock{kind: blockAssistant, content: "stale"})
+
+	gotModel, cmd := m.handleSlash("/session new")
+	if cmd == nil {
+		t.Fatal("handleSlash(/session new) returned nil cmd")
+	}
+
+	got := gotModel.(*model)
+	if len(got.messages) != 1 {
+		t.Fatalf("messages = %#v, want single post-switch notice", got.messages)
+	}
+	if !strings.Contains(got.messages[0].content, "created session") {
+		t.Fatalf("got message %q, want created session notice", got.messages[0].content)
 	}
 }
 

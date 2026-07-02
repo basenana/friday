@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 
+	coderagents "github.com/basenana/friday/coder/agents"
 	"github.com/basenana/friday/config"
 	"github.com/basenana/friday/core/agents"
 	"github.com/basenana/friday/core/api"
@@ -197,17 +198,40 @@ func NewAgent(sessionMgr SessionManager, cfg *config.Config, opts ...Option) (*A
 		Tools:        allTools,
 	})
 
-	// Register subagent hook (explore forks main agent for research; run_task delegates to experts).
-	// explore reuses the main agent's system prompt + tool set so forked sessions share the same
-	// cache prefix. Recursion is prevented at the tool-handler level via anti-nesting guards.
-	exploreAgent := agents.New(client, agents.Option{
-		SystemPrompt: workspace.ComposeSystemPrompt(loaded),
-	})
+	// Build subagents via coder/agents factory: each agent gets its own
+	// (possibly overridden) provider client and a tool set filtered by the
+	// spec's ToolPolicy. The explorer reuses the main system prompt so forked
+	// sessions share the same cache prefix.
+	factory := coderagents.NewClientFactory(client, cfg.PrimaryModel(), CreateProviderClientFromModel)
+	exploreSpec := coderagents.ExplorerSpec(cfg.AgentModel(coderagents.NameExplorer))
+	exploreSpec.SystemPrompt = workspace.ComposeSystemPrompt(loaded)
+	exploreAgent, err := factory.BuildAgent(exploreSpec, allTools)
+	if err != nil {
+		return nil, fmt.Errorf("build explore agent: %w", err)
+	}
+
+	// Build the named expert agents (planner, reviewer, advisor) for run_task.
+	expertSpecs := []*coderagents.AgentSpec{
+		coderagents.PlannerSpec(cfg.AgentModel(coderagents.NamePlanner)),
+		coderagents.ReviewerSpec(cfg.AgentModel(coderagents.NameReviewer)),
+		coderagents.AdvisorSpec(cfg.AgentModel(coderagents.NameAdvisor)),
+	}
+	expertAgents, err := factory.BuildExpertAgents(expertSpecs, allTools)
+	if err != nil {
+		return nil, fmt.Errorf("build expert agents: %w", err)
+	}
+
 	subagentHook := subagents.NewHook(client, subagents.Option{
-		SelfAgent:    &subagents.ExpertAgent{Name: "explore", Agent: exploreAgent},
-		ExploreTools: allTools,
-		ExpertTools:  allTools,
+		SelfAgent: &subagents.ExpertAgent{
+			Name:  coderagents.NameExplorer,
+			Agent: exploreAgent,
+		},
+		// Do not pass request-level tool overrides into forked subagents.
+		// Their filtered agent-level tool set is the authority; otherwise
+		// request tools would re-expand privileges at runtime.
+		ExpertAgents: expertAgents,
 	})
+
 	sharedHooks := []coreSession.Hook{
 		planningHook,
 		skillHook,

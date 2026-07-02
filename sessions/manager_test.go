@@ -253,3 +253,34 @@ func TestManager_GetOrCreateDetachedByID_DoesNotAffectCurrent(t *testing.T) {
 		t.Fatalf("detached session ID = %q, want proposal-1", detached.ID)
 	}
 }
+
+func TestManager_Exists(t *testing.T) {
+	store := newMockStore()
+	mgr := NewManager(store, filepath.Join(t.TempDir(), "current"), "")
+
+	_, id, _, err := mgr.GetOrCreateCurrent()
+	if err != nil {
+		t.Fatalf("GetOrCreateCurrent failed: %v", err)
+	}
+
+	ok, err := mgr.Exists(id)
+	if err != nil {
+		t.Fatalf("Exists failed: %v", err)
+	}
+	if !ok {
+		t.Fatalf("Exists(%q) = false, want true", id)
+	}
+}
+
+func TestManager_ExistsMissing(t *testing.T) {
+	store := newMockStore()
+	mgr := NewManager(store, filepath.Join(t.TempDir(), "current"), "")
+
+	ok, err := mgr.Exists("missing")
+	if err != nil {
+		t.Fatalf("Exists failed: %v", err)
+	}
+	if ok {
+		t.Fatal("Exists(missing) = true, want false")
+	}
+}

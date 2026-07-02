@@ -10,6 +10,11 @@ type Message struct {
 	Metadata  map[string]string // protocol-specific metadata; actor does not interpret
 }
 
+// MessageFromText is a convenience constructor for a text-only Message.
+func MessageFromText(content string) Message {
+	return Message{Content: content}
+}
+
 // MergeMessages combines one or more inbox messages into a single prompt and
 // deduplicated image list.
 //
