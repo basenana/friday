@@ -10,6 +10,7 @@ import (
 	"image/png"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/basenana/friday/core/tools"
@@ -132,5 +133,52 @@ func TestImageToolUsesDefaultPromptAndModelOverride(t *testing.T) {
 	}
 	if analyzer.image == nil {
 		t.Fatalf("expected analyzer to receive image content")
+	}
+}
+
+func TestReadImageBytesRejectsPathOutsideWorkdir(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Sandbox.Enabled = false
+	// t.TempDir() lives under /tmp, which is a default write root; clear the
+	// extra roots so only the workdir itself is readable.
+	cfg.Sandbox.Filesystem.Write = nil
+	exec := NewExecutor(cfg)
+
+	outside := t.TempDir()
+	outsidePath := filepath.Join(outside, "image.png")
+	if err := os.WriteFile(outsidePath, testPNGBytes(t), 0o644); err != nil {
+		t.Fatalf("os.WriteFile() error: %v", err)
+	}
+
+	workdir := t.TempDir()
+	_, _, err := readImageBytes(context.Background(), exec, workdir, outsidePath, 5*1024*1024)
+	if err == nil {
+		t.Fatal("expected local image outside the workdir to be rejected")
+	}
+	if !strings.Contains(err.Error(), "sandbox policy") {
+		t.Errorf("error = %v, want it to mention sandbox policy", err)
+	}
+}
+
+func TestReadImageBytesAllowsPathInsideWorkdir(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Sandbox.Enabled = false
+	exec := NewExecutor(cfg)
+
+	workdir := t.TempDir()
+	imagePath := filepath.Join(workdir, "image.png")
+	if err := os.WriteFile(imagePath, testPNGBytes(t), 0o644); err != nil {
+		t.Fatalf("os.WriteFile() error: %v", err)
+	}
+
+	data, mediaType, err := readImageBytes(context.Background(), exec, workdir, imagePath, 5*1024*1024)
+	if err != nil {
+		t.Fatalf("readImageBytes() error = %v", err)
+	}
+	if len(data) == 0 {
+		t.Fatal("expected image data")
+	}
+	if mediaType != "image/png" {
+		t.Errorf("mediaType = %q, want image/png", mediaType)
 	}
 }

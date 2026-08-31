@@ -32,6 +32,20 @@ type ContextWindowProvider interface {
 	ContextWindow() int64
 }
 
+// MaxOutputTokensProvider is an optional capability that a Client may implement
+// to expose the model's configured max output tokens (per-request completion
+// budget). Callers can use this for logging/observability without importing
+// provider-specific types.
+type MaxOutputTokensProvider interface {
+	MaxOutputTokens() int64
+}
+
+// ModelNameProvider is an optional capability that a Client may implement
+// to expose the configured model name for observability (usage logging).
+type ModelNameProvider interface {
+	ModelName() string
+}
+
 type Embedding interface {
 	Vectorization(ctx context.Context, content string) ([]float64, error)
 }
@@ -80,10 +94,11 @@ type ToolDefine interface {
 }
 
 type Tokens struct {
-	CompletionTokens   int64
-	PromptTokens       int64
-	CachedPromptTokens int64
-	TotalTokens        int64
+	CompletionTokens    int64
+	PromptTokens        int64
+	CachedPromptTokens  int64
+	CacheCreationTokens int64
+	TotalTokens         int64
 }
 
 type Apply struct {

@@ -57,12 +57,12 @@ func NewBashTool(exec *Executor, workdir string) *tools.Tool {
 		tools.WithString("command", tools.Required(), tools.Description("The bash command to execute")),
 		tools.WithString("timeout", tools.Description("Timeout duration (e.g. '30s', '5m'). Default is from config.")),
 		tools.WithString("workdir", tools.Description("Working directory. Default is current directory.")),
-		tools.WithToolHandler(bashToolHandler(exec)),
+		tools.WithToolHandler(bashToolHandler(exec, workdir)),
 	)
 }
 
 // bashToolHandler creates the handler for the bash tool
-func bashToolHandler(exec *Executor) tools.ToolHandlerFunc {
+func bashToolHandler(exec *Executor, baseWorkdir string) tools.ToolHandlerFunc {
 	return func(ctx context.Context, req *tools.Request) (*tools.Result, error) {
 		// Extract command (required)
 		command, ok := req.Arguments["command"].(string)
@@ -76,10 +76,10 @@ func bashToolHandler(exec *Executor) tools.ToolHandlerFunc {
 			timeout = t
 		}
 
-		// Extract optional workdir
-		workdir, _ := os.Getwd()
-		if w, ok := req.Arguments["workdir"].(string); ok {
-			workdir = w
+		// Resolve and validate optional workdir
+		workdir, err := resolveToolWorkdir(baseWorkdir, req.Arguments)
+		if err != nil {
+			return tools.NewToolResultError(err.Error()), nil
 		}
 
 		// Build options
@@ -143,4 +143,77 @@ func parseDuration(s string) (time.Duration, error) {
 		s = s + "s"
 	}
 	return time.ParseDuration(s)
+}
+
+// resolveToolWorkdir resolves the effective workdir for a tool call: the
+// per-call "workdir" argument takes precedence over the base workdir, and the
+// result is always validated (exists, is a directory, absolute). The resolved
+// workdir must stay inside the agent's base workdir so a model-controlled
+// value cannot point the sandbox at arbitrary host directories.
+func resolveToolWorkdir(base string, args map[string]interface{}) (string, error) {
+	if base == "" {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return "", fmt.Errorf("invalid workdir: resolve current directory: %w", err)
+		}
+		base = cwd
+	}
+
+	baseAbs, err := ValidateWorkdir(base)
+	if err != nil {
+		return "", fmt.Errorf("invalid workdir: %w", err)
+	}
+
+	workdir := baseAbs
+	if raw, ok := args["workdir"].(string); ok && strings.TrimSpace(raw) != "" {
+		validated, err := ValidateWorkdir(raw)
+		if err != nil {
+			return "", fmt.Errorf("invalid workdir: %w", err)
+		}
+		workdir = validated
+	}
+
+	if !pathWithinRoot(workdir, baseAbs) {
+		return "", fmt.Errorf("invalid workdir: %q is outside the agent workdir %q", workdir, baseAbs)
+	}
+	return workdir, nil
+}
+
+func buildPermissionDescription(exec *Executor) string {
+	permissionBuf := bytes.NewBuffer(nil)
+
+	if len(exec.config.Permissions.Allow) > 0 {
+		permissionBuf.WriteString("Allowed commands:\n")
+		for _, cmd := range exec.config.Permissions.Allow {
+			permissionBuf.WriteString("- " + cmd + "\n")
+		}
+	}
+	if len(exec.config.Permissions.Deny) > 0 {
+		permissionBuf.WriteString("Denied commands:\n")
+		for _, cmd := range exec.config.Permissions.Deny {
+			permissionBuf.WriteString("- " + cmd + "\n")
+		}
+	}
+
+	return permissionBuf.String()
+}
+
+func buildCommandOutput(result *Result) string {
+	if result == nil {
+		return ""
+	}
+
+	var output strings.Builder
+	if result.Stdout != "" {
+		output.WriteString(result.Stdout)
+	}
+	if result.Stderr != "" {
+		if output.Len() > 0 {
+			output.WriteString("\n")
+		}
+		output.WriteString("stderr:\n")
+		output.WriteString(result.Stderr)
+	}
+
+	return output.String()
 }

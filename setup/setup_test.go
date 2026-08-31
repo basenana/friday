@@ -10,6 +10,7 @@ import (
 
 	"github.com/basenana/friday/config"
 	"github.com/basenana/friday/core/api"
+	"github.com/basenana/friday/core/providers"
 	coresession "github.com/basenana/friday/core/session"
 	"github.com/basenana/friday/core/tools"
 	"github.com/basenana/friday/core/types"
@@ -57,8 +58,8 @@ func TestWorkspaceLoadProvidesSystemPrompt(t *testing.T) {
 	}
 }
 
-func TestNewAgentDoesNotInjectWorkspaceMemoryIntoNewSession(t *testing.T) {
-	tmpDir, err := os.MkdirTemp("", "setup-no-workspace-memory-*")
+func TestNewAgentMemoryInjectedPerRequestNotPersisted(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "setup-memory-hook-*")
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
@@ -93,8 +94,29 @@ func TestNewAgentDoesNotInjectWorkspaceMemoryIntoNewSession(t *testing.T) {
 		t.Fatalf("NewAgent failed: %v", err)
 	}
 
-	if len(agentCtx.Session.GetHistory()) != 0 {
-		t.Fatalf("expected new session history to stay empty; got %#v", agentCtx.Session.GetHistory())
+	// Memory must not be baked into the persisted session history.
+	if history := agentCtx.Session.GetHistory(); len(history) != 0 {
+		t.Fatalf("expected empty session history, got %#v", history)
+	}
+
+	// Instead it is injected at request-composition time on every model call.
+	req := providers.NewRequest("system")
+	if err := agentCtx.Session.RunHooks(context.Background(), types.SessionHookBeforeModel,
+		coresession.HookPayload{ModelRequest: req}); err != nil {
+		t.Fatalf("RunHooks failed: %v", err)
+	}
+	injected := req.History()
+	if len(injected) != 2 {
+		t.Fatalf("expected 2 memory messages in the model request, got %#v", injected)
+	}
+	if !strings.Contains(injected[0].Content, "[Long-Term Memory]") {
+		t.Fatalf("expected long-term memory message, got %q", injected[0].Content)
+	}
+	if !strings.Contains(injected[1].Content, "[Recent Memory Context]") {
+		t.Fatalf("expected recent memory message, got %q", injected[1].Content)
+	}
+	if history := agentCtx.Session.GetHistory(); len(history) != 0 {
+		t.Fatalf("session history must stay untouched, got %#v", history)
 	}
 }
 

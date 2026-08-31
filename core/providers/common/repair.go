@@ -39,6 +39,7 @@ func shouldMergeAssistantMessages(dst, src types.Message) bool {
 func isPlainAssistantText(msg types.Message) bool {
 	return msg.Role == types.RoleAssistant &&
 		msg.Image == nil &&
+		len(msg.Images) == 0 &&
 		len(msg.ToolCalls) == 0 &&
 		msg.ToolResult == nil &&
 		msg.Reasoning == "" &&

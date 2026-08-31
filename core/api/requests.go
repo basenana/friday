@@ -10,7 +10,9 @@ type Request struct {
 	Session     *session.Session
 	UserMessage string
 	Image       *types.ImageContent
+	Images      []types.ImageContent
 	ImageURLs   []string
+	Metadata    map[string]string
 	Tools       []*tools.Tool
 }
 

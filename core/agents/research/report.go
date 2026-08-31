@@ -83,7 +83,7 @@ func (r *Report) submitReportTool() *tools.Tool {
 			}
 
 			markdown, ok := request.Arguments["markdown"].(string)
-			if !ok || len(title) == 0 {
+			if !ok || len(markdown) == 0 {
 				return tools.NewToolResultError("missing required parameter: markdown"), nil
 			}
 

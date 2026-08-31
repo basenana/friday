@@ -82,7 +82,7 @@ func fsReadHandler(exec *Executor, workdir string) tools.ToolHandlerFunc {
 			return tools.NewToolResultError(fmt.Sprintf("failed to read file: %s", err)), nil
 		}
 
-		return tools.NewToolResultText(string(content)), nil
+		return tools.NewToolResultText(truncateOutput(string(content))), nil
 	}
 }
 
@@ -355,12 +355,26 @@ func resolveToolPath(cfg *Config, workdir, path string, mode fsAccessMode) (stri
 		return "", err
 	}
 
-	inWorkdir := isWithinWorkdir(workdir, absPath)
-	inWriteRoots := matchesAnyPath(cfg.Sandbox.Filesystem.Write, workdir, absPath)
-	inReadOnlyRoots := matchesAnyPath(cfg.Sandbox.Filesystem.ReadOnly, workdir, absPath)
-	inProtectedRoots := matchesAnyPath(cfg.Sandbox.Filesystem.Protected, workdir, absPath)
+	// Containment and deny checks below are path-based, so symlinks must be
+	// resolved first: otherwise a symlink planted inside the workdir by a
+	// previously allowed command could point at files outside it.
+	absPath, err = resolveSymlinkedPath(absPath)
+	if err != nil {
+		return "", err
+	}
+	resolvedWorkdir := workdir
+	if strings.TrimSpace(workdir) != "" {
+		if resolved, err := resolveSymlinkedPath(workdir); err == nil {
+			resolvedWorkdir = resolved
+		}
+	}
 
-	if matchesAnyPath(cfg.Sandbox.Filesystem.Deny, workdir, absPath) {
+	inWorkdir := isWithinWorkdir(resolvedWorkdir, absPath)
+	inWriteRoots := matchesAnyPath(cfg.Sandbox.Filesystem.Write, resolvedWorkdir, absPath)
+	inReadOnlyRoots := matchesAnyPath(cfg.Sandbox.Filesystem.ReadOnly, resolvedWorkdir, absPath)
+	inProtectedRoots := matchesAnyPath(cfg.Sandbox.Filesystem.Protected, resolvedWorkdir, absPath)
+
+	if matchesAnyPath(cfg.Sandbox.Filesystem.Deny, resolvedWorkdir, absPath) {
 		return "", fmt.Errorf("path is denied by sandbox rules")
 	}
 
@@ -387,7 +401,7 @@ func resolveLocalFsPath(workdir, path string) (string, error) {
 		return "", fmt.Errorf("path is required")
 	}
 
-	resolved := expandPath(path, workdir)
+	resolved := expandPath(path, workdir, "")
 	if !filepath.IsAbs(resolved) {
 		absPath, err := filepath.Abs(resolved)
 		if err != nil {
@@ -397,6 +411,42 @@ func resolveLocalFsPath(workdir, path string) (string, error) {
 	}
 
 	return filepath.Clean(resolved), nil
+}
+
+// resolveSymlinkedPath resolves all symlinks in a path. If the final
+// component does not exist (e.g. a file about to be created), the nearest
+// existing ancestor is resolved and the remainder appended lexically. A
+// dangling symlink is an error, because its destination cannot be verified
+// against the sandbox policy.
+func resolveSymlinkedPath(path string) (string, error) {
+	// A symlink whose destination does not exist (dangling) must be rejected:
+	// its target is outside the resolved parent and cannot be verified.
+	if _, lstatErr := os.Lstat(path); lstatErr == nil {
+		resolved, err := filepath.EvalSymlinks(path)
+		if err != nil {
+			return "", fmt.Errorf("failed to resolve path %q: %w", path, err)
+		}
+		return resolved, nil
+	}
+
+	resolved, err := filepath.EvalSymlinks(path)
+	if err == nil {
+		return resolved, nil
+	}
+	if !os.IsNotExist(err) {
+		return "", fmt.Errorf("failed to resolve path %q: %w", path, err)
+	}
+
+	parent := filepath.Dir(path)
+	if parent == path {
+		// Reached the filesystem root without finding an existing ancestor.
+		return "", fmt.Errorf("failed to resolve path %q: %w", path, err)
+	}
+	resolvedParent, err := resolveSymlinkedPath(parent)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(resolvedParent, filepath.Base(path)), nil
 }
 
 func isWithinWorkdir(workdir, absPath string) bool {
@@ -414,7 +464,7 @@ func isWithinWorkdir(workdir, absPath string) bool {
 
 func matchesAnyPath(patterns []string, workdir, absPath string) bool {
 	for _, pattern := range patterns {
-		expanded := expandPath(pattern, workdir)
+		expanded := expandPath(pattern, workdir, "")
 		if !strings.ContainsAny(expanded, "*?[]") && !filepath.IsAbs(expanded) {
 			absPattern, err := filepath.Abs(expanded)
 			if err == nil {

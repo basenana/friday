@@ -7,13 +7,33 @@ import (
 	"strings"
 )
 
-// expandPath expands ~ and relative paths
-func expandPath(path string, workdir string) string {
+func defaultExecutionHome() string {
+	home, err := os.UserHomeDir()
+	if err == nil && strings.TrimSpace(home) != "" {
+		return home
+	}
+	return strings.TrimSpace(os.Getenv("HOME"))
+}
+
+func normalizeExecutionHome(homeDir string) string {
+	homeDir = strings.TrimSpace(homeDir)
+	if homeDir != "" {
+		return homeDir
+	}
+	return defaultExecutionHome()
+}
+
+// expandPath expands ~ and relative paths. homeDir overrides the home used
+// for ~ expansion; when empty it falls back to the process home directory.
+func expandPath(path, workdir, homeDir string) string {
 	// Expand ~ to home directory
-	if strings.HasPrefix(path, "~/") {
-		home, err := os.UserHomeDir()
-		if err != nil {
+	if path == "~" || strings.HasPrefix(path, "~/") {
+		home := normalizeExecutionHome(homeDir)
+		if home == "" {
 			return path
+		}
+		if path == "~" {
+			return home
 		}
 		return filepath.Join(home, path[2:])
 	}

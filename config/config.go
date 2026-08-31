@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/basenana/friday/core/providers"
 	"gopkg.in/yaml.v3"
 )
 
@@ -53,7 +54,23 @@ func Load(configPath string) (*Config, error) {
 
 	cfg.expandEnv()
 
+	if err := cfg.validate(); err != nil {
+		return nil, err
+	}
+
 	return cfg, nil
+}
+
+func (c *Config) validate() error {
+	if e := c.Model.ReasoningEffort; e != "" && !providers.IsValidReasoningEffort(e) {
+		return fmt.Errorf("invalid model.reasoning_effort %q: must be one of default, none, low, medium, high, xhigh, max", e)
+	}
+	for _, m := range c.Models {
+		if e := m.ReasoningEffort; e != "" && !providers.IsValidReasoningEffort(e) {
+			return fmt.Errorf("invalid models entry %q: reasoning_effort %q must be one of default, none, low, medium, high, xhigh, max", m.Model, e)
+		}
+	}
+	return nil
 }
 
 func (c *Config) expandEnv() {
@@ -102,6 +119,9 @@ func (c *Config) DataDirPath() string {
 }
 
 func (c *Config) WorkspacePath() string {
+	if c.Workspace == "" {
+		return filepath.Join(c.DataDirPath(), "workspace")
+	}
 	return c.ResolvePath(c.Workspace)
 }
 

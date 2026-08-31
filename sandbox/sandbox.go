@@ -22,6 +22,9 @@ type Sandbox interface {
 type ExecOptions struct {
 	// Workdir is the working directory for the command
 	Workdir string
+	// HomeDir overrides the home directory used for ~ expansion in sandbox
+	// path policy; empty falls back to the process home directory.
+	HomeDir string
 	// Env is the environment variables for the command
 	Env []string
 	// Timeout is the maximum time the command can run
@@ -40,6 +43,12 @@ type Result struct {
 	ExitCode int
 	// TimedOut indicates if the command timed out
 	TimedOut bool
+	// StdoutTruncated reports that stdout exceeded its configured capture
+	// limits (bounded buffer or output truncation) and is incomplete.
+	StdoutTruncated bool
+	// StderrTruncated reports that stderr exceeded its configured capture
+	// limits (bounded buffer or output truncation) and is incomplete.
+	StderrTruncated bool
 }
 
 // NewSandbox creates a new sandbox based on the current OS

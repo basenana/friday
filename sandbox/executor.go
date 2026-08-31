@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -26,6 +27,8 @@ type Executor struct {
 	config  *Config
 	perm    *Permission
 	sandbox Sandbox
+
+	warnUnsandboxedOnce sync.Once
 }
 
 // NewExecutor creates a new Executor
@@ -74,6 +77,13 @@ func (e *Executor) Run(ctx context.Context, cmd string, opts ExecOptions) (*Resu
 	defer cancel()
 
 	// 4. Wrap command with sandbox
+	if e.config.Sandbox.Enabled && !e.sandbox.IsAvailable() {
+		e.warnUnsandboxedOnce.Do(func() {
+			fmt.Fprintf(os.Stderr,
+				"[friday] WARNING: sandboxing is enabled but the %q sandbox is unavailable on this system; "+
+					"commands will run WITHOUT sandbox isolation\n", e.sandbox.Name())
+		})
+	}
 	wrappedCmd, cleanup, err := e.sandbox.WrapCommand(cmd, opts)
 	if cleanup != nil {
 		defer cleanup()
@@ -101,17 +111,16 @@ func (e *Executor) execute(ctx context.Context, cmdStr string, opts ExecOptions)
 		cmd.Dir = opts.Workdir
 	}
 
-	// Set environment
-	if len(opts.Env) > 0 {
-		cmd.Env = opts.Env
-	} else {
-		cmd.Env = os.Environ()
-	}
+	// Set environment: build the child environment from a minimal safe base
+	// plus anything the caller passed explicitly.
+	cmd.Env = buildCommandEnv(opts.Env, opts.HomeDir)
 
-	// Capture output
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	// Capture output with a hard cap per stream so a runaway command cannot
+	// exhaust memory.
+	stdout := newBoundedOutputBuffer(maxCaptureBytes)
+	stderr := newBoundedOutputBuffer(maxCaptureBytes)
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
 
 	// Handle stdin if provided
 	if opts.Stdin != "" {
@@ -122,9 +131,14 @@ func (e *Executor) execute(ctx context.Context, cmdStr string, opts ExecOptions)
 	err := cmd.Run()
 
 	// Build result
-	result := &Result{
-		Stdout: truncateOutput(stdout.String()),
-		Stderr: truncateOutput(stderr.String()),
+	result := &Result{}
+	result.Stdout, result.StdoutTruncated = truncateOutputWithFlag(stdout.String())
+	if stdout.Truncated() {
+		result.StdoutTruncated = true
+	}
+	result.Stderr, result.StderrTruncated = truncateOutputWithFlag(stderr.String())
+	if stderr.Truncated() {
+		result.StderrTruncated = true
 	}
 
 	// Handle exit code
@@ -134,6 +148,7 @@ func (e *Executor) execute(ctx context.Context, cmdStr string, opts ExecOptions)
 			result.ExitCode = 124 // Standard timeout exit code
 			result.TimedOut = true
 			result.Stderr = "Command timed out"
+			result.StderrTruncated = false
 		} else if exitErr, ok := err.(*exec.ExitError); ok {
 			result.ExitCode = exitErr.ExitCode()
 		} else {
@@ -142,6 +157,115 @@ func (e *Executor) execute(ctx context.Context, cmdStr string, opts ExecOptions)
 	}
 
 	return result, nil
+}
+
+// maxCaptureBytes is the hard cap for a single output stream (8MB).
+const maxCaptureBytes = 8 * 1024 * 1024
+
+type boundedOutputBuffer struct {
+	buffer    bytes.Buffer
+	limit     int
+	truncated bool
+}
+
+func newBoundedOutputBuffer(limit int) *boundedOutputBuffer {
+	return &boundedOutputBuffer{limit: limit}
+}
+
+func (b *boundedOutputBuffer) Write(p []byte) (int, error) {
+	requested := len(p)
+	remaining := b.limit - b.buffer.Len()
+	if remaining > 0 {
+		toWrite := p
+		if len(toWrite) > remaining {
+			toWrite = toWrite[:remaining]
+		}
+		_, _ = b.buffer.Write(toWrite)
+	}
+	if requested > 0 && (remaining <= 0 || requested > remaining) {
+		b.truncated = true
+	}
+	return requested, nil
+}
+
+func (b *boundedOutputBuffer) String() string {
+	return b.buffer.String()
+}
+
+func (b *boundedOutputBuffer) Truncated() bool {
+	return b.truncated
+}
+
+// buildCommandEnv builds the child environment from a minimal, safe base
+// (PATH, TERM, TZ, LANG/LC_*, HOME) plus the caller-provided entries. The
+// host environment is deliberately not inherited: sandboxed commands must not
+// see host credentials such as API keys.
+//
+// HOME is only overridden by homeDir when the caller did not set an explicit
+// HOME entry in extraEnv.
+func buildCommandEnv(extraEnv []string, homeDir string) []string {
+	env := mergeEnvLists(safeChildEnvBase(), extraEnv)
+	if strings.TrimSpace(homeDir) != "" && !envListHas(extraEnv, "HOME") {
+		env = mergeEnvLists(env, []string{"HOME=" + strings.TrimSpace(homeDir)})
+	}
+	return env
+}
+
+// safeChildEnvBase returns the minimal host environment variables inherited
+// by executed commands.
+func safeChildEnvBase() []string {
+	var base []string
+	for _, key := range []string{"PATH", "TERM", "TZ", "LANG", "HOME"} {
+		if value, ok := os.LookupEnv(key); ok {
+			base = append(base, key+"="+value)
+		}
+	}
+	for _, entry := range os.Environ() {
+		if strings.HasPrefix(envKey(entry), "LC_") {
+			base = append(base, entry)
+		}
+	}
+	return base
+}
+
+func envListHas(env []string, key string) bool {
+	for _, entry := range env {
+		if envKey(entry) == key {
+			return true
+		}
+	}
+	return false
+}
+
+func mergeEnvLists(base, overrides []string) []string {
+	if len(overrides) == 0 {
+		return append([]string{}, base...)
+	}
+
+	merged := append([]string{}, base...)
+	indexByKey := make(map[string]int, len(merged))
+	for idx, entry := range merged {
+		indexByKey[envKey(entry)] = idx
+	}
+
+	for _, entry := range overrides {
+		key := envKey(entry)
+		if idx, ok := indexByKey[key]; ok {
+			merged[idx] = entry
+			continue
+		}
+		indexByKey[key] = len(merged)
+		merged = append(merged, entry)
+	}
+
+	return merged
+}
+
+func envKey(entry string) string {
+	if idx := strings.IndexByte(entry, '='); idx >= 0 {
+		return entry[:idx]
+	}
+	return entry
 }
 
 // parseTimeout parses the timeout from config
@@ -160,8 +284,15 @@ func (e *Executor) parseTimeout() time.Duration {
 
 // truncateOutput truncates output to max lines and max bytes
 func truncateOutput(output string) string {
+	truncated, _ := truncateOutputWithFlag(output)
+	return truncated
+}
+
+func truncateOutputWithFlag(output string) (string, bool) {
+	wasTruncated := false
 	if len(output) > MaxOutputBytes {
 		output = output[len(output)-MaxOutputBytes:]
+		wasTruncated = true
 	}
 
 	lines := strings.Split(output, "\n")
@@ -169,9 +300,10 @@ func truncateOutput(output string) string {
 		lines = lines[len(lines)-MaxOutputLines:]
 		// Add truncation indicator
 		lines[0] = "... (output truncated)"
+		wasTruncated = true
 	}
 
-	return strings.Join(lines, "\n")
+	return strings.Join(lines, "\n"), wasTruncated
 }
 
 // CheckPermission checks if a command would be allowed without executing it
@@ -207,13 +339,7 @@ func ValidateWorkdir(workdir string) (string, error) {
 	}
 
 	// Expand ~ to home directory
-	if strings.HasPrefix(workdir, "~/") {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", err
-		}
-		workdir = strings.Replace(workdir, "~", home, 1)
-	}
+	workdir = expandPath(workdir, "", "")
 
 	// Convert to absolute path
 	absPath, err := filepath.Abs(workdir)

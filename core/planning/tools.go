@@ -16,23 +16,26 @@ func writeTodoListHandler(t *Todo, sess *session.Session) tools.ToolHandlerFunc 
 	return func(ctx context.Context, request *tools.Request) (*tools.Result, error) {
 		todoList, ok := request.Arguments["todo_list"].([]any)
 		if !ok {
+			if _, present := request.Arguments["todo_list"]; present {
+				return tools.NewToolResultError("invalid todo_list format: todo_list must be an array of objects with describe and status fields"), nil
+			}
 			return tools.NewToolResultError("missing required parameter: todo_list"), nil
 		}
 
 		todo := &TodoList{}
-		for _, todoItem := range todoList {
+		for i, todoItem := range todoList {
 			todoInfo, ok := todoItem.(map[string]interface{})
 			if !ok || len(todoInfo) == 0 {
-				return tools.NewToolResultError("invalid todo_list format"), nil
+				return tools.NewToolResultError(fmt.Sprintf("invalid todo_list format: item %d must be a non-empty object with describe and status fields", i)), nil
 			}
 
 			describe, ok := todoInfo["describe"].(string)
 			if !ok || describe == "" {
-				return tools.NewToolResultError("invalid todo_list format: describe is required"), nil
+				return tools.NewToolResultError(fmt.Sprintf("invalid todo_list format: item %d requires a non-empty describe string", i)), nil
 			}
 			status, ok := todoInfo["status"].(string)
-			if !ok || status == "" {
-				return tools.NewToolResultError("invalid todo_list format: status is required"), nil
+			if !ok || !isTodoStatus(status) {
+				return tools.NewToolResultError(fmt.Sprintf("invalid todo_list format: item %d status must be pending, in_progress, completed, or blocked", i)), nil
 			}
 
 			todo.Todos = append(todo.Todos, &TodoItem{Describe: describe, Status: status})
@@ -43,7 +46,7 @@ func writeTodoListHandler(t *Todo, sess *session.Session) tools.ToolHandlerFunc 
 		t.todoMaps[key] = todo
 		t.mu.Unlock()
 
-		var pending, inProgress, completed int
+		var pending, inProgress, completed, blocked int
 		for _, item := range todo.Todos {
 			switch item.Status {
 			case "pending":
@@ -52,6 +55,8 @@ func writeTodoListHandler(t *Todo, sess *session.Session) tools.ToolHandlerFunc 
 				inProgress++
 			case "completed":
 				completed++
+			case "blocked":
+				blocked++
 			}
 		}
 
@@ -66,6 +71,7 @@ func writeTodoListHandler(t *Todo, sess *session.Session) tools.ToolHandlerFunc 
 				"pending":     strconv.Itoa(pending),
 				"in_progress": strconv.Itoa(inProgress),
 				"completed":   strconv.Itoa(completed),
+				"blocked":     strconv.Itoa(blocked),
 				"todo_list":   string(todoData),
 			},
 		})
@@ -81,6 +87,15 @@ type TodoList struct {
 type TodoItem struct {
 	Describe string `json:"describe"`
 	Status   string `json:"status"`
+}
+
+func isTodoStatus(status string) bool {
+	switch status {
+	case "pending", "in_progress", "completed", "blocked":
+		return true
+	default:
+		return false
+	}
 }
 
 func displayTodoList(todo *TodoList) string {

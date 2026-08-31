@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestNewWorkspace(t *testing.T) {
@@ -96,9 +97,112 @@ func TestWorkspaceLoad(t *testing.T) {
 		t.Errorf("expected 3 system prompts, got %d", len(content.SystemPrompts))
 	}
 
-	// MEMORY.md has FileRoleOptional, so it should not be in SystemPrompts
+	// MEMORY.md has FileRoleMemory, so it should not be in SystemPrompts
 	if len(content.SystemPrompts) != 3 {
 		t.Errorf("expected memory files to stay out of loaded content prompts, got %d system prompts", len(content.SystemPrompts))
+	}
+
+	// Fresh workspace: MEMORY.md only contains the empty template header,
+	// so no memory history messages should be produced.
+	if len(content.MemoryHistory) != 0 {
+		t.Errorf("expected 0 memory history messages for fresh workspace, got %d", len(content.MemoryHistory))
+	}
+}
+
+func TestWorkspaceLoadIncludesLongTermAndRecentMemory(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "workspace-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	workspacePath := filepath.Join(tmpDir, "workspace")
+	memoryPath := filepath.Join(tmpDir, "memory")
+
+	ws := NewWorkspace(workspacePath, memoryPath)
+	if _, err := ws.InitWithParams(nil); err != nil {
+		t.Fatalf("Init failed: %v", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(workspacePath, "MEMORY.md"), []byte("# MEMORY.md\n\n- Prefers concise answers"), 0644); err != nil {
+		t.Fatalf("failed to write MEMORY.md: %v", err)
+	}
+	today := time.Now().Format("2006-01-02")
+	if err := os.WriteFile(filepath.Join(memoryPath, today+".md"), []byte("Investigated low mapping rate in sample T1."), 0644); err != nil {
+		t.Fatalf("failed to write daily memory: %v", err)
+	}
+
+	content, err := ws.Load()
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	if len(content.MemoryHistory) != 2 {
+		t.Fatalf("expected 2 memory history messages, got %d", len(content.MemoryHistory))
+	}
+	if !strings.Contains(content.MemoryHistory[0].Content, "[Long-Term Memory]") {
+		t.Fatalf("expected long-term memory header, got %q", content.MemoryHistory[0].Content)
+	}
+	if !strings.Contains(content.MemoryHistory[1].Content, "[Recent Memory Context]") {
+		t.Fatalf("expected recent memory header, got %q", content.MemoryHistory[1].Content)
+	}
+}
+
+func TestWorkspaceLoadMemoryDaysOption(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "workspace-memory-days-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	workspacePath := filepath.Join(tmpDir, "workspace")
+	memoryPath := filepath.Join(tmpDir, "memory")
+	ws := NewWorkspace(workspacePath, memoryPath)
+	if _, err := ws.InitWithParams(nil); err != nil {
+		t.Fatalf("Init failed: %v", err)
+	}
+
+	// Write one daily log three days back and one for today.
+	oldDate := time.Now().AddDate(0, 0, -3).Format("2006-01-02")
+	today := time.Now().Format("2006-01-02")
+	for name, content := range map[string]string{
+		oldDate + ".md": "Older than the default window.",
+		today + ".md":   "Today's note.",
+	} {
+		if err := os.WriteFile(filepath.Join(memoryPath, name), []byte(content), 0644); err != nil {
+			t.Fatalf("failed to write %s: %v", name, err)
+		}
+	}
+
+	// Default: only today + yesterday.
+	defaultContent, err := ws.Load()
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if !strings.Contains(defaultContent.MemoryHistory[len(defaultContent.MemoryHistory)-1].Content, "Today's note.") {
+		t.Fatalf("expected today's log by default, got %#v", defaultContent.MemoryHistory)
+	}
+	if strings.Contains(defaultContent.MemoryHistory[len(defaultContent.MemoryHistory)-1].Content, "Older than the default window.") {
+		t.Fatalf("3-day-old log should not load with the default 2-day window, got %#v", defaultContent.MemoryHistory)
+	}
+
+	// Configured retention: 14 days pulls in the 3-day-old log.
+	content, err := ws.Load(WithMemoryDays(14))
+	if err != nil {
+		t.Fatalf("Load(WithMemoryDays(14)) failed: %v", err)
+	}
+	combined := content.MemoryHistory[len(content.MemoryHistory)-1].Content
+	if !strings.Contains(combined, "Older than the default window.") || !strings.Contains(combined, "Today's note.") {
+		t.Fatalf("expected both logs with 14-day window, got %#v", content.MemoryHistory)
+	}
+
+	// Invalid values fall back to the default.
+	fallback, err := ws.Load(WithMemoryDays(0))
+	if err != nil {
+		t.Fatalf("Load(WithMemoryDays(0)) failed: %v", err)
+	}
+	if len(fallback.MemoryHistory) != len(defaultContent.MemoryHistory) {
+		t.Fatalf("expected zero value to fall back to default, got %#v", fallback.MemoryHistory)
 	}
 }
 

@@ -75,6 +75,7 @@ Writing todos takes time and tokens, use it when it is helpful for managing comp
 ## Important To-Do List Usage Notes to Remember
 - The "write_todos" tool should never be called multiple times in parallel.
 - Don't be afraid to revise the To-Do list as you go. New information may reveal new tasks that need to be done, or old tasks that are irrelevant.
+- Use status "blocked" when a task requires user input, approval, an external system, or another dependency. Keep the task description free of blocker tags; change the status back to "pending" or "in_progress" once it can proceed.
 </write_todos>
 `
 )

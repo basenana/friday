@@ -28,8 +28,10 @@ type ModelConfig struct {
 	ContextWindow int64   `yaml:"context_window" json:"context_window"`
 	MaxTokens     int     `yaml:"max_tokens" json:"max_tokens"`
 	Temperature   float64 `yaml:"temperature" json:"temperature"`
-	QPM           int64   `yaml:"qpm" json:"qpm"`
-	Proxy         string  `yaml:"proxy" json:"proxy"`
+	QPM             int64   `yaml:"qpm" json:"qpm"`
+	Proxy           string  `yaml:"proxy" json:"proxy"`
+	ReasoningEffort string  `yaml:"reasoning_effort" json:"reasoning_effort"` // thinking-mode effort: default/none/low/medium/high/xhigh/max
+	ReasoningSplit  bool    `yaml:"reasoning_split" json:"reasoning_split"`
 }
 
 type MemoryConfig struct {

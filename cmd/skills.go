@@ -82,7 +82,7 @@ var skillsDeleteCmd = &cobra.Command{
 			os.Exit(1)
 		}
 
-		if loader.Get(skillName) == nil {
+		if _, err := loader.Get(skillName); err != nil {
 			fmt.Printf("Skill not found: %s\n", skillName)
 			os.Exit(1)
 		}

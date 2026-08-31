@@ -21,7 +21,7 @@ func NewWorkspace(workspacePath, memoryPath string) *Workspace {
 			{Name: "SOUL.md", Role: FileRoleSystemPrompt},
 			{Name: "IDENTITY.md", Role: FileRoleSystemPrompt},
 			{Name: "ENVIRONMENT.md", Role: FileRoleGuidance},
-			{Name: "MEMORY.md", Role: FileRoleOptional},
+			{Name: "MEMORY.md", Role: FileRoleMemory},
 			{Name: "TOOLS.md", Role: FileRoleGuidance},
 			{Name: "HEARTBEAT.md", Role: FileRoleOptional},
 		},

@@ -343,11 +343,36 @@ func (m *Manager) buildBudget() session.PromptBudget {
 	if provider, ok := m.llm.(providers.ContextWindowProvider); ok && provider.ContextWindow() > 0 {
 		window = provider.ContextWindow()
 	}
+	// Providers count the max output tokens reserve against the context window,
+	// so the input budget must subtract it to avoid overflow.
+	var maxOutput int64
+	if mp, ok := m.llm.(providers.MaxOutputTokensProvider); ok {
+		maxOutput = mp.MaxOutputTokens()
+	}
+	effective := window
+	if maxOutput > 0 {
+		effective = window - maxOutput
+	}
+	// Floor: input keeps at least 25% of the window (min 16K), clamped to window
+	// so tiny windows are never inflated. The floor is further capped at
+	// window-maxOutput (when positive) so the max-output subtraction still
+	// bites on small windows — otherwise a 16K floor would restore the full
+	// budget on any window <= 64K.
+	floor := maxInt64(window/4, 16*1024)
+	if floor > window {
+		floor = window
+	}
+	if windowMinusOutput := window - maxOutput; windowMinusOutput > 0 && floor > windowMinusOutput {
+		floor = windowMinusOutput
+	}
+	if effective < floor {
+		effective = floor
+	}
 	return session.PromptBudget{
 		ContextWindow: window,
-		SoftThreshold: int64(float64(window) * m.cfg.SoftThresholdRatio),
-		HardThreshold: int64(float64(window) * m.cfg.HardThresholdRatio),
-		TailTarget:    maxInt64(window/5, 8*1024),
+		SoftThreshold: int64(float64(effective) * m.cfg.SoftThresholdRatio),
+		HardThreshold: int64(float64(effective) * m.cfg.HardThresholdRatio),
+		TailTarget:    maxInt64(effective/5, 8*1024),
 	}
 }
 
@@ -358,23 +383,61 @@ type conversationGroup struct {
 }
 
 func (m *Manager) buildMicroCompactProjection(st *session.ContextState, oldGroups, tailGroups []conversationGroup) ([]types.Message, int64) {
+	oldMessages := flattenGroups(oldGroups)
+	tailMessages := flattenGroups(tailGroups)
+	// Strip images from old-group messages so historical image attachments do
+	// not accumulate in the projected context. The latest image across the
+	// whole history is kept so the agent never loses the image it is currently
+	// working on mid-turn; tail groups bypass pruning entirely.
+	keepImageIdx := latestImageMessageIndex(append(oldMessages, tailMessages...))
+
 	var pruned []types.Message
 	var savedTokens int64
+	msgIdx := 0
 	for _, group := range oldGroups {
 		for _, msg := range group.Messages {
 			prunedMsg := pruneMessage(msg, m.cfg)
+			if msgIdx != keepImageIdx {
+				prunedMsg = stripMessageImages(prunedMsg)
+			}
 			if before, after := msg.FuzzyTokens(), prunedMsg.FuzzyTokens(); before > after {
 				savedTokens += before - after
 			}
 			pruned = append(pruned, prunedMsg)
+			msgIdx++
 		}
 	}
 	pruned = cloneMessages(pruned)
 	if st != nil {
 		st.MicroCompactPrefix = pruned
-		st.MicroCompactSourceMessages = len(flattenGroups(oldGroups))
+		st.MicroCompactSourceMessages = len(oldMessages)
 	}
-	return append(pruned, flattenGroups(tailGroups)...), savedTokens
+	return append(pruned, tailMessages...), savedTokens
+}
+
+func latestImageMessageIndex(messages []types.Message) int {
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messageHasImage(messages[i]) {
+			return i
+		}
+	}
+	return -1
+}
+
+// messageHasImage reports whether the message carries any image content.
+// It is a cheap predicate that avoids allocating ImageContents() per message.
+func messageHasImage(msg types.Message) bool {
+	return msg.Image != nil || len(msg.Images) > 0
+}
+
+func stripMessageImages(msg types.Message) types.Message {
+	if msg.Image == nil && len(msg.Images) == 0 {
+		return msg
+	}
+	msg.Image = nil
+	msg.Images = nil
+	msg.Tokens = 0
+	return msg
 }
 
 func flattenGroups(groups []conversationGroup) []types.Message {

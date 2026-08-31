@@ -12,7 +12,6 @@ import (
 	"io"
 	"math"
 	"net/http"
-	neturl "net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -128,15 +127,14 @@ func prepareImageContent(ctx context.Context, exec *Executor, workdir, imageRef 
 
 func readImageBytes(ctx context.Context, exec *Executor, workdir, imageRef string, maxBytes int64) ([]byte, string, error) {
 	if isRemoteImageRef(imageRef) {
-		return downloadImage(ctx, imageRef, maxBytes)
+		return downloadImage(ctx, exec, imageRef, maxBytes)
 	}
 
-	absPath, err := resolveLocalImagePath(workdir, imageRef)
+	// Local image paths go through the same containment/deny policy as the
+	// fs tools, so images outside the readable roots cannot be attached.
+	absPath, err := resolveToolPath(exec.config, workdir, imageRef, fsAccessRead)
 	if err != nil {
-		return nil, "", err
-	}
-	if err := validateImagePathAccess(exec.config, workdir, absPath); err != nil {
-		return nil, "", err
+		return nil, "", fmt.Errorf("image path is not allowed by sandbox policy: %w", err)
 	}
 
 	info, err := os.Stat(absPath)
@@ -223,13 +221,10 @@ func optimizeImageForModel(data []byte, mediaType string, maxBytes int64) (*type
 	return nil, fmt.Errorf("image is still too large after resizing and compression")
 }
 
-func downloadImage(ctx context.Context, imageURL string, maxBytes int64) ([]byte, string, error) {
-	parsed, err := neturl.Parse(imageURL)
+func downloadImage(ctx context.Context, exec *Executor, imageURL string, maxBytes int64) ([]byte, string, error) {
+	validated, err := validateNetworkURLAccess(exec, imageURL)
 	if err != nil {
-		return nil, "", fmt.Errorf("invalid image URL: %w", err)
-	}
-	if parsed.Scheme != "http" && parsed.Scheme != "https" {
-		return nil, "", fmt.Errorf("unsupported image URL scheme: %s", parsed.Scheme)
+		return nil, "", err
 	}
 
 	downloadLimit := maxBytes * 6
@@ -237,8 +232,22 @@ func downloadImage(ctx context.Context, imageURL string, maxBytes int64) ([]byte
 		downloadLimit = 30 * 1024 * 1024
 	}
 
-	client := &http.Client{Timeout: 30 * time.Second}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, imageURL, nil)
+	// The client re-validates every redirect hop against the network policy
+	// so an allowed host cannot bypass the allow-list by redirecting (e.g.
+	// via 302 to a link-local metadata address).
+	client := &http.Client{
+		Timeout: 30 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= maxImageRedirects {
+				return fmt.Errorf("stopped after %d redirects", maxImageRedirects)
+			}
+			if _, err := validateNetworkURLAccess(exec, req.URL.String()); err != nil {
+				return fmt.Errorf("redirect to %q blocked: %w", req.URL.Host, err)
+			}
+			return nil
+		},
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, validated.String(), nil)
 	if err != nil {
 		return nil, "", fmt.Errorf("failed to create image request: %w", err)
 	}
@@ -274,28 +283,6 @@ func downloadImage(ctx context.Context, imageURL string, maxBytes int64) ([]byte
 		return nil, "", err
 	}
 	return data, mediaType, nil
-}
-
-func resolveLocalImagePath(workdir, imageRef string) (string, error) {
-	path := expandPath(strings.TrimSpace(imageRef), workdir)
-	if !filepath.IsAbs(path) {
-		absPath, err := filepath.Abs(path)
-		if err != nil {
-			return "", fmt.Errorf("failed to resolve image path: %w", err)
-		}
-		path = absPath
-	}
-	return filepath.Clean(path), nil
-}
-
-func validateImagePathAccess(cfg *Config, workdir, absPath string) error {
-	for _, deny := range cfg.Sandbox.Filesystem.Deny {
-		pattern := expandPath(deny, workdir)
-		if matchesDeniedPath(pattern, absPath) {
-			return fmt.Errorf("image path is denied by sandbox rules: %s", absPath)
-		}
-	}
-	return nil
 }
 
 func matchesDeniedPath(pattern, path string) bool {

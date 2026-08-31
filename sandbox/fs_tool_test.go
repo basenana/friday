@@ -201,3 +201,94 @@ func TestFsHandlersUseSharedAccessRules(t *testing.T) {
 		t.Fatalf("delete should be allowed: %s", textResult(t, deleteResult))
 	}
 }
+
+func TestFsReadRejectsSymlinkEscape(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Sandbox.Enabled = false
+	workdir := t.TempDir()
+	exec := NewExecutor(cfg)
+
+	// A symlink planted inside the workdir that points at a sensitive host
+	// file must not be readable through the fs tools.
+	link := filepath.Join(workdir, "leak")
+	if err := os.Symlink("/etc/passwd", link); err != nil {
+		t.Fatalf("os.Symlink() error: %v", err)
+	}
+
+	if _, err := resolveToolPath(cfg, workdir, link, fsAccessRead); err == nil {
+		t.Fatal("expected symlink outside the workdir to be rejected")
+	}
+
+	result, err := fsReadHandler(exec, workdir)(context.Background(), &tools.Request{
+		Arguments: map[string]any{"path": link},
+	})
+	if err != nil {
+		t.Fatalf("fsReadHandler() error: %v", err)
+	}
+	if !result.IsError {
+		t.Fatal("expected fs_read of an escaping symlink to fail")
+	}
+}
+
+func TestFsWriteRejectsSymlinkEscape(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Sandbox.Enabled = false
+	workdir := t.TempDir()
+	exec := NewExecutor(cfg)
+
+	outside := t.TempDir()
+	link := filepath.Join(workdir, "escape")
+	if err := os.Symlink(filepath.Join(outside, "pwned.txt"), link); err != nil {
+		t.Fatalf("os.Symlink() error: %v", err)
+	}
+
+	if _, err := resolveToolPath(cfg, workdir, link, fsAccessWrite); err == nil {
+		t.Fatal("expected dangling symlink outside the workdir to be rejected")
+	}
+
+	result, err := fsWriteHandler(exec, workdir)(context.Background(), &tools.Request{
+		Arguments: map[string]any{"path": link, "content": "nope"},
+	})
+	if err != nil {
+		t.Fatalf("fsWriteHandler() error: %v", err)
+	}
+	if !result.IsError {
+		t.Fatal("expected fs_write through an escaping symlink to fail")
+	}
+	if _, err := os.Stat(filepath.Join(outside, "pwned.txt")); err == nil {
+		t.Fatal("the symlink target must not have been written")
+	}
+}
+
+func TestFsReadAllowsRegularNestedPath(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Sandbox.Enabled = false
+	workdir := t.TempDir()
+	exec := NewExecutor(cfg)
+
+	nested := filepath.Join(workdir, "a", "b", "file.txt")
+	if err := os.MkdirAll(filepath.Dir(nested), 0o755); err != nil {
+		t.Fatalf("os.MkdirAll() error: %v", err)
+	}
+	if err := os.WriteFile(nested, []byte("hello"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile() error: %v", err)
+	}
+
+	got, err := resolveToolPath(cfg, workdir, nested, fsAccessRead)
+	if err != nil {
+		t.Fatalf("resolveToolPath() error = %v", err)
+	}
+	if got != nested {
+		t.Fatalf("resolveToolPath() = %q, want %q", got, nested)
+	}
+
+	result, err := fsReadHandler(exec, workdir)(context.Background(), &tools.Request{
+		Arguments: map[string]any{"path": nested},
+	})
+	if err != nil {
+		t.Fatalf("fsReadHandler() error: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected fs_read error: %s", textResult(t, result))
+	}
+}

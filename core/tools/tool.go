@@ -2,6 +2,8 @@ package tools
 
 import (
 	"context"
+	"fmt"
+	"strings"
 )
 
 type ToolSet interface {
@@ -29,6 +31,41 @@ func (t *Tool) GetName() string               { return t.Name }
 func (t *Tool) GetDescription() string        { return t.Description }
 func (t *Tool) GetParameters() map[string]any { return t.JsonSchema() }
 
+// ValidateRequiredArguments checks that every parameter declared as required
+// in the tool's input schema is present in args. It returns an empty string
+// when all required arguments are supplied; otherwise it returns an
+// agent-actionable message naming each missing parameter together with its
+// schema description, so the model can correct the call on retry instead of
+// receiving an opaque server-side validation error. Empty-string values are
+// treated as supplied: some tools legitimately accept them (e.g. an empty
+// replace_string deletes text), so value-level validation stays with handlers.
+func (t *Tool) ValidateRequiredArguments(args map[string]interface{}) string {
+	var missing []string
+	for _, name := range t.InputSchema.Required {
+		if _, ok := args[name]; !ok {
+			missing = append(missing, name)
+		}
+	}
+	if len(missing) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(missing))
+	for _, name := range missing {
+		desc := ""
+		if schema, ok := t.InputSchema.Properties[name].(map[string]interface{}); ok {
+			if d, ok := schema["description"].(string); ok {
+				desc = d
+			}
+		}
+		if desc != "" {
+			parts = append(parts, fmt.Sprintf("'%s' (%s)", name, desc))
+		} else {
+			parts = append(parts, fmt.Sprintf("'%s'", name))
+		}
+	}
+	return fmt.Sprintf("missing required parameter(s): %s. Provide them and retry the tool call.", strings.Join(parts, ", "))
+}
+
 func NewTool(name string, options ...ToolOption) *Tool {
 	t := &Tool{
 		Name:        name,
@@ -53,8 +90,21 @@ type Request struct {
 }
 
 type Result struct {
-	Content []Content `json:"content"`
-	IsError bool      `json:"is_error,omitempty"`
+	Content     []Content `json:"content"`
+	IsError     bool      `json:"is_error,omitempty"`
+	Retryable   bool      `json:"retryable,omitempty"`
+	RetryReason string    `json:"retry_reason,omitempty"`
+	ExitCode    *int      `json:"exit_code,omitempty"`
+	Cancelled   bool      `json:"cancelled,omitempty"`
+}
+
+// NewToolResultRetryableError marks a failure as safe for an execution-plan retry.
+// Callers must only use this when the operation is idempotent or has a stable dedupe key.
+func NewToolResultRetryableError(text, reason string) *Result {
+	result := NewToolResultError(text)
+	result.Retryable = true
+	result.RetryReason = reason
+	return result
 }
 
 // NewToolResultText creates a new CallToolResult with a text content

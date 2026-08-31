@@ -71,23 +71,64 @@ func toolCall(ctx context.Context, sess *session.Session, use *ToolUse, td *tool
 	req := &tools.Request{SessionID: sess.ID}
 	args, ok := common.ParseToolUseArguments(use.Arguments)
 	if !ok {
-		return "", false, fmt.Errorf("tool %s arguments must be a JSON object, got: %.80s", use.Name, use.Arguments)
+		return "", false, fmt.Errorf("tool %s arguments must be a JSON object, got: %s", use.Name, truncateToolArgs(use.Arguments))
 	}
 	req.Arguments = args
+
+	// Reject calls missing required parameters before they reach the handler,
+	// so the model receives an actionable message (parameter name + schema
+	// description) instead of an opaque server-side validation error.
+	if msg := td.ValidateRequiredArguments(args); msg != "" {
+		span.RecordError(fmt.Errorf("tool %s %s", use.Name, msg))
+		result := tools.NewToolResultError(fmt.Sprintf("tool %s: %s", use.Name, msg))
+		content, err := marshalToolResultForModel(result)
+		if err != nil {
+			return "", false, fmt.Errorf("marshal tool %s result failed: %s", use.Name, err)
+		}
+		return content, false, nil
+	}
 
 	result, err := td.Handler(ctx, req)
 	if err != nil {
 		return "", false, err
 	}
 
-	content, err := json.Marshal(result)
+	content, err := marshalToolResultForModel(result)
 	if err != nil {
 		return "", false, fmt.Errorf("marshal tool %s result failed: %s", use.Name, err)
 	}
 
-	msg := truncateToolResult(sess, string(content))
+	msg := truncateToolResult(sess, content)
 	span.SetAttributes(tracing.TruncateAttr("tool.output", msg))
 	return msg, !result.IsError, nil
+}
+
+// modelToolResult is the reduced view of tools.Result that is serialized into
+// the model-visible tool message. Execution-control fields (Retryable,
+// RetryReason, ExitCode, Cancelled) are consumed by the setup layer directly
+// from the *tools.Result returned by the handler and would only leak noise
+// into the model's context.
+type modelToolResult struct {
+	Content []tools.Content `json:"content"`
+	IsError bool            `json:"is_error,omitempty"`
+}
+
+func marshalToolResultForModel(result *tools.Result) (string, error) {
+	view := modelToolResult{Content: result.Content, IsError: result.IsError}
+	content, err := json.Marshal(view)
+	if err != nil {
+		return "", err
+	}
+	return string(content), nil
+}
+
+func truncateToolArgs(s string) string {
+	const max = 80
+	runes := []rune(s)
+	if len(runes) <= max {
+		return s
+	}
+	return string(runes[:max]) + "..."
 }
 
 func truncateToolResult(sess *session.Session, content string) string {

@@ -2,10 +2,12 @@ package planning
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/basenana/friday/core/providers"
 	"github.com/basenana/friday/core/session"
+	"github.com/basenana/friday/core/tools"
 	"github.com/basenana/friday/core/types"
 )
 
@@ -146,5 +148,54 @@ func TestNew_DefaultPrompts(t *testing.T) {
 	}
 	if todo.opt.TaskDescribePrompt != DEFAULT_TASK_DESC_PROMPT {
 		t.Fatalf("expected default task describe prompt, got %s", todo.opt.TaskDescribePrompt)
+	}
+}
+
+func TestTodoStatusValidation(t *testing.T) {
+	for _, status := range []string{"pending", "in_progress", "completed", "blocked"} {
+		if !isTodoStatus(status) {
+			t.Fatalf("expected %q to be a valid todo status", status)
+		}
+	}
+	if isTodoStatus("waiting") {
+		t.Fatal("expected unknown todo status to be rejected")
+	}
+}
+
+func TestWriteTodosAcceptsBlockedStatus(t *testing.T) {
+	todo := New(Option{})
+	sess := session.New(types.NewID(), nil)
+	result, err := writeTodoListHandler(todo, sess)(context.Background(), &tools.Request{
+		SessionID: sess.ID,
+		Arguments: map[string]interface{}{
+			"todo_list": []any{map[string]interface{}{
+				"describe": "Wait for publication confirmation",
+				"status":   "blocked",
+			}},
+		},
+	})
+	if err != nil || result.IsError {
+		t.Fatalf("expected blocked status to be accepted, result=%+v err=%v", result, err)
+	}
+}
+
+func TestWriteTodosRejectsUnknownStatus(t *testing.T) {
+	todo := New(Option{})
+	sess := session.New(types.NewID(), nil)
+	result, err := writeTodoListHandler(todo, sess)(context.Background(), &tools.Request{
+		SessionID: sess.ID,
+		Arguments: map[string]interface{}{
+			"todo_list": []any{map[string]interface{}{
+				"describe": "Wait for publication confirmation",
+				"status":   "waiting",
+			}},
+		},
+	})
+	if err != nil || !result.IsError {
+		t.Fatalf("expected unknown status to be rejected, result=%+v err=%v", result, err)
+	}
+	text := result.Content[0].(tools.TextContent).Text
+	if !strings.Contains(text, "status must be pending, in_progress, completed, or blocked") {
+		t.Fatalf("unexpected validation error: %q", text)
 	}
 }

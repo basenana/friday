@@ -563,7 +563,7 @@ func TestMessageCreateParamsMergesImmediateToolResultsIntoSingleUserMessage(t *t
 	}
 }
 
-func TestMessageCreateParamsKeepsOnlyToolUsesWithImmediateResults(t *testing.T) {
+func TestMessageCreateParamsDowngradesWholeBatchWhenResultIncomplete(t *testing.T) {
 	cli := &client{model: Model{Name: "claude-test"}}
 	req := providers.NewRequest("",
 		types.Message{
@@ -602,11 +602,11 @@ func TestMessageCreateParamsKeepsOnlyToolUsesWithImmediateResults(t *testing.T) 
 			fallbackBlocks = append(fallbackBlocks, *text)
 		}
 	}
-	if len(toolUseIDs) != 1 || toolUseIDs[0] != "call-1" {
-		t.Fatalf("expected only immediately paired tool_use to remain, got %#v", toolUseIDs)
+	if len(toolUseIDs) != 0 {
+		t.Fatalf("expected whole batch to be downgraded to text, got tool_use ids %#v", toolUseIDs)
 	}
-	if len(fallbackBlocks) != 1 || !strings.Contains(fallbackBlocks[0], "b.go") {
-		t.Fatalf("expected missing tool_use to be converted to text fallback, got %#v", fallbackBlocks)
+	if len(fallbackBlocks) != 2 {
+		t.Fatalf("expected both tool_use blocks converted to text fallback, got %#v", fallbackBlocks)
 	}
 
 	user := params.Messages[1]
@@ -616,8 +616,8 @@ func TestMessageCreateParamsKeepsOnlyToolUsesWithImmediateResults(t *testing.T) 
 			toolResultCount++
 		}
 	}
-	if toolResultCount != 1 {
-		t.Fatalf("expected only one immediate tool_result block, got %#v", user.Content)
+	if toolResultCount != 0 {
+		t.Fatalf("expected no tool_result blocks after batch downgrade, got %#v", user.Content)
 	}
 }
 
@@ -647,5 +647,680 @@ func TestMessageCreateParamsConvertsUnresolvedFinalToolUseToText(t *testing.T) {
 	}
 	if got := assistant.Content[1].GetText(); got == nil || !strings.Contains(*got, "tool call") {
 		t.Fatalf("expected fallback text for unresolved final tool_use, got %#v", assistant.Content[1])
+	}
+}
+
+func TestMessageCreateParamsIncludesMultipleImages(t *testing.T) {
+	cli := &client{model: Model{Name: "claude-vision-test"}}
+	req := providers.NewRequest("", types.Message{
+		Role:    types.RoleUser,
+		Content: "describe",
+		Images: []types.ImageContent{
+			{Type: types.ImageTypeURL, URL: "https://example.com/one.png"},
+			{Type: types.ImageTypeBase64, MediaType: "image/png", Data: "dHdv"},
+		},
+	})
+
+	params := cli.messageCreateParams(req)
+	if len(params.Messages) != 1 || len(params.Messages[0].Content) != 3 {
+		t.Fatalf("expected text and two image blocks, got %#v", params.Messages)
+	}
+}
+
+func TestResponseHandleEventBackfillsUsageFromMessageDelta(t *testing.T) {
+	// GLM's Anthropic-compatible endpoint sends zero usage in message_start and
+	// delivers real values (including cache fields) only in message_delta.
+	resp := newResponse(nil)
+	resp.handleEvent(mustMessageStreamEvent(t, `{
+		"type":"message_start",
+		"message":{"id":"msg_1","type":"message","role":"assistant","model":"glm-5.3-flash",
+			"content":[],"stop_reason":null,
+			"usage":{"input_tokens":0,"output_tokens":0}}
+	}`))
+	resp.handleEvent(mustMessageStreamEvent(t, `{
+		"type":"message_delta",
+		"delta":{"stop_reason":"end_turn"},
+		"usage":{"input_tokens":52,"output_tokens":61,"cache_read_input_tokens":11008}
+	}`))
+	resp.close()
+
+	if resp.Token.PromptTokens != 11060 {
+		t.Fatalf("expected backfilled PromptTokens=11060 (52 input + 11008 cache read), got %d", resp.Token.PromptTokens)
+	}
+	if resp.Token.CachedPromptTokens != 11008 {
+		t.Fatalf("expected CachedPromptTokens=11008, got %d", resp.Token.CachedPromptTokens)
+	}
+	if resp.Token.CompletionTokens != 61 {
+		t.Fatalf("expected CompletionTokens=61, got %d", resp.Token.CompletionTokens)
+	}
+}
+
+func TestResponseRetryStateResetClearsBufferedAttemptState(t *testing.T) {
+	resp := newResponse(nil)
+	resp.Token.PromptTokens = 9
+	resp.Token.CompletionTokens = 4
+	resp.Token.TotalTokens = 13
+	resp.incompleteTool.ID = "call-1"
+	resp.incompleteTool.Name = "read_file"
+	resp.incompleteTool.Arguments = `{"path":"a.go"}`
+	resp.accumulatedContent = "partial"
+	resp.currentThinking = true
+	resp.currentSignature = "sig-1"
+	resp.currentRedacted = "opaque"
+
+	if !resp.canRetry() {
+		t.Fatal("expected buffered state without emitted delta to remain retryable")
+	}
+
+	resp.resetForRetry()
+
+	if !resp.canRetry() {
+		t.Fatal("expected reset response to become retryable again")
+	}
+	if resp.incompleteTool.ID != "" || resp.incompleteTool.Arguments != "" {
+		t.Fatalf("expected buffered tool state to be cleared, got %#v", resp.incompleteTool)
+	}
+	if resp.accumulatedContent != "" || resp.currentSignature != "" || resp.currentRedacted != "" || resp.currentThinking {
+		t.Fatalf("expected transient stream state to be cleared, got content=%q thinking=%v sig=%q redacted=%q",
+			resp.accumulatedContent, resp.currentThinking, resp.currentSignature, resp.currentRedacted)
+	}
+	if tokens := resp.Tokens(); tokens != (providers.Tokens{}) {
+		t.Fatalf("expected token usage to be reset, got %#v", tokens)
+	}
+}
+
+func TestResponseRetryStateTreatsThinkingAsVisibleOutput(t *testing.T) {
+	resp := newResponse(nil)
+	resp.handleEvent(mustMessageStreamEvent(t, `{
+		"type":"content_block_delta",
+		"index":0,
+		"delta":{"type":"thinking_delta","thinking":"  reasoning body \n"}
+	}`))
+
+	if resp.canRetry() {
+		t.Fatal("expected emitted thinking delta to block transparent stream retry")
+	}
+}
+
+func TestMessageCreateParamsCacheControlBeforeLast3(t *testing.T) {
+	cli := &client{model: Model{Name: "claude-3-5-sonnet-20241022"}}
+	req := providers.NewRequest("", []types.Message{
+		{Role: types.RoleSystem, Content: "First system prompt."},
+		{Role: types.RoleSystem, Content: "Second system prompt."},
+		{Role: types.RoleUser, Content: "Hello"},
+		{Role: types.RoleAssistant, Content: "Hi!"},
+		{Role: types.RoleUser, Content: "How are you?"},
+		{Role: types.RoleAssistant, Content: "I'm good!"},
+		{Role: types.RoleUser, Content: "What's up?"},
+	}...)
+	req.SetPromptCacheKey("session:test-456")
+
+	params := cli.messageCreateParams(req)
+
+	if len(params.System) != 2 {
+		t.Fatalf("expected 2 system blocks, got %d", len(params.System))
+	}
+	if params.System[0].CacheControl.Type != "" {
+		t.Error("first system block should not have cache_control")
+	}
+	if params.System[1].CacheControl.Type == "" {
+		t.Error("last system block should have cache_control")
+	}
+
+	if len(params.Messages) != 5 {
+		t.Fatalf("expected 5 messages, got %d", len(params.Messages))
+	}
+
+	// cache breakpoint should be at index 1 (5-3-1=1)
+	for i, msg := range params.Messages {
+		hasCache := messageHasCacheControl(msg)
+		if i == 1 && !hasCache {
+			t.Errorf("message %d should have cache_control", i)
+		}
+		if i != 1 && hasCache {
+			t.Errorf("message %d should not have cache_control", i)
+		}
+	}
+}
+
+func TestMessageCreateParamsCacheControlFallsBackToToolUseBlock(t *testing.T) {
+	cli := &client{model: Model{Name: "claude-3-5-sonnet-20241022"}}
+	req := providers.NewRequest("",
+		types.Message{Role: types.RoleSystem, Content: "You are a helpful assistant."},
+		types.Message{Role: types.RoleUser, Content: "Inspect both files."},
+		types.Message{
+			Role:    types.RoleAssistant,
+			Content: "I will inspect them.",
+			ToolCalls: []types.ToolCall{{
+				ID:        "call-1",
+				Name:      "read_file",
+				Arguments: `{"path":"a.go"}`,
+			}},
+		},
+		types.Message{
+			Role:       types.RoleTool,
+			ToolResult: &types.ToolResult{CallID: "call-1", Content: "file a"},
+		},
+		types.Message{Role: types.RoleAssistant, Content: "I found the issue."},
+		types.Message{Role: types.RoleUser, Content: "Summarize it."},
+	)
+	req.SetPromptCacheKey("session:test-tool-use")
+
+	params := cli.messageCreateParams(req)
+	if len(params.Messages) != 5 {
+		t.Fatalf("expected 5 messages after tool normalization, got %d", len(params.Messages))
+	}
+
+	msg := params.Messages[1]
+	if len(msg.Content) != 2 {
+		t.Fatalf("expected assistant text and tool_use blocks, got %#v", msg.Content)
+	}
+	if msg.Content[0].OfText == nil {
+		t.Fatalf("expected first block to be text, got %#v", msg.Content[0])
+	}
+	if msg.Content[1].OfToolUse == nil {
+		t.Fatalf("expected second block to be tool_use, got %#v", msg.Content[1])
+	}
+	if msg.Content[0].OfText.CacheControl.Type != "" {
+		t.Fatalf("expected text block to remain uncached, got %#v", msg.Content[0].OfText.CacheControl)
+	}
+	if msg.Content[1].OfToolUse.CacheControl.Type == "" {
+		t.Fatalf("expected tool_use block to receive cache_control, got %#v", msg.Content[1].OfToolUse)
+	}
+}
+
+func TestMessageCreateParamsCacheControlFallsBackToImageBlock(t *testing.T) {
+	cli := &client{model: Model{Name: "claude-3-5-sonnet-20241022"}}
+	req := providers.NewRequest("",
+		types.Message{Role: types.RoleSystem, Content: "You are a helpful assistant."},
+		types.Message{Role: types.RoleUser, Content: "Warm up."},
+		types.Message{
+			Role: types.RoleUser,
+			Image: &types.ImageContent{
+				Type: types.ImageTypeURL,
+				URL:  "https://example.com/test.png",
+			},
+		},
+		types.Message{Role: types.RoleAssistant, Content: "I see the image."},
+		types.Message{Role: types.RoleUser, Content: "Anything else?"},
+		types.Message{Role: types.RoleAssistant, Content: "No."},
+	)
+	req.SetPromptCacheKey("session:test-image")
+
+	params := cli.messageCreateParams(req)
+	if len(params.Messages) != 5 {
+		t.Fatalf("expected 5 messages, got %d", len(params.Messages))
+	}
+
+	msg := params.Messages[1]
+	if len(msg.Content) != 1 || msg.Content[0].OfImage == nil {
+		t.Fatalf("expected cached boundary message to contain one image block, got %#v", msg.Content)
+	}
+	if msg.Content[0].OfImage.CacheControl.Type == "" {
+		t.Fatalf("expected image block to receive cache_control, got %#v", msg.Content[0].OfImage)
+	}
+}
+
+func TestMessageCreateParamsDowngradesWholeToolBatchWhenAnyResultIsMissing(t *testing.T) {
+	cli := &client{model: Model{Name: "claude-test"}}
+	req := providers.NewRequest("",
+		types.Message{
+			Role:    types.RoleAssistant,
+			Content: "I'll inspect both files.",
+			ToolCalls: []types.ToolCall{
+				{ID: "call-1", Name: "read_file", Arguments: `{"path":"a.go"}`},
+				{ID: "call-2", Name: "read_file", Arguments: `{"path":"b.go"}`},
+			},
+		},
+		types.Message{
+			Role:       types.RoleTool,
+			ToolResult: &types.ToolResult{CallID: "call-1", Content: "file a"},
+		},
+		types.Message{
+			Role:    types.RoleUser,
+			Content: "continue",
+		},
+	)
+
+	params := cli.messageCreateParams(req)
+	if len(params.Messages) != 3 {
+		t.Fatalf("expected downgraded assistant, downgraded tool-result message, and trailing user message, got %d", len(params.Messages))
+	}
+
+	assistant := params.Messages[0]
+	var (
+		toolUseCount   int
+		fallbackBlocks []string
+	)
+	for _, block := range assistant.Content {
+		if block.OfToolUse != nil {
+			toolUseCount++
+		}
+		if text := block.GetText(); text != nil && strings.Contains(*text, "tool call") {
+			fallbackBlocks = append(fallbackBlocks, *text)
+		}
+	}
+	if toolUseCount != 0 {
+		t.Fatalf("expected whole mismatched tool_use batch to be downgraded, got %#v", assistant.Content)
+	}
+	if len(fallbackBlocks) != 2 || !strings.Contains(fallbackBlocks[0], "a.go") || !strings.Contains(fallbackBlocks[1], "b.go") {
+		t.Fatalf("expected both tool_use blocks to be downgraded, got %#v", fallbackBlocks)
+	}
+
+	user := params.Messages[1]
+	var (
+		toolResultCount int
+		userTextBlocks  []string
+	)
+	for _, block := range user.Content {
+		if block.OfToolResult != nil {
+			toolResultCount++
+		}
+		if text := block.GetText(); text != nil {
+			userTextBlocks = append(userTextBlocks, *text)
+		}
+	}
+	if toolResultCount != 0 {
+		t.Fatalf("expected mismatched tool_result batch to be downgraded, got %#v", user.Content)
+	}
+	if len(userTextBlocks) != 1 || !strings.Contains(userTextBlocks[0], "file a") {
+		t.Fatalf("expected provided tool_result to be preserved as text fallback, got %#v", userTextBlocks)
+	}
+}
+
+func TestMessageCreateParamsConvertsAllMissingToolUsesToTextWhenTailMessageExists(t *testing.T) {
+	cli := &client{model: Model{Name: "claude-test"}}
+	req := providers.NewRequest("",
+		types.Message{
+			Role:    types.RoleAssistant,
+			Content: "I'll inspect both files.",
+			ToolCalls: []types.ToolCall{
+				{ID: "call-1", Name: "read_file", Arguments: `{"path":"a.go"}`},
+				{ID: "call-2", Name: "read_file", Arguments: `{"path":"b.go"}`},
+			},
+		},
+		types.Message{
+			Role:    types.RoleAgent,
+			Content: "tool batch interrupted; retry if needed",
+		},
+	)
+
+	params := cli.messageCreateParams(req)
+	if len(params.Messages) != 2 {
+		t.Fatalf("expected assistant plus converted agent tail, got %d messages", len(params.Messages))
+	}
+
+	assistant := params.Messages[0]
+	var (
+		toolUseCount   int
+		fallbackBlocks []string
+	)
+	for _, block := range assistant.Content {
+		if block.OfToolUse != nil {
+			toolUseCount++
+		}
+		if text := block.GetText(); text != nil && strings.Contains(*text, "tool call") {
+			fallbackBlocks = append(fallbackBlocks, *text)
+		}
+	}
+	if toolUseCount != 0 {
+		t.Fatalf("expected all unresolved tool_use blocks to be downgraded, got %#v", assistant.Content)
+	}
+	if len(fallbackBlocks) != 2 {
+		t.Fatalf("expected one fallback per missing tool_use, got %#v", fallbackBlocks)
+	}
+	if params.Messages[1].Role != anthropic.MessageParamRoleUser {
+		t.Fatalf("expected agent tail to be converted to user role, got %q", params.Messages[1].Role)
+	}
+}
+
+func TestMessageCreateParamsDowngradesWholeBatchWhenTrailingToolResultIsMissing(t *testing.T) {
+	cli := &client{model: Model{Name: "claude-test"}}
+	req := providers.NewRequest("",
+		types.Message{
+			Role:    types.RoleAssistant,
+			Content: "I'll inspect three files.",
+			ToolCalls: []types.ToolCall{
+				{ID: "call-1", Name: "read_file", Arguments: `{"path":"a.go"}`},
+				{ID: "call-2", Name: "read_file", Arguments: `{"path":"b.go"}`},
+				{ID: "call-3", Name: "read_file", Arguments: `{"path":"c.go"}`},
+			},
+		},
+		types.Message{
+			Role:       types.RoleTool,
+			ToolResult: &types.ToolResult{CallID: "call-1", Content: "file a"},
+		},
+		types.Message{
+			Role:       types.RoleTool,
+			ToolResult: &types.ToolResult{CallID: "call-2", Content: "file b"},
+		},
+		types.Message{
+			Role:    types.RoleUser,
+			Content: "continue",
+		},
+	)
+
+	params := cli.messageCreateParams(req)
+	if len(params.Messages) != 3 {
+		t.Fatalf("expected assistant, merged tool results, and trailing user message, got %d", len(params.Messages))
+	}
+
+	assistant := params.Messages[0]
+	var (
+		toolUseCount   int
+		fallbackBlocks []string
+	)
+	for _, block := range assistant.Content {
+		if block.OfToolUse != nil {
+			toolUseCount++
+		}
+		if text := block.GetText(); text != nil && strings.Contains(*text, "tool call") {
+			fallbackBlocks = append(fallbackBlocks, *text)
+		}
+	}
+	if toolUseCount != 0 {
+		t.Fatalf("expected whole mismatched tool_use batch to be downgraded, got %#v", assistant.Content)
+	}
+	if len(fallbackBlocks) != 3 {
+		t.Fatalf("expected all three tool_use blocks to be downgraded, got %#v", fallbackBlocks)
+	}
+	if !strings.Contains(fallbackBlocks[0], "a.go") || !strings.Contains(fallbackBlocks[1], "b.go") || !strings.Contains(fallbackBlocks[2], "c.go") {
+		t.Fatalf("expected downgraded tool_use fallbacks to preserve all tool arguments, got %#v", fallbackBlocks)
+	}
+
+	mergedResults := params.Messages[1]
+	var (
+		toolResultIDs  []string
+		mergedTextList []string
+	)
+	for _, block := range mergedResults.Content {
+		if block.OfToolResult != nil {
+			toolResultIDs = append(toolResultIDs, block.OfToolResult.ToolUseID)
+		}
+		if text := block.GetText(); text != nil {
+			mergedTextList = append(mergedTextList, *text)
+		}
+	}
+	if len(toolResultIDs) != 0 {
+		t.Fatalf("expected mismatched tool_result batch to be downgraded, got %#v", toolResultIDs)
+	}
+	if len(mergedTextList) != 2 || !strings.Contains(mergedTextList[0], "file a") || !strings.Contains(mergedTextList[1], "file b") {
+		t.Fatalf("expected provided tool_results to be preserved as text fallbacks, got %#v", mergedTextList)
+	}
+}
+
+func TestMessageCreateParamsDowngradesWholeBatchWhenToolResultsArriveOutOfOrder(t *testing.T) {
+	cli := &client{model: Model{Name: "claude-test"}}
+	req := providers.NewRequest("",
+		types.Message{
+			Role:    types.RoleAssistant,
+			Content: "I'll inspect both files.",
+			ToolCalls: []types.ToolCall{
+				{ID: "call-1", Name: "read_file", Arguments: `{"path":"a.go"}`},
+				{ID: "call-2", Name: "read_file", Arguments: `{"path":"b.go"}`},
+			},
+		},
+		types.Message{
+			Role:       types.RoleTool,
+			ToolResult: &types.ToolResult{CallID: "call-2", Content: "file b"},
+		},
+		types.Message{
+			Role:       types.RoleTool,
+			ToolResult: &types.ToolResult{CallID: "call-1", Content: "file a"},
+		},
+	)
+
+	params := cli.messageCreateParams(req)
+	if len(params.Messages) != 2 {
+		t.Fatalf("expected downgraded assistant plus downgraded tool-result message, got %d", len(params.Messages))
+	}
+
+	assistant := params.Messages[0]
+	for _, block := range assistant.Content {
+		if block.OfToolUse != nil {
+			t.Fatalf("expected out-of-order tool_use batch to be downgraded, got %#v", assistant.Content)
+		}
+	}
+
+	user := params.Messages[1]
+	var (
+		toolResultCount int
+		userTextBlocks  []string
+	)
+	for _, block := range user.Content {
+		if block.OfToolResult != nil {
+			toolResultCount++
+		}
+		if text := block.GetText(); text != nil {
+			userTextBlocks = append(userTextBlocks, *text)
+		}
+	}
+	if toolResultCount != 0 {
+		t.Fatalf("expected out-of-order tool_result batch to be downgraded, got %#v", user.Content)
+	}
+	if len(userTextBlocks) != 2 || !strings.Contains(userTextBlocks[0], "file b") || !strings.Contains(userTextBlocks[1], "file a") {
+		t.Fatalf("expected downgraded text to preserve original result order, got %#v", userTextBlocks)
+	}
+}
+
+func TestMessageCreateParamsDowngradesWholeBatchWhenExtraToolResultAppears(t *testing.T) {
+	cli := &client{model: Model{Name: "claude-test"}}
+	req := providers.NewRequest("",
+		types.Message{
+			Role:    types.RoleAssistant,
+			Content: "I'll inspect one file.",
+			ToolCalls: []types.ToolCall{
+				{ID: "call-1", Name: "read_file", Arguments: `{"path":"a.go"}`},
+			},
+		},
+		types.Message{
+			Role:       types.RoleTool,
+			ToolResult: &types.ToolResult{CallID: "call-1", Content: "file a"},
+		},
+		types.Message{
+			Role:       types.RoleTool,
+			ToolResult: &types.ToolResult{CallID: "call-extra", Content: "extra result"},
+		},
+	)
+
+	params := cli.messageCreateParams(req)
+	if len(params.Messages) != 2 {
+		t.Fatalf("expected downgraded assistant plus downgraded tool-result message, got %d", len(params.Messages))
+	}
+
+	assistant := params.Messages[0]
+	for _, block := range assistant.Content {
+		if block.OfToolUse != nil {
+			t.Fatalf("expected extra tool_result to downgrade the whole tool_use batch, got %#v", assistant.Content)
+		}
+	}
+
+	user := params.Messages[1]
+	var (
+		toolResultCount int
+		userTextBlocks  []string
+	)
+	for _, block := range user.Content {
+		if block.OfToolResult != nil {
+			toolResultCount++
+		}
+		if text := block.GetText(); text != nil {
+			userTextBlocks = append(userTextBlocks, *text)
+		}
+	}
+	if toolResultCount != 0 {
+		t.Fatalf("expected extra tool_result batch to be downgraded, got %#v", user.Content)
+	}
+	if len(userTextBlocks) != 2 || !strings.Contains(userTextBlocks[0], "file a") || !strings.Contains(userTextBlocks[1], "extra result") {
+		t.Fatalf("expected downgraded text to preserve all tool_result bodies, got %#v", userTextBlocks)
+	}
+}
+
+func TestBuildHistoricalToolUseBlockRejectsNonDictJSON(t *testing.T) {
+	tests := []struct {
+		name string
+		args string
+	}{
+		{"empty", ""},
+		{"whitespace", "  "},
+		{"null", "null"},
+		{"array", "[1,2,3]"},
+		{"number", "123"},
+		{"string", `"foo"`},
+		{"bool", "true"},
+		{"invalid", "not json"},
+		{"truncated", `{"path":"a.go"`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			block, ok := buildHistoricalToolUseBlock(types.ToolCall{
+				ID: "call-1", Name: "read_file", Arguments: tt.args,
+			})
+			if ok {
+				t.Fatalf("expected non-dict args %q to be rejected, got block=%#v", tt.args, block)
+			}
+		})
+	}
+}
+
+func TestBuildHistoricalToolUseBlockAcceptsDictJSON(t *testing.T) {
+	block, ok := buildHistoricalToolUseBlock(types.ToolCall{
+		ID: "call-1", Name: "read_file", Arguments: `{"path":"a.go"}`,
+	})
+	if !ok {
+		t.Fatal("expected dict args to be accepted")
+	}
+	if block.OfToolUse == nil || block.OfToolUse.Name != "read_file" {
+		t.Fatalf("expected tool_use block, got %#v", block)
+	}
+}
+
+func TestFlushToolUseReplacesNonDictArgumentsWithEmptyObjectAndError(t *testing.T) {
+	tests := []struct {
+		name      string
+		args      string
+		wantArgs  string
+		wantError string
+	}{
+		{"dict unchanged", `{"path":"a.go"}`, `{"path":"a.go"}`, ``},
+		{"empty object unchanged", `{}`, `{}`, ``},
+		{"array replaced", `[1,2,3]`, `{}`, `tool read_file: arguments must be a JSON object, got: [1,2,3]`},
+		{"number replaced", `42`, `{}`, `tool read_file: arguments must be a JSON object, got: 42`},
+		{"null replaced", `null`, `{}`, `tool read_file: arguments must be a JSON object, got: null`},
+		{"string replaced", `"foo"`, `{}`, `tool read_file: arguments must be a JSON object, got: "foo"`},
+		{"invalid replaced", `not json`, `{}`, `tool read_file: arguments must be a JSON object, got: not json`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resp := newResponse(nil)
+			resp.incompleteTool.ID = "call-1"
+			resp.incompleteTool.Name = "read_file"
+			resp.incompleteTool.Arguments = tt.args
+
+			resp.flushToolUse()
+			resp.close()
+
+			var got *providers.ToolCall
+			for delta := range resp.Message() {
+				if len(delta.ToolUse) > 0 {
+					tc := delta.ToolUse[0]
+					got = &tc
+				}
+			}
+			if got == nil {
+				t.Fatalf("expected emit with args, got no emit")
+			}
+			if got.Arguments != tt.wantArgs || got.Error != tt.wantError {
+				t.Fatalf("expected args/error (%q, %q), got (%q, %q)", tt.wantArgs, tt.wantError, got.Arguments, got.Error)
+			}
+		})
+	}
+}
+
+func TestMessageCreateParamsReasoningEffort(t *testing.T) {
+	cases := []struct {
+		name     string
+		effort   string
+		host     string
+		wantEff  anthropic.OutputConfigEffort
+		wantOpts int
+	}{
+		{"empty sends nothing", "", "", "", 0},
+		{"default sends nothing", providers.ReasoningEffortDefault, "", "", 0},
+		{"high sets output_config effort", providers.ReasoningEffortHigh, "", "high", 0},
+		{"xhigh is clamped to high", providers.ReasoningEffortXHigh, "", "high", 0},
+		{"max is clamped to high", providers.ReasoningEffortMax, "", "high", 0},
+		{"none sends no vendor field for official host", providers.ReasoningEffortNone, "https://api.anthropic.com", "", 0},
+		{"none disables reasoning for third-party host", providers.ReasoningEffortNone, "https://open.bigmodel.cn/api/anthropic", "", 1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cli := &client{model: Model{Name: "claude-test", ReasoningEffort: tc.effort}, host: tc.host}
+			req := providers.NewRequest("summarize this conversation")
+
+			params := cli.messageCreateParams(req)
+			if params.OutputConfig.Effort != tc.wantEff {
+				t.Fatalf("expected output_config effort=%q, got %q", tc.wantEff, params.OutputConfig.Effort)
+			}
+			if opts := cli.reasoningOpts(); len(opts) != tc.wantOpts {
+				t.Fatalf("expected %d request options, got %d", tc.wantOpts, len(opts))
+			}
+		})
+	}
+}
+
+func messageHasCacheControl(msg anthropic.MessageParam) bool {
+	for _, block := range msg.Content {
+		if contentBlockHasCacheControl(block) {
+			return true
+		}
+	}
+	return false
+}
+
+func contentBlockHasCacheControl(block anthropic.ContentBlockParamUnion) bool {
+	switch {
+	case block.OfText != nil:
+		return block.OfText.CacheControl.Type != ""
+	case block.OfImage != nil:
+		return block.OfImage.CacheControl.Type != ""
+	case block.OfSearchResult != nil:
+		return block.OfSearchResult.CacheControl.Type != ""
+	case block.OfToolUse != nil:
+		return block.OfToolUse.CacheControl.Type != ""
+	case block.OfToolResult != nil:
+		return block.OfToolResult.CacheControl.Type != ""
+	case block.OfServerToolUse != nil:
+		return block.OfServerToolUse.CacheControl.Type != ""
+	default:
+		return false
+	}
+}
+
+// Usage accumulation via SetTokens must be safe to read concurrently via
+// Tokens(). Run with -race.
+func TestResponseHandleEventConcurrentWithTokensReads(t *testing.T) {
+	resp := newResponse(nil)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 500; i++ {
+			resp.handleEvent(mustMessageStreamEvent(t, `{
+				"type":"message_delta",
+				"delta":{"stop_reason":"end_turn"},
+				"usage":{"input_tokens":1,"output_tokens":2}
+			}`))
+		}
+	}()
+	for i := 0; i < 500; i++ {
+		if got := resp.Tokens(); got.CompletionTokens < 0 {
+			t.Fatalf("unexpected negative snapshot: %#v", got)
+		}
+	}
+	<-done
+
+	got := resp.Tokens()
+	if got.CompletionTokens != 1000 {
+		t.Fatalf("expected 1000 accumulated completion tokens, got %d", got.CompletionTokens)
 	}
 }

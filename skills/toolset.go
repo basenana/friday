@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/basenana/friday/core/tools"
 )
@@ -13,7 +14,8 @@ func NewSkillTools(registry *Registry) []*tools.Tool {
 	return []*tools.Tool{
 		newListSkillsTool(registry),
 		newLoadSkillTool(registry),
-		newLoadSkillResourceTool(registry),
+		newListSkillFilesTool(registry),
+		newReadSkillFileTool(registry),
 	}
 }
 
@@ -81,34 +83,85 @@ The instructions will be added to the conversation context.`),
 	)
 }
 
-// newLoadSkillResourceTool creates the load_skill_resource tool
-func newLoadSkillResourceTool(registry *Registry) *tools.Tool {
-	return tools.NewTool("load_skill_resource",
-		tools.WithDescription(`Load a resource file from a skill.
-Skills may have reference files, documentation, or other resources.
-Use this to access additional context needed for the skill.`),
+// newListSkillFilesTool creates the list_skill_files tool.
+func newListSkillFilesTool(registry *Registry) *tools.Tool {
+	return tools.NewTool("list_skill_files",
+		tools.WithDescription(`List files and directories within a skill's directory.
+Use this to explore what's inside a skill - sub-skills, scripts, references, examples, etc.
+Leave path empty to list the root directory, or specify a sub-path to browse deeper.`),
+		tools.WithString("skill_name",
+			tools.Required(),
+			tools.Description("The name of the skill to explore"),
+		),
+		tools.WithString("path",
+			tools.Description("Sub-path within the skill directory (empty for root)"),
+		),
+		tools.WithToolHandler(func(ctx context.Context, req *tools.Request) (*tools.Result, error) {
+			skillName, _ := req.Arguments["skill_name"].(string)
+			if skillName == "" {
+				return tools.NewToolResultError("skill_name parameter is required"), nil
+			}
+			subPath, _ := req.Arguments["path"].(string)
+
+			entries, err := registry.ListFiles(skillName, subPath)
+			if err != nil {
+				return tools.NewToolResultError(fmt.Sprintf("Failed to list files: %v", err)), nil
+			}
+
+			if len(entries) == 0 {
+				return tools.NewToolResultText("Directory is empty."), nil
+			}
+
+			var b strings.Builder
+			prefix := skillName
+			if subPath != "" {
+				prefix += "/" + subPath
+			}
+			b.WriteString(fmt.Sprintf("Contents of %s (%d items):\n\n", prefix, len(entries)))
+			for _, e := range entries {
+				if e.IsDir() {
+					b.WriteString(fmt.Sprintf("[DIR]  %s/\n", e.Name()))
+				} else {
+					info, _ := e.Info()
+					if info != nil {
+						b.WriteString(fmt.Sprintf("[FILE] %s (%d bytes)\n", e.Name(), info.Size()))
+					} else {
+						b.WriteString(fmt.Sprintf("[FILE] %s\n", e.Name()))
+					}
+				}
+			}
+			b.WriteString("\nUse read_skill_file(skill_name, path) to read any file.")
+			return tools.NewToolResultText(b.String()), nil
+		}),
+	)
+}
+
+// newReadSkillFileTool creates the read_skill_file tool.
+func newReadSkillFileTool(registry *Registry) *tools.Tool {
+	return tools.NewTool("read_skill_file",
+		tools.WithDescription(`Read any file within a skill's directory tree.
+Use list_skill_files first to discover available files, then read them with this tool.`),
 		tools.WithString("skill_name",
 			tools.Required(),
 			tools.Description("The name of the skill"),
 		),
-		tools.WithString("resource_path",
+		tools.WithString("path",
 			tools.Required(),
-			tools.Description("The relative path to the resource file (e.g., references/api-docs.md)"),
+			tools.Description("The file path relative to the skill root (e.g., 'plotly/SKILL.md' or 'references/api.md')"),
 		),
 		tools.WithToolHandler(func(ctx context.Context, req *tools.Request) (*tools.Result, error) {
-			skillName, ok := req.Arguments["skill_name"].(string)
-			if !ok {
-				return tools.NewToolResultError("skill_name parameter is required"), nil
+			skillName, _ := req.Arguments["skill_name"].(string)
+			filePath, _ := req.Arguments["path"].(string)
+			if skillName == "" {
+				return tools.NewToolResultError("skill_name parameter is required: the name of the skill whose file to read"), nil
+			}
+			if filePath == "" {
+				return tools.NewToolResultError("path parameter is required: the file path relative to the skill's base path"), nil
 			}
 
-			resourcePath, ok := req.Arguments["resource_path"].(string)
-			if !ok {
-				return tools.NewToolResultError("resource_path parameter is required"), nil
-			}
-
-			content, err := registry.LoadResource(skillName, resourcePath)
+			content, err := registry.ReadFile(skillName, filePath)
 			if err != nil {
-				return tools.NewToolResultError(fmt.Sprintf("Failed to load resource: %v", err)), nil
+				return tools.NewToolResultError(fmt.Sprintf("Failed to read file: %v", err)), nil
 			}
 
 			return tools.NewToolResultText(string(content)), nil

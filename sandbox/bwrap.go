@@ -3,19 +3,21 @@
 package sandbox
 
 import (
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"strings"
+	"sync"
 
-	"mvdan.cc/sh/v3/syntax"
+	"github.com/basenana/friday/shellcmd"
 )
 
 // Bwrap implements Sandbox using Linux bubblewrap
 type Bwrap struct {
 	config *Config
+
+	probeOnce sync.Once
+	probeOK   bool
 }
 
 // NewBwrap creates a new Bwrap sandbox
@@ -30,27 +32,40 @@ func (b *Bwrap) WrapCommand(cmd string, opts ExecOptions) (string, func(), error
 	}
 
 	// Build bwrap arguments
-	args := b.buildArgs(opts.Workdir)
+	args := b.buildArgs(opts.Workdir, opts.HomeDir)
 
-	// Safely quote the command for bash -c using syntax.Quote
-	quotedCmd, err := syntax.Quote(cmd, syntax.LangBash)
-	if err != nil {
-		// Fallback to basic escaping if Quote fails
-		quotedCmd = "'" + strings.ReplaceAll(cmd, "'", "'\\''") + "'"
-	}
-	wrappedCmd := fmt.Sprintf("bwrap %s -- bash -c %s", strings.Join(args, " "), quotedCmd)
+	// Quote each argument (binary, flags, and the inner command) with bash
+	// quoting rules so values containing spaces or metacharacters stay a
+	// single argument.
+	wrappedCmd := shellcmd.Join("bwrap", append(args, "--", "bash", "-c", cmd)...)
 	cleanup := func() {}
 
 	return wrappedCmd, cleanup, nil
 }
 
-// IsAvailable checks if bwrap is available
+// IsAvailable checks if bwrap is available and functional.
+// The probe result is memoized: bwrap is only executed once per process.
 func (b *Bwrap) IsAvailable() bool {
 	if runtime.GOOS != "linux" {
 		return false
 	}
-	_, err := exec.LookPath("bwrap")
-	return err == nil
+	if _, err := exec.LookPath("bwrap"); err != nil {
+		return false
+	}
+	b.probeOnce.Do(func() {
+		// Probe bwrap to verify it can actually run (e.g. nested containers
+		// may block namespace creation). The probe uses the same argument
+		// builder as real invocations so it cannot diverge from them.
+		cmd := exec.Command("bwrap", b.probeArgs()...)
+		b.probeOK = cmd.Run() == nil
+	})
+	return b.probeOK
+}
+
+// probeArgs derives the availability probe arguments from buildArgs so the
+// probe exercises the same mount layout as a real sandboxed command.
+func (b *Bwrap) probeArgs() []string {
+	return append(b.buildArgs("", ""), "--", "true")
 }
 
 // Name returns the name of this sandbox
@@ -58,15 +73,27 @@ func (b *Bwrap) Name() string {
 	return "bubblewrap"
 }
 
-// buildArgs builds bubblewrap arguments
-func (b *Bwrap) buildArgs(workdir string) []string {
+// buildArgs builds bubblewrap arguments.
+//
+// Mount ordering matters: bubblewrap applies arguments in order, so the host
+// root is first mounted read-only, then writable mounts are layered on top,
+// and deny paths are masked with an empty tmpfs last so they can never be
+// re-exposed by a later bind.
+func (b *Bwrap) buildArgs(workdir string, homeDir string) []string {
 	var args []string
 
 	// Basic isolation
 	args = append(args,
-		//"--unshare-pid",
 		"--die-with-parent",
+		"--unshare-pid",
+		"--unshare-ipc",
+		"--new-session",
+		"--cap-drop", "ALL",
 	)
+
+	// Host root is visible read-only; writable access is granted explicitly
+	// below via the write paths and the working directory.
+	args = append(args, "--ro-bind", "/", "/")
 
 	// Proc filesystem — use bind mount as fallback when --proc is not permitted (e.g., in containers)
 	if os.Getenv("FRIDAY_SANDBOX_PROC_BIND") != "" {
@@ -77,17 +104,11 @@ func (b *Bwrap) buildArgs(workdir string) []string {
 
 	// Devtmpfs for /dev
 	args = append(args, "--dev", "/dev")
-
-	// Mount necessary system directories as read-only
-	for _, dir := range []string{"/usr", "/lib", "/lib64", "/bin", "/sbin"} {
-		if _, err := os.Stat(dir); err == nil {
-			args = append(args, "--ro-bind", dir, dir)
-		}
-	}
+	args = addLinuxRuntimeCompatMounts(args)
 
 	// Readonly paths
 	for _, path := range b.config.Sandbox.Filesystem.ReadOnly {
-		expanded := expandPath(path, workdir)
+		expanded := expandPath(path, workdir, homeDir)
 		if _, err := os.Stat(expanded); err == nil {
 			args = append(args, "--ro-bind", expanded, expanded)
 		}
@@ -95,17 +116,27 @@ func (b *Bwrap) buildArgs(workdir string) []string {
 
 	// Write paths (rw bind mount)
 	for _, path := range b.config.Sandbox.Filesystem.Write {
-		expanded := expandPath(path, workdir)
+		expanded := expandPath(path, workdir, homeDir)
 		if _, err := os.Stat(expanded); err == nil {
 			args = append(args, "--bind", expanded, expanded)
 		}
 	}
 
-	// Set working directory
+	// Set working directory (writable)
 	if workdir != "" {
-		absWorkdir, _ := filepath.Abs(workdir)
+		absWorkdir, err := filepath.Abs(workdir)
+		if err != nil {
+			absWorkdir = filepath.Clean(workdir)
+		}
 		args = append(args, "--bind", absWorkdir, absWorkdir)
 		args = append(args, "--chdir", absWorkdir)
+	}
+
+	// Deny paths are masked with an empty tmpfs. They are applied last so a
+	// deny path inside a writable mount (including the workdir) stays hidden.
+	for _, path := range b.config.Sandbox.Filesystem.Deny {
+		expanded := expandPath(path, workdir, homeDir)
+		args = append(args, "--tmpfs", filepath.Clean(expanded))
 	}
 
 	// Network isolation

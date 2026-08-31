@@ -1,13 +1,143 @@
 package openai
 
 import (
-	"encoding/json"
 	"encoding/xml"
 	"fmt"
 	"strings"
 
 	"github.com/basenana/friday/core/providers"
+	"github.com/basenana/friday/core/providers/common"
 )
+
+var thinkingTags = []struct {
+	open  string
+	close string
+}{
+	{open: "<think>", close: "</think>"},
+	{open: "<thinking>", close: "</thinking>"},
+}
+
+// thinkingStreamParser incrementally strips <think>/<thinking> tags from
+// streamed content: text inside the tags is emitted as Reasoning deltas and
+// everything else as Content deltas. Partial tag prefixes that straddle chunk
+// boundaries are buffered until they can be resolved.
+type thinkingStreamParser struct {
+	pending  string
+	openTag  string
+	closeTag string
+}
+
+func newThinkingStreamParser() *thinkingStreamParser {
+	return &thinkingStreamParser{}
+}
+
+func (p *thinkingStreamParser) write(s string) []providers.Delta {
+	p.pending += s
+	var result []providers.Delta
+
+	for p.pending != "" {
+		if p.closeTag != "" {
+			end := strings.Index(p.pending, p.closeTag)
+			if end >= 0 {
+				if end > 0 {
+					result = append(result, providers.Delta{Reasoning: p.pending[:end]})
+				}
+				p.pending = p.pending[end+len(p.closeTag):]
+				p.openTag = ""
+				p.closeTag = ""
+				continue
+			}
+			// Inside a thinking section with no closing tag yet: emit the
+			// reasoning text as it arrives, retaining only a suffix that
+			// could be the prefix of a closing tag split across chunks.
+			keep := thinkingCloseTagPrefixSuffixLength(p.closeTag, p.pending)
+			if emit := len(p.pending) - keep; emit > 0 {
+				result = append(result, providers.Delta{Reasoning: p.pending[:emit]})
+				p.pending = p.pending[emit:]
+			}
+			break
+		}
+
+		start, tag := findThinkingTag(p.pending)
+		if start >= 0 {
+			if start > 0 {
+				result = append(result, providers.Delta{Content: p.pending[:start]})
+			}
+			p.pending = p.pending[start+len(tag.open):]
+			p.openTag = tag.open
+			p.closeTag = tag.close
+			continue
+		}
+
+		keep := thinkingTagPrefixSuffixLength(p.pending)
+		if emit := len(p.pending) - keep; emit > 0 {
+			result = append(result, providers.Delta{Content: p.pending[:emit]})
+			p.pending = p.pending[emit:]
+		}
+		break
+	}
+
+	return result
+}
+
+// flush returns buffered text as deltas. Buffering outside a thinking section
+// only holds back a partial opening tag, which is restored verbatim as
+// Content; buffering inside an unclosed thinking section is emitted as
+// Reasoning. Callers must skip flush entirely when the stream failed, so
+// truncated reasoning is not re-emitted as Content.
+func (p *thinkingStreamParser) flush() []providers.Delta {
+	if p.pending == "" && p.openTag == "" {
+		return nil
+	}
+	content := p.pending
+	if p.openTag != "" {
+		p.pending = ""
+		return []providers.Delta{{Reasoning: content}}
+	}
+	p.pending = ""
+	return []providers.Delta{{Content: content}}
+}
+
+func findThinkingTag(s string) (int, struct {
+	open  string
+	close string
+}) {
+	index := -1
+	var found struct {
+		open  string
+		close string
+	}
+	for _, tag := range thinkingTags {
+		if candidate := strings.Index(s, tag.open); candidate >= 0 && (index < 0 || candidate < index) {
+			index = candidate
+			found = tag
+		}
+	}
+	return index, found
+}
+
+func thinkingTagPrefixSuffixLength(s string) int {
+	for length := min(len(s), len("<thinking>")-1); length > 0; length-- {
+		suffix := s[len(s)-length:]
+		for _, tag := range thinkingTags {
+			if strings.HasPrefix(tag.open, suffix) {
+				return length
+			}
+		}
+	}
+	return 0
+}
+
+// thinkingCloseTagPrefixSuffixLength returns how many trailing bytes of s to
+// retain because they could be the beginning of closeTag split across chunks.
+func thinkingCloseTagPrefixSuffixLength(closeTag, s string) int {
+	for length := min(len(s), len(closeTag)-1); length > 0; length-- {
+		if strings.HasPrefix(closeTag, s[len(s)-length:]) {
+			return length
+		}
+	}
+	return 0
+}
 
 type xmlParser struct {
 	buf *xmlBuffer
@@ -153,10 +283,11 @@ func xmlBodyToMessage(body string) *providers.Delta {
 		err := xml.Unmarshal([]byte(body), &use)
 		if err != nil && (use.Name == "" || use.Arguments == "") {
 			use.Error = fmt.Sprintf("The tool %s is used in an incorrect format; please try using the tool again", use.Name)
-		} else {
-			argBody := make(map[string]interface{})
-			if err = json.Unmarshal([]byte(use.Arguments), &argBody); err != nil {
-				use.Error = fmt.Sprintf("The arguments passed to the tool %s is not a valid JSON.", use.Name)
+		}
+		if normalized, errMsg, ok := common.NormalizeToolUseArguments(use.Arguments, use.Name); !ok {
+			use.Arguments = normalized
+			if use.Error == "" {
+				use.Error = errMsg
 			}
 		}
 
@@ -236,13 +367,10 @@ func compactMessages(messages []providers.Delta) []providers.Delta {
 	return result
 }
 
-func isTooManyError(err error) bool {
-	return strings.Contains(err.Error(), "429 Too Many Requests")
-}
-
 type compatibleResponse struct {
 	*providers.CommonResponse
-	buf *xmlParser
+	buf     *xmlParser
+	emitted bool
 }
 
 func (r *compatibleResponse) nextChoice(chunk interface{}) {}
@@ -256,10 +384,15 @@ func (r *compatibleResponse) fail(err error) {
 func (r *compatibleResponse) close() {
 	msgList := r.buf.flush()
 	for _, msg := range msgList {
-		r.Stream <- msg
+		r.emit(msg)
 	}
 	close(r.Stream)
 	close(r.Err)
+}
+
+func (r *compatibleResponse) emit(delta providers.Delta) {
+	r.emitted = true
+	r.Stream <- delta
 }
 
 func newCompatibleResponse() *compatibleResponse {

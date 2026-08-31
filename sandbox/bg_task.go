@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
-	"os"
 	"os/exec"
 	"strings"
 	"sync"
@@ -85,7 +84,7 @@ func (tm *TaskManager) Start(command, workdir string) (*Task, error) {
 
 	cmd := exec.Command("bash", "-c", wrappedCmd)
 	cmd.Dir = dir
-	cmd.Env = os.Environ()
+	cmd.Env = buildCommandEnv(nil, "")
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	stdout, err := cmd.StdoutPipe()
@@ -165,7 +164,10 @@ func (tm *TaskManager) Start(command, workdir string) (*Task, error) {
 		task.Status = TaskCompleted
 	}()
 
-	return snapshotTask(task), nil
+	tm.mu.RLock()
+	snapshot := snapshotTask(task)
+	tm.mu.RUnlock()
+	return snapshot, nil
 }
 
 type outputCollector struct {

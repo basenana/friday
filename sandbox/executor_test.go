@@ -190,3 +190,75 @@ func TestGetOSInfo(t *testing.T) {
 		t.Error("GetOSInfo should not return empty string")
 	}
 }
+
+func TestBuildCommandEnvDoesNotInheritHostEnv(t *testing.T) {
+	t.Setenv("FRIDAY_TEST_API_KEY", "super-secret-value")
+
+	env := buildCommandEnv(nil, "")
+	for _, entry := range env {
+		if strings.Contains(entry, "FRIDAY_TEST_API_KEY") || strings.Contains(entry, "super-secret-value") {
+			t.Errorf("child env must not inherit host secrets: %q", entry)
+		}
+	}
+
+	// Integration: the executed command must not see the host secret either.
+	cfg := DefaultConfig()
+	cfg.Sandbox.Enabled = false
+	cfg.Permissions.Allow = append(cfg.Permissions.Allow, "env")
+	exec := NewExecutor(cfg)
+	result, err := exec.Run(context.Background(), "env", ExecOptions{})
+	if err != nil {
+		t.Fatalf("Executor.Run error: %v", err)
+	}
+	if strings.Contains(result.Stdout+result.Stderr, "super-secret-value") {
+		t.Errorf("executed command saw the host secret: %q", result.Stdout)
+	}
+}
+
+func TestBuildCommandEnvPreservesExplicitHome(t *testing.T) {
+	env := buildCommandEnv([]string{"HOME=/custom/home"}, "/sandbox/home")
+
+	found := false
+	for _, entry := range env {
+		if strings.HasPrefix(entry, "HOME=") {
+			if entry != "HOME=/custom/home" {
+				t.Errorf("HOME entry = %q, want the explicit HOME to be preserved", entry)
+			}
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("expected HOME to be present in the child env")
+	}
+}
+
+func TestBuildCommandEnvOverridesHomeFromHomeDir(t *testing.T) {
+	env := buildCommandEnv(nil, "/sandbox/home")
+
+	found := false
+	for _, entry := range env {
+		if strings.HasPrefix(entry, "HOME=") {
+			if entry != "HOME=/sandbox/home" {
+				t.Errorf("HOME entry = %q, want HOME=/sandbox/home", entry)
+			}
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("expected HOME to be overridden by HomeDir")
+	}
+}
+
+func TestBuildCommandEnvKeepsSafeBase(t *testing.T) {
+	t.Setenv("PATH", "/usr/bin:/bin")
+	t.Setenv("TERM", "xterm-256color")
+	t.Setenv("LC_ALL", "C.UTF-8")
+
+	env := buildCommandEnv([]string{"CUSTOM=1"}, "")
+	joined := strings.Join(env, "\n")
+	for _, want := range []string{"PATH=/usr/bin:/bin", "TERM=xterm-256color", "LC_ALL=C.UTF-8", "CUSTOM=1"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("child env missing %q: %v", want, env)
+		}
+	}
+}

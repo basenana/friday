@@ -25,6 +25,23 @@ type react struct {
 	logger logger.Logger
 }
 
+func cloneMetadata(metadata map[string]string) map[string]string {
+	if len(metadata) == 0 {
+		return nil
+	}
+	cloned := make(map[string]string, len(metadata))
+	for key, value := range metadata {
+		cloned[key] = value
+	}
+	return cloned
+}
+
+type toolCallOutcome struct {
+	msg     string
+	success bool
+	err     error
+}
+
 func (a *react) Chat(ctx context.Context, req *api.Request) *api.Response {
 	resp := api.NewResponse()
 
@@ -39,17 +56,18 @@ func (a *react) Chat(ctx context.Context, req *api.Request) *api.Response {
 		return resp
 	}
 
-	sess.AppendMessage(&types.Message{Role: types.RoleUser, Content: req.UserMessage, Image: req.Image})
+	requestMetadata := cloneMetadata(req.Metadata)
+	sess.AppendMessage(&types.Message{Role: types.RoleUser, Content: req.UserMessage, Image: req.Image, Images: req.Images, Metadata: requestMetadata})
 	sess.PublishEvent(types.Event{
 		Type: types.EventAgentStart,
 		Data: map[string]string{"message": logger.FirstLine(req.UserMessage)},
 	})
 	a.logger.Infow("handle request", "message", logger.FirstLine(req.UserMessage), "session", sess.ID)
-	go a.reactLoop(ctx, sess, resp, req.Tools)
+	go a.reactLoop(ctx, sess, resp, req.Tools, requestMetadata)
 	return resp
 }
 
-func (a *react) reactLoop(ctx context.Context, sess *session.Session, resp *api.Response, reqTools []*tools.Tool) {
+func (a *react) reactLoop(ctx context.Context, sess *session.Session, resp *api.Response, reqTools []*tools.Tool, metadata map[string]string) {
 	defer resp.Close()
 
 	ctx, span := tracing.Start(ctx, "agent.react.chat",
@@ -102,7 +120,7 @@ func (a *react) reactLoop(ctx context.Context, sess *session.Session, resp *api.
 		case <-ctx.Done():
 			return
 		default:
-			keepRun, err = a.doAct(ctx, sess, resp, mergedTools, a.option.MaxLoopTimes-loopTimes)
+			keepRun, err = a.doAct(ctx, sess, resp, mergedTools, a.option.MaxLoopTimes-loopTimes, metadata)
 		}
 		if err != nil {
 			if isStreamIdleTimeout(err) {
@@ -118,9 +136,16 @@ func (a *react) reactLoop(ctx context.Context, sess *session.Session, resp *api.
 				}
 				continue
 			}
-			if isContextWindowExceeded(err) {
+			if isMaxTokensError(err) {
 				compactErr := sess.CompactHistory(ctx)
 				if compactErr == nil {
+					loopTimes++ // count the compact-attempt as a loop iteration
+					if loopTimes > a.option.MaxLoopTimes {
+						// Compaction cannot free more context; fail instead of
+						// retrying forever (mirrors the idle-timeout bound above).
+						resp.Fail(err)
+						return
+					}
 					continue
 				}
 				a.logger.Warnw("failed to compact history", "error", compactErr.Error())
@@ -141,7 +166,7 @@ func (a *react) reactLoop(ctx context.Context, sess *session.Session, resp *api.
 	}
 }
 
-func (a *react) doAct(ctx context.Context, sess *session.Session, resp *api.Response, toolList []*tools.Tool, budget int) (bool, error) {
+func (a *react) doAct(ctx context.Context, sess *session.Session, resp *api.Response, toolList []*tools.Tool, budget int, metadata map[string]string) (bool, error) {
 	ctx, span := tracing.Start(ctx, "agent.react.act",
 		tracing.WithAttributes(
 			tracing.String("session.id", sess.ID),
@@ -157,30 +182,13 @@ func (a *react) doAct(ctx context.Context, sess *session.Session, resp *api.Resp
 	})
 
 	var (
-		content            string
-		reasoning          string
-		reasoningSignature string
-		redactedThinking   string
-		agentMessage       string
-		messageCount       int
-		toolUse            []providers.ToolCall
-		err                error
+		agentMessage string
+		err          error
 
-		keepRun    = false
-		llmReq     = newLLMRequest(a.option.SystemPrompt, sess, toolList)
-		warnTicker = time.NewTicker(time.Minute)
-
-		idleTimeout = a.option.StreamIdleTimeout
-		maxTokens   = a.option.MaxTokens
+		keepRun   = false
+		llmReq    = newLLMRequest(a.option.SystemPrompt, sess, toolList)
+		maxTokens = a.option.MaxTokens
 	)
-
-	if idleTimeout == 0 {
-		idleTimeout = 3 * time.Minute
-	}
-	idleTimer := time.NewTimer(idleTimeout)
-
-	defer warnTicker.Stop()
-	defer idleTimer.Stop()
 
 	// before_model hooks
 	err = sess.RunHooks(ctx, types.SessionHookBeforeModel, session.HookPayload{ModelRequest: llmReq})
@@ -197,89 +205,56 @@ func (a *react) doAct(ctx context.Context, sess *session.Session, resp *api.Resp
 	sess.PublishEvent(types.Event{Type: types.EventModelStart})
 	streamCtx, cancelStream := context.WithCancel(ctx)
 	defer cancelStream()
+	callStart := time.Now()
 	stream := a.llm.Completion(streamCtx, llmReq)
 
-	// estComplTokens is a rough character-based estimate of received completion tokens,
-	// used only to break out of runaway streams (esp. models that loop forever when
-	// context breaks). charsPerToken=2 is conservative; see agents/tools.go.
-	const charsPerToken = 2
-	var estComplTokens int64
-	maxTokensExceeded := false
+	var acc streamResult
 
-WaitMessage:
-	for {
-		select {
-		case <-ctx.Done():
-			return false, ctx.Err()
-		case err = <-stream.Error():
-			if err != nil {
-				return false, err
-			}
-		case <-warnTicker.C:
-			a.logger.Warnw("still waiting llm completed", "receivedMessage", messageCount, "session", sess.ID)
-
-		case <-idleTimer.C:
-			a.logger.Errorw("stream idle timeout exceeded",
-				"timeout", idleTimeout, "received", messageCount, "session", sess.ID)
-			return false, &StreamIdleTimeoutError{Timeout: idleTimeout, Received: messageCount}
-
-		case msg, ok := <-stream.Message():
-			if !ok {
-				break WaitMessage
-			}
-
-			messageCount += 1
-			if !idleTimer.Stop() {
-				select {
-				case <-idleTimer.C:
-				default:
-				}
-			}
-			idleTimer.Reset(idleTimeout)
-
-			// Process each field independently — a single Delta may carry multiple fields.
-			if len(msg.Content) > 0 {
-				content += msg.Content
-				api.SendDelta(resp, types.Delta{Content: msg.Content})
-				estComplTokens += int64(len([]rune(msg.Content))) / charsPerToken
-			}
-			if len(msg.ToolUse) > 0 {
-				for i := range msg.ToolUse {
-					tool := msg.ToolUse[i]
-					toolUse = append(toolUse, tool)
-				}
-			}
-			if len(msg.Reasoning) > 0 {
-				reasoning += msg.Reasoning
-				api.SendDelta(resp, types.Delta{Reasoning: msg.Reasoning})
-			}
-			if msg.ReasoningSignature != "" {
-				reasoningSignature = msg.ReasoningSignature
-			}
-			if msg.RedactedThinking != "" {
-				redactedThinking = msg.RedactedThinking
-			}
-
-			// Real-time cap: if the model has streamed far past MaxTokens, stop reading.
-			// This prevents runaway loops that repeat content until the budget is exhausted.
-			if maxTokens > 0 && estComplTokens > maxTokens {
-				a.logger.Warnw("stream exceeded max tokens, interrupting",
-					"estimated_tokens", estComplTokens, "max_tokens", maxTokens, "session", sess.ID)
-				maxTokensExceeded = true
-				break WaitMessage
-			}
+	// fireModelCall runs after_model_call hooks with per-call stats on both
+	// success and failure paths. Hook errors are logged and swallowed: a
+	// stats/logging hook must never fail the turn. Hooks run on a
+	// cancellation-detached context so they still fire when the model call
+	// was aborted by ctx cancellation.
+	fireModelCall := func(callErr error) {
+		stats := &session.ModelCallStats{
+			Model:      modelNameOf(a.llm),
+			Tokens:     stream.Tokens(),
+			StartAt:    callStart,
+			DurationMs: time.Since(callStart).Milliseconds(),
+			Content:    acc.content,
+			Reasoning:  acc.reasoning,
+			ToolCalls:  acc.toolUse,
+		}
+		if callErr != nil {
+			stats.Err = callErr.Error()
+		}
+		if hookErr := sess.RunHooks(context.WithoutCancel(ctx), types.SessionHookAfterModelCall, session.HookPayload{ModelRequest: llmReq, ModelCallStats: stats}); hookErr != nil {
+			a.logger.Errorw("after_model_call hook error", "error", hookErr, "session", sess.ID)
 		}
 	}
+
+	if streamErr := a.consumeStream(ctx, sess, resp, stream, &acc, maxTokens, a.option.StreamIdleTimeout, fireModelCall); streamErr != nil {
+		return false, streamErr
+	}
+
+	content := acc.content
+	reasoning := acc.reasoning
+	reasoningSignature := acc.reasoningSignature
+	redactedThinking := acc.redactedThinking
+	toolUse := acc.toolUse
 
 	a.logger.Infow("message finish",
 		"fuzzyTokens", sess.Tokens(), "promptTokens", stream.Tokens().PromptTokens,
 		"cachedPromptTokens", stream.Tokens().CachedPromptTokens,
-		"completionTokens", stream.Tokens().CompletionTokens, "budget", budget, "session", sess.ID)
+		"completionTokens", stream.Tokens().CompletionTokens,
+		"maxTokens", maxOutputTokensOf(a.llm), "budget", budget, "session", sess.ID)
 	span.SetAttributes(
 		tracing.Int("prompt_tokens", stream.Tokens().PromptTokens),
 		tracing.Int("completion_tokens", stream.Tokens().CompletionTokens),
 		tracing.IntVal("tool_calls", len(toolUse)),
 	)
+
+	fireModelCall(nil)
 
 	// Record token checkpoint when LLM returns actual usage data.
 	sess.PublishEvent(types.Event{
@@ -325,7 +300,7 @@ WaitMessage:
 			})
 		}
 		finalContent := content
-		if maxTokensExceeded {
+		if acc.maxTokensExceeded {
 			finalContent = strings.TrimSpace(content) +
 				"\n\n[Warning: response interrupted because the model exceeded the configured max tokens (" +
 				strconv.FormatInt(maxTokens, 10) + "). The above may be incomplete or repetitive.]"
@@ -339,6 +314,7 @@ WaitMessage:
 			RedactedThinking:   redactedThinking,
 			ToolCalls:          toolCalls,
 			Tokens:             stream.Tokens().CompletionTokens,
+			Metadata:           cloneMetadata(metadata),
 		}
 		sess.AppendMessage(msg)
 	} else if stream.Tokens().CompletionTokens == 0 && agentMessage == "" {
@@ -347,16 +323,16 @@ WaitMessage:
 			"promptTokens", stream.Tokens().PromptTokens, "session", sess.ID)
 		fallback := "Sorry, the model failed to generate a valid response. Please retry or simplify your request."
 		api.SendDelta(resp, types.Delta{Content: fallback})
-		sess.AppendMessage(&types.Message{Role: types.RoleAssistant, Content: fallback})
+		sess.AppendMessage(&types.Message{Role: types.RoleAssistant, Content: fallback, Metadata: cloneMetadata(metadata)})
 	}
 	if agentMessage != "" {
 		keepRun = true
-		sess.AppendMessage(&types.Message{Role: types.RoleAgent, Content: agentMessage})
+		sess.AppendMessage(&types.Message{Role: types.RoleAgent, Content: agentMessage, Metadata: cloneMetadata(metadata)})
 	}
 
 	if len(toolUse) > 0 {
 		keepRun = true
-		a.doToolCalls(ctx, sess, toolUse, reasoning, reasoningSignature, redactedThinking, toolList)
+		a.doToolCalls(ctx, sess, toolUse, reasoning, reasoningSignature, redactedThinking, toolList, metadata)
 	}
 	if appl.Continue {
 		keepRun = true
@@ -367,7 +343,118 @@ WaitMessage:
 	return keepRun, nil
 }
 
-func (a *react) doToolCalls(ctx context.Context, sess *session.Session, toolUses []providers.ToolCall, reasoning string, reasoningSignature string, redactedThinking string, toolList []*tools.Tool) {
+// streamResult accumulates everything the react loop extracts from a single
+// LLM streaming response.
+type streamResult struct {
+	content            string
+	reasoning          string
+	reasoningSignature string
+	redactedThinking   string
+	toolUse            []providers.ToolCall
+	messages           int
+	// estComplTokens is a rough character-based estimate of received completion
+	// tokens, used only to break out of runaway streams (esp. models that loop
+	// forever when context breaks). charsPerToken=2 is conservative; see agents/tools.go.
+	estComplTokens    int64
+	maxTokensExceeded bool
+}
+
+// consumeStream reads the provider stream until it ends, the context is
+// cancelled, the stream errors, or the idle timeout fires. It mutates acc in
+// place and forwards deltas to resp as they arrive. On an abnormal exit it
+// calls fireModelCall with the error and returns it; on normal stream end it
+// returns nil (the caller fires fireModelCall itself with the final stats).
+func (a *react) consumeStream(
+	ctx context.Context,
+	sess *session.Session,
+	resp *api.Response,
+	stream providers.Response,
+	acc *streamResult,
+	maxTokens int64,
+	idleTimeout time.Duration,
+	fireModelCall func(callErr error),
+) error {
+	const charsPerToken = 2
+	if idleTimeout == 0 {
+		idleTimeout = 3 * time.Minute
+	}
+	warnTicker := time.NewTicker(time.Minute)
+	defer warnTicker.Stop()
+	idleTimer := time.NewTimer(idleTimeout)
+	defer idleTimer.Stop()
+
+WaitMessage:
+	for {
+		select {
+		case <-ctx.Done():
+			fireModelCall(ctx.Err())
+			return ctx.Err()
+		case err := <-stream.Error():
+			if err != nil {
+				fireModelCall(err)
+				return err
+			}
+		case <-warnTicker.C:
+			a.logger.Warnw("still waiting llm completed", "receivedMessage", acc.messages, "session", sess.ID)
+
+		case <-idleTimer.C:
+			a.logger.Errorw("stream idle timeout exceeded",
+				"timeout", idleTimeout, "received", acc.messages, "session", sess.ID)
+			idleErr := &StreamIdleTimeoutError{Timeout: idleTimeout, Received: acc.messages}
+			fireModelCall(idleErr)
+			return idleErr
+
+		case msg, ok := <-stream.Message():
+			if !ok {
+				break WaitMessage
+			}
+
+			acc.messages++
+			if !idleTimer.Stop() {
+				select {
+				case <-idleTimer.C:
+				default:
+				}
+			}
+			idleTimer.Reset(idleTimeout)
+
+			// Process each field independently — a single Delta may carry multiple fields.
+			if len(msg.Content) > 0 {
+				acc.content += msg.Content
+				api.SendDelta(resp, types.Delta{Content: msg.Content})
+				acc.estComplTokens += int64(len([]rune(msg.Content))) / charsPerToken
+			}
+			if len(msg.ToolUse) > 0 {
+				for i := range msg.ToolUse {
+					tool := msg.ToolUse[i]
+					acc.toolUse = append(acc.toolUse, tool)
+				}
+			}
+			if len(msg.Reasoning) > 0 {
+				acc.reasoning += msg.Reasoning
+				api.SendDelta(resp, types.Delta{Reasoning: msg.Reasoning})
+			}
+			if msg.ReasoningSignature != "" {
+				acc.reasoningSignature = msg.ReasoningSignature
+			}
+			if msg.RedactedThinking != "" {
+				acc.redactedThinking = msg.RedactedThinking
+			}
+
+			// Real-time cap: if the model has streamed far past MaxTokens, stop reading.
+			// This prevents runaway loops that repeat content until the budget is exhausted.
+			if maxTokens > 0 && acc.estComplTokens > maxTokens {
+				a.logger.Warnw("stream exceeded max tokens, interrupting",
+					"estimated_tokens", acc.estComplTokens, "max_tokens", maxTokens, "session", sess.ID)
+				acc.maxTokensExceeded = true
+				break WaitMessage
+			}
+		}
+	}
+	return nil
+}
+
+func (a *react) doToolCalls(ctx context.Context, sess *session.Session, toolUses []providers.ToolCall, reasoning string, reasoningSignature string, redactedThinking string, toolList []*tools.Tool, metadata map[string]string) {
 	ctx, span := tracing.Start(ctx, "tools.batch",
 		tracing.WithAttributes(
 			tracing.String("session.id", sess.ID),
@@ -389,7 +476,7 @@ func (a *react) doToolCalls(ctx context.Context, sess *session.Session, toolUses
 			update <- toolExecutionResult{
 				Index:    idx,
 				Call:     use,
-				Messages: a.tryToolCall(ctx, sess, use, reasoning, reasoningSignature, redactedThinking, toolList),
+				Messages: a.tryToolCall(ctx, sess, use, reasoning, reasoningSignature, redactedThinking, toolList, metadata),
 			}
 		}()
 	}
@@ -438,7 +525,7 @@ func (a *react) doToolCalls(ctx context.Context, sess *session.Session, toolUses
 	}
 }
 
-func (a *react) tryToolCall(ctx context.Context, sess *session.Session, use providers.ToolCall, reasoning string, reasoningSignature string, redactedThinking string, toolList []*tools.Tool) []*types.Message {
+func (a *react) tryToolCall(ctx context.Context, sess *session.Session, use providers.ToolCall, reasoning string, reasoningSignature string, redactedThinking string, toolList []*tools.Tool, metadata map[string]string) []*types.Message {
 	ctx, span := tracing.Start(ctx, "tools.invoke",
 		tracing.WithAttributes(
 			tracing.String("tool.name", use.Name),
@@ -476,13 +563,14 @@ func (a *react) tryToolCall(ctx context.Context, sess *session.Session, use prov
 		ReasoningSignature: reasoningSignature,
 		RedactedThinking:   redactedThinking,
 		ToolCalls:          []types.ToolCall{{ID: useMark, Name: use.Name, Arguments: use.Arguments}},
+		Metadata:           cloneMetadata(metadata),
 	})
 
 	td := getToolByName(toolList, use.Name)
 	if td == nil {
 		msg := fmt.Sprintf("tool %s not found", use.Name)
 		span.SetStatus(tracing.StatusError, msg)
-		result = append(result, &types.Message{Role: types.RoleTool, ToolResult: &types.ToolResult{CallID: useMark, Content: msg}})
+		result = append(result, &types.Message{Role: types.RoleTool, Metadata: cloneMetadata(metadata), ToolResult: &types.ToolResult{CallID: useMark, Content: msg}})
 		a.logger.Warnw(msg, "tool", use.Name, "session", sess.ID)
 		// Intentionally forward the full tool result for audit use cases.
 		// External subscribers must enforce their own security controls.
@@ -495,7 +583,7 @@ func (a *react) tryToolCall(ctx context.Context, sess *session.Session, use prov
 
 	if use.Error != "" {
 		span.SetStatus(tracing.StatusError, use.Error)
-		result = append(result, &types.Message{Role: types.RoleTool, ToolResult: &types.ToolResult{CallID: useMark, Content: use.Error}})
+		result = append(result, &types.Message{Role: types.RoleTool, Metadata: cloneMetadata(metadata), ToolResult: &types.ToolResult{CallID: useMark, Content: use.Error}})
 		a.logger.Warnw("try tool call error", "tool", use.Name, "error", use.Error, "session", sess.ID)
 		// Intentionally forward the full tool result for audit use cases.
 		// External subscribers must enforce their own security controls.
@@ -508,30 +596,83 @@ func (a *react) tryToolCall(ctx context.Context, sess *session.Session, use prov
 
 	toolUse := &ToolUse{GenID: use.ID, Name: use.Name, Arguments: use.Arguments}
 	a.logger.Infow("using tool", "tool", toolUse.Name, "args", toolUse.Arguments, "session", sess.ID)
-	msg, isSucceed, err := toolCall(ctx, sess, toolUse, td)
-	if err != nil {
-		span.RecordError(err)
-		errMsg := fmt.Sprintf("using tool failed: %s", err)
-		result = append(result, &types.Message{Role: types.RoleTool, ToolResult: &types.ToolResult{CallID: toolUse.ID(), Content: errMsg}})
-		a.logger.Warnw("using tool failed", "tool", use.Name, "error", err, "session", sess.ID)
+	done := make(chan toolCallOutcome, 1)
+	go func() {
+		msg, isSucceed, err := toolCall(ctx, sess, toolUse, td)
+		done <- toolCallOutcome{msg: msg, success: isSucceed, err: err}
+	}()
+
+	handleOutcome := func(outcome toolCallOutcome) []*types.Message {
+		if outcome.err != nil {
+			span.RecordError(outcome.err)
+			errMsg := fmt.Sprintf("using tool failed: %s", outcome.err)
+			result = append(result, &types.Message{Role: types.RoleTool, Metadata: cloneMetadata(metadata), ToolResult: &types.ToolResult{CallID: toolUse.ID(), Content: errMsg}})
+			a.logger.Warnw("using tool failed", "tool", use.Name, "error", outcome.err, "session", sess.ID)
+			// Intentionally forward the full tool result for audit use cases.
+			// External subscribers must enforce their own security controls.
+			sess.PublishEvent(types.Event{
+				Type: types.EventToolFinish,
+				Data: map[string]string{"id": use.ID, "tool": use.Name, "success": "false", "output": errMsg},
+			})
+			return result
+		}
+		span.SetStatus(tracing.StatusOK, "")
+
+		result = append(result, &types.Message{Role: types.RoleTool, Metadata: cloneMetadata(metadata), ToolResult: &types.ToolResult{CallID: toolUse.ID(), Content: outcome.msg, Success: outcome.success}})
 		// Intentionally forward the full tool result for audit use cases.
 		// External subscribers must enforce their own security controls.
 		sess.PublishEvent(types.Event{
 			Type: types.EventToolFinish,
-			Data: map[string]string{"id": use.ID, "tool": use.Name, "success": "false", "output": errMsg},
+			Data: map[string]string{"id": use.ID, "tool": use.Name, "success": strconv.FormatBool(outcome.success), "output": outcome.msg},
 		})
 		return result
 	}
-	span.SetStatus(tracing.StatusOK, "")
 
-	result = append(result, &types.Message{Role: types.RoleTool, ToolResult: &types.ToolResult{CallID: toolUse.ID(), Content: msg, Success: isSucceed}})
+	if outcome, ok := waitForToolCallOutcome(ctx, done); ok {
+		return handleOutcome(outcome)
+	}
+
+	err := ctx.Err()
+	if err == nil {
+		err = context.Canceled
+	}
+	msg := interruptedToolResultMessage(err)
+	span.RecordError(err)
+	span.SetStatus(tracing.StatusError, msg)
+	result = append(result, &types.Message{Role: types.RoleTool, Metadata: cloneMetadata(metadata), ToolResult: &types.ToolResult{CallID: toolUse.ID(), Content: msg}})
+	a.logger.Warnw("tool execution interrupted", "tool", use.Name, "error", err, "session", sess.ID)
 	// Intentionally forward the full tool result for audit use cases.
 	// External subscribers must enforce their own security controls.
 	sess.PublishEvent(types.Event{
 		Type: types.EventToolFinish,
-		Data: map[string]string{"id": use.ID, "tool": use.Name, "success": strconv.FormatBool(isSucceed), "output": msg},
+		Data: map[string]string{"id": use.ID, "tool": use.Name, "success": "false", "output": msg},
 	})
 	return result
+}
+
+func waitForToolCallOutcome(ctx context.Context, done <-chan toolCallOutcome) (toolCallOutcome, bool) {
+	select {
+	case outcome := <-done:
+		return outcome, true
+	case <-ctx.Done():
+		// Prefer a completed tool result when completion and cancellation race.
+		select {
+		case outcome := <-done:
+			return outcome, true
+		default:
+			return toolCallOutcome{}, false
+		}
+	}
+}
+
+// interruptedToolResultMessage describes a tool call abandoned mid-flight.
+// The handler goroutine may still complete the operation (which is not
+// guaranteed idempotent), so the message must not encourage a blind retry.
+func interruptedToolResultMessage(err error) string {
+	if err == nil {
+		return "tool execution interrupted before completion; the tool may have partially or fully run, so its effect is unknown — verify the current state before acting"
+	}
+	return fmt.Sprintf("tool execution interrupted before completion: %v; the tool may have partially or fully run, so its effect is unknown — verify the current state before acting", err)
 }
 
 func getToolByName(toolList []*tools.Tool, name string) *tools.Tool {
@@ -622,32 +763,50 @@ func (e *StreamIdleTimeoutError) Error() string {
 	return fmt.Sprintf("stream idle timeout: no data for %s (%d messages received)", e.Timeout, e.Received)
 }
 
+// maxOutputTokensOf returns the provider's configured max output tokens, or 0 if
+// the provider does not expose this capability.
+func maxOutputTokensOf(llm providers.Client) int64 {
+	if p, ok := llm.(providers.MaxOutputTokensProvider); ok {
+		return p.MaxOutputTokens()
+	}
+	return 0
+}
+
+func modelNameOf(llm providers.Client) string {
+	if p, ok := llm.(providers.ModelNameProvider); ok {
+		return p.ModelName()
+	}
+	return ""
+}
+
 func isStreamIdleTimeout(err error) bool {
 	var e *StreamIdleTimeoutError
 	return errors.As(err, &e)
 }
 
-// isContextWindowExceeded detects API errors indicating the request exceeded
-// the model's context window. Different providers phrase this differently:
-//   - OpenAI / DeepSeek: "context_length_exceeded", "maximum context length"
-//   - Anthropic: "context length", "too long"
-//   - DeepSeek variant: "exceed max message tokens"
-func isContextWindowExceeded(err error) bool {
+// isMaxTokensError checks if the error indicates the message exceeded token limits.
+// Patterns cover the major providers' wording (verified against official docs/source):
+//   - DeepSeek / OpenAI-compatible: "This model's maximum context length is X tokens..."
+//   - vLLM (v0.18+): "Input length (N) exceeds model's maximum context length (M)."
+//   - vLLM (legacy): "...is longer than the maximum model length of N."
+//   - Anthropic: "prompt is too long: ..."
+//   - GLM/Zhipu (error code 1261): "Prompt 超长"
+//   - Kimi: "Input token length too long" / "prompt tokens + max_tokens exceeds the model specification"
+//
+// Only specific overflow phrasings match: bare substrings like "max_tokens" or
+// "token limit" also appear in ordinary 400 validation errors (e.g. Anthropic's
+// "Invalid parameter: 'max_tokens'"), which must not trigger compaction.
+func isMaxTokensError(err error) bool {
 	if err == nil {
 		return false
 	}
 	msg := strings.ToLower(err.Error())
-	for _, pattern := range []string{
-		"context_length_exceeded",
-		"maximum context length",
-		"exceed max message tokens",
-		"context window",
-		"prompt is too long",
-		"request too large",
-	} {
-		if strings.Contains(msg, pattern) {
-			return true
-		}
-	}
-	return false
+	return strings.Contains(msg, "exceed max message tokens") ||
+		strings.Contains(msg, "context_length_exceeded") ||
+		strings.Contains(msg, "maximum context length") ||
+		strings.Contains(msg, "maximum model length") ||
+		strings.Contains(msg, "prompt is too long") ||
+		strings.Contains(msg, "prompt 超长") ||
+		strings.Contains(msg, "input token length too long") ||
+		strings.Contains(msg, "exceeds the model specification")
 }

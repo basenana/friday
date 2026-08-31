@@ -244,6 +244,14 @@ func (s *Session) RunHooks(ctx context.Context, hookType types.SessionType, payl
 					return err
 				}
 			}
+		case types.SessionHookAfterModelCall:
+			if ch, ok := h.(AfterModelCallHook); ok {
+				if payload.ModelCallStats != nil {
+					if err := ch.AfterModelCall(ctx, s, payload.ModelRequest, payload.ModelCallStats); err != nil {
+						return err
+					}
+				}
+			}
 		case types.SessionHookAfterTool:
 			if ah, ok := h.(AfterToolHook); ok {
 				if err := ah.AfterTool(ctx, s, ToolPayload{Executions: payload.Executions}); err != nil {

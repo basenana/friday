@@ -36,7 +36,6 @@ func (c *compatibleClient) Completion(ctx context.Context, request providers.Req
 			c.logger.Infow("[LLM-CALL] completion-with-streaming finish", "elapsed", time.Since(startAt).String())
 		}()
 
-	Retry:
 		if err = c.apiLimiter.Wait(ctx); err != nil {
 			c.logger.Errorw("new completion stream error", "err", err)
 			resp.fail(err)
@@ -56,17 +55,11 @@ func (c *compatibleClient) Completion(ctx context.Context, request providers.Req
 				continue
 			}
 
-			//c.logger.Infow("new choices found", "chunk", chunk)
 			ch := chunk.Choices[0]
 			resp.nextChoice(ch)
 		}
 
 		if err = stream.Err(); err != nil {
-			if isTooManyError(err) {
-				time.Sleep(time.Second * 10)
-				c.logger.Warn("too many requests try again")
-				goto Retry
-			}
 			c.logger.Errorw("completion stream error", "err", err)
 			resp.fail(err)
 			return
@@ -113,17 +106,17 @@ func (c *compatibleClient) chatCompletionNewParams(request providers.Request) *o
 			}
 
 			// Add image content
-			if msg.Image != nil {
-				switch msg.Image.Type {
+			for _, image := range msg.ImageContents() {
+				switch image.Type {
 				case types.ImageTypeURL:
 					contentParts = append(contentParts,
 						openai.ImageContentPart(openai.ChatCompletionContentPartImageImageURLParam{
-							URL: msg.Image.URL,
+							URL: image.URL,
 						}),
 					)
 				case types.ImageTypeBase64:
 					// OpenAI supports data URI format
-					dataURI := fmt.Sprintf("data:%s;base64,%s", msg.Image.MediaType, msg.Image.Data)
+					dataURI := fmt.Sprintf("data:%s;base64,%s", image.MediaType, image.Data)
 					contentParts = append(contentParts,
 						openai.ImageContentPart(openai.ChatCompletionContentPartImageImageURLParam{
 							URL: dataURI,

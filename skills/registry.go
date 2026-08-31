@@ -1,19 +1,25 @@
 package skills
 
 import (
+	"errors"
+	"io/fs"
 	"sync"
 )
 
+// ErrDeleteUnsupported is returned when the registry's underlying provider
+// cannot delete skills (only the filesystem Loader supports deletion).
+var ErrDeleteUnsupported = errors.New("delete is not supported by this skills provider")
+
 // Registry manages loaded skills and provides thread-safe access
 type Registry struct {
-	loader *Loader
-	mu     sync.RWMutex
+	provider Provider
+	mu       sync.RWMutex
 }
 
-// NewRegistry creates a new skill registry from an existing loader
-func NewRegistry(loader *Loader) *Registry {
+// NewRegistry creates a new skill registry from a provider
+func NewRegistry(provider Provider) *Registry {
 	return &Registry{
-		loader: loader,
+		provider: provider,
 	}
 }
 
@@ -22,11 +28,11 @@ func (r *Registry) List() []*Skill {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	// Return a copy to prevent race conditions if skills are modified
-	skills := r.loader.List()
-	result := make([]*Skill, len(skills))
-	copy(result, skills)
-	return result
+	// Defensive copy so callers cannot mutate the provider's slice.
+	skills := r.provider.List()
+	out := make([]*Skill, len(skills))
+	copy(out, skills)
+	return out
 }
 
 // Get returns a skill by name
@@ -34,11 +40,7 @@ func (r *Registry) Get(name string) (*Skill, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	skill := r.loader.Get(name)
-	if skill == nil {
-		return nil, ErrSkillNotFound{name}
-	}
-	return skill, nil
+	return r.provider.Get(name)
 }
 
 // LoadResource loads a resource file from a skill
@@ -46,7 +48,7 @@ func (r *Registry) LoadResource(skillName, resourcePath string) ([]byte, error) 
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	return r.loader.LoadResource(skillName, resourcePath)
+	return r.provider.LoadResource(skillName, resourcePath)
 }
 
 // ListResources lists all resources in a skill
@@ -54,35 +56,67 @@ func (r *Registry) ListResources(skillName string) ([]*Resource, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	return r.loader.ListResources(skillName)
+	return r.provider.ListResources(skillName)
 }
 
-// Refresh reloads all skills from disk
+// ListFiles lists directory entries within a skill at the given sub-path.
+func (r *Registry) ListFiles(skillName, subPath string) ([]fs.DirEntry, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	return r.provider.ListFiles(skillName, subPath)
+}
+
+// ReadFile reads an arbitrary file within a skill's directory.
+func (r *Registry) ReadFile(skillName, filePath string) ([]byte, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	return r.provider.ReadFile(skillName, filePath)
+}
+
+// Refresh reloads all skills from disk.
+// Only works when the underlying provider is a *Loader; otherwise returns nil.
 func (r *Registry) Refresh() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	// Create a new loader and reload
-	newLoader := NewLoader(r.loader.SkillsPaths()...)
+	loader, ok := r.provider.(*Loader)
+	if !ok {
+		return nil
+	}
+
+	newLoader := NewLoader(loader.SkillsPaths()...)
 	if err := newLoader.Load(); err != nil {
 		return err
 	}
 
-	r.loader = newLoader
+	r.provider = newLoader
 	return nil
 }
 
-// Locations returns all skills directory paths
+// Locations returns all skills directory paths.
+// Only works when the underlying provider is a *Loader; otherwise returns nil.
 func (r *Registry) Locations() []string {
-	return r.loader.SkillsPaths()
+	loader, ok := r.provider.(*Loader)
+	if !ok {
+		return nil
+	}
+	return loader.SkillsPaths()
 }
 
-// Delete removes a skill
+// Delete removes a skill.
+// Only works when the underlying provider is a *Loader; otherwise returns an error.
 func (r *Registry) Delete(skillName string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	return r.loader.Delete(skillName)
+	loader, ok := r.provider.(*Loader)
+	if !ok {
+		return ErrDeleteUnsupported
+	}
+
+	return loader.Delete(skillName)
 }
 
 // ErrSkillNotFound is returned when a skill is not found

@@ -30,10 +30,54 @@ type client struct {
 	model      Model
 	apiLimiter *rate.Limiter
 	logger     logger.Logger
+	// host is the configured base URL, used to detect third-party
+	// OpenAI-compatible endpoints that need vendor-specific fields.
+	host string
+}
+
+// reasoningOpts returns per-request options for thinking-mode control.
+// ReasoningEffortNone disables thinking via the top-level "thinking" field,
+// which the OpenAI SDK params do not model. These fields follow the
+// MiniMax-style dialect: they are only attached for third-party hosts,
+// because api.openai.com rejects unknown top-level fields.
+func (c *client) reasoningOpts() []option.RequestOption {
+	if !isThirdPartyHost(c.host, "api.openai.com") {
+		return nil
+	}
+	var opts []option.RequestOption
+	if c.model.ReasoningSplit {
+		opts = append(opts, option.WithJSONSet("reasoning_split", true))
+	}
+	if c.model.ReasoningEffort == providers.ReasoningEffortNone {
+		opts = append(opts, option.WithJSONSet("thinking", map[string]string{"type": "disabled"}))
+	}
+	return opts
+}
+
+// isThirdPartyHost reports whether the configured base URL points at a host
+// other than the vendor's official API endpoint. An empty base URL means the
+// SDK default, i.e. the official endpoint.
+func isThirdPartyHost(baseURL, officialHost string) bool {
+	if baseURL == "" {
+		return false
+	}
+	u, err := url.Parse(baseURL)
+	if err != nil || u.Host == "" {
+		return false
+	}
+	return u.Host != officialHost && !strings.HasSuffix(u.Host, "."+officialHost)
 }
 
 func (c *client) ContextWindow() int64 {
 	return c.model.ContextWindow
+}
+
+func (c *client) MaxOutputTokens() int64 {
+	return c.model.MaxTokens
+}
+
+func (c *client) ModelName() string {
+	return string(c.model.Name)
 }
 
 func (c *client) Completion(ctx context.Context, request providers.Request) providers.Response {
@@ -42,6 +86,7 @@ func (c *client) Completion(ctx context.Context, request providers.Request) prov
 		tracing.WithAttributes(tracing.String("model", string(c.model.Name))),
 	)
 	resp := newResponse(request)
+	resp.logger = c.logger
 	go func() {
 		defer span.End()
 		defer resp.close()
@@ -52,9 +97,10 @@ func (c *client) Completion(ctx context.Context, request providers.Request) prov
 		)
 
 		defer func() {
+			tokens := resp.Tokens()
 			span.SetAttributes(
-				tracing.Int("prompt_tokens", resp.Token.PromptTokens),
-				tracing.Int("completion_tokens", resp.Token.CompletionTokens),
+				tracing.Int("prompt_tokens", tokens.PromptTokens),
+				tracing.Int("completion_tokens", tokens.CompletionTokens),
 			)
 			if err != nil {
 				span.RecordError(err)
@@ -66,9 +112,11 @@ func (c *client) Completion(ctx context.Context, request providers.Request) prov
 			if sec < 1 {
 				sec = 1
 			}
-			tps := float64(resp.Token.CompletionTokens) / sec
+			tps := float64(tokens.CompletionTokens) / sec
 			c.logger.Infow("completion-with-streaming finish", "elapsed", time.Since(startAt).String(), "tps", fmt.Sprintf("%.2f", tps))
 		}()
+
+		var retries int
 
 	Retry:
 		if err = c.apiLimiter.Wait(ctx); err != nil {
@@ -80,7 +128,7 @@ func (c *client) Completion(ctx context.Context, request providers.Request) prov
 			c.logger.Infow("client-side llm api throttled", "wait", time.Since(startAt).String())
 		}
 
-		stream := c.openai.Chat.Completions.NewStreaming(ctx, *p)
+		stream := c.openai.Chat.Completions.NewStreaming(ctx, *p, c.reasoningOpts()...)
 
 		for stream.Next() {
 			chunk := stream.Current()
@@ -95,10 +143,24 @@ func (c *client) Completion(ctx context.Context, request providers.Request) prov
 		}
 
 		if err = stream.Err(); err != nil {
-			if isTooManyError(err) {
-				time.Sleep(time.Second * 10)
-				c.logger.Warn("too many requests try again")
+			if common.IsRetriableError(err) && retries < common.MaxRetriableAttempts && resp.canRetry() {
+				retries++
+				resp.resetForRetry()
+				backoff := common.RetryBackoffDelay(retries)
+				c.logger.Warnw("retriable LLM error, retrying", "attempt", retries, "backoff", backoff, "err", err)
+				if err = common.WaitBackoff(ctx, backoff); err != nil {
+					resp.fail(err)
+					return
+				}
 				goto Retry
+			}
+			switch {
+			case !common.IsRetriableError(err):
+				// Not retriable; fall through to fail below.
+			case !resp.canRetry():
+				c.logger.Warnw("retriable LLM stream error, not retrying after partial output", "err", err)
+			default:
+				c.logger.Warnw("retriable LLM stream error, retry budget exhausted", "attempts", retries, "err", err)
 			}
 			c.logger.Errorw("completion stream error", "err", err)
 			resp.fail(err)
@@ -129,6 +191,8 @@ func (c *client) CompletionNonStreaming(ctx context.Context, request providers.R
 		c.logger.Infow("completion-non-streaming finish", "elapsed", time.Since(startAt).String())
 	}()
 
+	var retries int
+
 Retry:
 	if err = c.apiLimiter.Wait(ctx); err != nil {
 		c.logger.Errorw("new completion error", "err", err)
@@ -138,14 +202,18 @@ Retry:
 		c.logger.Infow("client-side llm api throttled", "wait", time.Since(startAt).String())
 	}
 
-	response, err := c.openai.Chat.Completions.New(ctx, *p,
-		[]option.RequestOption{
-			option.WithJSONSet("stream", false), // for some model using stream as default
-		}...)
+	opts := append(c.reasoningOpts(),
+		option.WithJSONSet("stream", false), // for some model using stream as default
+	)
+	response, err := c.openai.Chat.Completions.New(ctx, *p, opts...)
 	if err != nil {
-		if isTooManyError(err) {
-			time.Sleep(time.Second * 10)
-			c.logger.Warn("too many requests try again")
+		if common.IsRetriableError(err) && retries < common.MaxRetriableAttempts {
+			retries++
+			backoff := common.RetryBackoffDelay(retries)
+			c.logger.Warnw("retriable LLM error, retrying", "attempt", retries, "backoff", backoff, "err", err)
+			if err = common.WaitBackoff(ctx, backoff); err != nil {
+				return "", err
+			}
 			goto Retry
 		}
 		c.logger.Errorw("completion error", "err", err)
@@ -208,11 +276,14 @@ func (c *client) chatCompletionNewParams(request providers.Request) *openai.Chat
 	if c.model.PresencePenalty != nil {
 		p.PresencePenalty = param.NewOpt(*c.model.PresencePenalty)
 	}
+	if e := c.model.ReasoningEffort; e != "" && e != providers.ReasoningEffortDefault && e != providers.ReasoningEffortNone {
+		p.ReasoningEffort = shared.ReasoningEffort(e)
+	}
 	if key := request.PromptCacheKey(); key != "" {
 		p.PromptCacheKey = param.NewOpt(key)
 	}
 
-	messages := normalizeOpenAIToolMessages(common.RepairToolHistory(request.Messages()))
+	messages := normalizeOpenAIToolMessages(request.Messages())
 
 	thinkingMode := false
 	for _, msg := range messages {
@@ -238,17 +309,17 @@ func (c *client) chatCompletionNewParams(request providers.Request) *openai.Chat
 			}
 
 			// Add image content
-			if msg.Image != nil {
-				switch msg.Image.Type {
+			for _, image := range msg.ImageContents() {
+				switch image.Type {
 				case types.ImageTypeURL:
 					contentParts = append(contentParts,
 						openai.ImageContentPart(openai.ChatCompletionContentPartImageImageURLParam{
-							URL: msg.Image.URL,
+							URL: image.URL,
 						}),
 					)
 				case types.ImageTypeBase64:
 					// OpenAI supports data URI format
-					dataURI := fmt.Sprintf("data:%s;base64,%s", msg.Image.MediaType, msg.Image.Data)
+					dataURI := fmt.Sprintf("data:%s;base64,%s", image.MediaType, image.Data)
 					contentParts = append(contentParts,
 						openai.ImageContentPart(openai.ChatCompletionContentPartImageImageURLParam{
 							URL: dataURI,
@@ -327,6 +398,7 @@ func newClient(host, apiKey string, model Model) *client {
 		model:      model,
 		apiLimiter: rate.NewLimiter(rate.Limit(float64(model.QPM)/60), int(model.QPM/2)),
 		logger:     logger.New("openai"),
+		host:       host,
 	}
 }
 
@@ -377,6 +449,13 @@ type response struct {
 
 	// accumulatedContent tracks the content for token fallback calculation
 	accumulatedContent string
+	emitted            bool
+	// failed marks the response as failed so close() skips flushing
+	// buffered (truncated) deltas.
+	failed   bool
+	thinking *thinkingStreamParser
+
+	logger logger.Logger
 }
 
 func (r *response) nextChoice(chunk openai.ChatCompletionChunkChoice) {
@@ -394,15 +473,38 @@ func (r *response) nextChoice(chunk openai.ChatCompletionChunkChoice) {
 	}
 
 	if chunk.Delta.Content != "" {
-		r.accumulatedContent += chunk.Delta.Content
-		r.Stream <- providers.Delta{Content: chunk.Delta.Content}
+		r.emitParsedDeltas(r.thinking.write(chunk.Delta.Content))
 	}
 
-	if reasoning := deltaExtraString(chunk.Delta, "reasoning_content"); reasoning != "" {
-		r.Stream <- providers.Delta{Reasoning: reasoning}
+	reasoningEmitted := false
+	for _, reasoning := range deltaReasoningDetails(chunk.Delta) {
+		if reasoning != "" {
+			r.emit(providers.Delta{Reasoning: reasoning})
+			reasoningEmitted = true
+		}
+	}
+	if !reasoningEmitted {
+		if reasoning := deltaExtraString(chunk.Delta, "reasoning_content"); reasoning != "" {
+			r.emit(providers.Delta{Reasoning: reasoning})
+			reasoningEmitted = true
+		}
+	}
+	if !reasoningEmitted {
+		if reasoning := deltaExtraString(chunk.Delta, "reasoning"); reasoning != "" {
+			r.emit(providers.Delta{Reasoning: reasoning})
+		}
 	}
 	if sig := deltaExtraString(chunk.Delta, "reasoning_content_signature"); sig != "" {
-		r.Stream <- providers.Delta{ReasoningSignature: sig}
+		r.emit(providers.Delta{ReasoningSignature: sig})
+	}
+}
+
+// emitParsedDeltas forwards parsed stream deltas (Content and Reasoning)
+// downstream, accumulating Content for token fallback calculation.
+func (r *response) emitParsedDeltas(deltas []providers.Delta) {
+	for _, delta := range deltas {
+		r.accumulatedContent += delta.Content
+		r.emit(delta)
 	}
 }
 
@@ -410,13 +512,24 @@ func (r *response) flushToolUse() {
 	if r.incompleteTool.ID == "" {
 		return
 	}
-	r.Stream <- providers.Delta{
+	arguments := r.incompleteTool.Arguments
+	toolError := ""
+	if normalized, errMsg, ok := common.NormalizeToolUseArguments(arguments, r.incompleteTool.Name); !ok {
+		if r.logger != nil {
+			r.logger.Warnw("non-object tool_use arguments emitted; replacing with empty object",
+				"tool", r.incompleteTool.Name, "raw", common.Truncate(arguments, 80))
+		}
+		arguments = normalized
+		toolError = errMsg
+	}
+	r.emit(providers.Delta{
 		ToolUse: []providers.ToolCall{{
 			ID:        r.incompleteTool.ID,
 			Name:      r.incompleteTool.Name,
-			Arguments: r.incompleteTool.Arguments,
+			Arguments: arguments,
+			Error:     toolError,
 		}},
-	}
+	})
 	r.incompleteTool = struct {
 		ID        string
 		Name      string
@@ -425,29 +538,69 @@ func (r *response) flushToolUse() {
 }
 
 func (r *response) updateUsage(chunk openai.CompletionUsage) {
-	r.Token.CompletionTokens += chunk.CompletionTokens
-	r.Token.PromptTokens += chunk.PromptTokens
-	r.Token.CachedPromptTokens += chunk.PromptTokensDetails.CachedTokens
-	r.Token.TotalTokens += chunk.TotalTokens
+	r.AddTokens(providers.Tokens{
+		CompletionTokens:   chunk.CompletionTokens,
+		PromptTokens:       chunk.PromptTokens,
+		CachedPromptTokens: chunk.PromptTokensDetails.CachedTokens,
+		TotalTokens:        chunk.TotalTokens,
+	})
 }
 
 // applyTokenFallback fills in token counts using FuzzyTokens if API didn't return them
 func (r *response) applyTokenFallback(requestMessages []types.Message) {
 	overhead := session.EstimateRequestOverhead(r.request)
-	r.Token.PromptTokens, r.Token.CompletionTokens, r.Token.TotalTokens =
-		common.ApplyTokenFallback(r.Token.PromptTokens, r.Token.CompletionTokens, r.accumulatedContent, requestMessages, overhead)
+	tokens := r.Tokens()
+	tokens.PromptTokens, tokens.CompletionTokens, tokens.TotalTokens =
+		common.ApplyTokenFallback(tokens.PromptTokens, tokens.CompletionTokens, r.accumulatedContent, requestMessages, overhead)
+	r.SetTokens(tokens)
 }
 
-func (r *response) fail(err error) { r.Err <- err }
+func (r *response) emit(delta providers.Delta) {
+	r.emitted = true
+	r.Stream <- delta
+}
+
+// canRetry reports whether the response is safe to retry: once any delta has
+// been emitted downstream, retrying would duplicate output.
+func (r *response) canRetry() bool {
+	return !r.emitted
+}
+
+func (r *response) resetForRetry() {
+	r.SetTokens(providers.Tokens{})
+	r.incompleteTool = struct {
+		ID        string
+		Name      string
+		Arguments string
+	}{}
+	r.accumulatedContent = ""
+	r.emitted = false
+	r.thinking = newThinkingStreamParser()
+}
+
+func (r *response) fail(err error) {
+	r.failed = true
+	r.Err <- err
+}
 
 func (r *response) close() {
-	r.flushToolUse()
+	if !r.failed {
+		// Flush buffered deltas only for a successful stream; after a failure
+		// the buffered text is a truncated fragment and must not be re-emitted
+		// as Content.
+		r.emitParsedDeltas(r.thinking.flush())
+		r.flushToolUse()
+	}
 	close(r.Stream)
 	close(r.Err)
 }
 
 func newResponse(req providers.Request) *response {
-	return &response{CommonResponse: providers.NewCommonResponse(), request: req}
+	return &response{
+		CommonResponse: providers.NewCommonResponse(),
+		request:        req,
+		thinking:       newThinkingStreamParser(),
+	}
 }
 
 var _ providers.Response = (*response)(nil)
@@ -499,7 +652,93 @@ func deltaExtraString(delta openai.ChatCompletionChunkChoiceDelta, key string) s
 	return result
 }
 
+type reasoningDetail struct {
+	Text  string `json:"text"`
+	Index int    `json:"index"`
+}
+
+// deltaReasoningDetails extracts reasoning text from the `reasoning_details`
+// field that MiniMax uses for its OpenAI-compatible endpoint. The field may be
+// an array of objects (each carrying `text` and an optional `index`), a single
+// object, or a plain string.
+func deltaReasoningDetails(delta openai.ChatCompletionChunkChoiceDelta) []string {
+	raw, ok := deltaRawJSON(delta, "reasoning_details")
+	if !ok {
+		return nil
+	}
+
+	var details []reasoningDetail
+	if err := json.Unmarshal(raw, &details); err == nil {
+		return reasoningDetailTexts(details)
+	}
+
+	var texts []string
+	if err := json.Unmarshal(raw, &texts); err == nil {
+		return texts
+	}
+
+	var detail reasoningDetail
+	if err := json.Unmarshal(raw, &detail); err == nil && detail.Text != "" {
+		return []string{detail.Text}
+	}
+
+	var text string
+	if json.Unmarshal(raw, &text) == nil {
+		return []string{text}
+	}
+	return nil
+}
+
+func reasoningDetailTexts(details []reasoningDetail) []string {
+	// MiniMax tags each segment with a monotonically increasing index. Only
+	// reorder when every segment carries a usable index; otherwise keep the
+	// supplied order (indexless payloads fall through here).
+	allIndexed := len(details) > 0
+	ascending := true
+	for i, detail := range details {
+		if detail.Index < 0 {
+			allIndexed = false
+		}
+		if i > 0 && details[i-1].Index > detail.Index {
+			ascending = false
+		}
+	}
+	if allIndexed && !ascending {
+		sort.SliceStable(details, func(i, j int) bool { return details[i].Index < details[j].Index })
+	}
+
+	texts := make([]string, 0, len(details))
+	for _, detail := range details {
+		texts = append(texts, detail.Text)
+	}
+	return texts
+}
+
+// deltaRawJSON returns the raw JSON value for an unknown delta field, checking
+// both openai-go's ExtraFields map and the delta's RawJSON fallback.
+func deltaRawJSON(delta openai.ChatCompletionChunkChoiceDelta, key string) ([]byte, bool) {
+	if field, ok := delta.JSON.ExtraFields[key]; ok && field.Valid() {
+		return []byte(field.Raw()), true
+	}
+
+	raw := strings.TrimSpace(delta.RawJSON())
+	if raw == "" {
+		return nil, false
+	}
+
+	var payload map[string]json.RawMessage
+	if json.Unmarshal([]byte(raw), &payload) != nil {
+		return nil, false
+	}
+	rawValue, ok := payload[key]
+	if !ok {
+		return nil, false
+	}
+	return rawValue, true
+}
+
 func normalizeOpenAIToolMessages(messages []types.Message) []types.Message {
+	messages = common.RepairToolHistory(messages)
 	if len(messages) == 0 {
 		return messages
 	}
@@ -510,11 +749,11 @@ func normalizeOpenAIToolMessages(messages []types.Message) []types.Message {
 
 		if msg.Role == types.RoleAssistant && len(msg.ToolCalls) > 0 {
 			resultMessages := collectImmediateOpenAIToolResults(messages, i+1)
-			assistantMsg, pairedToolNames := normalizeOpenAIAssistantToolUseMessage(msg, resultMessages)
+			assistantMsg, toolNames, exactMatch := normalizeOpenAIAssistantToolUseMessage(msg, resultMessages)
 			normalized = append(normalized, assistantMsg)
 
 			if len(resultMessages) > 0 {
-				normalized = append(normalized, normalizeOpenAIToolResultMessages(resultMessages, pairedToolNames)...)
+				normalized = append(normalized, normalizeOpenAIToolResultMessages(resultMessages, toolNames, exactMatch)...)
 				i += len(resultMessages)
 			}
 			continue
@@ -542,42 +781,84 @@ func collectImmediateOpenAIToolResults(messages []types.Message, start int) []ty
 	return collected
 }
 
-func normalizeOpenAIAssistantToolUseMessage(msg types.Message, resultMessages []types.Message) (types.Message, map[string]string) {
-	resultIDs := make(map[string]struct{})
-	for _, resultMsg := range resultMessages {
-		if resultMsg.ToolResult != nil {
-			resultIDs[resultMsg.ToolResult.CallID] = struct{}{}
-		}
-	}
+// normalizeOpenAIAssistantToolUseMessage keeps the assistant tool_calls block
+// only when it pairs exactly with the following tool results (same IDs, same
+// order, all arguments valid JSON objects). Many OpenAI-compatible endpoints
+// (GLM, MiniMax, vLLM, ...) reject partial downgrades harder than a fully
+// textual replay, so any mismatch downgrades the whole batch.
+func normalizeOpenAIAssistantToolUseMessage(msg types.Message, resultMessages []types.Message) (types.Message, map[string]string, bool) {
+	toolUseIDs, toolNames := openAIToolUseIDsAndNames(msg)
+	resultIDs := openAIToolResultIDs(resultMessages)
+	exactMatch := exactOpenAIToolPairing(toolUseIDs, resultIDs) && openAIToolCallsHaveJSONObjectArguments(msg.ToolCalls)
 
-	pairedToolNames := make(map[string]string)
 	normalized := msg
 	normalized.ToolCalls = make([]types.ToolCall, 0, len(msg.ToolCalls))
 	for _, tc := range msg.ToolCalls {
-		if _, ok := resultIDs[tc.ID]; ok {
-			pairedToolNames[tc.ID] = tc.Name
+		if exactMatch {
 			normalized.ToolCalls = append(normalized.ToolCalls, tc)
 			continue
 		}
 		normalized.Content = appendOpenAIFallbackText(normalized.Content, formatOpenAIToolUseFallback(tc))
 	}
-	return normalized, pairedToolNames
+	return normalized, toolNames, exactMatch
 }
 
-func normalizeOpenAIToolResultMessages(messages []types.Message, pairedToolNames map[string]string) []types.Message {
+func openAIToolCallsHaveJSONObjectArguments(toolCalls []types.ToolCall) bool {
+	for _, tc := range toolCalls {
+		if _, ok := common.ParseToolUseArguments(tc.Arguments); !ok {
+			return false
+		}
+	}
+	return true
+}
+
+func normalizeOpenAIToolResultMessages(messages []types.Message, toolNames map[string]string, exactMatch bool) []types.Message {
 	normalized := make([]types.Message, 0, len(messages))
 	for _, msg := range messages {
 		if msg.ToolResult == nil {
 			normalized = append(normalized, msg)
 			continue
 		}
-		if _, ok := pairedToolNames[msg.ToolResult.CallID]; ok {
+		if exactMatch {
 			normalized = append(normalized, msg)
 			continue
 		}
-		normalized = append(normalized, convertOpenAIToolResultToText(msg, pairedToolNames))
+		normalized = append(normalized, convertOpenAIToolResultToText(msg, toolNames))
 	}
 	return normalized
+}
+
+func openAIToolUseIDsAndNames(msg types.Message) ([]string, map[string]string) {
+	ids := make([]string, 0, len(msg.ToolCalls))
+	names := make(map[string]string, len(msg.ToolCalls))
+	for _, tc := range msg.ToolCalls {
+		ids = append(ids, tc.ID)
+		names[tc.ID] = tc.Name
+	}
+	return ids, names
+}
+
+func openAIToolResultIDs(messages []types.Message) []string {
+	ids := make([]string, 0, len(messages))
+	for _, msg := range messages {
+		if msg.ToolResult == nil {
+			continue
+		}
+		ids = append(ids, msg.ToolResult.CallID)
+	}
+	return ids
+}
+
+func exactOpenAIToolPairing(toolUseIDs, toolResultIDs []string) bool {
+	if len(toolUseIDs) != len(toolResultIDs) {
+		return false
+	}
+	for i := range toolUseIDs {
+		if toolUseIDs[i] != toolResultIDs[i] {
+			return false
+		}
+	}
+	return len(toolUseIDs) > 0
 }
 
 func convertOpenAIToolResultToText(msg types.Message, toolNames map[string]string) types.Message {

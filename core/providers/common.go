@@ -1,16 +1,48 @@
 package providers
 
-import "github.com/basenana/friday/core/types"
+import (
+	"sync"
+
+	"github.com/basenana/friday/core/types"
+)
 
 type CommonResponse struct {
 	Stream chan Delta
 	Err    chan error
-	Token  Tokens
+
+	tokenMu sync.Mutex
+	Token   Tokens
 }
 
 func (r *CommonResponse) Message() <-chan Delta { return r.Stream }
 func (r *CommonResponse) Error() <-chan error   { return r.Err }
-func (r *CommonResponse) Tokens() Tokens        { return r.Token }
+
+// Tokens returns a snapshot of the accumulated token usage. It is safe to
+// call concurrently with the provider's streaming goroutine, which must
+// accumulate usage via AddTokens/SetTokens rather than writing Token directly.
+func (r *CommonResponse) Tokens() Tokens {
+	r.tokenMu.Lock()
+	defer r.tokenMu.Unlock()
+	return r.Token
+}
+
+// AddTokens accumulates usage deltas into the response token counters.
+func (r *CommonResponse) AddTokens(delta Tokens) {
+	r.tokenMu.Lock()
+	defer r.tokenMu.Unlock()
+	r.Token.PromptTokens += delta.PromptTokens
+	r.Token.CompletionTokens += delta.CompletionTokens
+	r.Token.CachedPromptTokens += delta.CachedPromptTokens
+	r.Token.CacheCreationTokens += delta.CacheCreationTokens
+	r.Token.TotalTokens += delta.TotalTokens
+}
+
+// SetTokens overwrites the response token counters.
+func (r *CommonResponse) SetTokens(t Tokens) {
+	r.tokenMu.Lock()
+	defer r.tokenMu.Unlock()
+	r.Token = t
+}
 
 func NewCommonResponse() *CommonResponse {
 	return &CommonResponse{Stream: make(chan Delta, 5), Err: make(chan error, 1)}

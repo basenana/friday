@@ -1,9 +1,11 @@
 package session
 
 import (
+	"context"
 	"testing"
 
 	corelogger "github.com/basenana/friday/core/logger"
+	"github.com/basenana/friday/core/providers"
 	"github.com/basenana/friday/core/types"
 )
 
@@ -416,5 +418,55 @@ func TestFork_MultipleOrphanedCallsInLastMessage(t *testing.T) {
 
 	if len(fork.History) != 1 {
 		t.Fatalf("expected 1 (all orphans trimmed), got %d", len(fork.History))
+	}
+}
+
+type recordingModelCallHook struct {
+	calls []*ModelCallStats
+}
+
+func (h *recordingModelCallHook) AfterModelCall(_ context.Context, _ *Session, _ providers.Request, stats *ModelCallStats) error {
+	h.calls = append(h.calls, stats)
+	return nil
+}
+
+func TestRunHooks_AfterModelCall_Dispatches(t *testing.T) {
+	hook := &recordingModelCallHook{}
+	sess := New("sess-after-model-call", nil)
+	sess.RegisterHook(hook)
+
+	stats := &ModelCallStats{Model: "test-model", DurationMs: 42, Content: "hi"}
+	if err := sess.RunHooks(context.Background(), types.SessionHookAfterModelCall, HookPayload{ModelCallStats: stats}); err != nil {
+		t.Fatalf("RunHooks() error = %v", err)
+	}
+	if len(hook.calls) != 1 || hook.calls[0] != stats {
+		t.Fatalf("expected hook to fire once with stats, got %#v", hook.calls)
+	}
+}
+
+func TestRunHooks_AfterModelCall_SkippedWhenStatsNil(t *testing.T) {
+	hook := &recordingModelCallHook{}
+	sess := New("sess-after-model-call-nil", nil)
+	sess.RegisterHook(hook)
+
+	if err := sess.RunHooks(context.Background(), types.SessionHookAfterModelCall, HookPayload{}); err != nil {
+		t.Fatalf("RunHooks() error = %v", err)
+	}
+	if len(hook.calls) != 0 {
+		t.Fatalf("expected no hook calls with nil stats, got %d", len(hook.calls))
+	}
+}
+
+func TestFork_PropagatesAfterModelCallHook(t *testing.T) {
+	hook := &recordingModelCallHook{}
+	root := New("root-after-model-call", nil, WithHooks(hook))
+	child := root.Fork()
+
+	stats := &ModelCallStats{Model: "m"}
+	if err := child.RunHooks(context.Background(), types.SessionHookAfterModelCall, HookPayload{ModelCallStats: stats}); err != nil {
+		t.Fatalf("RunHooks() error = %v", err)
+	}
+	if len(hook.calls) != 1 {
+		t.Fatalf("expected fork to inherit after_model_call hook, got %d calls", len(hook.calls))
 	}
 }

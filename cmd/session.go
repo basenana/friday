@@ -461,12 +461,24 @@ func formatMessage(msg types.Message) string {
 }
 
 func findSessionByPrefix(metas []sessions.SessionMeta, prefix string) (string, bool) {
-	var matches []sessions.SessionMeta
+	// An exact alias match wins before any ID prefix scan, so an alias that
+	// happens to prefix another session's ID is not reported as ambiguous.
+	var aliasMatches []sessions.SessionMeta
 	for _, meta := range metas {
-		if strings.HasPrefix(meta.ID, prefix) {
-			matches = append(matches, meta)
+		if meta.Alias == prefix {
+			aliasMatches = append(aliasMatches, meta)
 		}
 	}
+
+	matches := aliasMatches
+	if len(matches) == 0 {
+		for _, meta := range metas {
+			if strings.HasPrefix(meta.ID, prefix) {
+				matches = append(matches, meta)
+			}
+		}
+	}
+
 	if len(matches) == 1 {
 		return matches[0].ID, true
 	}

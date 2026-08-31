@@ -9,10 +9,11 @@ import (
 type SessionType string
 
 const (
-	SessionHookBeforeAgent = "before_agent"
-	SessionHookBeforeModel = "before_model"
-	SessionHookAfterModel  = "after_model"
-	SessionHookAfterTool   = "after_tool"
+	SessionHookBeforeAgent    = "before_agent"
+	SessionHookBeforeModel    = "before_model"
+	SessionHookAfterModel     = "after_model"
+	SessionHookAfterModelCall = "after_model_call"
+	SessionHookAfterTool      = "after_tool"
 )
 
 type MessageRole string
@@ -50,9 +51,13 @@ const (
 // ImageContent represents image content in a message
 type ImageContent struct {
 	Type      ImageType `json:"type"`                 // "url" or "base64"
+	ID        string    `json:"id,omitempty"`         // durable attachment ID
 	URL       string    `json:"url,omitempty"`        // URL for ImageTypeURL
 	MediaType string    `json:"media_type,omitempty"` // MIME type for ImageTypeBase64
 	Data      string    `json:"data,omitempty"`       // Base64 encoded data for ImageTypeBase64
+	Filename  string    `json:"filename,omitempty"`
+	Width     int       `json:"width,omitempty"`
+	Height    int       `json:"height,omitempty"`
 }
 
 // Message represents a single message in the conversation
@@ -73,7 +78,8 @@ type Message struct {
 	RedactedThinking string `json:"redacted_thinking,omitempty"`
 
 	// Multimedia content
-	Image *ImageContent `json:"image,omitempty"`
+	Image  *ImageContent  `json:"image,omitempty"`
+	Images []ImageContent `json:"images,omitempty"`
 
 	// Tool interaction
 	ToolCalls  []ToolCall  `json:"tool_calls,omitempty"`
@@ -84,6 +90,16 @@ type Message struct {
 
 	Metadata map[string]string `json:"-"`
 	Time     time.Time         `json:"time,omitempty"`
+}
+
+// ImageContents returns images in display order while retaining compatibility
+// with callers that still populate the legacy single Image field.
+func (m Message) ImageContents() []ImageContent {
+	images := make([]ImageContent, 0, len(m.Images)+1)
+	if m.Image != nil {
+		images = append(images, *m.Image)
+	}
+	return append(images, m.Images...)
 }
 
 func (m Message) GetRole() MessageRole {

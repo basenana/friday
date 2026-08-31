@@ -7,6 +7,17 @@ import (
 	"strings"
 )
 
+func xmlEscape(s string) string {
+	s = strings.ReplaceAll(s, "&", "&amp;")
+	s = strings.ReplaceAll(s, "<", "&lt;")
+	s = strings.ReplaceAll(s, ">", "&gt;")
+	return s
+}
+
+func writeXMLElement(buf *bytes.Buffer, tag, content string) {
+	buf.WriteString(fmt.Sprintf("<%s>%s</%s>\n", tag, xmlEscape(content), tag))
+}
+
 // SKILL_SYSTEM_PROMPT is appended to system prompt to explain skills usage
 const SKILL_SYSTEM_PROMPT = `<skills_system>
 You have access to a skills library that provides specialized capabilities and domain knowledge.
@@ -70,7 +81,7 @@ func builtSkillsSystemPrompt(registry *Registry, skills []*Skill) string {
 
 	buf.WriteString("<skills_locations>\n")
 	for _, loc := range los {
-		buf.WriteString(fmt.Sprintf("<dir_path>%s</dir_path>\n", loc))
+		writeXMLElement(buf, "dir_path", loc)
 	}
 	buf.WriteString("</skills_locations>\n")
 	content = strings.ReplaceAll(content, "{skills_locations}", buf.String())
@@ -79,13 +90,13 @@ func builtSkillsSystemPrompt(registry *Registry, skills []*Skill) string {
 	buf.WriteString("<available_skills>\n")
 	for _, skill := range sortedSkills {
 		buf.WriteString("<skill>\n")
-		buf.WriteString(fmt.Sprintf("<name>%s</name>\n", skill.Name))
-		buf.WriteString(fmt.Sprintf("<description>%s</description>\n", skill.Description))
-		buf.WriteString(fmt.Sprintf("<dir_path>%s</dir_path>\n", skill.BasePath))
+		writeXMLElement(buf, "name", skill.Name)
+		writeXMLElement(buf, "description", skill.Description)
+		writeXMLElement(buf, "dir_path", skill.BasePath)
 		buf.WriteString("</skill>\n")
 	}
 	buf.WriteString("</available_skills>")
 	content = strings.ReplaceAll(content, "{skills_list}", buf.String())
 
-	return buf.String()
+	return content
 }

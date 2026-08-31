@@ -45,8 +45,14 @@ func newLeaderTool(worker agents.Agent, sess *session.Session, agentTools []*too
 func blockingSubagentTool(worker agents.Agent, sess *session.Session, agentTools []*tools.Tool) tools.ToolHandlerFunc {
 	return func(ctx context.Context, request *tools.Request) (*tools.Result, error) {
 		tasks, ok := request.Arguments["task_describe_list"].([]any)
-		if !ok || len(tasks) == 0 {
+		if !ok {
+			if _, present := request.Arguments["task_describe_list"]; present {
+				return tools.NewToolResultError("task_describe_list must be a string array"), nil
+			}
 			return tools.NewToolResultError("missing required parameter: task_describe_list"), nil
+		}
+		if len(tasks) == 0 {
+			return tools.NewToolResultError("task_describe_list must contain at least one task"), nil
 		}
 		var taskDescList []string
 		for _, taskDescStr := range tasks {

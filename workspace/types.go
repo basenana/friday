@@ -1,5 +1,9 @@
 package workspace
 
+import (
+	"github.com/basenana/friday/core/types"
+)
+
 // FileRole determines how a workspace file is used
 type FileRole string
 
@@ -10,6 +14,8 @@ const (
 	FileRoleGuidance FileRole = "guidance"
 	// FileRoleOptional files are optional and may be skipped
 	FileRoleOptional FileRole = "optional"
+	// FileRoleMemory files are used to store long-term critical memories.
+	FileRoleMemory FileRole = "memory"
 )
 
 // FileSpec defines a workspace file's behavior
@@ -23,6 +29,8 @@ type FileSpec struct {
 type LoadedContent struct {
 	// SystemPrompts contains content from files with FileRoleSystemPrompt
 	SystemPrompts []string
+	// MemoryHistory contains memory log messages to prepend to conversation history
+	MemoryHistory []types.Message
 }
 
 // Paths contains important directory paths for the friday application

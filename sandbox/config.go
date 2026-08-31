@@ -1,5 +1,19 @@
 package sandbox
 
+import (
+	"encoding/json"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"gopkg.in/yaml.v3"
+)
+
+const maxConfigFileSize = 1 << 20 // 1 MiB
+
 // Config is the top-level configuration for sandbox
 type Config struct {
 	Permissions PermissionsConfig `json:"permissions" yaml:"permissions"`
@@ -50,7 +64,84 @@ func LoadConfig(path string) (*Config, error) {
 		return cfg, nil
 	}
 
-	// Try to load from file
-	// TODO: implement file loading with JSON/YAML support
+	// Open the file and stat the opened descriptor so the permission and
+	// size checks apply to the file that is actually read (closing the
+	// Stat/ReadFile TOCTOU window).
+	f, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return cfg, nil
+		}
+		return nil, err
+	}
+	defer f.Close()
+
+	info, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+
+	if err := validateConfigFilePerm(path, info); err != nil {
+		return nil, err
+	}
+	if info.Size() > maxConfigFileSize {
+		return nil, fmt.Errorf("config file too large: %s exceeds %d bytes", path, maxConfigFileSize)
+	}
+
+	data, err := io.ReadAll(io.LimitReader(f, maxConfigFileSize+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > maxConfigFileSize {
+		return nil, fmt.Errorf("config file too large: %s exceeds %d bytes", path, maxConfigFileSize)
+	}
+
+	if strings.HasSuffix(strings.ToLower(path), ".json") {
+		if err := json.Unmarshal(data, cfg); err != nil {
+			return nil, err
+		}
+	} else {
+		if err := yaml.Unmarshal(data, cfg); err != nil {
+			return nil, err
+		}
+	}
+
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+
 	return cfg, nil
+}
+
+// Validate checks the config for invalid values
+func (c *Config) Validate() error {
+	if _, err := time.ParseDuration(c.Sandbox.Defaults.Timeout); c.Sandbox.Defaults.Timeout != "" && err != nil {
+		return fmt.Errorf("invalid sandbox.defaults.timeout: %w", err)
+	}
+	for _, entry := range c.Sandbox.Network.Allow {
+		if err := validateNetworkAllowEntry(entry); err != nil {
+			return fmt.Errorf("invalid sandbox.network.allow: %w", err)
+		}
+	}
+	return nil
+}
+
+func validateConfigFilePerm(path string, info os.FileInfo) error {
+	if os.Geteuid() == 0 {
+		return nil
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("config path is not a regular file: %s", path)
+	}
+	if info.Mode().Perm()&0o022 != 0 {
+		return fmt.Errorf("config file permissions too open: %s (%s)", path, info.Mode().Perm())
+	}
+	dirInfo, err := os.Stat(filepath.Dir(path))
+	if err != nil {
+		return err
+	}
+	if dirInfo.Mode().Perm()&0o002 != 0 {
+		return fmt.Errorf("config directory is world-writable: %s", filepath.Dir(path))
+	}
+	return nil
 }

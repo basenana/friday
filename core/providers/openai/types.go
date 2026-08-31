@@ -10,6 +10,8 @@ type Model struct {
 	FrequencyPenalty   *float64
 	PresencePenalty    *float64
 	MaxTokens          int64
+	ReasoningEffort    string
+	ReasoningSplit     bool
 	StrictMode         bool
 	QPM                int64
 	Proxy              string

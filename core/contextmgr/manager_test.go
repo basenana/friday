@@ -771,3 +771,152 @@ func historyContainsToolResult(history []types.Message, want string) bool {
 	}
 	return false
 }
+
+func TestBeforeModelMicroCompactStripsOldImagesButKeepsLatest(t *testing.T) {
+	largeToolResult := strings.Repeat("tool output ", 200)
+	oldImage := &types.ImageContent{Type: types.ImageTypeBase64, MediaType: "image/png", Data: "old-image-data"}
+	latestOldImage := types.ImageContent{Type: types.ImageTypeBase64, MediaType: "image/png", Data: "latest-old-image-data"}
+	// Six conversation groups: old groups 1-2 carry images, tail groups 3-6
+	// are preserved verbatim. The latest image sits in group 2 (an old group)
+	// so the "keep latest image" logic is exercised.
+	sess := session.New("sess-images", nil, session.WithHistory(
+		types.Message{Role: types.RoleUser, Content: "Analyze this old screenshot.", Image: oldImage},
+		types.Message{Role: types.RoleAssistant, ToolCalls: []types.ToolCall{{Name: "read_file", Arguments: `{"path":"a.go"}`}}},
+		types.Message{Role: types.RoleTool, ToolResult: &types.ToolResult{CallID: "call-1", Content: largeToolResult}},
+		types.Message{Role: types.RoleAssistant, Content: "Done with the first image."},
+		types.Message{Role: types.RoleUser, Content: "Now check this newer one.", Images: []types.ImageContent{latestOldImage}},
+		types.Message{Role: types.RoleAssistant, Content: "Reviewed."},
+		types.Message{Role: types.RoleUser, Content: "Step three."},
+		types.Message{Role: types.RoleAssistant, Content: "Working on it."},
+		types.Message{Role: types.RoleUser, Content: "Step four."},
+		types.Message{Role: types.RoleAssistant, Content: "Working on it."},
+		types.Message{Role: types.RoleUser, Content: "Step five."},
+		types.Message{Role: types.RoleAssistant, Content: "Working on it."},
+		types.Message{Role: types.RoleUser, Content: "Final step."},
+		types.Message{Role: types.RoleAssistant, Content: "Finalizing."},
+	))
+
+	mgr := New(nil, Config{
+		ContextWindow:      1200,
+		SoftThresholdRatio: 0.40,
+		HardThresholdRatio: 0.60,
+		MaxToolResultChars: 80,
+	})
+
+	req := providers.NewRequest("", sess.GetHistory()...)
+	if err := mgr.BeforeModel(stdctx.Background(), sess, req); err != nil {
+		t.Fatalf("BeforeModel failed: %v", err)
+	}
+
+	projected := req.History()
+	var oldImageKept, latestImageKept bool
+	for _, msg := range projected {
+		switch msg.Content {
+		case "Analyze this old screenshot.":
+			oldImageKept = len(msg.ImageContents()) > 0
+		case "Now check this newer one.":
+			latestImageKept = len(msg.ImageContents()) > 0
+		}
+	}
+	if oldImageKept {
+		t.Fatalf("expected old-group image to be stripped from projection")
+	}
+	if !latestImageKept {
+		t.Fatalf("expected the latest image message to keep its image even in an old group")
+	}
+	// Session history keeps both images (projection only).
+	for _, msg := range sess.GetHistory() {
+		if msg.Content == "Analyze this old screenshot." && len(msg.ImageContents()) == 0 {
+			t.Fatalf("expected session history to retain the old image")
+		}
+	}
+}
+
+func TestStripMessageImages(t *testing.T) {
+	withImages := types.Message{
+		Role:   types.RoleUser,
+		Tokens: 50,
+		Image:  &types.ImageContent{Type: types.ImageTypeBase64, Data: "data"},
+		Images: []types.ImageContent{{Type: types.ImageTypeBase64, Data: "data2"}},
+	}
+	got := stripMessageImages(withImages)
+	if got.Image != nil || len(got.Images) != 0 {
+		t.Fatalf("expected images to be stripped, got image=%v images=%d", got.Image, len(got.Images))
+	}
+	if got.Tokens != 0 {
+		t.Fatalf("expected stale token count to be cleared, got %d", got.Tokens)
+	}
+
+	untouched := types.Message{Role: types.RoleUser, Content: "plain", Tokens: 10}
+	if got := stripMessageImages(untouched); got.Tokens != 10 {
+		t.Fatalf("expected imageless message to be returned unchanged, got %#v", got)
+	}
+}
+
+type budgetFakeClient struct {
+	window    int64
+	maxOutput int64
+}
+
+func (c *budgetFakeClient) Completion(_ stdctx.Context, _ providers.Request) providers.Response {
+	resp := providers.NewCommonResponse()
+	go func() {
+		defer close(resp.Stream)
+		defer close(resp.Err)
+	}()
+	return resp
+}
+
+func (c *budgetFakeClient) CompletionNonStreaming(stdctx.Context, providers.Request) (string, error) {
+	return "", nil
+}
+
+func (c *budgetFakeClient) StructuredPredict(stdctx.Context, providers.Request, any) error {
+	return nil
+}
+
+func (c *budgetFakeClient) ContextWindow() int64   { return c.window }
+func (c *budgetFakeClient) MaxOutputTokens() int64 { return c.maxOutput }
+
+func TestBuildBudgetFloorCappedByMaxOutput(t *testing.T) {
+	t.Run("small window: floor does not defeat max-output subtraction", func(t *testing.T) {
+		m := New(&budgetFakeClient{window: 32 * 1024, maxOutput: 16 * 1024}, Config{})
+		budget := m.buildBudget()
+		// Effective input budget must be window-maxOutput = 16K, not the 16K floor
+		// restoring (almost) the whole 32K window.
+		effective := int64(32*1024) - int64(16*1024)
+		wantSoft := int64(float64(effective) * defaultSoftThresholdRatio)
+		wantHard := int64(float64(effective) * defaultHardThresholdRatio)
+		if budget.SoftThreshold > wantSoft {
+			t.Fatalf("SoftThreshold = %d, want <= %d (effective budget should be %d)", budget.SoftThreshold, wantSoft, effective)
+		}
+		if budget.HardThreshold > wantHard {
+			t.Fatalf("HardThreshold = %d, want <= %d", budget.HardThreshold, wantHard)
+		}
+		if budget.ContextWindow != 32*1024 {
+			t.Fatalf("ContextWindow = %d, want 32768", budget.ContextWindow)
+		}
+	})
+
+	t.Run("large window: existing behavior preserved", func(t *testing.T) {
+		m := New(&budgetFakeClient{window: 200 * 1000, maxOutput: 16 * 1024}, Config{})
+		budget := m.buildBudget()
+		effective := int64(200*1000) - int64(16*1024)
+		wantSoft := int64(float64(effective) * defaultSoftThresholdRatio)
+		wantHard := int64(float64(effective) * defaultHardThresholdRatio)
+		if budget.SoftThreshold != wantSoft || budget.HardThreshold != wantHard {
+			t.Fatalf("budget = %+v, want soft/hard = %d/%d", budget, wantSoft, wantHard)
+		}
+	})
+
+	t.Run("window smaller than max output keeps the floored behavior", func(t *testing.T) {
+		m := New(&budgetFakeClient{window: 16 * 1024, maxOutput: 32 * 1024}, Config{})
+		budget := m.buildBudget()
+		// window-maxOutput <= 0, so the floor keeps its old clamped value (the window itself).
+		effective := int64(16 * 1024)
+		wantSoft := int64(float64(effective) * defaultSoftThresholdRatio)
+		if budget.SoftThreshold != wantSoft {
+			t.Fatalf("SoftThreshold = %d, want the existing clamped-window behavior %d", budget.SoftThreshold, wantSoft)
+		}
+	})
+}

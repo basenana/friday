@@ -9,7 +9,7 @@ import (
 	"runtime"
 	"strings"
 
-	"mvdan.cc/sh/v3/syntax"
+	"github.com/basenana/friday/shellcmd"
 )
 
 // Seatbelt implements Sandbox using macOS sandbox-exec (Seatbelt)
@@ -29,7 +29,7 @@ func (s *Seatbelt) WrapCommand(cmd string, opts ExecOptions) (string, func(), er
 	}
 
 	// Generate the sandbox profile
-	profile := s.generateProfile(opts.Workdir)
+	profile := s.generateProfile(opts.Workdir, opts.HomeDir)
 
 	// Write profile to temp file
 	tmpFile, err := os.CreateTemp("", "friday-sandbox-*.sb")
@@ -45,13 +45,10 @@ func (s *Seatbelt) WrapCommand(cmd string, opts ExecOptions) (string, func(), er
 	}
 	tmpFile.Close()
 
-	// Safely quote the command for bash -c using syntax.Quote
-	quotedCmd, err := syntax.Quote(cmd, syntax.LangBash)
-	if err != nil {
-		// Fallback to basic escaping if Quote fails
-		quotedCmd = "'" + strings.ReplaceAll(cmd, "'", "'\\''") + "'"
-	}
-	wrappedCmd := fmt.Sprintf("sandbox-exec -f %s -- bash -c %s", profilePath, quotedCmd)
+	// Quote each argument (binary, flags, and the inner command) with bash
+	// quoting rules so values containing spaces or metacharacters stay a
+	// single argument.
+	wrappedCmd := shellcmd.Join("sandbox-exec", "-f", profilePath, "--", "bash", "-c", cmd)
 
 	cleanup := func() {
 		os.Remove(profilePath)
@@ -60,13 +57,30 @@ func (s *Seatbelt) WrapCommand(cmd string, opts ExecOptions) (string, func(), er
 	return wrappedCmd, cleanup, nil
 }
 
-// IsAvailable checks if sandbox-exec is available
+// IsAvailable checks if sandbox-exec is available and functional
 func (s *Seatbelt) IsAvailable() bool {
 	if runtime.GOOS != "darwin" {
 		return false
 	}
-	_, err := exec.LookPath("sandbox-exec")
-	return err == nil
+
+	binary, err := exec.LookPath("sandbox-exec")
+	if err != nil {
+		return false
+	}
+	trueBin, err := exec.LookPath("true")
+	if err != nil {
+		for _, candidate := range []string{"/usr/bin/true", "/bin/true"} {
+			if info, statErr := os.Stat(candidate); statErr == nil && !info.IsDir() {
+				trueBin = candidate
+				break
+			}
+		}
+	}
+	if trueBin == "" {
+		return false
+	}
+	cmd := exec.Command(binary, "-p", "(version 1) (allow default)", trueBin)
+	return cmd.Run() == nil
 }
 
 // Name returns the name of this sandbox
@@ -75,7 +89,7 @@ func (s *Seatbelt) Name() string {
 }
 
 // generateProfile generates a Seatbelt profile
-func (s *Seatbelt) generateProfile(workdir string) string {
+func (s *Seatbelt) generateProfile(workdir string, homeDir string) string {
 	var sb strings.Builder
 
 	sb.WriteString("(version 1)\n")
@@ -83,33 +97,38 @@ func (s *Seatbelt) generateProfile(workdir string) string {
 
 	// Deny reading sensitive paths
 	for _, path := range s.config.Sandbox.Filesystem.Deny {
-		expanded := expandPath(path, workdir)
+		expanded := expandPath(path, workdir, homeDir)
 		sb.WriteString(fmt.Sprintf("(deny file-read* (subpath %q))\n", expanded))
 	}
 
 	// Allow writing to specified paths
 	for _, path := range s.config.Sandbox.Filesystem.Write {
-		expanded := expandPath(path, workdir)
+		expanded := expandPath(path, workdir, homeDir)
 		sb.WriteString(fmt.Sprintf("(allow file-write* (subpath %q))\n", expanded))
 	}
 
 	// Deny writing to protected paths (even if in write list)
 	for _, path := range s.config.Sandbox.Filesystem.Protected {
-		expanded := expandPath(path, workdir)
+		expanded := expandPath(path, workdir, homeDir)
 		sb.WriteString(fmt.Sprintf("(deny file-write* (subpath %q))\n", expanded))
 	}
 
 	// Mount readonly paths as read-only
 	for _, path := range s.config.Sandbox.Filesystem.ReadOnly {
-		expanded := expandPath(path, workdir)
+		expanded := expandPath(path, workdir, homeDir)
 		sb.WriteString(fmt.Sprintf("(allow file-read* (subpath %q))\n", expanded))
 		sb.WriteString(fmt.Sprintf("(deny file-write* (subpath %q))\n", expanded))
 	}
 
-	// Network restrictions - deny by default for security
+	// Network restrictions: deny everything by default and only allow
+	// outbound connections when network isolation is disabled.
+	//
+	// Note: Network.Allow is an allow-list enforced by the image tool for
+	// URL downloads; it does not apply to shell commands executed under
+	// Seatbelt, which get either full outbound access (isolation disabled)
+	// or no network at all (isolation enabled).
 	sb.WriteString("(deny network*)\n")
-	if s.config.Sandbox.Network.Isolation {
-		// Allow network outbound if explicitly enabled
+	if !s.config.Sandbox.Network.Isolation {
 		sb.WriteString("(allow network-outbound)\n")
 	}
 

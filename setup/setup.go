@@ -11,6 +11,7 @@ import (
 	"github.com/basenana/friday/core/agents"
 	"github.com/basenana/friday/core/api"
 	"github.com/basenana/friday/core/contextmgr"
+	"github.com/basenana/friday/core/logger"
 	"github.com/basenana/friday/core/planning"
 	"github.com/basenana/friday/core/providers"
 	coreSession "github.com/basenana/friday/core/session"
@@ -37,11 +38,12 @@ type AgentContext struct {
 type Option func(*options)
 
 type options struct {
-	sessionID  string
-	isolate    bool
-	temporary  bool
-	verbose    bool
-	extraTools []*tools.Tool
+	sessionID      string
+	isolate        bool
+	temporary      bool
+	verbose        bool
+	extraTools     []*tools.Tool
+	providerClient providers.Client
 }
 
 type SessionManager interface {
@@ -83,20 +85,37 @@ func WithExtraTools(t []*tools.Tool) Option {
 	}
 }
 
+// WithProviderClient supplies a pre-built providers.Client so setup
+// does not construct a second one. Useful when a caller has already
+// built a client for another consumer and wants to share the same
+// authenticated transport with the agent.
+func WithProviderClient(c providers.Client) Option {
+	return func(o *options) {
+		o.providerClient = c
+	}
+}
+
 func NewAgent(sessionMgr SessionManager, cfg *config.Config, opts ...Option) (*AgentContext, error) {
 	options := &options{}
 	for _, opt := range opts {
 		opt(options)
 	}
 
-	client, err := CreateProviderClient(cfg)
-	if err != nil {
-		return nil, fmt.Errorf("create provider client: %w", err)
+	var client providers.Client
+	if options.providerClient != nil {
+		client = options.providerClient
+	} else {
+		c, err := CreateProviderClient(cfg)
+		if err != nil {
+			return nil, fmt.Errorf("create provider client: %w", err)
+		}
+		client = c
 	}
 
 	sessionMgr.SetLLM(client)
 
 	ws := workspace.NewWorkspace(cfg.WorkspacePath(), cfg.MemoryPath())
+	var err error
 	if err = ws.EnsureDir(""); err != nil {
 		return nil, fmt.Errorf("create workspace: %w", err)
 	}
@@ -142,7 +161,7 @@ func NewAgent(sessionMgr SessionManager, cfg *config.Config, opts ...Option) (*A
 		fmt.Fprintf(os.Stderr, "Warning: failed to ensure memory log: %v\n", err)
 	}
 
-	loaded, err := ws.Load()
+	loaded, err := ws.Load(workspace.WithMemoryDays(cfg.Memory.Days))
 	if err != nil {
 		return nil, fmt.Errorf("load workspace content: %w", err)
 	}
@@ -185,6 +204,8 @@ func NewAgent(sessionMgr SessionManager, cfg *config.Config, opts ...Option) (*A
 	allTools = append(allTools, imageTool)
 	bashTool := sandbox.NewBashTool(sandboxExec, workdir)
 	allTools = append(allTools, bashTool)
+	pollWaitTool := sandbox.NewPollWaitTool(sandboxExec, workdir)
+	allTools = append(allTools, pollWaitTool)
 	taskManager := sandbox.NewTaskManager(sandboxExec)
 	bgTools := sandbox.NewBackgroundTaskTools(taskManager, workdir)
 	allTools = append(allTools, bgTools...)
@@ -192,6 +213,15 @@ func NewAgent(sessionMgr SessionManager, cfg *config.Config, opts ...Option) (*A
 	if len(options.extraTools) > 0 {
 		allTools = append(allTools, options.extraTools...)
 	}
+
+	// Trace wraps the real handler (innermost) so every invocation —
+	// including each retry attempt — is observed with its evidence; retry
+	// sits outside and injects that evidence into the context. Registering
+	// both here wraps the shared tool set exactly once.
+	allTools = wrapToolsWithInvocationRetry(
+		wrapToolsWithTrace(allTools, toolTraceSinkForConfig(cfg)),
+		defaultToolInvocationPolicy,
+	)
 
 	agent := agents.New(client, agents.Option{
 		SystemPrompt: workspace.ComposeSystemPrompt(loaded),
@@ -236,6 +266,9 @@ func NewAgent(sessionMgr SessionManager, cfg *config.Config, opts ...Option) (*A
 		planningHook,
 		skillHook,
 		teamHook,
+		// Memory must be injected before the context manager runs so its
+		// projection accounts for the extra per-request messages.
+		newMemoryHook(ws),
 		contextHook,
 		subagentHook,
 	}
@@ -449,4 +482,14 @@ func replaceSessionHooks(sess *coreSession.Session, hooks ...coreSession.Hook) {
 	for _, hook := range hooks {
 		sess.RegisterHook(hook)
 	}
+}
+
+// toolTraceSinkForConfig returns the default tool-trace sink: trace events go
+// to the logger at debug level when logging is enabled, otherwise no sink is
+// installed and tracing is a no-op.
+func toolTraceSinkForConfig(cfg *config.Config) func(ToolTraceEvent) {
+	if cfg == nil || !cfg.Log.Enabled {
+		return nil
+	}
+	return toolTraceLoggerSink(logger.New("tools.trace"))
 }

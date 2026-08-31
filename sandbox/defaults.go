@@ -5,6 +5,8 @@ var DefaultProtectedPaths = []string{
 	"~/.ssh",
 	"~/.aws",
 	"~/.gnupg",
+	"~/.kube",
+	"~/.docker",
 	"~/.bashrc",
 	"~/.bash_profile",
 	"~/.zshrc",
@@ -19,6 +21,20 @@ var DefaultProtectedPaths = []string{
 	".env",
 	"*.pem",
 	"*.key",
+}
+
+// defaultDenyPaths are sensitive host directories that the sandbox blocks
+// entirely (not just write-protected). Relevant in particular when $HOME is
+// bound into the sandbox.
+var defaultDenyPaths = []string{
+	"~/.ssh",
+	"~/.aws",
+	"~/.gnupg",
+	"~/.kube",
+	"~/.docker",
+	"/etc/shadow",
+	"/etc/gshadow",
+	"/etc/ssh",
 }
 
 // DefaultDeniedCommands are commands that are denied by default
@@ -87,7 +103,7 @@ func DefaultConfig() *Config {
 			Enabled: true,
 			Filesystem: FilesystemConfig{
 				ReadOnly:  []string{},
-				Deny:      append([]string{}, DefaultProtectedPaths[:3]...), // ~/.ssh, ~/.aws, ~/.gnupg
+				Deny:      append([]string{}, defaultDenyPaths...),
 				Write:     []string{"/tmp"},
 				Protected: append([]string{}, DefaultProtectedPaths...),
 			},
