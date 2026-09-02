@@ -15,7 +15,8 @@ import (
 	"github.com/a2aproject/a2a-go/a2asrv"
 	"github.com/a2aproject/a2a-go/a2asrv/eventqueue"
 
-	"github.com/basenana/friday/actor"
+	coreactor "github.com/basenana/friday/core/actor"
+	"github.com/basenana/friday/core/actor/events"
 )
 
 // --- Agent Card Tests ---
@@ -151,8 +152,8 @@ func TestAuthMiddlewareAcceptsCorrectToken(t *testing.T) {
 
 // --- Cancel Propagation Test ---
 
-func TestFridayExecutorCancelShutsDownActor(t *testing.T) {
-	registry := newFakeRegistry(4)
+func TestFridayExecutorCancelPreemptsActor(t *testing.T) {
+	registry := newFakeRegistry()
 	executor := newFridayExecutor(registry)
 
 	taskID := a2a.TaskID("cancel-prop-test")
@@ -174,8 +175,8 @@ func TestFridayExecutorCancelShutsDownActor(t *testing.T) {
 	if statusUpdate.Status.State != a2a.TaskStateCanceled {
 		t.Errorf("expected canceled state, got %q", statusUpdate.Status.State)
 	}
-	if !registry.wasShutdown(string(taskID)) {
-		t.Fatalf("expected registry shutdown for task %q", taskID)
+	if !registry.actor.wasPreempted() {
+		t.Fatal("expected SendPreempt to be called on the actor")
 	}
 }
 
@@ -225,14 +226,15 @@ func TestExtractTextFromMessage(t *testing.T) {
 // --- Executor Integration Tests ---
 
 func TestFridayExecutorExecuteCompleted(t *testing.T) {
-	registry := newFakeRegistry(8)
-	registry.actor.send = func(msg actor.Message) bool {
+	registry := newFakeRegistry()
+	registry.actor.trySend = func(msg coreactor.Message) bool {
 		go func() {
-			registry.events <- actor.Event{Type: actor.EventTextMessageContent, Data: map[string]any{"delta": "Hello "}}
-			registry.events <- actor.Event{Type: actor.EventTextMessageContent, Data: map[string]any{"delta": "Friday"}}
-			registry.events <- actor.Event{Type: actor.EventRunFinished, Data: map[string]any{"stop_reason": "end_turn"}}
+			registry.publish(events.NewEvent(events.KindTextMessageContent, "run").WithPayload(events.TextMessageContentData{Content: "Hello "}))
+			registry.publish(events.NewEvent(events.KindTextMessageContent, "run").WithPayload(events.TextMessageContentData{Content: "Friday"}))
+			registry.publish(events.NewEvent(events.KindRunFinished, "run").WithPayload(events.RunFinishedData{StopReason: "end_turn"}))
 		}()
-		return msg.Content == "hi"
+		text, ok := msg.(coreactor.UserTextMessage)
+		return ok && text.Text == "hi"
 	}
 
 	executor := newFridayExecutor(registry)
@@ -280,11 +282,11 @@ func TestFridayExecutorExecuteCompleted(t *testing.T) {
 }
 
 func TestFridayExecutorExecuteFailed(t *testing.T) {
-	registry := newFakeRegistry(4)
-	registry.actor.send = func(msg actor.Message) bool {
+	registry := newFakeRegistry()
+	registry.actor.trySend = func(msg coreactor.Message) bool {
 		go func() {
-			registry.events <- actor.Event{Type: actor.EventRunError, Data: map[string]any{"message": "boom"}}
-			registry.events <- actor.Event{Type: actor.EventRunFinished, Data: map[string]any{"stop_reason": "error"}}
+			registry.publish(events.NewEvent(events.KindRunError, "run").WithPayload(events.RunErrorData{Message: "boom"}))
+			registry.publish(events.NewEvent(events.KindRunFinished, "run").WithPayload(events.RunFinishedData{StopReason: "error"}))
 		}()
 		return true
 	}
@@ -317,8 +319,8 @@ func TestFridayExecutorExecuteFailed(t *testing.T) {
 }
 
 func TestFridayExecutorExecuteCanceledOnContextDone(t *testing.T) {
-	registry := newFakeRegistry(2)
-	registry.actor.send = func(msg actor.Message) bool {
+	registry := newFakeRegistry()
+	registry.actor.trySend = func(msg coreactor.Message) bool {
 		return true
 	}
 
@@ -471,27 +473,33 @@ func (q *testQueue) events() []a2a.Event {
 	return result
 }
 
+// fakeRegistry backs the executor with a real core/actor EventStream so
+// subscriptions behave exactly like production (buffering, close semantics).
 type fakeRegistry struct {
 	actor  *fakeActorSession
-	events chan actor.Event
+	stream *coreactor.EventStream
 
 	mu          sync.Mutex
 	shutdownIDs []string
 }
 
-func newFakeRegistry(buffer int) *fakeRegistry {
+func newFakeRegistry() *fakeRegistry {
 	return &fakeRegistry{
 		actor:  &fakeActorSession{},
-		events: make(chan actor.Event, buffer),
+		stream: coreactor.NewEventStream(nil),
 	}
 }
 
-func (r *fakeRegistry) GetOrCreate(sessionID string) actorSession {
-	return r.actor
+func (r *fakeRegistry) publish(evt events.Event) {
+	r.stream.Publish(evt)
 }
 
-func (r *fakeRegistry) Subscribe(sessionID string, buffer int) (<-chan actor.Event, func(), error) {
-	return r.events, func() {}, nil
+func (r *fakeRegistry) GetOrCreate(sessionID string) (actorSession, error) {
+	return r.actor, nil
+}
+
+func (r *fakeRegistry) Subscribe(sessionID string) (*coreactor.Subscription, error) {
+	return r.stream.Subscribe(0), nil
 }
 
 func (r *fakeRegistry) Shutdown(sessionID string) {
@@ -514,12 +522,32 @@ func (r *fakeRegistry) wasShutdown(sessionID string) bool {
 }
 
 type fakeActorSession struct {
-	send func(actor.Message) bool
+	trySend func(coreactor.Message) bool
+
+	mu        sync.Mutex
+	preempted bool
 }
 
-func (a *fakeActorSession) Send(msg actor.Message) bool {
-	if a.send == nil {
+func (a *fakeActorSession) Send(_ context.Context, _ coreactor.Message) error {
+	return nil
+}
+
+func (a *fakeActorSession) TrySend(msg coreactor.Message) bool {
+	if a.trySend == nil {
 		return true
 	}
-	return a.send(msg)
+	return a.trySend(msg)
+}
+
+func (a *fakeActorSession) SendPreempt(_ context.Context, _ string) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.preempted = true
+	return nil
+}
+
+func (a *fakeActorSession) wasPreempted() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.preempted
 }

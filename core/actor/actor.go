@@ -129,6 +129,15 @@ func (a *Actor) Send(ctx context.Context, msg Message) error {
 	return nil
 }
 
+// TrySend enqueues a normal inbox message without blocking. Returns
+// false when the buffer is full or the actor is stopped.
+func (a *Actor) TrySend(msg Message) bool {
+	if a.stopped.Load() {
+		return false
+	}
+	return a.inbox.TrySend(msg)
+}
+
 // SendPreempt enqueues a preemption message.
 func (a *Actor) SendPreempt(ctx context.Context, reason string) error {
 	if a.stopped.Load() {
@@ -563,12 +572,8 @@ func (a *Actor) runTurn(ctx context.Context, bctx batchContext, batchSize int) {
 	// the terminal event.
 	finalizeErr := a.turnLifecycle.OnTurnFinalize(turnCtx, runID)
 
-	// RUN_FINISHED carries any open interrupts.
-	a.publish(turnCtx, events.NewEvent(events.KindRunFinished, runID).
-		WithPayload(events.RunFinishedData{
-			Interrupts: a.openInterrupts(),
-		}))
-
+	// Compute the outcome BEFORE publishing RUN_FINISHED so the terminal
+	// event carries the authoritative stop reason.
 	outcome := TurnOutcome{}
 	if streamErr != nil {
 		outcome.Err = streamErr
@@ -582,6 +587,21 @@ func (a *Actor) runTurn(ctx context.Context, bctx batchContext, batchSize int) {
 	}
 	outcome.Cancelled = errors.Is(outcome.Err, context.Canceled) ||
 		errors.Is(turnCtx.Err(), context.Canceled)
+
+	stopReason := "end_turn"
+	switch {
+	case outcome.Cancelled:
+		stopReason = "cancelled"
+	case outcome.Err != nil:
+		stopReason = "error"
+	}
+
+	// RUN_FINISHED carries any open interrupts plus the stop reason.
+	a.publish(turnCtx, events.NewEvent(events.KindRunFinished, runID).
+		WithPayload(events.RunFinishedData{
+			Interrupts: a.openInterrupts(),
+			StopReason: stopReason,
+		}))
 
 	_ = a.turnLifecycle.OnTurnComplete(turnCtx, runID, outcome)
 }

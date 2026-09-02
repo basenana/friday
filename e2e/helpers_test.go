@@ -23,10 +23,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/basenana/friday/actor"
 	a2apkg "github.com/basenana/friday/a2a"
 	"github.com/basenana/friday/config"
 	"github.com/basenana/friday/core/agents"
+	"github.com/basenana/friday/core/actor/events"
 	"github.com/basenana/friday/core/api"
 	"github.com/basenana/friday/core/providers"
 	"github.com/basenana/friday/core/session"
@@ -402,15 +402,15 @@ func assertEventReceived(t *testing.T, events []types.Event, eventType types.Eve
 	t.Errorf("expected event %q in %d events", eventType, len(events))
 }
 
-// assertActorEvent checks that a slice of actor events contains eventType.
-func assertActorEvent(t *testing.T, events []actor.Event, eventType actor.EventType) {
+// assertActorEvent checks that a slice of AG-UI events contains eventType.
+func assertActorEvent(t *testing.T, evts []events.Event, eventType events.EventKind) {
 	t.Helper()
-	for _, e := range events {
+	for _, e := range evts {
 		if e.Type == eventType {
 			return
 		}
 	}
-	t.Errorf("expected actor event %q in %d events", eventType, len(events))
+	t.Errorf("expected actor event %q in %d events", eventType, len(evts))
 }
 
 // ---------------------------------------------------------------------------
@@ -475,33 +475,6 @@ func getEvents(ptr *[]types.Event, mu *sync.Mutex) []types.Event {
 	cp := make([]types.Event, len(*ptr))
 	copy(cp, *ptr)
 	return cp
-}
-
-// ---------------------------------------------------------------------------
-// Actor helpers
-// ---------------------------------------------------------------------------
-
-// collectActorEvents drains the actor's Outcome channel until ctx is done,
-// the actor is shut down, stop is called, or a RunFinished event is observed.
-// Returns the collected events.
-func collectActorEvents(ctx context.Context, act *actor.Actor, stop <-chan struct{}) []actor.Event {
-	var events []actor.Event
-	for {
-		select {
-		case <-ctx.Done():
-			return events
-		case <-stop:
-			return events
-		case evt, ok := <-act.Outcome():
-			if !ok {
-				return events
-			}
-			events = append(events, evt)
-			if evt.Type == actor.EventRunFinished {
-				return events
-			}
-		}
-	}
 }
 
 // ---------------------------------------------------------------------------

@@ -1,6 +1,6 @@
 // Package tui implements an interactive Bubble Tea chat client for Friday.
 //
-// It consumes AG-UI events from an actor.Actor and renders them as a
+// It consumes AG-UI events from a core/actor Actor and renders them as a
 // Claude-Code-style terminal UI: streaming markdown text, reasoning blocks,
 // bordered tool call boxes, spinner, and a status bar.
 package tui
@@ -8,16 +8,16 @@ package tui
 import (
 	"github.com/charmbracelet/bubbletea"
 
-	"github.com/basenana/friday/actor"
+	"github.com/basenana/friday/core/actor/events"
 )
 
-// actorEventMsg wraps an actor.Event delivered into the Bubble Tea loop.
+// actorEventMsg wraps an events.Event delivered into the Bubble Tea loop.
 type actorEventMsg struct {
 	token uint64
-	event actor.Event
+	event events.Event
 }
 
-// actorDoneMsg is emitted when the actor's outcome channel closes.
+// actorDoneMsg is emitted when the actor's subscription channel closes.
 type actorDoneMsg struct {
 	token uint64
 }
@@ -26,9 +26,9 @@ type actorDoneMsg struct {
 // subscription channel. Bubble Tea runs the returned func on its own goroutine;
 // blocking here is expected and does not stall the UI. The cmd re-arms itself
 // by being re-issued from Update after each event.
-func waitForActorEvent(events <-chan actor.Event, token uint64) tea.Cmd {
+func waitForActorEvent(evts <-chan events.Event, token uint64) tea.Cmd {
 	return func() tea.Msg {
-		evt, ok := <-events
+		evt, ok := <-evts
 		if !ok {
 			return actorDoneMsg{token: token}
 		}

@@ -343,11 +343,14 @@ func (s *Session) SubscribeEvents() (<-chan types.Event, func()) {
 func (s *Session) PublishEvent(evt types.Event) {
 	root := s.eventBusOwner()
 
+	// Sends stay under the read lock: unsubscribe/Close remove and close
+	// channels under the write lock, so sending after releasing the lock
+	// could race with close (send on closed channel). Sends are
+	// non-blocking, so holding RLock cannot deadlock.
 	root.mu.RLock()
-	subs := append([]chan<- types.Event(nil), root.eventSubs...)
-	root.mu.RUnlock()
+	defer root.mu.RUnlock()
 
-	if len(subs) == 0 {
+	if len(root.eventSubs) == 0 {
 		return
 	}
 	if evt.Time.IsZero() {
@@ -364,7 +367,7 @@ func (s *Session) PublishEvent(evt types.Event) {
 	}
 
 	eventLogger := logger.New("session.events")
-	for _, ch := range subs {
+	for _, ch := range root.eventSubs {
 		select {
 		case ch <- evt:
 		default:

@@ -33,6 +33,9 @@ type chatScript struct {
 	// the channel is closed or ctx is cancelled. Used to simulate a
 	// long-running turn for shutdown tests.
 	blockUntil <-chan struct{}
+	// streamErr, when non-nil, is pushed to the response error channel
+	// instead of streaming deltas. Used to simulate LLM failures.
+	streamErr error
 }
 
 type scriptedToolCall struct {
@@ -59,6 +62,11 @@ func (m *mockAgent) Chat(ctx context.Context, req *api.Request) *api.Response {
 
 	go func() {
 		defer resp.Close()
+		// Optional stream failure: fail instead of streaming deltas.
+		if script.streamErr != nil {
+			resp.Fail(script.streamErr)
+			return
+		}
 		// Optional pre-stream block: simulates a long-running turn.
 		// Exits when blockUntil closes or the request context cancels.
 		if script.blockUntil != nil {

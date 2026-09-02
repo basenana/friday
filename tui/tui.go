@@ -1,7 +1,9 @@
 package tui
 
 import (
+	"context"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/spinner"
@@ -13,10 +15,10 @@ import (
 	"github.com/basenana/friday/actor"
 	codercmds "github.com/basenana/friday/coder/commands"
 	"github.com/basenana/friday/config"
+	coreactor "github.com/basenana/friday/core/actor"
+	"github.com/basenana/friday/core/actor/events"
 	"github.com/basenana/friday/sessions"
 )
-
-const subscriptionBuffer = 256
 
 // Run launches the interactive TUI. Blocks until the user quits.
 func Run(sessMgr *sessions.Manager, cfg *config.Config, sessionID string) error {
@@ -53,14 +55,14 @@ func Run(sessMgr *sessions.Manager, cfg *config.Config, sessionID string) error 
 type model struct {
 	sessMgr   *sessions.Manager
 	registry  *actor.Registry
-	actor     *actor.Actor
+	actor     *coreactor.Actor
 	sessionID string
-	events    <-chan actor.Event
+	events    <-chan events.Event
 
 	cmdRegistry *codercmds.Registry
 	cfg         *config.Config
 
-	unsubscribe       func()
+	sub               *coreactor.Subscription
 	subscriptionToken uint64
 
 	messages []chatBlock
@@ -169,7 +171,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m.handleSlash(text)
 			}
 			m.appendBlock(chatBlock{kind: blockUser, content: text})
-			if !m.actor.Send(actor.Message{Content: text}) {
+			if !m.actor.TrySend(coreactor.UserTextMessage{Text: text}) {
 				m.appendBlock(chatBlock{kind: blockError, content: "inbox full, try again"})
 				return m, nil
 			}
@@ -223,102 +225,131 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-// cancelRun aborts the current agent run while keeping the TUI alive.
+// cancelRun aborts the current agent run while keeping the TUI (and the
+// actor) alive. The actor stays subscribed; a late RUN_FINISHED from the
+// cancelled turn is idempotent because running is already false.
 func (m *model) cancelRun() (tea.Model, tea.Cmd) {
-	m.closeSubscription()
-	m.registry.Shutdown(m.sessionID)
+	if err := m.actor.SendPreempt(context.Background(), "user cancelled"); err != nil {
+		m.appendBlock(chatBlock{kind: blockError, content: fmt.Sprintf("cancel failed: %v", err)})
+	}
 	m.flushStreaming()
 	m.appendBlock(chatBlock{kind: blockError, content: "[cancelled]"})
 	m.running = false
-	if err := m.bindSession(m.sessionID); err != nil {
-		m.appendBlock(chatBlock{kind: blockError, content: err.Error()})
-		return m, nil
-	}
-	return m, m.waitForActorEvent()
+	return m, nil
 }
 
 // handleActorEvent maps an AG-UI event to model state mutations.
-func (m *model) handleActorEvent(evt actor.Event) {
+func (m *model) handleActorEvent(evt events.Event) {
 	switch evt.Type {
-	case actor.EventRunStarted:
+	case events.KindRunStarted:
 		m.running = true
 
-	case actor.EventRunFinished:
+	case events.KindRunFinished:
 		m.flushStreaming()
 		m.running = false
 
-	case actor.EventRunError:
-		msg, _ := evt.Data["message"].(string)
-		if msg == "" {
-			msg = "unknown error"
+	case events.KindRunError:
+		msg := "unknown error"
+		var d events.RunErrorData
+		if events.DecodePayload(evt, &d) == nil && d.Message != "" {
+			msg = d.Message
 		}
 		m.appendBlock(chatBlock{kind: blockError, content: msg})
 
-	case actor.EventTextMessageStart:
+	case events.KindTextMessageStart:
+		// Reasoning → text transition: flush pending reasoning first
+		// (reasoning.delta has no explicit END marker).
+		if m.reasonBuf.Len() > 0 {
+			m.appendBlock(chatBlock{kind: blockReasoning, content: m.reasonBuf.String()})
+			m.reasonBuf.Reset()
+		}
 		m.textBuf.Reset()
 
-	case actor.EventTextMessageContent:
-		if d, ok := evt.Data["delta"].(string); ok {
-			m.textBuf.WriteString(d)
+	case events.KindTextMessageContent:
+		var d events.TextMessageContentData
+		if events.DecodePayload(evt, &d) == nil {
+			m.textBuf.WriteString(d.Content)
 		}
 
-	case actor.EventTextMessageEnd:
+	case events.KindTextMessageEnd:
 		if m.textBuf.Len() > 0 {
 			m.appendBlock(chatBlock{kind: blockAssistant, content: m.textBuf.String()})
 		}
 		m.textBuf.Reset()
 
-	case actor.EventReasoningStart:
-		m.reasonBuf.Reset()
-
-	case actor.EventReasoningMessageContent:
-		if d, ok := evt.Data["delta"].(string); ok {
-			m.reasonBuf.WriteString(d)
+	case events.KindToolCallStart:
+		var d events.ToolCallStartData
+		if events.DecodePayload(evt, &d) == nil {
+			m.toolCalls[d.ToolCallID] = &toolCallBlock{name: d.ToolName, id: d.ToolCallID}
 		}
 
-	case actor.EventReasoningEnd:
-		if m.reasonBuf.Len() > 0 {
-			m.appendBlock(chatBlock{kind: blockReasoning, content: m.reasonBuf.String()})
-		}
-		m.reasonBuf.Reset()
-
-	case actor.EventToolCallStart:
-		name, _ := evt.Data["tool_name"].(string)
-		id, _ := evt.Data["tool_call_id"].(string)
-		input, _ := evt.Data["input"].(string)
-		m.toolCalls[id] = &toolCallBlock{name: name, id: id, input: input}
-
-	case actor.EventToolCallResult:
-		id, _ := evt.Data["tool_call_id"].(string)
-		out, _ := evt.Data["output"].(string)
-		success, _ := evt.Data["success"].(bool)
-		if tc, ok := m.toolCalls[id]; ok {
-			tc.output = out
-			tc.success = success
+	case events.KindToolCallArgs:
+		var d events.ToolCallArgsData
+		if events.DecodePayload(evt, &d) == nil {
+			if tc, ok := m.toolCalls[d.ToolCallID]; ok {
+				tc.input += d.PartialJSON
+			}
 		}
 
-	case actor.EventToolCallEnd:
-		id, _ := evt.Data["tool_call_id"].(string)
-		if tc, ok := m.toolCalls[id]; ok {
+	case events.KindToolCallEnd:
+		// no-op: the block is finalized on TOOL_CALL_RESULT.
+
+	case events.KindToolCallResult:
+		var d events.ToolCallResultData
+		if events.DecodePayload(evt, &d) != nil {
+			return
+		}
+		if tc, ok := m.toolCalls[d.ToolCallID]; ok {
 			m.appendBlock(chatBlock{
 				kind:     blockToolCall,
 				toolName: tc.name,
-				content:  tc.input + "\n" + tc.output,
-				success:  tc.success,
+				content:  tc.input + "\n" + d.Output,
+				success:  d.Success,
 			})
-			delete(m.toolCalls, id)
+			delete(m.toolCalls, d.ToolCallID)
 		}
 
-	case actor.EventStepStarted:
-		if name, _ := evt.Data["step_name"].(string); name == "react_loop" {
-			m.iteration++
-		}
-
-	case actor.EventStepFinished:
-		if v, ok := evt.Data["total_tokens"]; ok {
-			if n, ok := toInt(v); ok {
-				m.tokenCount = n
+	case events.KindStepFinished:
+		var d events.StepFinishedData
+		if events.DecodePayload(evt, &d) == nil {
+			if v, ok := d.Data["total_tokens"]; ok {
+				if n, err := strconv.Atoi(v); err == nil {
+					m.tokenCount = n
+				}
 			}
+		}
+
+	case events.KindCustom:
+		m.handleCustomEvent(evt)
+	}
+}
+
+// handleCustomEvent renders CUSTOM events (differentiated by Name).
+func (m *model) handleCustomEvent(evt events.Event) {
+	switch evt.Name {
+	case events.CustomReasoningDelta:
+		var d events.ReasoningDeltaBody
+		if events.DecodePayload(evt, &d) == nil {
+			m.reasonBuf.WriteString(d.Content)
+		}
+
+	case events.CustomLoopStart:
+		m.iteration++
+
+	case events.CustomCardEmitted:
+		var d events.CardEmittedBody
+		if events.DecodePayload(evt, &d) == nil {
+			title := d.Title
+			if title == "" {
+				title = d.Kind
+			}
+			m.appendBlock(chatBlock{kind: blockAssistant, content: fmt.Sprintf("[card] %s (TUI card rendering not supported)", title)})
+		}
+
+	case events.CustomFormRequested:
+		var d events.FormRequestedBody
+		if events.DecodePayload(evt, &d) == nil {
+			m.appendBlock(chatBlock{kind: blockAssistant, content: fmt.Sprintf("[form] %s — interactive forms are not supported in TUI yet", d.FormID)})
 		}
 	}
 }
@@ -350,9 +381,9 @@ func (m *model) appendBlock(b chatBlock) {
 }
 
 func (m *model) closeSubscription() {
-	if m.unsubscribe != nil {
-		m.unsubscribe()
-		m.unsubscribe = nil
+	if m.sub != nil {
+		m.sub.Close()
+		m.sub = nil
 	}
 	m.events = nil
 }
@@ -367,15 +398,16 @@ func (m *model) ensureSession(sessionID string) error {
 func (m *model) bindSession(sessionID string) error {
 	m.closeSubscription()
 
-	m.actor = m.registry.GetOrCreate(sessionID)
-	events, unsubscribe, err := m.registry.Subscribe(sessionID, subscriptionBuffer)
+	a, err := m.registry.GetOrCreate(sessionID)
 	if err != nil {
-		return fmt.Errorf("failed to subscribe session %s: %w", shortID(sessionID), err)
+		return fmt.Errorf("failed to bind session %s: %w", shortID(sessionID), err)
 	}
+	sub := a.Subscribe()
 
+	m.actor = a
 	m.sessionID = sessionID
-	m.events = events
-	m.unsubscribe = unsubscribe
+	m.sub = sub
+	m.events = sub.Events()
 	m.subscriptionToken++
 	return nil
 }
@@ -385,16 +417,4 @@ func (m *model) waitForActorEvent() tea.Cmd {
 		return nil
 	}
 	return waitForActorEvent(m.events, m.subscriptionToken)
-}
-
-func toInt(v any) (int, bool) {
-	switch n := v.(type) {
-	case int:
-		return n, true
-	case int64:
-		return int(n), true
-	case float64:
-		return int(n), true
-	}
-	return 0, false
 }

@@ -8,7 +8,7 @@ import (
 	"github.com/a2aproject/a2a-go/a2asrv"
 	"github.com/a2aproject/a2a-go/a2asrv/eventqueue"
 
-	"github.com/basenana/friday/actor"
+	"github.com/basenana/friday/core/actor/events"
 )
 
 // writeTerminalState writes a final status update event.
@@ -45,13 +45,14 @@ func finalMessage(text string) *a2a.Message {
 	return a2a.NewMessage(a2a.MessageRoleAgent, a2a.TextPart{Text: text})
 }
 
-func writeTaskTerminalState(ctx context.Context, queue eventqueue.Queue, reqCtx *a2asrv.RequestContext, evt actor.Event, runErr, finalText string) error {
+func writeTaskTerminalState(ctx context.Context, queue eventqueue.Queue, reqCtx *a2asrv.RequestContext, evt events.Event, runErr, finalText string) error {
 	if runErr != "" {
 		return writeTerminalState(ctx, queue, reqCtx, a2a.TaskStateFailed, errorMessage(runErr))
 	}
 
-	stopReason, _ := evt.Data["stop_reason"].(string)
-	switch stopReason {
+	var d events.RunFinishedData
+	_ = events.DecodePayload(evt, &d)
+	switch d.StopReason {
 	case "cancelled":
 		return writeTerminalState(ctx, queue, reqCtx, a2a.TaskStateCanceled, nil)
 	case "error":

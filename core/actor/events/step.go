@@ -13,4 +13,7 @@ type StepStartedData struct {
 // StepFinishedData signals that the previously started item finished.
 type StepFinishedData struct {
 	Kind string `json:"kind,omitempty"`
+	// Data carries auxiliary step metrics from the core event (e.g.
+	// total_tokens for model steps). Values are strings.
+	Data map[string]string `json:"data,omitempty"`
 }

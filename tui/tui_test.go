@@ -11,6 +11,7 @@ import (
 	"github.com/basenana/friday/actor"
 	codercmds "github.com/basenana/friday/coder/commands"
 	"github.com/basenana/friday/config"
+	"github.com/basenana/friday/core/actor/events"
 	"github.com/basenana/friday/sessions"
 	sessionfile "github.com/basenana/friday/sessions/file"
 )
@@ -27,7 +28,12 @@ func newTestModel(t *testing.T) (*model, *sessions.Manager, *sessionfile.FileSes
 		t.Fatalf("GetOrCreateByID() failed: %v", err)
 	}
 
-	registry := actor.NewRegistry(mgr, nil, actor.DefaultRegistryConfig())
+	cfg := config.DefaultConfig()
+	cfg.DataDir = baseDir
+	cfg.Workspace = filepath.Join(baseDir, "workspace")
+	cfg.Memory.Enabled = false
+
+	registry := actor.NewRegistry(mgr, cfg, actor.DefaultRegistryConfig())
 	t.Cleanup(registry.ShutdownAll)
 
 	cmdRegistry := codercmds.NewRegistry()
@@ -120,7 +126,7 @@ func TestUpdateIgnoresStaleSubscriptionMessages(t *testing.T) {
 	m.running = true
 	gotModel, _ := m.Update(actorEventMsg{
 		token: oldToken,
-		event: actor.Event{Type: actor.EventRunFinished},
+		event: events.NewEvent(events.KindRunFinished, "r"),
 	})
 	got := gotModel.(*model)
 	if !got.running {

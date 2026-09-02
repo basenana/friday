@@ -7,8 +7,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/basenana/friday/actor"
 	codercmds "github.com/basenana/friday/coder/commands"
+	coreactor "github.com/basenana/friday/core/actor"
 )
 
 // handleSlash dispatches slash commands via the registry.
@@ -111,7 +111,7 @@ func (m *model) runAgentCmd(agentName, input string) tea.Cmd {
 		agentName, input, agentName)
 
 	m.appendBlock(chatBlock{kind: blockUser, content: fmt.Sprintf("[/%s] %s", agentName, input)})
-	if !m.actor.Send(actor.MessageFromText(wrapped)) {
+	if !m.actor.TrySend(coreactor.UserTextMessage{Text: wrapped}) {
 		m.appendBlock(chatBlock{kind: blockError, content: "inbox full, try again"})
 		return nil
 	}

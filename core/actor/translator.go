@@ -100,7 +100,7 @@ func (t *Translator) FromCoreEvent(evt types.Event) []events.Event {
 	case types.EventModelFinish:
 		return []events.Event{
 			events.NewEvent(events.KindStepFinished, t.runID).
-				WithPayload(events.StepFinishedData{Kind: "model"}),
+				WithPayload(events.StepFinishedData{Kind: "model", Data: evt.Data}),
 		}
 	case types.EventToolStart:
 		id := t.toolStartID(evt.Data["id"])

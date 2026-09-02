@@ -17,6 +17,9 @@ type RunFinishedData struct {
 	// Interrupts lists pending interrupts (e.g. open forms) at the end
 	// of the run. Empty when the run completed normally.
 	Interrupts []Interrupt `json:"interrupts,omitempty"`
+	// StopReason is why the run terminated: "end_turn" (normal),
+	// "cancelled" (preemption / shutdown / context cancel), or "error".
+	StopReason string `json:"stop_reason,omitempty"`
 }
 
 // Interrupt describes a pending human-in-the-loop interrupt carried by

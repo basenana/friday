@@ -1,32 +1,38 @@
+// Package actor provides a per-session Registry over the core/actor
+// package (the AG-UI protocol actor). The Registry owns actor
+// construction (wiring setup.NewAgent), event-stream subscription,
+// idle eviction, and shutdown.
 package actor
 
 import (
 	"context"
 	"fmt"
+	"os"
 	"sync"
 	"time"
 
 	"github.com/basenana/friday/config"
+	coreactor "github.com/basenana/friday/core/actor"
 	"github.com/basenana/friday/setup"
 )
 
 // RegistryConfig tunes the Registry.
 type RegistryConfig struct {
-	// IdleTimeout is how long an Idle actor is kept alive before being shut
-	// down and evicted. Default 5m.
+	// IdleTimeout is how long an actor with no turn activity is kept
+	// alive before being shut down and evicted. Default 5m.
 	IdleTimeout time.Duration
 	// SweepInterval is the idle-sweep ticker period. Default 30s.
 	SweepInterval time.Duration
-	// InboxBuffer is the buffer size for newly-created actor inboxes.
+	// InboxBuffer is the inbox buffer size for newly-created actors.
+	// Zero means the core/actor default.
 	InboxBuffer int
-	// OutcomeBuffer is the buffer size for newly-created actor outcomes.
-	OutcomeBuffer int
-	// OnEvent, if non-nil, is invoked for every event emitted by every
-	// actor managed by this registry. The registry guarantees one fanout
-	// goroutine per actor (i.e. exactly-once delivery to this callback)
-	// before forwarding events to API-layer subscribers. Leaving this nil
-	// means events are only delivered to direct subscribers.
-	OnEvent func(sessionID string, evt Event)
+	// ShutdownGrace is the graceful-shutdown budget given to an
+	// in-flight turn before it is force-aborted during eviction.
+	// Default 2s.
+	ShutdownGrace time.Duration
+	// FilePathValidator, when non-nil, overrides the default file-card
+	// path validator (workdir-confined, see paths.go).
+	FilePathValidator coreactor.FilePathValidator
 }
 
 // DefaultRegistryConfig returns a sensible default configuration.
@@ -34,34 +40,45 @@ func DefaultRegistryConfig() RegistryConfig {
 	return RegistryConfig{
 		IdleTimeout:   5 * time.Minute,
 		SweepInterval: 30 * time.Second,
-		InboxBuffer:   16,
-		OutcomeBuffer: 256,
+		ShutdownGrace: 2 * time.Second,
 	}
 }
 
-// Registry owns the set of live Actors and supervises their lifecycle
-// (creation, lookup, idle eviction, graceful shutdown at process exit).
+// Registry manages one core/actor Actor per session, along with the
+// setup.AgentContext backing it. Actors are created lazily via
+// GetOrCreate and torn down on Shutdown, ShutdownAll, or after
+// IdleTimeout of inactivity.
 type Registry struct {
-	mu      sync.RWMutex
-	actors  map[string]*Actor
-	streams map[string]*sessionPubSub
+	mu      sync.Mutex
+	entries map[string]*managedActor
+
 	cfg     RegistryConfig
 	sessMgr setup.SessionManager
 	appCfg  *config.Config
+	workdir string
 
 	ctx    context.Context
 	cancel context.CancelFunc
 }
 
-// NewRegistry creates a Registry and starts its idle-sweep goroutine.
+// NewRegistry creates a Registry and starts its idle-sweep loop.
 func NewRegistry(sessMgr setup.SessionManager, appCfg *config.Config, cfg RegistryConfig) *Registry {
+	if cfg.IdleTimeout <= 0 {
+		cfg.IdleTimeout = 5 * time.Minute
+	}
+	if cfg.SweepInterval <= 0 {
+		cfg.SweepInterval = 30 * time.Second
+	}
+	if cfg.ShutdownGrace <= 0 {
+		cfg.ShutdownGrace = 2 * time.Second
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	r := &Registry{
-		actors:  make(map[string]*Actor),
-		streams: make(map[string]*sessionPubSub),
+		entries: make(map[string]*managedActor),
 		cfg:     cfg,
 		sessMgr: sessMgr,
 		appCfg:  appCfg,
+		workdir: workdirOrPWD(),
 		ctx:     ctx,
 		cancel:  cancel,
 	}
@@ -69,130 +86,103 @@ func NewRegistry(sessMgr setup.SessionManager, appCfg *config.Config, cfg Regist
 	return r
 }
 
-// GetOrCreate returns the existing live actor for sessionID, or builds a new
-// one. If a previously-shutdown actor is still in the map it is evicted and
-// replaced. Exactly one fanout pump goroutine is started per actor.
-func (r *Registry) GetOrCreate(sessionID string) *Actor {
-	r.mu.RLock()
-	a, exists := r.actors[sessionID]
-	r.mu.RUnlock()
-
-	if exists && a.State() != StateShutdown {
-		return a
-	}
-
+// GetOrCreate returns the live Actor for sessionID, constructing it
+// (agent + session via setup.NewAgent) on first use. An actor is built
+// once for its lifetime; its session keeps in-memory history across
+// turns, with persistence handled by the session store.
+func (r *Registry) GetOrCreate(sessionID string) (*coreactor.Actor, error) {
 	r.mu.Lock()
-	// double-check under write lock
-	if a, exists = r.actors[sessionID]; exists && a.State() != StateShutdown {
-		r.mu.Unlock()
-		return a
+	defer r.mu.Unlock()
+	if e, ok := r.entries[sessionID]; ok && !e.stopped.Load() {
+		return e.actor, nil
 	}
-	delete(r.actors, sessionID)
-	delete(r.streams, sessionID)
+	if old, ok := r.entries[sessionID]; ok {
+		// Stale entry from a concurrent shutdown; clean it up.
+		delete(r.entries, sessionID)
+		old.close(r.cfg.ShutdownGrace)
+	}
 
-	a = New(sessionID, r.sessMgr, r.appCfg,
-		WithInboxBuffer(r.cfg.InboxBuffer),
-		WithOutcomeBuffer(r.cfg.OutcomeBuffer),
-	)
-	stream := newSessionPubSub()
-	r.actors[sessionID] = a
-	r.streams[sessionID] = stream
-	r.mu.Unlock()
+	agentCtx, err := setup.NewAgent(r.sessMgr, r.appCfg, setup.WithSessionID(sessionID))
+	if err != nil {
+		return nil, fmt.Errorf("setup agent for session %s: %w", sessionID, err)
+	}
 
-	// Start the single pump goroutine for this actor. Started outside the
-	// lock so Shutdown→evict cannot observe a half-initialised pump.
-	go r.fanout(a, stream)
-	return a
+	e := &managedActor{agentCtx: agentCtx}
+	e.lastActive.Store(time.Now().UnixNano())
+
+	opts := []coreactor.Option{coreactor.WithTurnLifecycle(e)}
+	if r.cfg.InboxBuffer > 0 {
+		opts = append(opts, coreactor.WithInboxBuffer(r.cfg.InboxBuffer))
+	}
+	validator := r.cfg.FilePathValidator
+	if validator == nil {
+		validator = newFilePathValidator(r.workdir)
+	}
+	opts = append(opts, coreactor.WithFilePathValidator(validator))
+
+	e.actor = coreactor.New(agentCtx.Agent, agentCtx.Session, opts...)
+	e.stopLoop = e.actor.Start(r.ctx) // loop tied to registry lifetime
+	r.entries[sessionID] = e
+	return e.actor, nil
 }
 
-// Get looks up an actor without creating one.
-func (r *Registry) Get(sessionID string) (*Actor, bool) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	a, ok := r.actors[sessionID]
-	if !ok || a.State() == StateShutdown {
+// Get returns the live Actor for sessionID, if any.
+func (r *Registry) Get(sessionID string) (*coreactor.Actor, bool) {
+	r.mu.Lock()
+	e, ok := r.entries[sessionID]
+	r.mu.Unlock()
+	if !ok || e.stopped.Load() {
 		return nil, false
 	}
-	return a, true
+	return e.actor, true
 }
 
-// Subscribe registers an API-layer subscriber for one actor session.
-// The returned unsubscribe function is idempotent.
-func (r *Registry) Subscribe(sessionID string, buffer int) (<-chan Event, func(), error) {
-	r.mu.RLock()
-	stream, ok := r.streams[sessionID]
-	r.mu.RUnlock()
-
-	if !ok {
-		return nil, nil, fmt.Errorf("actor session %q not found", sessionID)
+// Subscribe returns an event-stream subscription for the live actor of
+// sessionID. Errors when no live actor exists. The subscription's
+// Events channel closes on Subscription.Close() or actor shutdown.
+func (r *Registry) Subscribe(sessionID string) (*coreactor.Subscription, error) {
+	r.mu.Lock()
+	e, ok := r.entries[sessionID]
+	r.mu.Unlock()
+	if !ok || e.stopped.Load() {
+		return nil, fmt.Errorf("actor session %q not found", sessionID)
 	}
-
-	ch, unsubscribe := stream.subscribe(buffer)
-	return ch, unsubscribe, nil
+	return e.actor.Subscribe(), nil
 }
 
-// Shutdown evicts an actor from the registry and gracefully shuts it down.
+// Shutdown stops the actor for sessionID (gracefully: an in-flight turn
+// gets ShutdownGrace to finish before being aborted) and releases its
+// agent context. Idempotent; missing sessions are ignored.
 func (r *Registry) Shutdown(sessionID string) {
 	r.mu.Lock()
-	a, ok := r.actors[sessionID]
-	stream, streamOK := r.streams[sessionID]
-	if ok {
-		delete(r.actors, sessionID)
-	}
-	if streamOK {
-		delete(r.streams, sessionID)
-	}
+	e, ok := r.entries[sessionID]
+	delete(r.entries, sessionID)
 	r.mu.Unlock()
-
 	if ok {
-		a.Shutdown()
-	}
-	if streamOK {
-		stream.stop()
+		e.close(r.cfg.ShutdownGrace)
 	}
 }
 
-// ShutdownAll evicts everything; intended for process exit. Stops the sweep
-// loop and waits for each actor's loop goroutine to exit.
+// ShutdownAll stops every actor and the sweep loop.
 func (r *Registry) ShutdownAll() {
-	r.cancel()
-
+	r.cancel() // stops the sweep loop and all actor loop contexts
 	r.mu.Lock()
-	actors := make([]*Actor, 0, len(r.actors))
-	streams := make([]*sessionPubSub, 0, len(r.streams))
-	for _, a := range r.actors {
-		actors = append(actors, a)
+	entries := make([]*managedActor, 0, len(r.entries))
+	for id, e := range r.entries {
+		entries = append(entries, e)
+		delete(r.entries, id)
 	}
-	for _, stream := range r.streams {
-		streams = append(streams, stream)
-	}
-	r.actors = make(map[string]*Actor)
-	r.streams = make(map[string]*sessionPubSub)
 	r.mu.Unlock()
-
-	for _, a := range actors {
-		a.Shutdown()
-	}
-	for _, stream := range streams {
-		stream.stop()
+	for _, e := range entries {
+		e.close(r.cfg.ShutdownGrace)
 	}
 }
 
-// fanout is the single pump goroutine per actor. It reads events from the
-// outcome channel and dispatches them through the registry-level OnEvent
-// callback. Exits automatically when the outcome channel is closed.
-func (r *Registry) fanout(a *Actor, stream *sessionPubSub) {
-	stream.run(a.Outcome(), func(evt Event) {
-		if r.cfg.OnEvent != nil {
-			r.cfg.OnEvent(a.SessionID, evt)
-		}
-	})
-}
-
+// sweepLoop evicts actors whose last turn activity is older than
+// IdleTimeout.
 func (r *Registry) sweepLoop() {
 	ticker := time.NewTicker(r.cfg.SweepInterval)
 	defer ticker.Stop()
-
 	for {
 		select {
 		case <-r.ctx.Done():
@@ -205,21 +195,22 @@ func (r *Registry) sweepLoop() {
 
 func (r *Registry) sweep() {
 	now := time.Now()
-
-	r.mu.RLock()
-	var toRemove []string
-	for id, a := range r.actors {
-		if a.State() == StateShutdown {
-			toRemove = append(toRemove, id)
-			continue
-		}
-		if a.State() == StateIdle && now.Sub(a.LastActive()) > r.cfg.IdleTimeout {
-			toRemove = append(toRemove, id)
+	r.mu.Lock()
+	var stale []string
+	for id, e := range r.entries {
+		if e.stopped.Load() || now.Sub(time.Unix(0, e.lastActive.Load())) > r.cfg.IdleTimeout {
+			stale = append(stale, id)
 		}
 	}
-	r.mu.RUnlock()
-
-	for _, id := range toRemove {
+	r.mu.Unlock()
+	for _, id := range stale {
 		r.Shutdown(id)
 	}
+}
+
+func workdirOrPWD() string {
+	if wd, err := os.Getwd(); err == nil {
+		return wd
+	}
+	return "."
 }
