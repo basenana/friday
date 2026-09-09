@@ -132,9 +132,6 @@ func TestUpdateIgnoresStaleSubscriptionMessages(t *testing.T) {
 	if !got.running {
 		t.Fatal("stale actor event changed running state")
 	}
-
-	gotModel, _ = got.Update(actorDoneMsg{token: oldToken})
-	got = gotModel.(*model)
 	if got.subscriptionToken != newToken {
 		t.Fatalf("subscription token = %d, want %d", got.subscriptionToken, newToken)
 	}

@@ -12,8 +12,10 @@ import (
 	"github.com/a2aproject/a2a-go/a2a"
 	"github.com/a2aproject/a2a-go/a2asrv"
 	"github.com/a2aproject/a2a-go/a2asrv/eventqueue"
+	eventbus "github.com/hyponet/eventbus/bus"
 
 	"github.com/basenana/friday/actor"
+	"github.com/basenana/friday/bus"
 	"github.com/basenana/friday/config"
 	coreactor "github.com/basenana/friday/core/actor"
 	"github.com/basenana/friday/core/actor/events"
@@ -22,16 +24,10 @@ import (
 
 const defaultExecuteTimeout = 10 * time.Minute
 
-// actorSession is the subset of *coreactor.Actor the executor depends on.
-type actorSession interface {
-	Send(ctx context.Context, msg coreactor.Message) error
-	TrySend(msg coreactor.Message) bool
-	SendPreempt(ctx context.Context, reason string) error
-}
-
+// actorRegistry is the subset of *actor.Registry the executor depends on.
 type actorRegistry interface {
-	GetOrCreate(sessionID string) (actorSession, error)
-	Subscribe(sessionID string) (*coreactor.Subscription, error)
+	GetOrCreate(sessionID string) (*coreactor.Actor, error)
+	Bus() *eventbus.Bus
 	Shutdown(sessionID string)
 	ShutdownAll()
 }
@@ -40,12 +36,12 @@ type registryAdapter struct {
 	inner *actor.Registry
 }
 
-func (r registryAdapter) GetOrCreate(sessionID string) (actorSession, error) {
+func (r registryAdapter) GetOrCreate(sessionID string) (*coreactor.Actor, error) {
 	return r.inner.GetOrCreate(sessionID)
 }
 
-func (r registryAdapter) Subscribe(sessionID string) (*coreactor.Subscription, error) {
-	return r.inner.Subscribe(sessionID)
+func (r registryAdapter) Bus() *eventbus.Bus {
+	return r.inner.Bus()
 }
 
 func (r registryAdapter) Shutdown(sessionID string) {
@@ -140,8 +136,8 @@ func authMiddleware(token string, next http.Handler) http.Handler {
 }
 
 // fridayExecutor implements a2asrv.AgentExecutor by routing requests through
-// the actor Registry. Each task is dispatched to a per-taskID actor; the
-// actor's ordered event stream is translated into A2A queue events.
+// the actor Registry's topic bus. Each task is dispatched to a per-taskID
+// actor; the session's ordered bus feed is translated into A2A queue events.
 type fridayExecutor struct {
 	registry actorRegistry
 }
@@ -169,8 +165,11 @@ func (e *fridayExecutor) Execute(ctx context.Context, reqCtx *a2asrv.RequestCont
 
 	// A2A TaskID is the actor session id: one actor per task.
 	sessionID := string(reqCtx.TaskID)
-	act, err := e.registry.GetOrCreate(sessionID)
-	if err != nil {
+	// Subscribe before creation so status.created is the observable epoch
+	// boundary and no early actor event can race the feed.
+	feed := bus.SubscribeAgentFeed(e.registry.Bus(), sessionID)
+	defer feed.Close()
+	if _, err := e.registry.GetOrCreate(sessionID); err != nil {
 		return writeTerminalState(ctx, queue, reqCtx, a2a.TaskStateFailed, errorMessage(fmt.Sprintf("actor setup failed: %v", err)))
 	}
 	defer e.registry.Shutdown(sessionID)
@@ -185,19 +184,11 @@ func (e *fridayExecutor) Execute(ctx context.Context, reqCtx *a2asrv.RequestCont
 		return fmt.Errorf("failed to write working event: %w", err)
 	}
 
-	sub, err := e.registry.Subscribe(sessionID)
-	if err != nil {
-		return fmt.Errorf("failed to subscribe actor events: %w", err)
-	}
-	defer sub.Close()
-	eventCh := sub.Events()
-
-	// Send the message to the actor inbox. If the inbox is full (very unlikely
-	// for a freshly created actor) surface as a failed task.
-	if !act.TrySend(coreactor.UserTextMessage{Text: userText, TurnID: string(reqCtx.TaskID)}) {
-		_ = queue.Write(ctx, a2a.NewStatusUpdateEvent(reqCtx, a2a.TaskStateFailed, errorMessage("actor inbox full")))
-		return nil
-	}
+	// Send the message to the actor inbox over the bus. Delivery failures
+	// come back asynchronously as status.inbox_dropped envelopes matched on
+	// TurnID below.
+	e.registry.Bus().Publish(bus.TopicInbox(sessionID),
+		bus.NewUserInput(sessionID, "a2a", bus.UserTextInput{Text: userText, TurnID: string(reqCtx.TaskID)}))
 
 	var (
 		textBuf    strings.Builder
@@ -207,17 +198,7 @@ func (e *fridayExecutor) Execute(ctx context.Context, reqCtx *a2asrv.RequestCont
 
 	for {
 		select {
-		case evt, ok := <-eventCh:
-			if !ok {
-				if runErr != "" {
-					return writeTerminalState(ctx, queue, reqCtx, a2a.TaskStateFailed, errorMessage(runErr))
-				}
-				if ctx.Err() != nil {
-					return writeTerminalState(ctx, queue, reqCtx, a2a.TaskStateCanceled, nil)
-				}
-				return writeTerminalState(ctx, queue, reqCtx, a2a.TaskStateFailed, errorMessage("actor stream closed unexpectedly"))
-			}
-
+		case evt := <-feed.Events():
 			switch evt.Type {
 			case events.KindTextMessageContent:
 				var d events.TextMessageContentData
@@ -252,6 +233,20 @@ func (e *fridayExecutor) Execute(ctx context.Context, reqCtx *a2asrv.RequestCont
 
 			case events.KindRunFinished:
 				return writeTaskTerminalState(ctx, queue, reqCtx, evt, runErr, textBuf.String())
+
+			case events.KindCustom:
+				if evt.Name != "status."+bus.StatusInboxDropped {
+					continue
+				}
+				var drop bus.InboxDropped
+				if events.DecodePayload(evt, &drop) != nil {
+					continue
+				}
+				// Only fail on drops of this task's input; other turns'
+				// drops are not ours to report.
+				if drop.TurnID == string(reqCtx.TaskID) {
+					return writeTerminalState(ctx, queue, reqCtx, a2a.TaskStateFailed, errorMessage("actor inbox dropped: "+drop.Reason))
+				}
 			}
 
 		case <-ctx.Done():
@@ -261,14 +256,13 @@ func (e *fridayExecutor) Execute(ctx context.Context, reqCtx *a2asrv.RequestCont
 }
 
 // Cancel handles task cancellation by preempting the actor's in-flight
-// turn for the task. The terminal Canceled status is written by Execute's
-// event loop when it observes the resulting RUN_FINISHED; here we only
-// record the cancel request.
+// turn for the task over the bus. The terminal Canceled status is written
+// by Execute's event loop when it observes the resulting RUN_FINISHED;
+// here we only record the cancel request.
 func (e *fridayExecutor) Cancel(ctx context.Context, reqCtx *a2asrv.RequestContext, queue eventqueue.Queue) error {
 	if e.registry != nil {
-		if act, err := e.registry.GetOrCreate(string(reqCtx.TaskID)); err == nil {
-			_ = act.SendPreempt(ctx, "a2a tasks/cancel")
-		}
+		tid := string(reqCtx.TaskID)
+		e.registry.Bus().Publish(bus.TopicPreempt(tid), bus.NewPreempt(tid, "a2a", "a2a tasks/cancel"))
 	}
 	return queue.Write(ctx, a2a.NewStatusUpdateEvent(reqCtx, a2a.TaskStateCanceled, nil))
 }

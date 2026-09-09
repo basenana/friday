@@ -1,13 +1,15 @@
 // Package tui implements an interactive Bubble Tea chat client for Friday.
 //
-// It consumes AG-UI events from a core/actor Actor and renders them as a
+// It consumes AG-UI events from the session's actor over the topic event
+// bus (agent.<sid>.* topics, bridged by bus/bridge) and renders them as a
 // Claude-Code-style terminal UI: streaming markdown text, reasoning blocks,
 // bordered tool call boxes, spinner, and a status bar.
 package tui
 
 import (
-	"github.com/charmbracelet/bubbletea"
+	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/basenana/friday/bus"
 	"github.com/basenana/friday/core/actor/events"
 )
 
@@ -17,21 +19,22 @@ type actorEventMsg struct {
 	event events.Event
 }
 
-// actorDoneMsg is emitted when the actor's subscription channel closes.
-type actorDoneMsg struct {
-	token uint64
-}
+// feedClosedMsg is emitted when the model's bus feed is closed (session
+// switch or quit). Update ignores it; it only exists to unblock
+// waitForActorEvent commands reading the old feed.
+type feedClosedMsg struct{}
 
-// waitForActorEvent returns a tea.Cmd that reads one event from the actor's
-// subscription channel. Bubble Tea runs the returned func on its own goroutine;
-// blocking here is expected and does not stall the UI. The cmd re-arms itself
-// by being re-issued from Update after each event.
-func waitForActorEvent(evts <-chan events.Event, token uint64) tea.Cmd {
+// waitForActorEvent returns a tea.Cmd that reads one event from the feed.
+// Bubble Tea runs the returned func on its own goroutine; blocking here is
+// expected and does not stall the UI. The cmd re-arms itself by being
+// re-issued from Update after each event.
+func waitForActorEvent(f *bus.Feed, token uint64) tea.Cmd {
 	return func() tea.Msg {
-		evt, ok := <-evts
-		if !ok {
-			return actorDoneMsg{token: token}
+		select {
+		case evt := <-f.Events():
+			return actorEventMsg{token: token, event: evt}
+		case <-f.Done():
+			return feedClosedMsg{}
 		}
-		return actorEventMsg{token: token, event: evt}
 	}
 }

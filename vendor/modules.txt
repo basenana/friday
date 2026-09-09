@@ -126,7 +126,7 @@ github.com/google/uuid
 # github.com/gorilla/css v1.0.1
 ## explicit; go 1.20
 github.com/gorilla/css/scanner
-# github.com/hyponet/eventbus v1.1.0
+# github.com/hyponet/eventbus v1.1.1-0.20260909123412-4a4c10ebb459
 ## explicit; go 1.23
 github.com/hyponet/eventbus/bus
 # github.com/inconshreveable/mousetrap v1.1.0

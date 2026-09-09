@@ -10,7 +10,7 @@ require (
 	github.com/charmbracelet/glamour v1.0.0
 	github.com/charmbracelet/lipgloss v1.1.1-0.20250404203927-76690c660834
 	github.com/davecgh/go-spew v1.1.1
-	github.com/hyponet/eventbus v1.1.0
+	github.com/hyponet/eventbus v1.1.1-0.20260909123412-4a4c10ebb459
 	github.com/mark3labs/mcp-go v0.43.2
 	github.com/spf13/cobra v1.10.2
 	go.uber.org/zap v1.27.1

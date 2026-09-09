@@ -15,6 +15,8 @@ func init() {
 	gid = uint64(rand.Uint32())
 }
 
+const defaultSerialBuffer = 256
+
 type Listener struct {
 	id    string
 	topic string
@@ -22,6 +24,20 @@ type Listener struct {
 	block bool
 	once  bool
 	mux   sync.Mutex
+
+	// Serial delivery mode (see Bus.SubscribeSerial): a dedicated
+	// goroutine drains queue in FIFO order so handler calls are strictly
+	// ordered, unlike the default goroutine-per-publish dispatch.
+	serial   bool
+	queue    [][]interface{}
+	head     int
+	size     int
+	capacity int
+	cond     *sync.Cond
+	overflow OverflowPolicy
+	onDrop   func(delta uint64)
+	closed   bool
+	done     chan struct{}
 }
 
 func (l *Listener) call(args ...interface{}) {
@@ -42,7 +58,76 @@ func (l *Listener) parseArgs(inArgs ...interface{}) (args []reflect.Value) {
 		}
 		args[i] = reflect.ValueOf(inArg)
 	}
-	return
+	return args
+}
+
+// run is the serial dispatch loop: it delivers queued messages in FIFO order
+// and exits after shutdown has been requested and the queue has been drained.
+func (l *Listener) run() {
+	for {
+		l.mux.Lock()
+		for l.size == 0 && !l.closed {
+			l.cond.Wait()
+		}
+		if l.size == 0 {
+			l.mux.Unlock()
+			return
+		}
+		args := l.queue[l.head]
+		l.queue[l.head] = nil
+		l.head = (l.head + 1) % l.capacity
+		l.size--
+		l.cond.Broadcast()
+		l.mux.Unlock()
+
+		l.call(args...)
+	}
+}
+
+// deliver takes a shallow snapshot of args and enqueues it for the serial
+// dispatch goroutine. Queue mutation is serialized by l.mux, but the drop
+// callback always runs after the lock is released so it may safely publish,
+// unsubscribe, or close the bus.
+func (l *Listener) deliver(args []interface{}) {
+	queuedArgs := append([]interface{}(nil), args...)
+
+	l.mux.Lock()
+	for l.overflow == OverflowBlock && l.size == l.capacity && !l.closed {
+		l.cond.Wait()
+	}
+	if l.closed {
+		l.mux.Unlock()
+		return
+	}
+
+	dropped := false
+	if l.size == l.capacity {
+		l.queue[l.head] = nil
+		l.head = (l.head + 1) % l.capacity
+		l.size--
+		dropped = true
+	}
+	tail := (l.head + l.size) % l.capacity
+	l.queue[tail] = queuedArgs
+	l.size++
+	l.cond.Signal()
+	onDrop := l.onDrop
+	l.mux.Unlock()
+
+	if dropped && onDrop != nil {
+		onDrop(1)
+	}
+}
+
+// shutdown stops new deliveries exactly once. Buffered messages are still
+// delivered before the dispatch goroutine exits.
+func (l *Listener) shutdown() {
+	l.mux.Lock()
+	if !l.closed {
+		l.closed = true
+		l.cond.Broadcast()
+	}
+	l.mux.Unlock()
 }
 
 func NewListener(topic string, fn interface{}, block, once bool) *Listener {

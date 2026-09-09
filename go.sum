@@ -75,6 +75,8 @@ github.com/hexops/gotextdiff v1.0.3 h1:gitA9+qJrrTCsiCl7+kh75nPqQt1cx4ZkudSTLoUq
 github.com/hexops/gotextdiff v1.0.3/go.mod h1:pSWU5MAI3yDq+fZBTazCSJysOMbxWL1BSow5/V2vxeg=
 github.com/hyponet/eventbus v1.1.0 h1:/UEP8D86xwH6NpuuUnN8cf0NqabpbXHplQ5zwcrmVZU=
 github.com/hyponet/eventbus v1.1.0/go.mod h1:Qg8Z/EtRPvNRQR4TLNmKbLpY3rWZ3ft97jBnLNvGBWg=
+github.com/hyponet/eventbus v1.1.1-0.20260909123412-4a4c10ebb459 h1:t73ZyqpVyk3mzp3d7qcyhzSyNQIe7YsYDIN8F8U/Q+k=
+github.com/hyponet/eventbus v1.1.1-0.20260909123412-4a4c10ebb459/go.mod h1:Qg8Z/EtRPvNRQR4TLNmKbLpY3rWZ3ft97jBnLNvGBWg=
 github.com/inconshreveable/mousetrap v1.1.0 h1:wN+x4NVGpMsO7ErUn/mUI3vEoE6Jt13X2s0bqwp9tc8=
 github.com/inconshreveable/mousetrap v1.1.0/go.mod h1:vpF70FUmC8bwa3OWnCshd2FqLfsEA9PFc4w1p2J65bw=
 github.com/invopop/jsonschema v0.13.0 h1:KvpoAJWEjR3uD9Kbm2HWJmqsEaHt8lBUpd0qHcIi21E=

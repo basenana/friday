@@ -8,7 +8,6 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	codercmds "github.com/basenana/friday/coder/commands"
-	coreactor "github.com/basenana/friday/core/actor"
 )
 
 // handleSlash dispatches slash commands via the registry.
@@ -59,7 +58,7 @@ func (m *model) applyResult(r *codercmds.Result) (tea.Model, tea.Cmd) {
 	}
 	if r.Quit {
 		m.quitting = true
-		m.closeSubscription()
+		m.closeFeed()
 		m.registry.Shutdown(m.sessionID)
 		cmds = append(cmds, tea.Quit)
 	}
@@ -80,7 +79,7 @@ func (m *model) switchSession(newID string) (tea.Cmd, error) {
 	if err := m.ensureSession(newID); err != nil {
 		return nil, err
 	}
-	m.closeSubscription()
+	m.closeFeed()
 	m.registry.Shutdown(m.sessionID)
 	m.sessionID = newID
 	m.messages = nil
@@ -111,8 +110,8 @@ func (m *model) runAgentCmd(agentName, input string) tea.Cmd {
 		agentName, input, agentName)
 
 	m.appendBlock(chatBlock{kind: blockUser, content: fmt.Sprintf("[/%s] %s", agentName, input)})
-	if !m.actor.TrySend(coreactor.UserTextMessage{Text: wrapped}) {
-		m.appendBlock(chatBlock{kind: blockError, content: "inbox full, try again"})
+	if err := m.sendUserText(wrapped); err != nil {
+		m.appendBlock(chatBlock{kind: blockError, content: err.Error()})
 		return nil
 	}
 	m.running = true

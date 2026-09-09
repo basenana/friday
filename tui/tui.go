@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"context"
 	"fmt"
 	"strconv"
 	"strings"
@@ -13,9 +12,9 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/basenana/friday/actor"
+	"github.com/basenana/friday/bus"
 	codercmds "github.com/basenana/friday/coder/commands"
 	"github.com/basenana/friday/config"
-	coreactor "github.com/basenana/friday/core/actor"
 	"github.com/basenana/friday/core/actor/events"
 	"github.com/basenana/friday/sessions"
 )
@@ -55,14 +54,12 @@ func Run(sessMgr *sessions.Manager, cfg *config.Config, sessionID string) error 
 type model struct {
 	sessMgr   *sessions.Manager
 	registry  *actor.Registry
-	actor     *coreactor.Actor
 	sessionID string
-	events    <-chan events.Event
+	feed      *bus.Feed
 
 	cmdRegistry *codercmds.Registry
 	cfg         *config.Config
 
-	sub               *coreactor.Subscription
 	subscriptionToken uint64
 
 	messages []chatBlock
@@ -148,7 +145,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m.cancelRun()
 			}
 			m.quitting = true
-			m.closeSubscription()
+			m.closeFeed()
 			return m, tea.Quit
 
 		case tea.KeyEsc:
@@ -171,8 +168,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m.handleSlash(text)
 			}
 			m.appendBlock(chatBlock{kind: blockUser, content: text})
-			if !m.actor.TrySend(coreactor.UserTextMessage{Text: text}) {
-				m.appendBlock(chatBlock{kind: blockError, content: "inbox full, try again"})
+			if err := m.sendUserText(text); err != nil {
+				m.appendBlock(chatBlock{kind: blockError, content: err.Error()})
 				return m, nil
 			}
 			m.running = true
@@ -193,18 +190,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Batch(cmds...)
 
-	case actorDoneMsg:
-		if msg.token != m.subscriptionToken {
-			return m, nil
-		}
-		// Current subscription closed — recreate for next turn.
-		if !m.quitting {
-			if err := m.bindSession(m.sessionID); err != nil {
-				m.appendBlock(chatBlock{kind: blockError, content: err.Error()})
-				return m, nil
-			}
-			return m, m.waitForActorEvent()
-		}
+	case feedClosedMsg:
+		// The previous feed was closed on session switch or quit; nothing
+		// to do — the new binding issued its own waitForActorEvent.
 		return m, nil
 
 	case spinner.TickMsg:
@@ -226,16 +214,27 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 // cancelRun aborts the current agent run while keeping the TUI (and the
-// actor) alive. The actor stays subscribed; a late RUN_FINISHED from the
+// actor) alive. The feed stays subscribed; a late RUN_FINISHED from the
 // cancelled turn is idempotent because running is already false.
 func (m *model) cancelRun() (tea.Model, tea.Cmd) {
-	if err := m.actor.SendPreempt(context.Background(), "user cancelled"); err != nil {
-		m.appendBlock(chatBlock{kind: blockError, content: fmt.Sprintf("cancel failed: %v", err)})
-	}
+	sid := m.sessionID
+	m.registry.Bus().Publish(bus.TopicPreempt(sid), bus.NewPreempt(sid, "user.local", "user cancelled"))
 	m.flushStreaming()
 	m.appendBlock(chatBlock{kind: blockError, content: "[cancelled]"})
 	m.running = false
 	return m, nil
+}
+
+// sendUserText ensures the session's actor (and its bus bridges) exist and
+// publishes the text on the inbox topic. Delivery failures are reported
+// asynchronously via status.inbox_dropped envelopes.
+func (m *model) sendUserText(text string) error {
+	if _, err := m.registry.GetOrCreate(m.sessionID); err != nil {
+		return err
+	}
+	m.registry.Bus().Publish(bus.TopicInbox(m.sessionID),
+		bus.NewUserInput(m.sessionID, "user.local", bus.UserTextInput{Text: text}))
+	return nil
 }
 
 // handleActorEvent maps an AG-UI event to model state mutations.
@@ -351,6 +350,12 @@ func (m *model) handleCustomEvent(evt events.Event) {
 		if events.DecodePayload(evt, &d) == nil {
 			m.appendBlock(chatBlock{kind: blockAssistant, content: fmt.Sprintf("[form] %s — interactive forms are not supported in TUI yet", d.FormID)})
 		}
+
+	case "status." + bus.StatusInboxDropped:
+		var d bus.InboxDropped
+		if events.DecodePayload(evt, &d) == nil {
+			m.appendBlock(chatBlock{kind: blockError, content: "message dropped: " + d.Reason})
+		}
 	}
 }
 
@@ -380,12 +385,11 @@ func (m *model) appendBlock(b chatBlock) {
 	m.messages = append(m.messages, b)
 }
 
-func (m *model) closeSubscription() {
-	if m.sub != nil {
-		m.sub.Close()
-		m.sub = nil
+func (m *model) closeFeed() {
+	if m.feed != nil {
+		m.feed.Close()
+		m.feed = nil
 	}
-	m.events = nil
 }
 
 func (m *model) ensureSession(sessionID string) error {
@@ -395,26 +399,29 @@ func (m *model) ensureSession(sessionID string) error {
 	return nil
 }
 
+// bindSession subscribes the model to every outbound topic of sessionID on
+// the registry bus and (re)creates the session's actor and bridges. The
+// feed persists across turns; it is only replaced on session switch.
 func (m *model) bindSession(sessionID string) error {
-	m.closeSubscription()
+	m.closeFeed()
 
-	a, err := m.registry.GetOrCreate(sessionID)
-	if err != nil {
+	// Subscribe before actor creation so status.created is retained as the
+	// epoch boundary and no startup event can race this binding.
+	feed := bus.SubscribeAgentFeed(m.registry.Bus(), sessionID)
+	if _, err := m.registry.GetOrCreate(sessionID); err != nil {
+		feed.Close()
 		return fmt.Errorf("failed to bind session %s: %w", shortID(sessionID), err)
 	}
-	sub := a.Subscribe()
 
-	m.actor = a
 	m.sessionID = sessionID
-	m.sub = sub
-	m.events = sub.Events()
+	m.feed = feed
 	m.subscriptionToken++
 	return nil
 }
 
 func (m *model) waitForActorEvent() tea.Cmd {
-	if m.events == nil {
+	if m.feed == nil {
 		return nil
 	}
-	return waitForActorEvent(m.events, m.subscriptionToken)
+	return waitForActorEvent(m.feed, m.subscriptionToken)
 }

@@ -102,6 +102,25 @@ func TestRegistry_ShutdownClosesSubscription(t *testing.T) {
 	}
 }
 
+func TestRegistryDetachStaleKeepsReplacementIsolated(t *testing.T) {
+	old := &managedActor{}
+	old.lastActive.Store(time.Now().Add(-time.Hour).UnixNano())
+	r := &Registry{
+		entries: map[string]*managedActor{"sess-1": old},
+		cfg:     RegistryConfig{IdleTimeout: time.Minute},
+	}
+
+	stale := r.detachStale(time.Now())
+	if len(stale) != 1 || stale[0].managed != old {
+		t.Fatalf("detached entries = %+v, want the original actor", stale)
+	}
+	replacement := &managedActor{}
+	r.entries["sess-1"] = replacement
+	if got := r.entries["sess-1"]; got != replacement {
+		t.Fatal("detached stale actor still aliases the replacement entry")
+	}
+}
+
 func TestRegistry_IdleSweepEvicts(t *testing.T) {
 	r := newTestRegistry(t, func(c *RegistryConfig) {
 		c.IdleTimeout = 50 * time.Millisecond

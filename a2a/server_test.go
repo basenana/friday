@@ -14,7 +14,9 @@ import (
 	"github.com/a2aproject/a2a-go/a2a"
 	"github.com/a2aproject/a2a-go/a2asrv"
 	"github.com/a2aproject/a2a-go/a2asrv/eventqueue"
+	eventbus "github.com/hyponet/eventbus/bus"
 
+	"github.com/basenana/friday/bus"
 	coreactor "github.com/basenana/friday/core/actor"
 	"github.com/basenana/friday/core/actor/events"
 )
@@ -154,6 +156,7 @@ func TestAuthMiddlewareAcceptsCorrectToken(t *testing.T) {
 
 func TestFridayExecutorCancelPreemptsActor(t *testing.T) {
 	registry := newFakeRegistry()
+	preempts := registry.onPreempt(t)
 	executor := newFridayExecutor(registry)
 
 	taskID := a2a.TaskID("cancel-prop-test")
@@ -175,8 +178,13 @@ func TestFridayExecutorCancelPreemptsActor(t *testing.T) {
 	if statusUpdate.Status.State != a2a.TaskStateCanceled {
 		t.Errorf("expected canceled state, got %q", statusUpdate.Status.State)
 	}
-	if !registry.actor.wasPreempted() {
-		t.Fatal("expected SendPreempt to be called on the actor")
+	select {
+	case reason := <-preempts:
+		if reason != "a2a tasks/cancel" {
+			t.Fatalf("preempt reason = %q, want %q", reason, "a2a tasks/cancel")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected a preempt publish on the bus")
 	}
 }
 
@@ -227,15 +235,17 @@ func TestExtractTextFromMessage(t *testing.T) {
 
 func TestFridayExecutorExecuteCompleted(t *testing.T) {
 	registry := newFakeRegistry()
-	registry.actor.trySend = func(msg coreactor.Message) bool {
-		go func() {
-			registry.publish(events.NewEvent(events.KindTextMessageContent, "run").WithPayload(events.TextMessageContentData{Content: "Hello "}))
-			registry.publish(events.NewEvent(events.KindTextMessageContent, "run").WithPayload(events.TextMessageContentData{Content: "Friday"}))
-			registry.publish(events.NewEvent(events.KindRunFinished, "run").WithPayload(events.RunFinishedData{StopReason: "end_turn"}))
-		}()
-		text, ok := msg.(coreactor.UserTextMessage)
-		return ok && text.Text == "hi"
-	}
+	registry.onInbox(t, func(session string, in bus.UserTextInput) {
+		if in.Text != "hi" {
+			t.Errorf("actor received %q, want %q", in.Text, "hi")
+		}
+		registry.publish(session, bus.TopicReplyContent(session),
+			events.NewEvent(events.KindTextMessageContent, "run").WithPayload(events.TextMessageContentData{Content: "Hello "}))
+		registry.publish(session, bus.TopicReplyContent(session),
+			events.NewEvent(events.KindTextMessageContent, "run").WithPayload(events.TextMessageContentData{Content: "Friday"}))
+		registry.publish(session, bus.TopicRun(session, "finished"),
+			events.NewEvent(events.KindRunFinished, "run").WithPayload(events.RunFinishedData{StopReason: "end_turn"}))
+	})
 
 	executor := newFridayExecutor(registry)
 	reqCtx := &a2asrv.RequestContext{
@@ -283,13 +293,12 @@ func TestFridayExecutorExecuteCompleted(t *testing.T) {
 
 func TestFridayExecutorExecuteFailed(t *testing.T) {
 	registry := newFakeRegistry()
-	registry.actor.trySend = func(msg coreactor.Message) bool {
-		go func() {
-			registry.publish(events.NewEvent(events.KindRunError, "run").WithPayload(events.RunErrorData{Message: "boom"}))
-			registry.publish(events.NewEvent(events.KindRunFinished, "run").WithPayload(events.RunFinishedData{StopReason: "error"}))
-		}()
-		return true
-	}
+	registry.onInbox(t, func(session string, _ bus.UserTextInput) {
+		registry.publish(session, bus.TopicRun(session, "error"),
+			events.NewEvent(events.KindRunError, "run").WithPayload(events.RunErrorData{Message: "boom"}))
+		registry.publish(session, bus.TopicRun(session, "finished"),
+			events.NewEvent(events.KindRunFinished, "run").WithPayload(events.RunFinishedData{StopReason: "error"}))
+	})
 
 	executor := newFridayExecutor(registry)
 	reqCtx := &a2asrv.RequestContext{TaskID: "test-fail-1", ContextID: "ctx-fail-1"}
@@ -318,11 +327,44 @@ func TestFridayExecutorExecuteFailed(t *testing.T) {
 	}
 }
 
+func TestFridayExecutorExecuteFailsOnInboxDropped(t *testing.T) {
+	registry := newFakeRegistry()
+	registry.onInbox(t, func(session string, in bus.UserTextInput) {
+		// Simulate the InBridge rejecting this task's input.
+		evt := events.NewEvent(events.KindCustom, "").WithName("status." + bus.StatusInboxDropped)
+		evt = evt.WithPayload(bus.InboxDropped{From: "a2a", TurnID: in.TurnID, Reason: "actor stopped"})
+		registry.bus.Publish(bus.TopicStatus(session, bus.StatusInboxDropped), bus.Envelope{
+			Event:   evt,
+			Topic:   bus.TopicStatus(session, bus.StatusInboxDropped),
+			Session: session,
+			From:    "actor",
+		})
+	})
+
+	executor := newFridayExecutor(registry)
+	reqCtx := &a2asrv.RequestContext{TaskID: "test-drop-1", ContextID: "ctx-drop-1"}
+	queue := newTestQueue()
+
+	if err := executor.Execute(context.Background(), reqCtx, queue); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	events := queue.events()
+	last := events[len(events)-1]
+	statusUpdate, ok := last.(*a2a.TaskStatusUpdateEvent)
+	if !ok {
+		t.Fatalf("expected TaskStatusUpdateEvent, got %T", last)
+	}
+	if statusUpdate.Status.State != a2a.TaskStateFailed {
+		t.Fatalf("expected failed state, got %q", statusUpdate.Status.State)
+	}
+	if got := extractTextFromMessage(statusUpdate.Status.Message); got != "actor inbox dropped: actor stopped" {
+		t.Fatalf("unexpected failure message: %q", got)
+	}
+}
+
 func TestFridayExecutorExecuteCanceledOnContextDone(t *testing.T) {
 	registry := newFakeRegistry()
-	registry.actor.trySend = func(msg coreactor.Message) bool {
-		return true
-	}
 
 	executor := newFridayExecutor(registry)
 	reqCtx := &a2asrv.RequestContext{TaskID: "test-cancel-1", ContextID: "ctx-cancel-1"}
@@ -473,34 +515,26 @@ func (q *testQueue) events() []a2a.Event {
 	return result
 }
 
-// fakeRegistry backs the executor with a real core/actor EventStream so
-// subscriptions behave exactly like production (buffering, close semantics).
+// fakeRegistry backs the executor with a real eventbus so topic
+// subscriptions behave exactly like production (serial ordering, wildcard
+// matching). The "actor" is simulated by test listeners on the inbox and
+// preempt topics that publish scripted events back onto the bus.
 type fakeRegistry struct {
-	actor  *fakeActorSession
-	stream *coreactor.EventStream
+	bus *eventbus.Bus
 
 	mu          sync.Mutex
 	shutdownIDs []string
 }
 
 func newFakeRegistry() *fakeRegistry {
-	return &fakeRegistry{
-		actor:  &fakeActorSession{},
-		stream: coreactor.NewEventStream(nil),
-	}
+	return &fakeRegistry{bus: eventbus.NewBus()}
 }
 
-func (r *fakeRegistry) publish(evt events.Event) {
-	r.stream.Publish(evt)
+func (r *fakeRegistry) GetOrCreate(_ string) (*coreactor.Actor, error) {
+	return nil, nil
 }
 
-func (r *fakeRegistry) GetOrCreate(sessionID string) (actorSession, error) {
-	return r.actor, nil
-}
-
-func (r *fakeRegistry) Subscribe(sessionID string) (*coreactor.Subscription, error) {
-	return r.stream.Subscribe(0), nil
-}
+func (r *fakeRegistry) Bus() *eventbus.Bus { return r.bus }
 
 func (r *fakeRegistry) Shutdown(sessionID string) {
 	r.mu.Lock()
@@ -521,33 +555,38 @@ func (r *fakeRegistry) wasShutdown(sessionID string) bool {
 	return false
 }
 
-type fakeActorSession struct {
-	trySend func(coreactor.Message) bool
-
-	mu        sync.Mutex
-	preempted bool
+// publish puts an event on a session topic the way the OutBridge would.
+func (r *fakeRegistry) publish(session, topic string, evt events.Event) {
+	r.bus.Publish(topic, bus.Envelope{
+		Event:   evt,
+		Topic:   topic,
+		Session: session,
+		From:    "actor",
+	})
 }
 
-func (a *fakeActorSession) Send(_ context.Context, _ coreactor.Message) error {
-	return nil
+// onInbox subscribes the inbox topic; fn runs as the simulated actor for
+// every user input envelope.
+func (r *fakeRegistry) onInbox(t *testing.T, fn func(session string, in bus.UserTextInput)) {
+	t.Helper()
+	r.bus.SubscribeSerial([]string{"agent.*.inbox"}, func(env bus.Envelope) {
+		var in bus.UserTextInput
+		if events.DecodePayload(env.Event, &in) == nil {
+			fn(env.Session, in)
+		}
+	}, eventbus.SerialConfig{Overflow: eventbus.OverflowDropOldest})
 }
 
-func (a *fakeActorSession) TrySend(msg coreactor.Message) bool {
-	if a.trySend == nil {
-		return true
-	}
-	return a.trySend(msg)
-}
-
-func (a *fakeActorSession) SendPreempt(_ context.Context, _ string) error {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.preempted = true
-	return nil
-}
-
-func (a *fakeActorSession) wasPreempted() bool {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return a.preempted
+// onPreempt records preempt requests; the returned channel yields each
+// reason.
+func (r *fakeRegistry) onPreempt(t *testing.T) <-chan string {
+	t.Helper()
+	ch := make(chan string, 4)
+	r.bus.SubscribeSerial([]string{"agent.*.preempt"}, func(env bus.Envelope) {
+		var in bus.PreemptInput
+		if events.DecodePayload(env.Event, &in) == nil {
+			ch <- in.Reason
+		}
+	}, eventbus.SerialConfig{Overflow: eventbus.OverflowDropOldest})
+	return ch
 }

@@ -3,7 +3,6 @@
 package e2e
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,6 +11,7 @@ import (
 	"time"
 
 	"github.com/basenana/friday/actor"
+	"github.com/basenana/friday/bus"
 	coreactor "github.com/basenana/friday/core/actor"
 	"github.com/basenana/friday/core/actor/events"
 	"github.com/basenana/friday/core/types"
@@ -33,24 +33,20 @@ func newActorEnv(t *testing.T, cfg *E2EConfig, modelName string) (*actor.Registr
 	return reg, sessID, dir
 }
 
-// runRegistryActor binds to the session's actor, sends one message, drains
-// the subscription until the run finishes (or the grace period elapses),
-// then shuts the actor down. Returns the collected events.
+// runRegistryActor binds to the session's actor over the bus, sends one
+// inbox message, drains the ordered session feed until the run finishes
+// (or the grace period elapses), then shuts the actor down. Returns the
+// collected events.
 func runRegistryActor(t *testing.T, reg *actor.Registry, sessID, msg string, grace time.Duration) []events.Event {
 	t.Helper()
-	a, err := reg.GetOrCreate(sessID)
-	if err != nil {
+	if _, err := reg.GetOrCreate(sessID); err != nil {
 		t.Fatalf("GetOrCreate: %v", err)
 	}
-	sub, err := reg.Subscribe(sessID)
-	if err != nil {
-		t.Fatalf("Subscribe: %v", err)
-	}
-	defer sub.Close()
+	feed := bus.SubscribeAgentFeed(reg.Bus(), sessID)
+	defer feed.Close()
 
-	if err := a.Send(context.Background(), coreactor.UserTextMessage{Text: msg}); err != nil {
-		t.Fatalf("Send: %v", err)
-	}
+	reg.Bus().Publish(bus.TopicInbox(sessID),
+		bus.NewUserInput(sessID, "e2e", bus.UserTextInput{Text: msg}))
 
 	var collected []events.Event
 	deadline := time.NewTimer(grace)
@@ -59,10 +55,7 @@ func runRegistryActor(t *testing.T, reg *actor.Registry, sessID, msg string, gra
 	defer idle.Stop()
 	for {
 		select {
-		case evt, ok := <-sub.Events():
-			if !ok {
-				return collected
-			}
+		case evt := <-feed.Events():
 			collected = append(collected, evt)
 			if evt.Type == events.KindRunFinished || evt.Type == events.KindRunError {
 				reg.Shutdown(sessID)
@@ -167,28 +160,29 @@ func TestActor_ToolCallEvents(t *testing.T) {
 	})
 }
 
-// TestActor_ShutdownClosesSubscription verifies that a registry Shutdown
-// closes the actor's subscription channel.
-func TestActor_ShutdownClosesSubscription(t *testing.T) {
+// TestActor_ShutdownPublishesStatusStopped verifies that a registry
+// Shutdown surfaces as a status.stopped envelope on the bus.
+func TestActor_ShutdownPublishesStatusStopped(t *testing.T) {
 	cfg := loadConfig(t)
 	reg, sessID, _ := newActorEnv(t, cfg, "chat")
 
 	if _, err := reg.GetOrCreate(sessID); err != nil {
 		t.Fatalf("GetOrCreate: %v", err)
 	}
-	sub, err := reg.Subscribe(sessID)
-	if err != nil {
-		t.Fatalf("Subscribe: %v", err)
-	}
+	feed := bus.SubscribeAgentFeed(reg.Bus(), sessID)
+	defer feed.Close()
 	reg.Shutdown(sessID)
 
-	select {
-	case _, ok := <-sub.Events():
-		if ok {
-			t.Error("expected closed channel, got an event")
+	deadline := time.After(5 * time.Second)
+	for {
+		select {
+		case evt := <-feed.Events():
+			if evt.Type == events.KindCustom && evt.Name == "status."+bus.StatusStopped {
+				return
+			}
+		case <-deadline:
+			t.Fatal("status.stopped not observed within 5s of Shutdown")
 		}
-	case <-time.After(5 * time.Second):
-		t.Error("subscription channel not closed within 5s of Shutdown")
 	}
 }
 
