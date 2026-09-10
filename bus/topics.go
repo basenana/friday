@@ -16,6 +16,16 @@ const (
 	InboxFormCancel = "form.cancel"
 )
 
+// InputDelivery controls how user text is scheduled. Empty/normal preserves
+// the existing FIFO behavior; steer interrupts an active run and is processed
+// before queued normal input.
+type InputDelivery string
+
+const (
+	DeliveryNormal InputDelivery = "normal"
+	DeliverySteer  InputDelivery = "steer"
+)
+
 // Status events carried on the status topic.
 const (
 	StatusCreated      = "created"
@@ -143,6 +153,7 @@ func UnsubscribeAll(b *eventbus.Bus, ids ...string) {
 type UserTextInput struct {
 	Text     string         `json:"text"`
 	TurnID   string         `json:"turn_id,omitempty"`
+	Delivery InputDelivery  `json:"delivery,omitempty"`
 	Metadata map[string]any `json:"metadata,omitempty"`
 }
 
@@ -160,7 +171,17 @@ type FormCancelInput struct {
 // PreemptInput is the payload schema of preempt envelopes.
 type PreemptInput struct {
 	Reason string `json:"reason,omitempty"`
+	// Scope is "current" to retain queued turns. Empty means the historical
+	// cancel-all behavior.
+	Scope string `json:"scope,omitempty"`
 }
+
+type PreemptScope string
+
+const (
+	PreemptAll     PreemptScope = ""
+	PreemptCurrent PreemptScope = "current"
+)
 
 // InboxDropped is the payload schema of status.inbox_dropped
 // envelopes, echoing the identity of the rejected input so senders
@@ -168,6 +189,7 @@ type PreemptInput struct {
 type InboxDropped struct {
 	From   string `json:"from,omitempty"`
 	TurnID string `json:"turn_id,omitempty"`
+	FormID string `json:"form_id,omitempty"`
 	Reason string `json:"reason,omitempty"`
 }
 
@@ -200,8 +222,13 @@ func NewFormCancel(session, from string, in FormCancelInput) Envelope {
 
 // NewPreempt builds a preempt envelope carrying PreemptInput.
 func NewPreempt(session, from, reason string) Envelope {
+	return NewScopedPreempt(session, from, reason, PreemptAll)
+}
+
+// NewScopedPreempt builds a preemption request with an explicit queue scope.
+func NewScopedPreempt(session, from, reason string, scope PreemptScope) Envelope {
 	evt := events.NewEvent(events.KindCustom, "").WithName("preempt")
-	evt = evt.WithPayload(PreemptInput{Reason: reason})
+	evt = evt.WithPayload(PreemptInput{Reason: reason, Scope: string(scope)})
 	return Envelope{
 		Event:   evt,
 		Topic:   TopicPreempt(session),

@@ -9,6 +9,7 @@ import (
 
 	"github.com/basenana/friday/config"
 	coreactor "github.com/basenana/friday/core/actor"
+	"github.com/basenana/friday/core/actor/events"
 	"github.com/basenana/friday/sessions"
 	"github.com/basenana/friday/sessions/file"
 )
@@ -49,6 +50,26 @@ func TestRegistry_GetOrCreateIdempotent(t *testing.T) {
 	if got, ok := r.Get("sess-1"); !ok || got != a1 {
 		t.Fatalf("Get mismatch")
 	}
+}
+
+func TestRegistryPersistsActorEventsWhenStoreSupportsIt(t *testing.T) {
+	r := newTestRegistry(t, nil)
+	a, err := r.GetOrCreate("sess-events")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.EmitCustom(events.CustomTodoUpdate, "todo", map[string]any{"status": "running"})
+	r.Shutdown("sess-events")
+	mgr := r.sessMgr.(*sessions.Manager)
+	store := mgr.GetStore().(sessions.EventStore)
+	got, err := store.LoadEvents(context.Background(), "sess-events")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Name != events.CustomTodoUpdate {
+		t.Fatalf("persisted events = %#v", got)
+	}
+	r.ShutdownAll()
 }
 
 func TestRegistry_ShutdownThenRebuild(t *testing.T) {

@@ -18,6 +18,9 @@ type Result struct {
 	ClearMessages bool
 	// SwitchSession switches the TUI to the named session ID.
 	SwitchSession string
+	// PreserveTranscript keeps the visible terminal transcript when switching
+	// to a newly-created chat (Codex-style /new behavior).
+	PreserveTranscript bool
 	// Quit exits the TUI.
 	Quit bool
 

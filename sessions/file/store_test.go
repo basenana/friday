@@ -1,14 +1,108 @@
 package file
 
 import (
+	"context"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/basenana/friday/core/actor/events"
 	"github.com/basenana/friday/core/contextmgr"
 	"github.com/basenana/friday/core/types"
 )
+
+func TestEventStoreRoundTripAndRepairsTruncatedTail(t *testing.T) {
+	dir := t.TempDir()
+	store := NewFileSessionStore(dir)
+	if _, err := store.Create("events", nil); err != nil {
+		t.Fatal(err)
+	}
+	sink, err := store.OpenEventSink(context.Background(), "events")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := events.NewEvent(events.KindRunStarted, "run-1")
+	if err := sink.Append(context.Background(), want); err != nil {
+		t.Fatal(err)
+	}
+	if err := sink.Close(); err != nil {
+		t.Fatal(err)
+	}
+	path := store.eventsPath("events")
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("mode = %o", info.Mode().Perm())
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = f.WriteString(`{"type":`)
+	_ = f.Close()
+	repaired, err := store.OpenEventSink(context.Background(), "events")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = repaired.Close()
+	got, err := store.LoadEvents(context.Background(), "events")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].RunID != want.RunID {
+		t.Fatalf("events = %#v", got)
+	}
+}
+
+func TestEventStoreCompactsLargeLogsAndKeepsLatestRun(t *testing.T) {
+	dir := t.TempDir()
+	store := NewFileSessionStore(dir)
+	if _, err := store.Create("bounded", nil); err != nil {
+		t.Fatal(err)
+	}
+	sink, err := store.OpenEventSink(context.Background(), "bounded")
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := strings.Repeat("x", 4096)
+	for run := 0; run < 24; run++ {
+		runID := fmt.Sprintf("run-%d", run)
+		if err := sink.Append(context.Background(), events.NewEvent(events.KindRunStarted, runID)); err != nil {
+			t.Fatal(err)
+		}
+		for i := 0; i < 100; i++ {
+			evt := events.NewEvent(events.KindTextMessageContent, runID).WithPayload(events.TextMessageContentData{Content: payload})
+			if err := sink.Append(context.Background(), evt); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := sink.Append(context.Background(), events.NewEvent(events.KindRunFinished, runID)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := sink.Close(); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(store.eventsPath("bounded"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Size() > maxEventLogBytes {
+		t.Fatalf("event log size = %d, max = %d", info.Size(), maxEventLogBytes)
+	}
+	got, err := store.LoadEvents(context.Background(), "bounded")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) == 0 || got[len(got)-1].RunID != "run-23" || got[len(got)-1].Type != events.KindRunFinished {
+		t.Fatalf("latest event not retained: %#v", got[len(got)-1])
+	}
+}
 
 func TestReplaceMessages(t *testing.T) {
 	// Create temp directory

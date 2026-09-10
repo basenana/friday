@@ -68,7 +68,7 @@ func TestActor_MultiMessageDrain(t *testing.T) {
 	}
 
 	seen := collectEvents(t, sub, hasRunFinished)
-	var starts, finishes int
+	var starts, finishes, accepted int
 	var batch int
 	for _, e := range seen {
 		switch e.Type {
@@ -79,6 +79,17 @@ func TestActor_MultiMessageDrain(t *testing.T) {
 			batch = data.Batch
 		case events.KindRunFinished:
 			finishes++
+		case events.KindCustom:
+			if e.Name == events.CustomInputAccepted {
+				var body events.InputAcceptedBody
+				if err := events.DecodePayload(e, &body); err != nil {
+					t.Fatal(err)
+				}
+				if body.Text == "" {
+					t.Fatal("accepted input text is empty")
+				}
+				accepted++
+			}
 		}
 	}
 	if starts != 1 || finishes != 1 {
@@ -87,6 +98,9 @@ func TestActor_MultiMessageDrain(t *testing.T) {
 	// batch counts the messages coalesced into the turn.
 	if batch < 1 {
 		t.Fatalf("expected batch>=1, got %d", batch)
+	}
+	if accepted != 1 {
+		t.Fatalf("input.accepted count = %d, want 1", accepted)
 	}
 }
 

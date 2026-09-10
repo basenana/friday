@@ -16,6 +16,7 @@ import (
 	"github.com/basenana/friday/bus"
 	"github.com/basenana/friday/config"
 	coreactor "github.com/basenana/friday/core/actor"
+	"github.com/basenana/friday/sessions"
 	"github.com/basenana/friday/setup"
 )
 
@@ -128,6 +129,16 @@ func (r *Registry) GetOrCreate(sessionID string) (*coreactor.Actor, error) {
 	e.lastActive.Store(time.Now().UnixNano())
 
 	opts := []coreactor.Option{coreactor.WithTurnLifecycle(e)}
+	if provider, ok := r.sessMgr.(interface{ GetStore() sessions.Store }); ok {
+		if eventStore, ok := provider.GetStore().(sessions.EventStore); ok {
+			eventSink, sinkErr := eventStore.OpenEventSink(r.ctx, sessionID)
+			if sinkErr != nil {
+				agentCtx.Close()
+				return nil, fmt.Errorf("open event log for session %s: %w", sessionID, sinkErr)
+			}
+			opts = append(opts, coreactor.WithSink(eventSink))
+		}
+	}
 	if r.cfg.InboxBuffer > 0 {
 		opts = append(opts, coreactor.WithInboxBuffer(r.cfg.InboxBuffer))
 	}

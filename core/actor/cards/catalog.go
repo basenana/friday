@@ -44,6 +44,11 @@ func (c Catalog) ValidateField(f Field) error {
 			return fmt.Errorf("cards: field %q of type %s requires options", f.Name, f.Type)
 		}
 	}
+	for _, child := range f.Fields {
+		if err := c.ValidateField(child); err != nil {
+			return fmt.Errorf("cards: field %q: %w", f.Name, err)
+		}
+	}
 	return nil
 }
 

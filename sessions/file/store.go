@@ -1,18 +1,28 @@
 package file
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/basenana/friday/core/actor/events"
+	actorsink "github.com/basenana/friday/core/actor/sink"
 	"github.com/basenana/friday/core/contextmgr"
 	"github.com/basenana/friday/core/providers"
 	coresession "github.com/basenana/friday/core/session"
 	"github.com/basenana/friday/core/types"
 	"github.com/basenana/friday/sessions"
+)
+
+const (
+	maxEventLogBytes    int64 = 8 << 20
+	targetEventLogBytes int64 = 6 << 20
 )
 
 type FileSessionStore struct {
@@ -41,6 +51,136 @@ func (s *FileSessionStore) metaPath(id string) string {
 
 func (s *FileSessionStore) historyPath(id string) string {
 	return filepath.Join(s.sessionDir(id), "history.jsonl")
+}
+
+func (s *FileSessionStore) eventsPath(id string) string {
+	return filepath.Join(s.sessionDir(id), "events.jsonl")
+}
+
+// OpenEventSink opens the append-only actor event log for a session.
+func (s *FileSessionStore) OpenEventSink(_ context.Context, id string) (actorsink.EventSink, error) {
+	if err := os.MkdirAll(s.sessionDir(id), 0o755); err != nil {
+		return nil, err
+	}
+	if err := repairEventLogTail(s.eventsPath(id)); err != nil {
+		return nil, err
+	}
+	if err := actorsink.CompactJSONL(s.eventsPath(id), maxEventLogBytes, targetEventLogBytes); err != nil {
+		return nil, err
+	}
+	eventSink, err := actorsink.NewBoundedJSONL(s.eventsPath(id), maxEventLogBytes, targetEventLogBytes)
+	if err != nil {
+		return nil, err
+	}
+	if err := os.Chmod(s.eventsPath(id), 0o600); err != nil {
+		_ = eventSink.Close()
+		return nil, err
+	}
+	return eventSink, nil
+}
+
+func repairEventLogTail(path string) error {
+	f, err := os.OpenFile(path, os.O_RDWR, 0)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	if info.Size() == 0 {
+		return nil
+	}
+
+	last := []byte{0}
+	if _, err := f.ReadAt(last, info.Size()-1); err != nil {
+		return err
+	}
+	lastNewline, err := previousNewline(f, info.Size()-1)
+	if err != nil {
+		return err
+	}
+	if last[0] != '\n' {
+		// A JSONL record is committed only once its terminating newline exists.
+		return f.Truncate(lastNewline + 1)
+	}
+	lineStart, err := previousNewline(f, lastNewline-1)
+	if err != nil {
+		return err
+	}
+	lineStart++
+	line := make([]byte, lastNewline-lineStart)
+	if _, err := f.ReadAt(line, lineStart); err != nil && !errors.Is(err, io.EOF) {
+		return err
+	}
+	var evt events.Event
+	if len(line) > 0 && json.Unmarshal(line, &evt) == nil {
+		return nil
+	}
+	// Only repair the tail. Earlier malformed records remain visible to
+	// LoadEvents as corruption rather than being silently discarded.
+	return f.Truncate(lineStart)
+}
+
+func previousNewline(f *os.File, before int64) (int64, error) {
+	const chunkSize int64 = 32 << 10
+	for end := before; end >= 0; {
+		start := end - chunkSize + 1
+		if start < 0 {
+			start = 0
+		}
+		buf := make([]byte, end-start+1)
+		if _, err := f.ReadAt(buf, start); err != nil && !errors.Is(err, io.EOF) {
+			return -1, err
+		}
+		for i := len(buf) - 1; i >= 0; i-- {
+			if buf[i] == '\n' {
+				return start + int64(i), nil
+			}
+		}
+		end = start - 1
+	}
+	return -1, nil
+}
+
+// LoadEvents decodes every complete event record. A truncated final record is
+// ignored so a process killed mid-write does not make an otherwise valid
+// transcript unusable.
+func (s *FileSessionStore) LoadEvents(ctx context.Context, id string) ([]events.Event, error) {
+	if err := repairEventLogTail(s.eventsPath(id)); err != nil {
+		return nil, err
+	}
+	if err := actorsink.CompactJSONL(s.eventsPath(id), maxEventLogBytes, targetEventLogBytes); err != nil {
+		return nil, err
+	}
+	f, err := os.Open(s.eventsPath(id))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	defer f.Close()
+
+	var out []events.Event
+	decoder := json.NewDecoder(f)
+	for {
+		if err := ctx.Err(); err != nil {
+			return out, err
+		}
+		var evt events.Event
+		if err := decoder.Decode(&evt); err != nil {
+			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+				return out, nil
+			}
+			return out, fmt.Errorf("decode event log: %w", err)
+		}
+		out = append(out, evt)
+	}
 }
 
 func (s *FileSessionStore) sessionMemoryPath(id string) string {

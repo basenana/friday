@@ -1,11 +1,15 @@
 package tui
 
 import (
+	"fmt"
+	"path/filepath"
 	"strings"
+	"unicode"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/glamour"
-	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 type blockKind int
@@ -16,6 +20,8 @@ const (
 	blockReasoning
 	blockToolCall
 	blockError
+	blockCard
+	blockDivider
 )
 
 type toolCallBlock struct {
@@ -23,229 +29,328 @@ type toolCallBlock struct {
 	success                 bool
 }
 
-// chatBlock is a finalized, immutable conversation element rendered in the
-// viewport. `rendered` caches the styled string (invalidated on resize).
 type chatBlock struct {
-	kind     blockKind
-	content  string
-	rendered string
-	toolName string
-	success  bool
+	id          string
+	kind        blockKind
+	content     string
+	rendered    string
+	toolName    string
+	success     bool
+	interrupted bool
+	card        *cardState
 }
 
 var (
-	// glamourRenderer is the lazily-built markdown renderer; glamourWidth
-	// tracks its wrap width so we rebuild only on terminal resize.
-	glamourRenderer *glamour.TermRenderer
-	glamourWidth    int
+	themeAccent  = lipgloss.Color("#C4A7FF")
+	themeMuted   = lipgloss.Color("#B4BCCB")
+	themeText    = lipgloss.Color("#EDF0F5")
+	themeUser    = lipgloss.Color("#75BEFF")
+	themeError   = lipgloss.Color("#FF8A80")
+	themeBorder  = lipgloss.Color("#788293")
+	themeAdded   = lipgloss.Color("#7EE787")
+	themeRemoved = lipgloss.Color("#FF7B72")
 
-	userStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("39")).
-			Bold(true)
+	accentStyle = lipgloss.NewStyle().Foreground(themeAccent)
+	mutedStyle  = lipgloss.NewStyle().Foreground(themeMuted)
+	userStyle   = lipgloss.NewStyle().Foreground(themeUser).Bold(true)
+	errorStyle  = lipgloss.NewStyle().Foreground(themeError)
 
-	reasoningStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("245")).
-			Italic(true).
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("238")).
-			Padding(0, 1)
-
-	toolBoxStyle = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("99")).
-			Padding(0, 1)
-
-	toolFailStyle = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("203")).
-			Padding(0, 1)
-
-	toolHeaderStyle = lipgloss.NewStyle().
-			Bold(true).
-			Foreground(lipgloss.Color("213"))
-
-	errorStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("203")).
-			Italic(true)
-
-	statusBarStyle = lipgloss.NewStyle().
-			Background(lipgloss.Color("236")).
-			Foreground(lipgloss.Color("250")).
-			Padding(0, 1)
-
-	inputBoxStyle = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("238")).
-			Padding(0, 1)
+	reasoningStyle = lipgloss.NewStyle().Foreground(themeText).Italic(true).
+			BorderLeft(true).BorderStyle(lipgloss.NormalBorder()).BorderForeground(themeBorder).PaddingLeft(1)
+	toolBoxStyle = lipgloss.NewStyle().Foreground(themeText).
+			BorderLeft(true).BorderStyle(lipgloss.NormalBorder()).BorderForeground(themeBorder).PaddingLeft(1)
+	toolFailStyle = toolBoxStyle.Copy().BorderForeground(themeError)
+	inputBoxStyle = lipgloss.NewStyle().UnsetBackground().Border(lipgloss.RoundedBorder()).BorderForeground(themeBorder).Padding(0, 1)
+	menuStyle     = lipgloss.NewStyle().Foreground(themeText).Border(lipgloss.RoundedBorder()).BorderForeground(themeBorder).Padding(0, 1)
+	statusStyle   = lipgloss.NewStyle().Foreground(themeMuted)
 )
 
-// initGlamour lazily creates the markdown renderer with the current width.
-func initGlamour(width int) {
-	w := max(width-4, 20)
-	if glamourRenderer != nil && glamourWidth == w {
-		return
-	}
-	r, err := glamour.NewTermRenderer(
-		glamour.WithAutoStyle(),
-		glamour.WithWordWrap(w),
-	)
-	if err != nil {
-		return
-	}
-	glamourRenderer = r
-	glamourWidth = w
+func configureTheme(dark bool) {
+	lightDark := lipgloss.LightDark(dark)
+	themeAccent = lightDark(lipgloss.Color("#5F3DC4"), lipgloss.Color("#C4A7FF"))
+	themeMuted = lightDark(lipgloss.Color("#5C6370"), lipgloss.Color("#B4BCCB"))
+	themeText = lightDark(lipgloss.Color("#20242B"), lipgloss.Color("#EDF0F5"))
+	themeUser = lightDark(lipgloss.Color("#005A9C"), lipgloss.Color("#75BEFF"))
+	themeError = lightDark(lipgloss.Color("#B42318"), lipgloss.Color("#FF8A80"))
+	themeBorder = lightDark(lipgloss.Color("#8B95A5"), lipgloss.Color("#788293"))
+	themeAdded = lightDark(lipgloss.Color("#18794E"), lipgloss.Color("#7EE787"))
+	themeRemoved = lightDark(lipgloss.Color("#CF222E"), lipgloss.Color("#FF7B72"))
+
+	accentStyle = lipgloss.NewStyle().Foreground(themeAccent)
+	mutedStyle = lipgloss.NewStyle().Foreground(themeMuted)
+	userStyle = lipgloss.NewStyle().Foreground(themeUser).Bold(true)
+	errorStyle = lipgloss.NewStyle().Foreground(themeError)
+	reasoningStyle = lipgloss.NewStyle().Foreground(themeText).Italic(true).
+		BorderLeft(true).BorderStyle(lipgloss.NormalBorder()).BorderForeground(themeBorder).PaddingLeft(1)
+	toolBoxStyle = lipgloss.NewStyle().Foreground(themeText).
+		BorderLeft(true).BorderStyle(lipgloss.NormalBorder()).BorderForeground(themeBorder).PaddingLeft(1)
+	toolFailStyle = toolBoxStyle.Copy().BorderForeground(themeError)
+	inputBoxStyle = lipgloss.NewStyle().UnsetBackground().Border(lipgloss.RoundedBorder()).BorderForeground(themeBorder).Padding(0, 1)
+	menuStyle = lipgloss.NewStyle().Foreground(themeText).Border(lipgloss.RoundedBorder()).BorderForeground(themeBorder).Padding(0, 1)
+	statusStyle = lipgloss.NewStyle().Foreground(themeMuted)
 }
 
-func max(a, b int) int {
-	if a > b {
-		return a
+func (m *model) applyTheme(dark bool) {
+	if m.darkBackground == dark {
+		return
 	}
-	return b
+	m.darkBackground = dark
+	configureTheme(dark)
+	m.spinner.Style = accentStyle
+	removeTextareaBackground(&m.textarea)
+	m.markdownRenderer = nil
+	m.markdownWidth = 0
+	m.invalidateRendered()
 }
 
-// invalidateRendered drops cached styled output, forcing re-render on next View.
 func (m *model) invalidateRendered() {
 	for i := range m.messages {
 		m.messages[i].rendered = ""
 	}
 }
 
-// renderBlock renders a finalized chatBlock to a styled string.
+func (m *model) markdown(content string) string {
+	content = terminalSafe(content)
+	width := max(m.width-4, 20)
+	if m.markdownRenderer == nil || m.markdownWidth != width {
+		markdownStyle := "light"
+		if m.darkBackground {
+			markdownStyle = "dark"
+		}
+		r, err := glamour.NewTermRenderer(glamour.WithStandardStyle(markdownStyle), glamour.WithWordWrap(width))
+		if err != nil {
+			return content
+		}
+		m.markdownRenderer = r
+		m.markdownWidth = width
+	}
+	out, err := m.markdownRenderer.Render(content)
+	if err != nil {
+		return content
+	}
+	return trimVerticalSpace(out)
+}
+
 func (m *model) renderBlock(b *chatBlock) string {
 	if b.rendered != "" {
 		return b.rendered
 	}
+	suffix := ""
+	if b.interrupted {
+		suffix = "\n" + mutedStyle.Render("↳ interrupted")
+	}
 	switch b.kind {
 	case blockUser:
-		b.rendered = userStyle.Render("> ") + strings.TrimRight(b.content, "\n")
+		b.rendered = userStyle.Render("› ") + strings.TrimRight(terminalSafe(b.content), "\n")
 	case blockAssistant:
-		initGlamour(m.width)
-		if glamourRenderer == nil {
-			b.rendered = b.content
-			break
-		}
-		out, err := glamourRenderer.Render(b.content)
-		if err != nil {
-			b.rendered = b.content
-		} else {
-			b.rendered = strings.TrimRight(out, "\n")
-		}
+		b.rendered = m.markdown(b.content) + suffix
 	case blockReasoning:
-		header := lipgloss.NewStyle().Italic(true).Faint(true).Render("thinking")
-		body := reasoningStyle.Render(strings.TrimRight(b.content, "\n"))
-		b.rendered = header + "\n" + body
+		b.rendered = mutedStyle.Render("thinking") + "\n" + reasoningStyle.Render(truncateLines(terminalSafe(b.content), 12)) + suffix
 	case blockToolCall:
-		style := toolBoxStyle
+		style, icon := toolBoxStyle, "✓"
 		if !b.success {
-			style = toolFailStyle
+			style, icon = toolFailStyle, "✗"
 		}
-		header := toolHeaderStyle.Render("✦ " + b.toolName)
-		body := truncateLines(b.content, 10)
-		b.rendered = style.Render(header + "\n" + body)
+		body := truncateLines(terminalSafe(b.content), 10)
+		if len(strings.Split(strings.TrimRight(b.content, "\n"), "\n")) > 10 && b.id != "" {
+			body += "\n" + mutedStyle.Render("/show "+shortID(b.id)+" · full output")
+		}
+		b.rendered = style.Render(fmt.Sprintf("%s %s\n%s", icon, terminalSafe(b.toolName), body)) + suffix
 	case blockError:
-		b.rendered = errorStyle.Render("✗ " + b.content)
+		b.rendered = errorStyle.Render("✗ " + terminalSafe(b.content))
+	case blockCard:
+		b.rendered = m.renderCard(b.card)
+	case blockDivider:
+		lineWidth := max(m.width-lipgloss.Width(b.content)-5, 3)
+		b.rendered = mutedStyle.Render("── " + terminalSafe(b.content) + " " + strings.Repeat("─", lineWidth))
 	}
 	return b.rendered
 }
 
-// truncateLines caps the number of lines shown, appending an indicator.
+func terminalSafe(s string) string {
+	s = ansi.Strip(s)
+	return strings.Map(func(r rune) rune {
+		if r == '\n' || r == '\t' || (!unicode.IsControl(r) && r != '\u007f') {
+			return r
+		}
+		return -1
+	}, s)
+}
+
 func truncateLines(s string, maxLines int) string {
 	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
 	if len(lines) <= maxLines {
-		return s
+		return strings.TrimRight(s, "\n")
 	}
-	return strings.Join(lines[:maxLines], "\n") + "\n… (" + itoa(len(lines)-maxLines) + " more lines)"
+	return strings.Join(lines[:maxLines], "\n") + fmt.Sprintf("\n… (%d more lines)", len(lines)-maxLines)
 }
 
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	var buf [20]byte
-	i := len(buf)
-	for n > 0 {
-		i--
-		buf[i] = byte('0' + n%10)
-		n /= 10
-	}
-	return string(buf[i:])
-}
-
-// renderStreaming produces the in-progress preview appended below finalized blocks.
 func (m *model) renderStreaming() string {
 	var parts []string
 	if m.reasonBuf.Len() > 0 {
-		header := lipgloss.NewStyle().Italic(true).Faint(true).Render("thinking…")
-		body := reasoningStyle.Render(strings.TrimRight(m.reasonBuf.String(), "\n"))
-		parts = append(parts, header+"\n"+body)
+		parts = append(parts, mutedStyle.Render("thinking…")+"\n"+reasoningStyle.Render(truncateLines(terminalSafe(m.reasonBuf.String()), 12)))
 	}
 	if m.textBuf.Len() > 0 {
-		initGlamour(m.width)
-		if glamourRenderer == nil {
-			parts = append(parts, m.textBuf.String())
-		} else if out, err := glamourRenderer.Render(m.textBuf.String()); err == nil {
-			parts = append(parts, strings.TrimRight(out, "\n"))
-		} else {
-			parts = append(parts, m.textBuf.String())
-		}
+		parts = append(parts, m.markdown(m.textBuf.String()))
 	}
-	for _, tc := range m.toolCalls {
-		header := toolHeaderStyle.Render("✦ " + tc.name + " …")
-		body := truncateLines(tc.input, 5)
-		parts = append(parts, toolBoxStyle.Render(header+"\n"+body))
+	for _, id := range m.toolOrder {
+		if tc := m.toolCalls[id]; tc != nil {
+			parts = append(parts, toolBoxStyle.Render("… "+terminalSafe(tc.name)+"\n"+truncateLines(terminalSafe(tc.input), 5)))
+		}
 	}
 	return strings.Join(parts, "\n\n")
 }
 
-// View renders the full screen.
-func (m *model) View() string {
+func (m *model) View() tea.View {
 	if m.quitting {
-		return ""
+		return m.newView("")
 	}
-
+	if m.loading {
+		return m.newView(lipgloss.NewStyle().Padding(1, 2).Render(accentStyle.Render(m.spinner.View() + " Loading session…")))
+	}
+	m.layout()
 	var blocks []string
 	for i := range m.messages {
-		blocks = append(blocks, m.renderBlock(&m.messages[i]))
+		if rendered := m.renderBlock(&m.messages[i]); rendered != "" {
+			blocks = append(blocks, rendered)
+		}
 	}
 	if m.running {
 		if preview := m.renderStreaming(); preview != "" {
 			blocks = append(blocks, preview)
 		}
-		blocks = append(blocks, m.spinner.View()+" working…")
+		label := "working"
+		if m.steeringPending {
+			label = "steering"
+		} else if m.cancelling {
+			label = "cancelling"
+		}
+		blocks = append(blocks, accentStyle.Render(m.spinner.View()+" "+label+"…"))
 	}
-
-	content := strings.Join(blocks, "\n\n")
 	wasAtBottom := m.viewport.AtBottom()
-	m.viewport.SetContent(content)
+	m.viewport.SetContent(joinConversationBlocks(blocks))
 	if wasAtBottom {
 		m.viewport.GotoBottom()
 	}
 
-	status := statusBarStyle.Render(m.renderStatus())
-	input := inputBoxStyle.Render(m.textarea.View())
+	parts := []string{m.viewport.View()}
+	if len(m.queued) > 0 {
+		parts = append(parts, m.renderQueue())
+	}
+	if m.form != nil {
+		parts = append(parts, m.form.View(m.width))
+	} else if m.detail != nil {
+		parts = append(parts, m.detail.View(m.width))
+	} else if m.confirm != nil {
+		parts = append(parts, m.confirm.View(m.width))
+	} else {
+		if m.menu.mode != menuNone {
+			parts = append(parts, m.renderMenu())
+		}
+		parts = append(parts, inputBoxStyle.Width(max(m.width-2, 10)).Render(m.textarea.View()))
+	}
+	parts = append(parts, m.renderStatus())
+	return m.newView(lipgloss.JoinVertical(lipgloss.Left, parts...))
+}
 
-	return lipgloss.JoinVertical(lipgloss.Left,
-		status,
-		m.viewport.View(),
-		input,
-	)
+func (m *model) newView(content string) tea.View {
+	view := tea.NewView(content)
+	view.AltScreen = m.alternateScreen
+	return view
+}
+
+func (m *model) layout() {
+	width := max(m.width, 20)
+	composerLines := min(max(m.textarea.LineCount(), 1), 8)
+	m.textarea.SetHeight(composerLines)
+	m.textarea.SetWidth(max(width-6, 10))
+	extra := composerLines + 3 // input border + status
+	if len(m.queued) > 0 {
+		extra += min(len(m.queued), 3) + 2
+	}
+	if m.menu.mode != menuNone {
+		extra += min(len(m.menu.items), 8) + 2
+	}
+	if m.form != nil {
+		extra += m.form.Height(width)
+		extra -= composerLines + 2
+	}
+	if m.detail != nil {
+		m.detail.view.SetHeight(max(min(m.height/2, 14), 4))
+		extra += min(m.height/2, 16)
+		extra -= composerLines + 2
+	}
+	if m.confirm != nil {
+		extra += 4
+		extra -= composerLines + 2
+	}
+	m.viewport.SetWidth(width)
+	m.viewport.SetHeight(max(m.height-extra, 3))
+}
+
+func (m *model) renderQueue() string {
+	start := max(len(m.queued)-3, 0)
+	lines := []string{mutedStyle.Render(fmt.Sprintf("queued (%d) · Tab while running", len(m.queued)))}
+	for i := start; i < len(m.queued); i++ {
+		lines = append(lines, fmt.Sprintf("  %d. %s", i+1, terminalSafe(firstLine(m.queued[i].text))))
+	}
+	return menuStyle.Width(max(m.width-4, 10)).Render(strings.Join(lines, "\n"))
+}
+
+func (m *model) renderMenu() string {
+	if len(m.menu.items) == 0 {
+		return menuStyle.Width(max(m.width-4, 10)).Render(mutedStyle.Render("no matches"))
+	}
+	start := 0
+	if m.menu.selected >= 8 {
+		start = m.menu.selected - 7
+	}
+	end := min(start+8, len(m.menu.items))
+	var lines []string
+	for i := start; i < end; i++ {
+		item := m.menu.items[i]
+		prefix := "  "
+		if i == m.menu.selected {
+			prefix = "› "
+		}
+		line := prefix + item.label
+		if item.description != "" {
+			line += "  " + item.description
+		}
+		line = truncateWidth(line, max(m.width-6, 10))
+		if i == m.menu.selected {
+			line = accentStyle.Copy().Bold(true).Render(line)
+		} else {
+			line = mutedStyle.Render(line)
+		}
+		lines = append(lines, line)
+	}
+	return menuStyle.Width(max(m.width-4, 10)).Render(strings.Join(lines, "\n"))
 }
 
 func (m *model) renderStatus() string {
-	parts := []string{
-		"friday",
-		"session:" + shortID(m.sessionID),
+	modelName := m.cfg.PrimaryModel().Model
+	if modelName == "" {
+		modelName = "model?"
+	}
+	parts := []string{"friday", modelName, "session:" + shortID(m.sessionID)}
+	if m.workdir != "" {
+		parts = append(parts, filepath.Base(m.workdir))
 	}
 	if m.tokenCount > 0 {
-		parts = append(parts, fmtTokens(m.tokenCount)+" tokens")
-	}
-	if m.iteration > 0 {
-		parts = append(parts, "loop:"+itoa(m.iteration))
+		if window := m.cfg.PrimaryModel().ContextWindow; window > 0 {
+			parts = append(parts, fmt.Sprintf("%s/%s", fmtTokens(m.tokenCount), fmtTokens(int(window))))
+		} else {
+			parts = append(parts, fmtTokens(m.tokenCount)+" tokens")
+		}
 	}
 	if m.running {
 		parts = append(parts, "● running")
 	}
-	return strings.Join(parts, " · ")
+	if !m.viewport.AtBottom() {
+		parts = append(parts, "↑ history")
+	}
+	return statusStyle.Width(max(m.width-1, 10)).Render(terminalSafe(strings.Join(parts, " · ")))
 }
 
 func shortID(id string) string {
@@ -257,29 +362,43 @@ func shortID(id string) string {
 
 func fmtTokens(n int) string {
 	if n < 1000 {
-		return itoa(n)
+		return fmt.Sprintf("%d", n)
 	}
-	whole := n / 1000
-	frac := (n % 1000) / 100
-	if frac == 0 {
-		return itoa(whole) + "k"
+	if n%1000 < 100 {
+		return fmt.Sprintf("%dk", n/1000)
 	}
-	return itoa(whole) + "." + itoa(frac) + "k"
+	return fmt.Sprintf("%.1fk", float64(n)/1000)
 }
 
-func shouldRouteToViewport(msg tea.Msg) bool {
-	switch msg := msg.(type) {
-	case tea.MouseMsg:
-		return true
-	case tea.KeyMsg:
-		switch msg.Type {
-		case tea.KeyPgUp, tea.KeyPgDown:
-			return true
-		}
-		switch msg.String() {
-		case "ctrl+u", "ctrl+d":
-			return true
+func truncateWidth(s string, width int) string {
+	if lipgloss.Width(s) <= width {
+		return s
+	}
+	r := []rune(s)
+	for len(r) > 0 && lipgloss.Width(string(r)+"…") > width {
+		r = r[:len(r)-1]
+	}
+	return string(r) + "…"
+}
+
+func joinConversationBlocks(blocks []string) string {
+	compact := make([]string, 0, len(blocks))
+	for _, block := range blocks {
+		if block = trimVerticalSpace(block); block != "" {
+			compact = append(compact, block)
 		}
 	}
-	return false
+	return strings.Join(compact, "\n\n")
+}
+
+func trimVerticalSpace(s string) string {
+	lines := strings.Split(s, "\n")
+	start, end := 0, len(lines)
+	for start < end && strings.TrimSpace(lines[start]) == "" {
+		start++
+	}
+	for end > start && strings.TrimSpace(lines[end-1]) == "" {
+		end--
+	}
+	return strings.Join(lines[start:end], "\n")
 }

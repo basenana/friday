@@ -1,6 +1,9 @@
 package commands
 
-import "strings"
+import (
+	"sort"
+	"strings"
+)
 
 // Registry stores commands keyed by Name (case-sensitive) and resolves aliases.
 type Registry struct {
@@ -45,5 +48,6 @@ func (r *Registry) List() []Command {
 	for _, cmd := range r.commands {
 		out = append(out, cmd)
 	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name() < out[j].Name() })
 	return out
 }

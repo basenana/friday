@@ -1,12 +1,23 @@
 package sessions
 
 import (
+	"context"
 	"time"
 
+	"github.com/basenana/friday/core/actor/events"
+	actorsink "github.com/basenana/friday/core/actor/sink"
 	"github.com/basenana/friday/core/providers"
 	coresession "github.com/basenana/friday/core/session"
 	"github.com/basenana/friday/core/types"
 )
+
+// EventStore is an optional capability implemented by stores that persist the
+// actor event stream used by rich TUI transcript replay. Store intentionally
+// does not embed it so existing/custom session backends remain compatible.
+type EventStore interface {
+	OpenEventSink(context.Context, string) (actorsink.EventSink, error)
+	LoadEvents(context.Context, string) ([]events.Event, error)
+}
 
 // SessionMeta represents metadata for a session
 type SessionMeta struct {

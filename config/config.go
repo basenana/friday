@@ -62,6 +62,11 @@ func Load(configPath string) (*Config, error) {
 }
 
 func (c *Config) validate() error {
+	switch strings.ToLower(strings.TrimSpace(c.TUI.AlternateScreen)) {
+	case "", "auto", "always", "never":
+	default:
+		return fmt.Errorf("invalid tui.alternate_screen %q: must be auto, always, or never", c.TUI.AlternateScreen)
+	}
 	if e := c.Model.ReasoningEffort; e != "" && !providers.IsValidReasoningEffort(e) {
 		return fmt.Errorf("invalid model.reasoning_effort %q: must be one of default, none, low, medium, high, xhigh, max", e)
 	}

@@ -57,3 +57,12 @@ type FormCancelledBody struct {
 type ReasoningDeltaBody struct {
 	Content string `json:"content"`
 }
+
+// InputAcceptedBody records the complete user input that caused a run. It is
+// emitted immediately after RUN_STARTED so event logs can rebuild a transcript
+// without having to infer user messages from the intentionally short preview.
+type InputAcceptedBody struct {
+	TurnID   string `json:"turn_id"`
+	Text     string `json:"text"`
+	Delivery string `json:"delivery,omitempty"`
+}

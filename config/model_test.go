@@ -17,6 +17,21 @@ func TestModelConfigHasInput(t *testing.T) {
 	}
 }
 
+func TestTUIAlternateScreenValidation(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "friday.yaml")
+	if err := os.WriteFile(path, []byte("tui:\n  alternate_screen: sideways\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil {
+		t.Fatal("expected invalid alternate-screen mode to fail")
+	}
+	cfg := DefaultConfig()
+	if cfg.TUI.AlternateScreen != "auto" {
+		t.Fatalf("default alternate screen = %q", cfg.TUI.AlternateScreen)
+	}
+}
+
 func TestResolveImageModel(t *testing.T) {
 	tests := []struct {
 		name          string

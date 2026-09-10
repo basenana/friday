@@ -7,7 +7,7 @@
 package tui
 
 import (
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/basenana/friday/bus"
 	"github.com/basenana/friday/core/actor/events"

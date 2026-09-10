@@ -71,6 +71,7 @@ const (
 	CustomTodoUpdate     = "todo.update"
 	CustomModelTimeout   = "model.timeout"
 	CustomLoopStart      = "loop.start"
+	CustomInputAccepted  = "input.accepted"
 )
 
 // Event is the universal envelope. Fields follow AG-UI wire naming

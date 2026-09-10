@@ -43,6 +43,7 @@ func TestRouteEvent(t *testing.T) {
 		{"todo update", events.NewEvent(events.KindCustom, "r").WithName(events.CustomTodoUpdate), bus.TopicObs(sid, "todo.update")},
 		{"model timeout", events.NewEvent(events.KindCustom, "r").WithName(events.CustomModelTimeout), bus.TopicObs(sid, "model.timeout")},
 		{"loop start", events.NewEvent(events.KindCustom, "r").WithName(events.CustomLoopStart), bus.TopicObs(sid, "loop.start")},
+		{"input accepted", events.NewEvent(events.KindCustom, "r").WithName(events.CustomInputAccepted), bus.TopicObs(sid, "input.accepted")},
 		{"step started", events.NewEvent(events.KindStepStarted, "r"), bus.TopicObs(sid, "step")},
 		{"step finished", events.NewEvent(events.KindStepFinished, "r"), bus.TopicObs(sid, "step")},
 		{"raw dropped", events.NewEvent(events.KindRaw, "r"), ""},

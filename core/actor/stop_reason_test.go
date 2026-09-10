@@ -3,6 +3,7 @@ package actor
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
@@ -97,6 +98,185 @@ preempt:
 	}
 	if got := drainStopReason(t, sub); got != "cancelled" {
 		t.Fatalf("stop reason = %q, want cancelled", got)
+	}
+}
+
+func TestSteerInterruptsAndRunsBeforeQueuedInput(t *testing.T) {
+	blocked := make(chan struct{})
+	mock := newMockAgent(
+		chatScript{blockUntil: blocked},
+		chatScript{deltas: []types.Delta{{Content: "steered"}}},
+		chatScript{deltas: []types.Delta{{Content: "queued"}}},
+	)
+	a, _ := newTestActor(mock)
+	sub := a.Subscribe()
+	a.Start(context.Background())
+	defer a.Stop()
+
+	if err := a.Send(context.Background(), UserTextMessage{Text: "original", TurnID: "original"}); err != nil {
+		t.Fatal(err)
+	}
+	for {
+		e := <-sub.Events()
+		if e.Type == events.KindRunStarted {
+			break
+		}
+	}
+	if err := a.Send(context.Background(), UserTextMessage{Text: "later", TurnID: "queued"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.SendSteer(context.Background(), UserTextMessage{Text: "redirect", TurnID: "steer"}); err != nil {
+		t.Fatal(err)
+	}
+
+	var starts []string
+	deadline := time.After(3 * time.Second)
+	for len(starts) < 2 {
+		select {
+		case e := <-sub.Events():
+			if e.Type == events.KindRunStarted && e.RunID != "original" {
+				starts = append(starts, e.RunID)
+			}
+		case <-deadline:
+			t.Fatalf("timed out; starts=%v", starts)
+		}
+	}
+	if want := []string{"steer", "queued"}; !reflect.DeepEqual(starts, want) {
+		t.Fatalf("run order = %v, want %v", starts, want)
+	}
+}
+
+func TestCurrentPreemptPreservesQueuedInput(t *testing.T) {
+	blocked := make(chan struct{})
+	mock := newMockAgent(chatScript{blockUntil: blocked}, chatScript{deltas: []types.Delta{{Content: "next"}}})
+	a, _ := newTestActor(mock)
+	sub := a.Subscribe()
+	a.Start(context.Background())
+	defer a.Stop()
+
+	_ = a.Send(context.Background(), UserTextMessage{Text: "original", TurnID: "original"})
+	for {
+		if e := <-sub.Events(); e.Type == events.KindRunStarted {
+			break
+		}
+	}
+	_ = a.Send(context.Background(), UserTextMessage{Text: "keep", TurnID: "keep"})
+	if err := a.SendPreemptScope(context.Background(), "cancel current", PreemptCurrent); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.After(3 * time.Second)
+	for {
+		select {
+		case e := <-sub.Events():
+			if e.Type == events.KindRunStarted && e.RunID == "keep" {
+				return
+			}
+		case <-deadline:
+			t.Fatal("queued input was not run after current-only preempt")
+		}
+	}
+}
+
+func TestIdleSteerStartsWithoutNormalInboxWakeup(t *testing.T) {
+	mock := newMockAgent(chatScript{deltas: []types.Delta{{Content: "steered"}}})
+	a, _ := newTestActor(mock)
+	sub := a.Subscribe()
+	a.Start(context.Background())
+	defer a.Stop()
+
+	if err := a.SendSteer(context.Background(), UserTextMessage{Text: "redirect", TurnID: "steer-idle"}); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case e := <-sub.Events():
+			if e.Type == events.KindRunFinished && e.RunID == "steer-idle" {
+				var data events.RunFinishedData
+				if err := events.DecodePayload(e, &data); err != nil {
+					t.Fatal(err)
+				}
+				if data.StopReason != "end_turn" {
+					t.Fatalf("idle steer stop reason = %q", data.StopReason)
+				}
+				return
+			}
+		case <-deadline:
+			t.Fatal("idle steer did not wake the actor")
+		}
+	}
+}
+
+func TestLatestSteerSupersedesOrCancelsEarlierSteer(t *testing.T) {
+	original := make(chan struct{})
+	firstSteer := make(chan struct{})
+	mock := newMockAgent(
+		chatScript{blockUntil: original},
+		chatScript{blockUntil: firstSteer},
+		chatScript{deltas: []types.Delta{{Content: "latest"}}},
+	)
+	a, _ := newTestActor(mock)
+	sub := a.Subscribe()
+	a.Start(context.Background())
+	defer a.Stop()
+
+	_ = a.Send(context.Background(), UserTextMessage{Text: "original", TurnID: "original"})
+	for {
+		if e := <-sub.Events(); e.Type == events.KindRunStarted {
+			break
+		}
+	}
+	if err := a.SendSteer(context.Background(), UserTextMessage{Text: "first", TurnID: "steer-1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.SendSteer(context.Background(), UserTextMessage{Text: "second", TurnID: "steer-2"}); err != nil {
+		t.Fatal(err)
+	}
+
+	deadline := time.After(3 * time.Second)
+	for {
+		select {
+		case e := <-sub.Events():
+			if e.Type == events.KindRunStarted && e.RunID == "steer-2" {
+				return
+			}
+		case <-deadline:
+			t.Fatal("latest steer never became active")
+		}
+	}
+}
+
+func TestPreemptAllDiscardsPendingSteer(t *testing.T) {
+	blocked := make(chan struct{})
+	mock := newMockAgent(chatScript{blockUntil: blocked}, chatScript{deltas: []types.Delta{{Content: "unexpected"}}})
+	a, _ := newTestActor(mock)
+	sub := a.Subscribe()
+	a.Start(context.Background())
+	defer a.Stop()
+
+	_ = a.Send(context.Background(), UserTextMessage{Text: "original", TurnID: "original"})
+	for {
+		if e := <-sub.Events(); e.Type == events.KindRunStarted {
+			break
+		}
+	}
+	if err := a.SendSteer(context.Background(), UserTextMessage{Text: "discard", TurnID: "steer"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.SendPreempt(context.Background(), "cancel all"); err != nil {
+		t.Fatal(err)
+	}
+
+	deadline := time.After(300 * time.Millisecond)
+	for {
+		select {
+		case e := <-sub.Events():
+			if e.Type == events.KindRunStarted && e.RunID == "steer" {
+				t.Fatal("cancel-all allowed a pending steer to run")
+			}
+		case <-deadline:
+			return
+		}
 	}
 }
 

@@ -3,16 +3,24 @@ package config
 import "github.com/basenana/friday/sandbox"
 
 type Config struct {
-	Model      ModelConfig     `yaml:"model" json:"model"`
-	Models     []ModelConfig   `yaml:"models" json:"models"`
-	ImageModel ModelConfig     `yaml:"image_model" json:"image_model"`
+	Model      ModelConfig            `yaml:"model" json:"model"`
+	Models     []ModelConfig          `yaml:"models" json:"models"`
+	ImageModel ModelConfig            `yaml:"image_model" json:"image_model"`
 	Agents     map[string]ModelConfig `yaml:"agents" json:"agents"`
-	DataDir    string          `yaml:"data_dir" json:"data_dir"`
-	Workspace  string          `yaml:"workspace" json:"workspace"`
-	Memory     MemoryConfig    `yaml:"memory" json:"memory"`
-	Session    SessionConfig   `yaml:"session" json:"session"`
-	Log        LogConfig       `yaml:"log" json:"log"`
-	Sandbox    *sandbox.Config `yaml:"sandbox" json:"sandbox"`
+	DataDir    string                 `yaml:"data_dir" json:"data_dir"`
+	Workspace  string                 `yaml:"workspace" json:"workspace"`
+	Memory     MemoryConfig           `yaml:"memory" json:"memory"`
+	Session    SessionConfig          `yaml:"session" json:"session"`
+	Log        LogConfig              `yaml:"log" json:"log"`
+	Sandbox    *sandbox.Config        `yaml:"sandbox" json:"sandbox"`
+	TUI        TUIConfig              `yaml:"tui" json:"tui"`
+}
+
+type TUIConfig struct {
+	// AlternateScreen controls terminal scrollback behavior: auto uses the
+	// alternate screen except in known-incompatible multiplexers such as
+	// Zellij; always/never force the choice.
+	AlternateScreen string `yaml:"alternate_screen" json:"alternate_screen"`
 }
 
 type LogConfig struct {
@@ -20,14 +28,14 @@ type LogConfig struct {
 }
 
 type ModelConfig struct {
-	Provider      string  `yaml:"provider" json:"provider"` // "openai" or "anthropic"
-	BaseURL       string  `yaml:"base_url" json:"base_url"`
-	Key           string  `yaml:"key" json:"key"`
-	Input         string  `yaml:"input" json:"input"` // "text" "image"
-	Model         string  `yaml:"model" json:"model"`
-	ContextWindow int64   `yaml:"context_window" json:"context_window"`
-	MaxTokens     int     `yaml:"max_tokens" json:"max_tokens"`
-	Temperature   float64 `yaml:"temperature" json:"temperature"`
+	Provider        string  `yaml:"provider" json:"provider"` // "openai" or "anthropic"
+	BaseURL         string  `yaml:"base_url" json:"base_url"`
+	Key             string  `yaml:"key" json:"key"`
+	Input           string  `yaml:"input" json:"input"` // "text" "image"
+	Model           string  `yaml:"model" json:"model"`
+	ContextWindow   int64   `yaml:"context_window" json:"context_window"`
+	MaxTokens       int     `yaml:"max_tokens" json:"max_tokens"`
+	Temperature     float64 `yaml:"temperature" json:"temperature"`
 	QPM             int64   `yaml:"qpm" json:"qpm"`
 	Proxy           string  `yaml:"proxy" json:"proxy"`
 	ReasoningEffort string  `yaml:"reasoning_effort" json:"reasoning_effort"` // thinking-mode effort: default/none/low/medium/high/xhigh/max
@@ -63,6 +71,7 @@ func DefaultConfig() *Config {
 		Session: SessionConfig{
 			DefaultAgent: "react",
 		},
+		TUI:     TUIConfig{AlternateScreen: "auto"},
 		Sandbox: sandbox.DefaultConfig(),
 	}
 }

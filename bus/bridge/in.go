@@ -107,7 +107,11 @@ func (ib *InBridge) dispatchPreempt(env bus.Envelope) {
 	// A bridge-scoped context guarantees Close can unblock a saturated
 	// preempt inbox. Failure is otherwise benign: the actor is already
 	// stopped or the turn has already ended.
-	_ = ib.actor.SendPreempt(ib.ctx, in.Reason)
+	scope := coreactor.PreemptAll
+	if in.Scope == string(coreactor.PreemptCurrent) {
+		scope = coreactor.PreemptCurrent
+	}
+	_ = ib.actor.SendPreemptScope(ib.ctx, in.Reason, scope)
 }
 
 func (ib *InBridge) dispatchInbox(env bus.Envelope) {
@@ -123,28 +127,43 @@ func (ib *InBridge) dispatchInbox(env bus.Envelope) {
 			ib.reportDrop(env, "bad payload: "+err.Error())
 			return
 		}
-		msg = coreactor.UserTextMessage{
+		if in.Delivery != "" && in.Delivery != bus.DeliveryNormal && in.Delivery != bus.DeliverySteer {
+			ib.reportDrop(env, "unknown input delivery: "+string(in.Delivery))
+			return
+		}
+		user := coreactor.UserTextMessage{
 			Text:     in.Text,
 			TurnID:   in.TurnID,
+			Delivery: string(in.Delivery),
 			Metadata: in.Metadata,
 		}
+		if in.Delivery == bus.DeliverySteer {
+			if err := ib.actor.SendSteer(ib.ctx, user); err != nil {
+				ib.reportDrop(env, err.Error())
+			}
+			return
+		}
+		msg = user
 	case bus.InboxFormSubmit:
 		var in bus.FormSubmitInput
 		if err := events.DecodePayload(env.Event, &in); err != nil {
 			ib.reportDrop(env, "bad payload: "+err.Error())
 			return
 		}
-		msg = coreactor.FormSubmitMessage{
-			FormID: in.FormID,
-			Values: in.Values,
+		if err := ib.actor.SubmitForm(in.FormID, in.Values); err != nil {
+			ib.reportDrop(env, err.Error())
 		}
+		return
 	case bus.InboxFormCancel:
 		var in bus.FormCancelInput
 		if err := events.DecodePayload(env.Event, &in); err != nil {
 			ib.reportDrop(env, "bad payload: "+err.Error())
 			return
 		}
-		msg = coreactor.FormCancelMessage{FormID: in.FormID}
+		if err := ib.actor.CancelForm(in.FormID); err != nil {
+			ib.reportDrop(env, err.Error())
+		}
+		return
 	default:
 		ib.reportDrop(env, "unknown inbox kind: "+env.Name)
 		return
@@ -159,6 +178,7 @@ func (ib *InBridge) reportDrop(env bus.Envelope, reason string) {
 	drop = drop.WithPayload(bus.InboxDropped{
 		From:   env.From,
 		TurnID: turnIDOf(env),
+		FormID: formIDOf(env),
 		Reason: reason,
 	})
 	ib.bus.Publish(bus.TopicStatus(ib.session, bus.StatusInboxDropped), bus.Envelope{
@@ -168,6 +188,22 @@ func (ib *InBridge) reportDrop(env bus.Envelope, reason string) {
 		From:    "actor",
 		TS:      bus.NextTS(),
 	})
+}
+
+func formIDOf(env bus.Envelope) string {
+	switch env.Name {
+	case bus.InboxFormSubmit:
+		var in bus.FormSubmitInput
+		if events.DecodePayload(env.Event, &in) == nil {
+			return in.FormID
+		}
+	case bus.InboxFormCancel:
+		var in bus.FormCancelInput
+		if events.DecodePayload(env.Event, &in) == nil {
+			return in.FormID
+		}
+	}
+	return ""
 }
 
 func turnIDOf(env bus.Envelope) string {

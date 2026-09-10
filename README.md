@@ -110,6 +110,28 @@ Create `~/.friday/config.json` (or `friday.yaml`):
 friday chat "Write a Go HTTP server"
 ```
 
+### Interactive TUI
+
+```bash
+friday tui
+# Resume a specific session
+friday tui --session <id>
+```
+
+The TUI restores the session transcript, renders reasoning, tools, rich cards,
+and interactive forms, and supports Codex-style follow-ups:
+
+- `Enter` sends a prompt; while a task is running it steers the task immediately.
+- `Tab` completes slash commands; while running it queues the prompt for the next turn.
+- `Ctrl+J` inserts a newline, `Ctrl+G` opens `$VISUAL`/`$EDITOR`, and `Ctrl+R` searches prompt history.
+- `Esc` cancels the current task, while `Ctrl+C` exits.
+- Type `/` for the command menu. Use `/open <card-id>` for a confirmed external artifact preview and `/show <tool-id>` for complete tool output.
+
+The alternate screen defaults to `auto` (disabled under Zellij). Override it
+with `tui.alternate_screen: always` or `never` in JSON/YAML configuration.
+Rich transcript events are retained in a bounded recent window; older plain
+conversation content is rebuilt from the session message history.
+
 ---
 
 ## Usage
@@ -313,4 +335,3 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 ## License
 
 [Apache License 2.0](LICENSE)
-

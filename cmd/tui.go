@@ -15,10 +15,10 @@ var tuiCmd = &cobra.Command{
 
 Features:
   - Streaming markdown-rendered responses
-  - Reasoning blocks (dim, collapsible)
-  - Tool call visualization (bordered boxes)
-  - Slash commands: /clear /new /quit /help
-  - Ctrl+C: cancel current run or quit when idle`,
+  - Reasoning, tool calls, rich cards, and interactive forms
+  - Slash command completion and prompt history
+  - Enter to steer and Tab to queue while a task runs
+  - Adaptive alternate-screen behavior`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return tui.Run(sessMgr, cfg, tuiSessionID)
 	},
