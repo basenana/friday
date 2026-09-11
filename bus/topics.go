@@ -81,8 +81,8 @@ func TopicCard(sid, event string) string { return agentTopic(sid, "card."+event)
 // "cancelled").
 func TopicForm(sid, event string) string { return agentTopic(sid, "form."+event) }
 
-// TopicObs carries observability custom events (compact.*, subagent.*,
-// todo.update, model.timeout, loop.start, step).
+// TopicObs carries observability and extensible domain events (compact.*,
+// subagent.*, todo.update, model.timeout, plan.*, mode.*, loop.start, step).
 func TopicObs(sid, name string) string { return agentTopic(sid, "obs."+name) }
 
 // TopicStatus builds a registry lifecycle topic for event ("created",

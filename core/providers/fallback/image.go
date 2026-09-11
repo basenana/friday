@@ -69,6 +69,7 @@ func StripImagesFromRequest(req providers.Request) providers.Request {
 	newReq.SetHistory(stripped)
 	newReq.SetToolDefines(req.ToolDefines())
 	newReq.SetPromptCacheKey(req.PromptCacheKey())
+	providers.SetRequestReasoningEffort(newReq, providers.RequestReasoningEffort(req))
 
 	return newReq
 }

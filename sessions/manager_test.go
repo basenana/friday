@@ -1,21 +1,57 @@
 package sessions
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
+	"github.com/basenana/friday/core/planning"
 	"github.com/basenana/friday/core/providers"
 	coresession "github.com/basenana/friday/core/session"
 	"github.com/basenana/friday/core/types"
 )
+
+type baseOnlyStore struct{ Store }
+
+var _ Store = (*baseOnlyStore)(nil)
+
+func TestManagerOptionalStoreCapabilitiesRemainOptional(t *testing.T) {
+	store := &baseOnlyStore{Store: newMockStore()}
+	mgr := NewManager(store, filepath.Join(t.TempDir(), "current"), "")
+	if err := mgr.SetMode("session", "plan"); err == nil || !strings.Contains(err.Error(), "mutable metadata") {
+		t.Fatalf("SetMode error = %v", err)
+	}
+	if err := mgr.SavePlan("session", planning.Artifact{}); err == nil || !strings.Contains(err.Error(), "plan artifacts") {
+		t.Fatalf("SavePlan error = %v", err)
+	}
+}
+
+type aliasFailStore struct{ *mockStore }
+
+func (s *aliasFailStore) UpdateAlias(string, string) error { return errors.New("alias failed") }
+
+func TestManagerCreateIsolatedCleansUpInitializationFailure(t *testing.T) {
+	store := &aliasFailStore{mockStore: newMockStore()}
+	mgr := NewManager(store, filepath.Join(t.TempDir(), "current"), "test")
+	if _, id, err := mgr.CreateIsolated(); err == nil || id != "" {
+		t.Fatalf("CreateIsolated = id %q, err %v", id, err)
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if len(store.sessions) != 0 || len(store.metas) != 0 {
+		t.Fatalf("failed isolated session leaked: sessions=%d metas=%d", len(store.sessions), len(store.metas))
+	}
+}
 
 type mockStore struct {
 	mu       sync.Mutex
 	sessions map[string]*coresession.Session
 	metas    map[string]*SessionMeta
 	msgs     map[string][]types.Message
+	plans    map[string]map[string]planning.Artifact
 }
 
 func newMockStore() *mockStore {
@@ -23,6 +59,7 @@ func newMockStore() *mockStore {
 		sessions: make(map[string]*coresession.Session),
 		metas:    make(map[string]*SessionMeta),
 		msgs:     make(map[string][]types.Message),
+		plans:    make(map[string]map[string]planning.Artifact),
 	}
 }
 
@@ -93,7 +130,17 @@ func (m *mockStore) List() ([]SessionMeta, error) {
 	return result, nil
 }
 
-func (m *mockStore) ListActive() ([]SessionMeta, error) { return m.List() }
+func (m *mockStore) ListActive() ([]SessionMeta, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var result []SessionMeta
+	for _, meta := range m.metas {
+		if !meta.Archived {
+			result = append(result, *meta)
+		}
+	}
+	return result, nil
+}
 
 func (m *mockStore) GetMeta(sessionID string) (*SessionMeta, error) {
 	m.mu.Lock()
@@ -111,6 +158,94 @@ func (m *mockStore) UpdateAlias(sessionID, alias string) error {
 		meta.Alias = alias
 	}
 	return nil
+}
+
+func (m *mockStore) UpdateMeta(sessionID string, patch SessionMetaPatch) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	meta := m.metas[sessionID]
+	if meta == nil {
+		return os.ErrNotExist
+	}
+	if patch.Name != nil {
+		meta.Name = *patch.Name
+	}
+	if patch.Archived != nil {
+		meta.Archived = *patch.Archived
+	}
+	if patch.Runtime != nil {
+		meta.Runtime = *patch.Runtime
+	}
+	if patch.Mode != nil {
+		meta.Runtime.Mode = *patch.Mode
+	}
+	if patch.Model != nil {
+		meta.Runtime.Model = *patch.Model
+	}
+	if patch.LatestPlanID != nil {
+		meta.LatestPlanID = *patch.LatestPlanID
+	}
+	if patch.ParentSessionID != nil {
+		meta.ParentSessionID = *patch.ParentSessionID
+	}
+	if patch.SourcePlanID != nil {
+		meta.SourcePlanID = *patch.SourcePlanID
+	}
+	return nil
+}
+
+func (m *mockStore) SavePlan(sessionID string, plan planning.Artifact) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.plans[sessionID] == nil {
+		m.plans[sessionID] = map[string]planning.Artifact{}
+	}
+	m.plans[sessionID][plan.ID] = plan
+	if meta := m.metas[sessionID]; meta != nil {
+		meta.LatestPlanID = plan.ID
+	}
+	return nil
+}
+
+func (m *mockStore) ProposePlan(sessionID string, plan planning.Artifact) (*planning.Artifact, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	plan.Version = 1
+	if meta := m.metas[sessionID]; meta != nil && meta.LatestPlanID != "" {
+		plan.Version = m.plans[sessionID][meta.LatestPlanID].Version + 1
+	}
+	if m.plans[sessionID] == nil {
+		m.plans[sessionID] = map[string]planning.Artifact{}
+	}
+	m.plans[sessionID][plan.ID] = plan
+	if meta := m.metas[sessionID]; meta != nil {
+		meta.LatestPlanID = plan.ID
+	}
+	return &plan, nil
+}
+
+func (m *mockStore) LoadPlan(sessionID, planID string) (*planning.Artifact, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	plan, ok := m.plans[sessionID][planID]
+	if !ok {
+		return nil, os.ErrNotExist
+	}
+	return &plan, nil
+}
+
+func (m *mockStore) LoadLatestPlan(sessionID string) (*planning.Artifact, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	meta := m.metas[sessionID]
+	if meta == nil || meta.LatestPlanID == "" {
+		return nil, nil
+	}
+	plan, ok := m.plans[sessionID][meta.LatestPlanID]
+	if !ok {
+		return nil, os.ErrNotExist
+	}
+	return &plan, nil
 }
 
 func (m *mockStore) Archive(sessionID string) error {
@@ -282,5 +417,58 @@ func TestManager_ExistsMissing(t *testing.T) {
 	}
 	if ok {
 		t.Fatal("Exists(missing) = true, want false")
+	}
+}
+
+func TestManagerRuntimeRenameAndLifecycle(t *testing.T) {
+	store := newMockStore()
+	mgr := NewManager(store, filepath.Join(t.TempDir(), "current"), "")
+	for _, id := range []string{"one-abcdef", "two-abcdef"} {
+		if _, _, err := mgr.GetOrCreateByID(id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := mgr.SetMode("one-abcdef", "plan"); err != nil {
+		t.Fatal(err)
+	}
+	selection := ModelSelection{Provider: "openai", Model: "gpt-test"}
+	if err := mgr.SetModel("one-abcdef", selection); err != nil {
+		t.Fatal(err)
+	}
+	runtimeState, err := mgr.Runtime("one-abcdef")
+	if err != nil || runtimeState.Mode != "plan" || runtimeState.Model != selection {
+		t.Fatalf("runtime = %+v, err=%v", runtimeState, err)
+	}
+	if err := mgr.ClearModel("one-abcdef"); err != nil {
+		t.Fatal(err)
+	}
+	runtimeState, _ = mgr.Runtime("one-abcdef")
+	if runtimeState.Model.Model != "" {
+		t.Fatalf("model override not cleared: %+v", runtimeState)
+	}
+
+	name1, err := mgr.Rename("one-abcdef", "  Shared\n Name  ")
+	if err != nil || name1 != "Shared Name" {
+		t.Fatalf("first rename = %q, err=%v", name1, err)
+	}
+	name2, err := mgr.Rename("two-abcdef", "Shared Name")
+	if err != nil || name2 != "Shared Name (2)" {
+		t.Fatalf("deduplicated rename = %q, err=%v", name2, err)
+	}
+	resolved, err := mgr.ResolveActiveSession("one-")
+	if err != nil || resolved.ID != "one-abcdef" {
+		t.Fatalf("resolved = %+v, err=%v", resolved, err)
+	}
+	if err := mgr.Archive("one-abcdef"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mgr.ResolveActiveSession("one-abcdef"); err == nil {
+		t.Fatal("archived session remained resumable")
+	}
+	if err := mgr.Delete("two-abcdef"); err != nil {
+		t.Fatal(err)
+	}
+	if ok, _ := mgr.Exists("two-abcdef"); ok {
+		t.Fatal("deleted session still exists")
 	}
 }

@@ -729,6 +729,23 @@ func TestChatCompletionNewParamsReasoningEffort(t *testing.T) {
 	}
 }
 
+func TestRequestReasoningEffortOverridesModel(t *testing.T) {
+	cli := &client{model: Model{Name: "gpt-test", ReasoningEffort: providers.ReasoningEffortNone}, host: "https://api.minimax.chat/v1"}
+	req := providers.NewRequest("system", types.Message{Role: types.RoleUser, Content: "hello"})
+	providers.SetRequestReasoningEffort(req, providers.ReasoningEffortMedium)
+	raw, err := json.Marshal(cli.chatCompletionNewParams(req))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded["reasoning_effort"] != "medium" || len(cli.reasoningOpts(providers.RequestReasoningEffort(req))) != 0 {
+		t.Fatalf("request override not applied: params=%v opts=%d", decoded, len(cli.reasoningOpts(providers.RequestReasoningEffort(req))))
+	}
+}
+
 // The MiniMax-style reasoning_split / thinking fields must only be attached
 // for third-party hosts; api.openai.com rejects unknown top-level fields.
 func TestReasoningOptsGatedByHost(t *testing.T) {

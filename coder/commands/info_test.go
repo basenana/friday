@@ -2,7 +2,6 @@ package commands
 
 import (
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/basenana/friday/sessions"
@@ -16,22 +15,20 @@ func newSessionManagerForTest(t *testing.T) *sessions.Manager {
 	return sessions.NewManager(store, filepath.Join(baseDir, "current"), "test")
 }
 
-func TestSessionCmdUseMissingDoesNotCreateSession(t *testing.T) {
+func TestResumeCmdCarriesTargetWithoutCreatingSession(t *testing.T) {
 	mgr := newSessionManagerForTest(t)
-	cmd := sessionCmd{}
+	cmd := resumeCmd{}
 
 	result, err := cmd.Execute(&Context{
 		SessMgr: mgr,
-		Args:    []string{"use", "missing-session"},
+		Args:    []string{"missing-session"},
+		RawArgs: "missing-session",
 	})
 	if err != nil {
 		t.Fatalf("Execute returned error: %v", err)
 	}
-	if result.SwitchSession != "" {
-		t.Fatalf("SwitchSession = %q, want empty", result.SwitchSession)
-	}
-	if !strings.Contains(result.Message, "session not found") {
-		t.Fatalf("message = %q, want session not found", result.Message)
+	if target := actionAt[ResumeSessionAction](t, result, 0).Target; target != "missing-session" {
+		t.Fatalf("resume target = %q", target)
 	}
 
 	ok, err := mgr.Exists("missing-session")

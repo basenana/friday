@@ -20,6 +20,8 @@ import (
 	"github.com/basenana/friday/core/actor/sink"
 	"github.com/basenana/friday/core/agents"
 	"github.com/basenana/friday/core/api"
+	"github.com/basenana/friday/core/collaboration"
+	"github.com/basenana/friday/core/planning"
 	"github.com/basenana/friday/core/session"
 	coretools "github.com/basenana/friday/core/tools"
 	"github.com/basenana/friday/core/tracing"
@@ -52,7 +54,8 @@ type Actor struct {
 	pendingFormsMu sync.Mutex
 
 	// currentRunID is the active turn id (read by event emitters).
-	currentRunID atomic.Value
+	currentRunID  atomic.Value
+	planSubmitted atomic.Bool
 
 	cancel  context.CancelFunc
 	stopped atomic.Bool
@@ -67,6 +70,11 @@ type Actor struct {
 	turnIDGenerator func() string
 	turnTimeout     time.Duration
 	extraTools      []*coretools.Tool
+	modeProvider    collaboration.ModeProvider
+	modeController  collaboration.ModeController
+	planRepository  planning.Repository
+	collabTools     []*coretools.Tool
+	agentPlanEntry  bool
 
 	turnMu     sync.Mutex
 	turnCtx    context.Context
@@ -95,6 +103,10 @@ func New(agent agents.Agent, sess *session.Session, opts ...Option) *Actor {
 		turnIDGenerator:         o.turnIDGenerator,
 		turnTimeout:             o.turnTimeout,
 		extraTools:              o.extraTools,
+		modeProvider:            o.modeProvider,
+		modeController:          o.modeController,
+		planRepository:          o.planRepository,
+		agentPlanEntry:          o.agentPlanEntry,
 	}
 	if a.sink == nil {
 		a.sink = sink.Nop()
@@ -103,6 +115,15 @@ func New(agent agents.Agent, sess *session.Session, opts ...Option) *Actor {
 		makeEmitCardTool(a),
 		makeRequestFormTool(a),
 		makeUpdateCardTool(a),
+	}
+	if a.modeProvider != nil {
+		a.collabTools = []*coretools.Tool{makeRequestUserInputTool(a)}
+		if a.planRepository != nil {
+			a.collabTools = append(a.collabTools, makeSubmitPlanTool(a))
+		}
+	}
+	if a.modeController != nil && a.agentPlanEntry {
+		a.collabTools = append(a.collabTools, makeEnterPlanModeTool(a))
 	}
 	return a
 }
@@ -571,6 +592,8 @@ func (a *Actor) runTurn(ctx context.Context, bctx batchContext, batchSize int) {
 		runID = a.generateRunID()
 	}
 	a.currentRunID.Store(runID)
+	a.planSubmitted.Store(false)
+	startedAt := time.Now()
 
 	// Start a root span for this turn so every downstream span
 	// (BeforeAgent hooks like hook.mcp.before_agent, agent.react.chat,
@@ -596,6 +619,11 @@ func (a *Actor) runTurn(ctx context.Context, bctx batchContext, batchSize int) {
 		// Surface lifecycle start failure as a turn error and abort.
 		a.publish(turnCtx, events.NewEvent(events.KindRunError, runID).
 			WithPayload(events.RunErrorData{Message: err.Error()}))
+		a.publish(turnCtx, events.NewEvent(events.KindRunFinished, runID).
+			WithPayload(events.RunFinishedData{
+				StopReason: "error",
+				DurationMs: time.Since(startedAt).Milliseconds(),
+			}))
 		_ = a.turnLifecycle.OnTurnComplete(turnCtx, runID, TurnOutcome{Err: err})
 		return
 	}
@@ -636,6 +664,12 @@ func (a *Actor) runTurn(ctx context.Context, bctx batchContext, batchSize int) {
 
 	resp := a.agent.Chat(turnCtx, req)
 	streamErr := a.pumpResponse(turnCtx, runID, resp)
+	if streamErr != nil || turnCtx.Err() != nil {
+		// Timeout/provider-error paths can end the response pump before a
+		// blocked form handler observes cancellation. Resolve those interrupts
+		// synchronously so form.cancelled precedes the terminal run event.
+		a.cancelPendingForms()
+	}
 
 	// Finalize hook runs after the stream is fully consumed but before
 	// the terminal event.
@@ -663,6 +697,8 @@ func (a *Actor) runTurn(ctx context.Context, bctx batchContext, batchSize int) {
 		stopReason = "cancelled"
 	case outcome.Err != nil:
 		stopReason = "error"
+	case a.planSubmitted.Load():
+		stopReason = "plan_completed"
 	}
 
 	// RUN_FINISHED carries any open interrupts plus the stop reason.
@@ -670,6 +706,7 @@ func (a *Actor) runTurn(ctx context.Context, bctx batchContext, batchSize int) {
 		WithPayload(events.RunFinishedData{
 			Interrupts: a.openInterrupts(),
 			StopReason: stopReason,
+			DurationMs: time.Since(startedAt).Milliseconds(),
 		}))
 
 	_ = a.turnLifecycle.OnTurnComplete(turnCtx, runID, outcome)
@@ -704,12 +741,22 @@ func (a *Actor) generateRunID() string {
 // call: the actor's three card tools followed by any injected domain
 // tools.
 func (a *Actor) assembleRequestTools() []*coretools.Tool {
-	if len(a.extraTools) == 0 {
+	planMode := a.modeProvider != nil && a.modeProvider.CollaborationMode(a.session.ID) == collaboration.ModePlan
+	if len(a.extraTools) == 0 && len(a.collabTools) == 0 {
 		return a.cardTools
 	}
-	out := make([]*coretools.Tool, 0, len(a.cardTools)+len(a.extraTools))
-	out = append(out, a.cardTools...)
+	out := make([]*coretools.Tool, 0, len(a.cardTools)+len(a.extraTools)+len(a.collabTools))
+	for _, tool := range a.cardTools {
+		// Plan Mode has a constrained, typed question tool. Hiding the generic
+		// form tool keeps planning interactions consistent and prevents the
+		// model from bypassing request_user_input's question contract.
+		if planMode && tool.Name == "request_form" {
+			continue
+		}
+		out = append(out, tool)
+	}
 	out = append(out, a.extraTools...)
+	out = append(out, a.collabTools...)
 	return out
 }
 
@@ -806,37 +853,38 @@ func (a *Actor) snapshotTurnCancel() context.CancelFunc {
 }
 
 func (a *Actor) preemptCapturedTurn(cancel context.CancelFunc) {
-	cancelledForms := a.cancelPendingForms()
-	for _, formID := range cancelledForms {
-		a.EmitCustom(events.CustomFormCancelled, formID, events.FormCancelledBody{FormID: formID})
-	}
+	a.cancelPendingForms()
 	if cancel != nil {
 		cancel()
 	}
 }
 
-func (a *Actor) cancelPendingForms() []string {
+func (a *Actor) cancelPendingForms() {
 	a.pendingFormsMu.Lock()
 	if len(a.pendingForms) == 0 {
 		a.pendingFormsMu.Unlock()
-		return nil
+		return
 	}
-	formIDs := make([]string, 0, len(a.pendingForms))
-	waiters := make([]chan FormOutcome, 0, len(a.pendingForms))
+	type pendingForm struct {
+		id string
+		ch chan FormOutcome
+	}
+	waiters := make([]pendingForm, 0, len(a.pendingForms))
 	for id, ch := range a.pendingForms {
 		delete(a.pendingForms, id)
-		formIDs = append(formIDs, id)
-		waiters = append(waiters, ch)
+		waiters = append(waiters, pendingForm{id: id, ch: ch})
 	}
 	a.pendingFormsMu.Unlock()
 
-	for _, ch := range waiters {
+	for _, waiter := range waiters {
+		// Publish synchronously before cancelling the turn so consumers always
+		// observe the interrupt resolution before RUN_FINISHED.
+		a.EmitCustom(events.CustomFormCancelled, waiter.id, events.FormCancelledBody{FormID: waiter.id})
 		select {
-		case ch <- FormOutcome{Cancelled: true}:
+		case waiter.ch <- FormOutcome{Cancelled: true, cancelEventEmitted: true}:
 		default:
 		}
 	}
-	return formIDs
 }
 
 // firstLine returns the first line of s, truncated for preview use.

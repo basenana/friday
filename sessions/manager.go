@@ -2,9 +2,13 @@ package sessions
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"strings"
+	"unicode"
 
+	"github.com/basenana/friday/core/collaboration"
+	"github.com/basenana/friday/core/planning"
 	"github.com/basenana/friday/core/providers"
 	coresession "github.com/basenana/friday/core/session"
 	"github.com/basenana/friday/core/types"
@@ -176,6 +180,9 @@ func (m *Manager) CreateIsolated(opts ...coresession.Option) (*coresession.Sessi
 	}
 
 	if err := m.store.UpdateAlias(sessionID, alias); err != nil {
+		if deleteErr := m.store.Delete(sessionID); deleteErr != nil {
+			return nil, "", fmt.Errorf("initialize isolated session: %w; cleanup: %v", err, deleteErr)
+		}
 		return nil, "", err
 	}
 
@@ -203,4 +210,162 @@ func (m *Manager) Exists(sessionID string) (bool, error) {
 		return false, err
 	}
 	return true, nil
+}
+
+// CollaborationMode implements collaboration.ModeProvider.
+func (m *Manager) CollaborationMode(sessionID string) collaboration.Mode {
+	meta, err := m.store.GetMeta(sessionID)
+	if err != nil || meta.Runtime.Mode == "" {
+		return collaboration.ModeDefault
+	}
+	mode, err := collaboration.ParseMode(string(meta.Runtime.Mode))
+	if err != nil {
+		return collaboration.ModeDefault
+	}
+	return mode
+}
+
+func (m *Manager) Runtime(sessionID string) (SessionRuntime, error) {
+	meta, err := m.store.GetMeta(sessionID)
+	if err != nil {
+		return SessionRuntime{}, err
+	}
+	if meta.Runtime.Mode == "" {
+		meta.Runtime.Mode = collaboration.ModeDefault
+	}
+	return meta.Runtime, nil
+}
+
+func (m *Manager) UpdateMeta(sessionID string, patch SessionMetaPatch) error {
+	store, ok := m.store.(MetadataStore)
+	if !ok {
+		return errors.New("session store does not support mutable metadata")
+	}
+	return store.UpdateMeta(sessionID, patch)
+}
+
+func (m *Manager) SetMode(sessionID string, mode collaboration.Mode) error {
+	parsed, err := collaboration.ParseMode(string(mode))
+	if err != nil {
+		return err
+	}
+	return m.UpdateMeta(sessionID, SessionMetaPatch{Mode: &parsed})
+}
+
+func (m *Manager) SetModel(sessionID string, model ModelSelection) error {
+	if strings.TrimSpace(model.Provider) == "" || strings.TrimSpace(model.Model) == "" {
+		return errors.New("provider and model are required")
+	}
+	return m.UpdateMeta(sessionID, SessionMetaPatch{Model: &model})
+}
+
+// ClearModel removes the session override so future actors use the configured
+// primary model. This is also used when a persisted selection no longer exists
+// in the current configuration.
+func (m *Manager) ClearModel(sessionID string) error {
+	model := ModelSelection{}
+	return m.UpdateMeta(sessionID, SessionMetaPatch{Model: &model})
+}
+
+func (m *Manager) ResolveActiveSession(target string) (*SessionMeta, error) {
+	metas, err := m.store.ListActive()
+	if err != nil {
+		return nil, err
+	}
+	target = strings.TrimSpace(target)
+	var matches []SessionMeta
+	for _, meta := range metas {
+		if meta.ID == target || meta.Name == target {
+			copy := meta
+			return &copy, nil
+		}
+	}
+	for _, meta := range metas {
+		if strings.HasPrefix(meta.ID, target) {
+			matches = append(matches, meta)
+		}
+	}
+	if len(matches) == 1 {
+		return &matches[0], nil
+	}
+	if len(matches) > 1 {
+		return nil, fmt.Errorf("ambiguous session prefix %q", target)
+	}
+	return nil, fmt.Errorf("session not found: %s", target)
+}
+
+func normalizeSessionName(name string) string {
+	name = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return ' '
+		}
+		return r
+	}, name)
+	name = strings.TrimSpace(strings.Join(strings.Fields(name), " "))
+	runes := []rune(name)
+	if len(runes) > 200 {
+		name = string(runes[:200])
+	}
+	return name
+}
+
+func (m *Manager) Rename(sessionID, requested string) (string, error) {
+	base := normalizeSessionName(requested)
+	if base == "" {
+		return "", errors.New("session name is empty")
+	}
+	metas, err := m.store.List()
+	if err != nil {
+		return "", err
+	}
+	used := make(map[string]bool, len(metas))
+	for _, meta := range metas {
+		if meta.ID != sessionID && meta.Name != "" {
+			used[meta.Name] = true
+		}
+	}
+	name := base
+	for n := 2; used[name]; n++ {
+		name = fmt.Sprintf("%s (%d)", base, n)
+	}
+	return name, m.UpdateMeta(sessionID, SessionMetaPatch{Name: &name})
+}
+
+func (m *Manager) Archive(sessionID string) error {
+	archived := true
+	return m.UpdateMeta(sessionID, SessionMetaPatch{Archived: &archived})
+}
+
+func (m *Manager) Delete(sessionID string) error { return m.store.Delete(sessionID) }
+
+func (m *Manager) SavePlan(sessionID string, plan planning.Artifact) error {
+	store, ok := m.store.(PlanningStore)
+	if !ok {
+		return errors.New("session store does not support plan artifacts")
+	}
+	return store.SavePlan(sessionID, plan)
+}
+
+func (m *Manager) ProposePlan(sessionID string, plan planning.Artifact) (*planning.Artifact, error) {
+	store, ok := m.store.(PlanningStore)
+	if !ok {
+		return nil, errors.New("session store does not support plan artifacts")
+	}
+	return store.ProposePlan(sessionID, plan)
+}
+
+func (m *Manager) LoadPlan(sessionID, planID string) (*planning.Artifact, error) {
+	store, ok := m.store.(PlanningStore)
+	if !ok {
+		return nil, errors.New("session store does not support plan artifacts")
+	}
+	return store.LoadPlan(sessionID, planID)
+}
+
+func (m *Manager) LoadLatestPlan(sessionID string) (*planning.Artifact, error) {
+	store, ok := m.store.(PlanningStore)
+	if !ok {
+		return nil, nil
+	}
+	return store.LoadLatestPlan(sessionID)
 }

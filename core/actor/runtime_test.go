@@ -152,18 +152,18 @@ func TestActor_RequestForm_PreemptCancelsTurnAndForm(t *testing.T) {
 	}
 
 	seen := collectEvents(t, sub, hasRunFinished)
-	var cancelled bool
+	var cancelled int
 	var contentChunks int
 	for _, e := range seen {
 		if e.Type == events.KindCustom && e.Name == events.CustomFormCancelled {
-			cancelled = true
+			cancelled++
 		}
 		if e.Type == events.KindTextMessageContent {
 			contentChunks++
 		}
 	}
-	if !cancelled {
-		t.Fatalf("expected form.cancelled after preempt")
+	if cancelled != 1 {
+		t.Fatalf("form.cancelled events = %d, want 1", cancelled)
 	}
 	if contentChunks != 0 {
 		t.Fatalf("expected no text deltas after preempt, got %d", contentChunks)

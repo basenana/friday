@@ -3,15 +3,22 @@ package tui
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/basenana/friday/config"
 	"github.com/basenana/friday/core/actor/events"
+	"github.com/basenana/friday/core/collaboration"
+	"github.com/basenana/friday/core/planning"
+	"github.com/basenana/friday/sandbox"
 	"github.com/basenana/friday/sessions"
+	sessionfile "github.com/basenana/friday/sessions/file"
 )
 
 func TestAlternateScreenMode(t *testing.T) {
@@ -56,6 +63,464 @@ func TestTabQueuesWhileRunning(t *testing.T) {
 	}
 	if model.textarea.Value() != "" {
 		t.Fatal("composer was not cleared")
+	}
+}
+
+func TestRunningSlashCommandsRespectRunPolicy(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	m.running = true
+	m.textarea.SetValue("/status")
+	got, _ := m.submitComposer()
+	m = got.(*model)
+	if len(m.queued) != 0 || m.steeringPending {
+		t.Fatalf("immediate status was queued or steered: queued=%v steering=%v", m.queued, m.steeringPending)
+	}
+	if len(m.messages) == 0 || !strings.Contains(m.messages[len(m.messages)-1].content, "Friday status") {
+		t.Fatalf("status did not execute immediately: %#v", m.messages)
+	}
+
+	m.textarea.SetValue("/plan design auth")
+	got, _ = m.submitComposer()
+	m = got.(*model)
+	if len(m.queued) != 1 || m.queued[0].text != "/plan design auth" {
+		t.Fatalf("deferred plan command was not queued: %#v", m.queued)
+	}
+}
+
+func TestPlanModeCommandsAndShortcut(t *testing.T) {
+	m, mgr, _ := newTestModel(t)
+	if _, _ = m.handleSlash("/plan"); m.mode != collaboration.ModePlan {
+		t.Fatalf("mode after /plan = %q", m.mode)
+	}
+	runtimeState, _ := mgr.Runtime(m.sessionID)
+	if runtimeState.Mode != collaboration.ModePlan {
+		t.Fatalf("persisted mode = %q", runtimeState.Mode)
+	}
+	if _, _ = m.handleSlash("/plan off"); m.mode != collaboration.ModeDefault {
+		t.Fatalf("mode after /plan off = %q", m.mode)
+	}
+	got, _ := m.updateKey(tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})
+	if got.(*model).mode != collaboration.ModePlan {
+		t.Fatalf("Shift+Tab mode = %q", got.(*model).mode)
+	}
+}
+
+func TestResumeCurrentSessionIsNoop(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	token := m.subscriptionToken
+	got, _ := m.handleSlash("/resume " + m.sessionID)
+	m = got.(*model)
+	if m.sessionID != "session-initial" || m.subscriptionToken != token {
+		t.Fatalf("current resume changed session: id=%q token=%d", m.sessionID, m.subscriptionToken)
+	}
+}
+
+func TestPlanHandoffPausesQueueAndCanKeepPlanning(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	m.mode = collaboration.ModePlan
+	m.latestPlan = &planning.Artifact{ID: "plan-1", SessionID: m.sessionID, Version: 1, Status: planning.ArtifactProposed, Markdown: "the plan"}
+	m.running = true
+	m.currentRunID = "run-1"
+	m.queued = []pendingInput{{text: "queued follow-up"}}
+	m.handleActorEvent(events.NewEvent(events.KindRunFinished, "run-1").WithPayload(events.RunFinishedData{StopReason: "plan_completed"}))
+	if m.planHandoff == nil || m.running {
+		t.Fatalf("handoff state missing: popup=%v running=%v", m.planHandoff != nil, m.running)
+	}
+	if _, cmd := m.dispatchNextQueued(); cmd != nil || len(m.queued) != 1 {
+		t.Fatalf("queue dispatched behind handoff: cmd=%v queue=%v", cmd != nil, m.queued)
+	}
+	m.planHandoff.selected = 2
+	got, cmd := m.updatePlanHandoff(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = got.(*model)
+	if m.planHandoff != nil || m.mode != collaboration.ModePlan || m.latestPlan.Status != planning.ArtifactProposed || cmd == nil {
+		t.Fatalf("keep planning state: popup=%v mode=%q status=%q dispatch=%v", m.planHandoff != nil, m.mode, m.latestPlan.Status, cmd != nil)
+	}
+}
+
+func TestPlanHandoffOnlyOpensForCompletedPlanRun(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	m.mode = collaboration.ModePlan
+	m.latestPlan = &planning.Artifact{ID: "old-plan", SessionID: m.sessionID, Version: 1, Status: planning.ArtifactProposed}
+	m.running, m.currentRunID = true, "run-ordinary"
+	m.handleActorEvent(events.NewEvent(events.KindRunFinished, "run-ordinary").WithPayload(events.RunFinishedData{StopReason: "end_turn"}))
+	if m.planHandoff != nil {
+		t.Fatal("an ordinary planning turn reopened the old plan handoff")
+	}
+}
+
+func TestModeChangedEventUpdatesTUI(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	m.handleActorEvent(events.NewEvent(events.KindCustom, "run").WithName(events.CustomModeChanged).WithPayload(events.ModeChangedBody{
+		Mode: string(collaboration.ModePlan), Source: "agent", Reason: "needs design",
+	}))
+	if m.mode != collaboration.ModePlan {
+		t.Fatalf("mode = %q", m.mode)
+	}
+	if last := m.messages[len(m.messages)-1].content; !strings.Contains(last, "mode · plan · agent") {
+		t.Fatalf("mode marker = %q", last)
+	}
+}
+
+func TestRunElapsedStatusAndCompletionMarker(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	m.width = 120
+	started := time.Date(2026, 9, 11, 10, 0, 0, 0, time.UTC)
+	now := started.Add(68 * time.Second)
+	m.now = func() time.Time { return now }
+	startEvent := events.NewEvent(events.KindRunStarted, "run-time")
+	startEvent.Timestamp = started
+	m.handleActorEvent(startEvent)
+	if status := m.renderStatus(); !strings.Contains(status, "running 1m 08s") {
+		t.Fatalf("running status = %q", status)
+	}
+
+	finishEvent := events.NewEvent(events.KindRunFinished, "run-time").WithPayload(events.RunFinishedData{
+		StopReason: "end_turn", DurationMs: 68_000,
+	})
+	finishEvent.Timestamp = now
+	m.handleActorEvent(finishEvent)
+	if m.running || !m.runStartedAt.IsZero() {
+		t.Fatalf("run state not cleared: running=%v started=%v", m.running, m.runStartedAt)
+	}
+	if last := m.messages[len(m.messages)-1].content; last != "completed in 1m 08s" {
+		t.Fatalf("completion marker = %q", last)
+	}
+	count := len(m.messages)
+	m.handleActorEvent(finishEvent)
+	if len(m.messages) != count {
+		t.Fatal("duplicate RUN_FINISHED produced a second completion marker")
+	}
+}
+
+func TestRunCompletionFallsBackToEventTimestamps(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	started := time.Date(2026, 9, 11, 10, 0, 0, 0, time.UTC)
+	startEvent := events.NewEvent(events.KindRunStarted, "old-run")
+	startEvent.Timestamp = started
+	m.handleActorEvent(startEvent)
+	finishEvent := events.NewEvent(events.KindRunFinished, "old-run").WithPayload(events.RunFinishedData{StopReason: "cancelled"})
+	finishEvent.Timestamp = started.Add(9 * time.Second)
+	m.handleActorEvent(finishEvent)
+	if last := m.messages[len(m.messages)-1].content; last != "cancelled after 9s" {
+		t.Fatalf("fallback marker = %q", last)
+	}
+}
+
+func TestRestoreProposedPlanReopensHandoff(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	m.mode = collaboration.ModePlan
+	m.latestPlan = &planning.Artifact{ID: "plan-restore", SessionID: m.sessionID, Version: 1, Status: planning.ArtifactProposed}
+	m.restorePlanHandoff()
+	if m.planHandoff == nil {
+		t.Fatal("proposed plan did not restore approval handoff")
+	}
+}
+
+func TestPlanHandoffImplementsHereAndFresh(t *testing.T) {
+	t.Run("current", func(t *testing.T) {
+		m, mgr, _ := newTestModel(t)
+		plan := planning.Artifact{ID: "plan-current", SessionID: m.sessionID, Version: 1, Title: "Current", Status: planning.ArtifactProposed, Markdown: "## Summary\ncurrent plan"}
+		if err := mgr.SavePlan(m.sessionID, plan); err != nil {
+			t.Fatal(err)
+		}
+		m.mode, m.latestPlan, m.planHandoff = collaboration.ModePlan, &plan, &planHandoffState{}
+		got, cmd := m.updatePlanHandoff(tea.KeyPressMsg{Code: tea.KeyEnter})
+		m = got.(*model)
+		if cmd == nil || !m.running || m.mode != collaboration.ModeDefault || m.latestPlan.Status != planning.ArtifactAccepted {
+			t.Fatalf("current handoff: cmd=%v running=%v mode=%q plan=%+v", cmd != nil, m.running, m.mode, m.latestPlan)
+		}
+		if last := m.messages[len(m.messages)-1].content; !strings.Contains(last, plan.Markdown) {
+			t.Fatalf("implementation prompt omitted plan: %q", last)
+		}
+	})
+
+	t.Run("fresh", func(t *testing.T) {
+		m, mgr, _ := newTestModel(t)
+		oldID := m.sessionID
+		if err := mgr.SetModel(oldID, sessions.ModelSelection{Provider: "openai", Model: "gpt-4o"}); err != nil {
+			t.Fatal(err)
+		}
+		plan := planning.Artifact{ID: "plan-fresh", SessionID: oldID, Version: 1, Title: "Fresh", Status: planning.ArtifactProposed, Markdown: "## Summary\nfresh plan"}
+		if err := mgr.SavePlan(oldID, plan); err != nil {
+			t.Fatal(err)
+		}
+		m.mode, m.latestPlan, m.planHandoff = collaboration.ModePlan, &plan, &planHandoffState{selected: 1}
+		got, cmd := m.updatePlanHandoff(tea.KeyPressMsg{Code: tea.KeyEnter})
+		m = got.(*model)
+		if cmd == nil || m.sessionID == oldID || !m.running || m.mode != collaboration.ModeDefault {
+			t.Fatalf("fresh handoff: cmd=%v id=%q running=%v mode=%q", cmd != nil, m.sessionID, m.running, m.mode)
+		}
+		meta, err := mgr.GetStore().GetMeta(m.sessionID)
+		if err != nil || meta.ParentSessionID != oldID || meta.SourcePlanID != plan.ID || meta.Runtime.Model.Model != "gpt-4o" {
+			t.Fatalf("fresh lineage/runtime = %+v, err=%v", meta, err)
+		}
+	})
+}
+
+func TestPlanHandoffFailuresRestoreProposalAndQueue(t *testing.T) {
+	setup := func(t *testing.T, selected int) (*model, *sessions.Manager, *sessionfile.FileSessionStore, *faultStore, planning.Artifact) {
+		t.Helper()
+		m, mgr, raw, faults := newFaultTestModel(t)
+		plan := planning.Artifact{ID: "plan-fault", SessionID: m.sessionID, Version: 1, Title: "Fault", Status: planning.ArtifactProposed, Markdown: "## Summary\nfault plan"}
+		if err := raw.SavePlan(m.sessionID, plan); err != nil {
+			t.Fatal(err)
+		}
+		if err := mgr.SetMode(m.sessionID, collaboration.ModePlan); err != nil {
+			t.Fatal(err)
+		}
+		m.mode, m.latestPlan, m.planHandoff = collaboration.ModePlan, &plan, &planHandoffState{selected: selected}
+		m.queued = []pendingInput{{text: "keep queued"}}
+		return m, mgr, raw, faults, plan
+	}
+
+	t.Run("accept save", func(t *testing.T) {
+		m, _, raw, faults, plan := setup(t, 0)
+		faults.failNextSave = true
+		m.updatePlanHandoff(tea.KeyPressMsg{Code: tea.KeyEnter})
+		persisted, _ := raw.LoadPlan(plan.SessionID, plan.ID)
+		if m.planHandoff == nil || m.latestPlan.Status != planning.ArtifactProposed || persisted.Status != planning.ArtifactProposed || len(m.queued) != 1 || m.running {
+			t.Fatalf("failed acceptance was not rolled back: popup=%v latest=%+v persisted=%+v queue=%v running=%v", m.planHandoff != nil, m.latestPlan, persisted, m.queued, m.running)
+		}
+	})
+
+	t.Run("mode update", func(t *testing.T) {
+		m, _, raw, faults, plan := setup(t, 0)
+		faults.failMode = true
+		m.updatePlanHandoff(tea.KeyPressMsg{Code: tea.KeyEnter})
+		persisted, _ := raw.LoadPlan(plan.SessionID, plan.ID)
+		if m.planHandoff == nil || m.mode != collaboration.ModePlan || m.latestPlan.Status != planning.ArtifactProposed || persisted.Status != planning.ArtifactProposed || len(m.queued) != 1 {
+			t.Fatalf("mode failure was not rolled back: popup=%v mode=%q latest=%+v persisted=%+v queue=%v", m.planHandoff != nil, m.mode, m.latestPlan, persisted, m.queued)
+		}
+	})
+
+	t.Run("fresh lineage", func(t *testing.T) {
+		m, mgr, raw, faults, plan := setup(t, 1)
+		before, _ := raw.List()
+		faults.failLineage = true
+		m.updatePlanHandoff(tea.KeyPressMsg{Code: tea.KeyEnter})
+		after, _ := raw.List()
+		persisted, _ := raw.LoadPlan(plan.SessionID, plan.ID)
+		current, _ := mgr.GetCurrentID()
+		if m.planHandoff == nil || m.sessionID != plan.SessionID || current != plan.SessionID || persisted.Status != planning.ArtifactProposed || len(after) != len(before) || len(m.queued) != 1 {
+			t.Fatalf("fresh failure leaked state: popup=%v session=%q current=%q persisted=%+v sessions=%d/%d queue=%v", m.planHandoff != nil, m.sessionID, current, persisted, len(after), len(before), m.queued)
+		}
+	})
+
+	t.Run("fresh create", func(t *testing.T) {
+		m, _, raw, faults, plan := setup(t, 1)
+		before, _ := raw.List()
+		faults.failCreate = true
+		m.updatePlanHandoff(tea.KeyPressMsg{Code: tea.KeyEnter})
+		after, _ := raw.List()
+		persisted, _ := raw.LoadPlan(plan.SessionID, plan.ID)
+		if m.planHandoff == nil || m.sessionID != plan.SessionID || persisted.Status != planning.ArtifactProposed || len(after) != len(before) || len(m.queued) != 1 {
+			t.Fatalf("create failure leaked state: popup=%v session=%q persisted=%+v sessions=%d/%d queue=%v", m.planHandoff != nil, m.sessionID, persisted, len(after), len(before), m.queued)
+		}
+	})
+
+	t.Run("fresh activation", func(t *testing.T) {
+		m, _, raw, faults, plan := setup(t, 1)
+		before, _ := raw.List()
+		if err := os.Remove(faults.currentFile); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Mkdir(faults.currentFile, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		m.updatePlanHandoff(tea.KeyPressMsg{Code: tea.KeyEnter})
+		after, _ := raw.List()
+		persisted, _ := raw.LoadPlan(plan.SessionID, plan.ID)
+		if m.planHandoff == nil || m.sessionID != plan.SessionID || persisted.Status != planning.ArtifactProposed || len(after) != len(before) || len(m.queued) != 1 {
+			t.Fatalf("activation failure leaked state: popup=%v session=%q persisted=%+v sessions=%d/%d queue=%v", m.planHandoff != nil, m.sessionID, persisted, len(after), len(before), m.queued)
+		}
+	})
+}
+
+func TestModelSelectionPersistsAndRollsBack(t *testing.T) {
+	m, mgr, _ := newTestModel(t)
+	m.cfg.Models = []config.ModelConfig{
+		{Provider: "openai", Model: "gpt-4o", ContextWindow: 128000, ReasoningEffort: "low"},
+		{Provider: "openai", Model: "gpt-alt", ContextWindow: 32000, ReasoningEffort: "high"},
+		{Provider: "unsupported", Model: "broken"},
+	}
+	m.applyModel(m.cfg.Models[1])
+	runtimeState, _ := mgr.Runtime(m.sessionID)
+	if runtimeState.Model.Model != "gpt-alt" || effectiveEffort(m) != "high" {
+		t.Fatalf("selected runtime=%+v effort=%q", runtimeState, effectiveEffort(m))
+	}
+	m.showStatus()
+	if status := m.messages[len(m.messages)-1].content; !strings.Contains(status, "32000") || !strings.Contains(status, "Reasoning: `high`") {
+		t.Fatalf("status did not use complete selected model config: %q", status)
+	}
+	m.applyModel(m.cfg.Models[2])
+	runtimeState, _ = mgr.Runtime(m.sessionID)
+	if runtimeState.Model.Model != "gpt-alt" {
+		t.Fatalf("failed reconfigure was not rolled back: %+v", runtimeState)
+	}
+	if err := mgr.UpdateMeta(m.sessionID, sessions.SessionMetaPatch{Runtime: &sessions.SessionRuntime{Mode: collaboration.ModeDefault, Model: sessions.ModelSelection{Provider: "openai", Model: "removed"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := normalizeSessionModel(mgr, m.cfg, m.sessionID); err != nil {
+		t.Fatal(err)
+	}
+	runtimeState, _ = mgr.Runtime(m.sessionID)
+	if runtimeState.Model.Model != "" {
+		t.Fatalf("invalid saved model was not cleared: %+v", runtimeState)
+	}
+}
+
+func TestRunningTaskCountOnlyCountsActiveTasks(t *testing.T) {
+	tasks := []*sandbox.Task{
+		nil,
+		{Status: sandbox.TaskRunning},
+		{Status: sandbox.TaskCompleted},
+		{Status: sandbox.TaskFailed},
+		{Status: sandbox.TaskKilled},
+		{Status: sandbox.TaskRunning},
+	}
+	if got := runningTaskCount(tasks); got != 2 {
+		t.Fatalf("runningTaskCount = %d, want 2", got)
+	}
+}
+
+func TestDiffIncludesUntrackedFileContents(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	repo := t.TempDir()
+	if out, err := exec.Command("git", "init", "-q", repo).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, out)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "new.txt"), []byte("untracked-payload-42\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m.workdir = repo
+	msg := m.showDiff()()
+	m.Update(msg)
+	if m.detail == nil || !strings.Contains(m.detail.view.GetContent(), "untracked-payload-42") {
+		t.Fatalf("diff omitted untracked content: %#v", m.detail)
+	}
+}
+
+func TestDiffCollectionIsBoundedAndReportsTruncation(t *testing.T) {
+	repo := t.TempDir()
+	if out, err := exec.Command("git", "init", "-q", repo).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, out)
+	}
+	path := filepath.Join(repo, "large.txt")
+	if err := os.WriteFile(path, []byte(strings.Repeat("x", 2<<20)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command("git", "-C", repo, "add", "large.txt").CombinedOutput(); err != nil {
+		t.Fatalf("git add: %v: %s", err, out)
+	}
+	content, err := collectWorkingTreeDiff(context.Background(), repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(content) > 1<<20 {
+		t.Fatalf("diff output size = %d, want <= 1 MiB", len(content))
+	}
+	if !strings.Contains(content, "output truncated at 1 MiB") {
+		t.Fatalf("missing truncation marker, tail=%q", content[max(0, len(content)-100):])
+	}
+}
+
+func TestShowDiffDefersWorkToTeaCommand(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	m.workdir = t.TempDir()
+	cmd := m.showDiff()
+	if cmd == nil || m.detail != nil {
+		t.Fatalf("showDiff executed synchronously: cmd=%v detail=%v", cmd != nil, m.detail != nil)
+	}
+	msg := cmd()
+	if _, ok := msg.(diffLoadedMsg); !ok {
+		t.Fatalf("showDiff message = %T", msg)
+	}
+}
+
+func TestArchiveAndDeleteRequireConfirmation(t *testing.T) {
+	m, mgr, _ := newTestModel(t)
+	_, archiveID, err := mgr.CreateIsolated()
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.handleSlash("/archive " + archiveID)
+	if m.commandConfirm == nil {
+		t.Fatal("archive did not request confirmation")
+	}
+	m.updateCommandConfirmation(tea.KeyPressMsg{Code: 'y', Text: "y"})
+	meta, _ := mgr.GetStore().GetMeta(archiveID)
+	if meta == nil || !meta.Archived {
+		t.Fatalf("session not archived: %+v", meta)
+	}
+	_, deleteID, err := mgr.CreateIsolated()
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.handleSlash("/delete " + deleteID)
+	m.updateCommandConfirmation(tea.KeyPressMsg{Code: 'y', Text: "y"})
+	if ok, _ := mgr.Exists(deleteID); ok {
+		t.Fatal("session not deleted")
+	}
+}
+
+func TestSelectorFilteringAndConditionalOtherField(t *testing.T) {
+	selector := &selectorState{items: []selectorItem{{label: "alpha"}, {label: "beta"}}, query: "bet"}
+	if got := selector.visibleIndexes(); len(got) != 1 || got[0] != 1 {
+		t.Fatalf("filtered indexes = %v", got)
+	}
+	f, err := newFormState("plan-input", map[string]any{"variant": "plan_questions", "fields": []any{
+		map[string]any{"name": "scope", "type": "select", "options": []any{map[string]any{"label": "A", "value": "A"}, map[string]any{"label": "Other", "value": "Other"}}},
+		map[string]any{"name": "scope_other", "type": "text"},
+	}}, 80)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := f.visibleFieldIndexes(); len(got) != 1 {
+		t.Fatalf("Other field initially visible: %v", got)
+	}
+	f.fields[0].option = 1
+	if got := f.visibleFieldIndexes(); len(got) != 2 {
+		t.Fatalf("Other field hidden after selection: %v", got)
+	}
+	m, _, _ := newTestModel(t)
+	m.form = f
+	m.submitForm()
+	if m.form.err == "" || m.form.active != 1 {
+		t.Fatalf("blank Other answer was accepted: active=%d err=%q", m.form.active, m.form.err)
+	}
+}
+
+func TestGenericFormDoesNotApplyPlanningOtherConvention(t *testing.T) {
+	f, err := newFormState("generic", map[string]any{"fields": []any{
+		map[string]any{"name": "scope", "type": "select", "options": []any{map[string]any{"label": "A", "value": "A"}}},
+		map[string]any{"name": "scope_other", "type": "text", "required": true},
+	}}, 80)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := f.visibleFieldIndexes(); !reflect.DeepEqual(got, []int{0, 1}) {
+		t.Fatalf("generic form fields = %v, want both visible", got)
+	}
+	f.fields[1].text = "ordinary required value"
+	m, _, _ := newTestModel(t)
+	m.form = f
+	_, _ = m.submitForm()
+	if m.form == nil || !m.form.submitting || m.form.err != "" {
+		t.Fatalf("generic foo_other submission failed: %+v", m.form)
+	}
+}
+
+func TestRunFinishedExpiresStaleForm(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	m.running = true
+	m.currentRunID = "run-form"
+	m.form = &formState{id: "stale"}
+	m.handleActorEvent(events.NewEvent(events.KindRunFinished, "run-form"))
+	if m.form != nil {
+		t.Fatal("run completion left a stale form open")
+	}
+	if len(m.messages) == 0 || !strings.Contains(m.messages[len(m.messages)-1].content, "unfinished form expired") {
+		t.Fatalf("missing stale form notice: %#v", m.messages)
 	}
 }
 
@@ -174,7 +639,7 @@ func TestEventLogRestoresTranscript(t *testing.T) {
 	if err := m.loadTranscript(m.sessionID); err != nil {
 		t.Fatal(err)
 	}
-	if len(m.messages) != 2 || m.messages[0].kind != blockUser || m.messages[1].content != "world" {
+	if len(m.messages) != 3 || m.messages[0].kind != blockUser || m.messages[1].content != "world" || m.messages[2].content != "completed in <1s" {
 		t.Fatalf("restored messages = %#v", m.messages)
 	}
 }

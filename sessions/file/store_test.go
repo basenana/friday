@@ -5,14 +5,226 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/basenana/friday/core/actor/events"
+	"github.com/basenana/friday/core/collaboration"
 	"github.com/basenana/friday/core/contextmgr"
+	"github.com/basenana/friday/core/planning"
 	"github.com/basenana/friday/core/types"
+	"github.com/basenana/friday/sessions"
 )
+
+func TestConcurrentMetadataUpdatesAcrossStoreInstances(t *testing.T) {
+	dir := t.TempDir()
+	first := NewFileSessionStore(dir)
+	second := NewFileSessionStore(dir)
+	if _, err := first.Create("shared", nil); err != nil {
+		t.Fatal(err)
+	}
+	mode := collaboration.ModePlan
+	model := sessions.ModelSelection{Provider: "openai", Model: "gpt-test"}
+	start := make(chan struct{})
+	errs := make(chan error, 102)
+	var wg sync.WaitGroup
+	wg.Add(4)
+	go func() {
+		defer wg.Done()
+		<-start
+		errs <- first.UpdateMeta("shared", sessions.SessionMetaPatch{Mode: &mode})
+	}()
+	go func() {
+		defer wg.Done()
+		<-start
+		errs <- second.UpdateMeta("shared", sessions.SessionMetaPatch{Model: &model})
+	}()
+	appendMessages := func(store *FileSessionStore, prefix string) {
+		defer wg.Done()
+		<-start
+		for i := 0; i < 50; i++ {
+			errs <- store.AppendMessages("shared", types.Message{Role: types.RoleUser, Content: fmt.Sprintf("%s-%d", prefix, i)})
+		}
+	}
+	go appendMessages(first, "first")
+	go appendMessages(second, "second")
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent update: %v", err)
+		}
+	}
+	meta, err := first.GetMeta("shared")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta.Runtime.Mode != mode || meta.Runtime.Model != model || meta.MessageCount != 100 {
+		t.Fatalf("lost metadata update: %+v", meta)
+	}
+	messages, err := second.LoadMessages("shared")
+	if err != nil || len(messages) != 100 {
+		t.Fatalf("messages = %d, err=%v", len(messages), err)
+	}
+	lockInfo, err := os.Stat(filepath.Join(first.sessionDir("shared"), ".session.lock"))
+	if err != nil || lockInfo.Mode().Perm() != 0o600 {
+		t.Fatalf("metadata lock permissions = %v, err=%v", lockInfo, err)
+	}
+}
+
+func TestConcurrentPlanProposalsAreVersionedAndSuperseded(t *testing.T) {
+	dir := t.TempDir()
+	stores := []*FileSessionStore{NewFileSessionStore(dir), NewFileSessionStore(dir)}
+	if _, err := stores[0].Create("planning", nil); err != nil {
+		t.Fatal(err)
+	}
+	const count = 24
+	start := make(chan struct{})
+	results := make(chan *planning.Artifact, count)
+	errs := make(chan error, count)
+	var wg sync.WaitGroup
+	for i := 0; i < count; i++ {
+		i := i
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			plan, err := stores[i%len(stores)].ProposePlan("planning", planning.Artifact{
+				ID: fmt.Sprintf("plan-%02d", i), SessionID: "planning", Title: "Plan",
+				Markdown: "## Summary\ncomplete", CreatedAt: time.Now(),
+			})
+			if err != nil {
+				errs <- err
+				return
+			}
+			results <- plan
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+	close(errs)
+	for err := range errs {
+		t.Fatalf("ProposePlan: %v", err)
+	}
+	var versions []int
+	for plan := range results {
+		versions = append(versions, plan.Version)
+	}
+	sort.Ints(versions)
+	if len(versions) != count {
+		t.Fatalf("proposal count = %d, want %d", len(versions), count)
+	}
+	for i, version := range versions {
+		if version != i+1 {
+			t.Fatalf("versions = %v", versions)
+		}
+	}
+	latest, err := stores[0].LoadLatestPlan("planning")
+	if err != nil || latest == nil || latest.Version != count || latest.Status != planning.ArtifactProposed {
+		t.Fatalf("latest = %+v, err=%v", latest, err)
+	}
+	proposed := 0
+	for i := 0; i < count; i++ {
+		loaded, err := stores[1].LoadPlan("planning", fmt.Sprintf("plan-%02d", i))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if loaded.Status == planning.ArtifactProposed {
+			proposed++
+			if loaded.ID != latest.ID {
+				t.Fatalf("non-latest plan remained proposed: %+v", loaded)
+			}
+		} else if loaded.Status != planning.ArtifactSuperseded {
+			t.Fatalf("old plan status = %q", loaded.Status)
+		}
+	}
+	if proposed != 1 {
+		t.Fatalf("proposed plans = %d, want 1", proposed)
+	}
+}
+
+func TestPlanArtifactRoundTripAndStatusTransition(t *testing.T) {
+	dir := t.TempDir()
+	store := NewFileSessionStore(dir)
+	if _, err := store.Create("planning", nil); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	plan := planning.Artifact{
+		ID: "plan-1", SessionID: "planning", Version: 1, Title: "First",
+		Markdown: "## Summary\nDone", Status: planning.ArtifactProposed, CreatedAt: now,
+	}
+	if err := store.SavePlan("planning", plan); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := store.LoadPlan("planning", plan.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.ID != plan.ID || loaded.Status != planning.ArtifactProposed || !loaded.CreatedAt.Equal(now) {
+		t.Fatalf("loaded plan = %+v", loaded)
+	}
+	latest, err := store.LoadLatestPlan("planning")
+	if err != nil || latest == nil || latest.ID != plan.ID {
+		t.Fatalf("latest plan = %+v, err=%v", latest, err)
+	}
+
+	acceptedAt := now.Add(time.Minute)
+	plan.Status = planning.ArtifactAccepted
+	plan.AcceptedAt = &acceptedAt
+	if err := store.SavePlan("planning", plan); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err = store.LoadPlan("planning", plan.ID)
+	if err != nil || loaded.Status != planning.ArtifactAccepted || loaded.AcceptedAt == nil || !loaded.AcceptedAt.Equal(acceptedAt) {
+		t.Fatalf("accepted plan = %+v, err=%v", loaded, err)
+	}
+	info, err := os.Stat(store.planPath("planning", plan.ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("plan mode = %o", info.Mode().Perm())
+	}
+	if leftovers, _ := filepath.Glob(filepath.Join(store.plansDir("planning"), ".friday-*.tmp")); len(leftovers) != 0 {
+		t.Fatalf("atomic-write leftovers: %v", leftovers)
+	}
+}
+
+func TestSavePlanRejectsMismatchedIdentity(t *testing.T) {
+	store := NewFileSessionStore(t.TempDir())
+	if err := store.SavePlan("session", planning.Artifact{ID: "plan", SessionID: "other"}); err == nil {
+		t.Fatal("expected mismatched session identity to fail")
+	}
+	if _, err := store.LoadPlan("session", "../../escape"); err == nil {
+		t.Fatal("expected unsafe plan ID to fail")
+	}
+}
+
+func TestLegacySessionMetadataUsesRuntimeDefaults(t *testing.T) {
+	dir := t.TempDir()
+	store := NewFileSessionStore(dir)
+	if err := os.MkdirAll(store.sessionDir("legacy"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	legacy := `{"id":"legacy","created_at":"2025-01-01T00:00:00Z","updated_at":"2025-01-01T00:00:00Z","message_count":0}`
+	if err := os.WriteFile(store.metaPath("legacy"), []byte(legacy), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mgr := sessions.NewManager(store, filepath.Join(dir, "current"), "")
+	runtimeState, err := mgr.Runtime("legacy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtimeState.Mode != collaboration.ModeDefault || runtimeState.Model.Model != "" {
+		t.Fatalf("legacy runtime = %+v", runtimeState)
+	}
+}
 
 func TestEventStoreRoundTripAndRepairsTruncatedTail(t *testing.T) {
 	dir := t.TempDir()

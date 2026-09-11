@@ -294,8 +294,8 @@ func TestActor_TurnTimeoutAborts(t *testing.T) {
 	close(block) // release the blocked mock goroutine
 }
 
-// TestActor_OnTurnStartError verifies that a lifecycle start failure
-// aborts the turn and produces a terminal RunError event.
+// TestActor_OnTurnStartError verifies that a lifecycle start failure emits
+// its diagnostic error and still closes the public run lifecycle.
 func TestActor_OnTurnStartError(t *testing.T) {
 	mock := newMockAgent(
 		chatScript{deltas: []types.Delta{{Content: "should-not-stream"}}},
@@ -309,9 +309,9 @@ func TestActor_OnTurnStartError(t *testing.T) {
 	if err := a.Send(context.Background(), UserTextMessage{Text: "go"}); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
-	var sawRunError bool
+	var sawRunError, sawRunFinished bool
 	deadline := time.After(2 * time.Second)
-	for {
+	for !sawRunFinished {
 		select {
 		case e, ok := <-sub.Events():
 			if !ok {
@@ -321,17 +321,21 @@ func TestActor_OnTurnStartError(t *testing.T) {
 				sawRunError = true
 			}
 			if e.Type == events.KindRunFinished {
-				// Some flows emit both; tolerate either terminal.
+				var data events.RunFinishedData
+				if err := events.DecodePayload(e, &data); err != nil {
+					t.Fatal(err)
+				}
+				if data.StopReason != "error" || data.DurationMs < 0 {
+					t.Fatalf("finished data = %+v", data)
+				}
+				sawRunFinished = true
 			}
 		case <-deadline:
-			if !sawRunError {
-				t.Fatalf("expected RUN_ERROR on lifecycle start failure")
-			}
-			return
+			t.Fatalf("events on lifecycle start failure: error=%v finished=%v", sawRunError, sawRunFinished)
 		}
-		if sawRunError {
-			return
-		}
+	}
+	if !sawRunError {
+		t.Fatal("expected RUN_ERROR before RUN_FINISHED")
 	}
 }
 

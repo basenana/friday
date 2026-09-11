@@ -16,9 +16,86 @@ import (
 	"github.com/basenana/friday/config"
 	"github.com/basenana/friday/core/actor/events"
 	actorsink "github.com/basenana/friday/core/actor/sink"
+	"github.com/basenana/friday/core/planning"
+	"github.com/basenana/friday/core/providers"
+	coresession "github.com/basenana/friday/core/session"
 	"github.com/basenana/friday/sessions"
 	sessionfile "github.com/basenana/friday/sessions/file"
 )
+
+type faultStore struct {
+	sessions.Store
+	metadata     sessions.MetadataStore
+	plans        sessions.PlanningStore
+	failNextSave bool
+	failMode     bool
+	failLineage  bool
+	failCreate   bool
+	currentFile  string
+}
+
+func (s *faultStore) Create(sessionID string, llm providers.Client, opts ...coresession.Option) (*coresession.Session, error) {
+	if s.failCreate {
+		return nil, fmt.Errorf("injected create failure")
+	}
+	return s.Store.Create(sessionID, llm, opts...)
+}
+
+func (s *faultStore) UpdateMeta(sessionID string, patch sessions.SessionMetaPatch) error {
+	if s.failMode && patch.Mode != nil {
+		return fmt.Errorf("injected mode failure")
+	}
+	if s.failLineage && patch.ParentSessionID != nil {
+		return fmt.Errorf("injected lineage failure")
+	}
+	return s.metadata.UpdateMeta(sessionID, patch)
+}
+
+func (s *faultStore) ProposePlan(sessionID string, plan planning.Artifact) (*planning.Artifact, error) {
+	return s.plans.ProposePlan(sessionID, plan)
+}
+
+func (s *faultStore) SavePlan(sessionID string, plan planning.Artifact) error {
+	if s.failNextSave {
+		s.failNextSave = false
+		return fmt.Errorf("injected plan save failure")
+	}
+	return s.plans.SavePlan(sessionID, plan)
+}
+
+func (s *faultStore) LoadPlan(sessionID, planID string) (*planning.Artifact, error) {
+	return s.plans.LoadPlan(sessionID, planID)
+}
+
+func (s *faultStore) LoadLatestPlan(sessionID string) (*planning.Artifact, error) {
+	return s.plans.LoadLatestPlan(sessionID)
+}
+
+func newFaultTestModel(t *testing.T) (*model, *sessions.Manager, *sessionfile.FileSessionStore, *faultStore) {
+	t.Helper()
+	baseDir := t.TempDir()
+	raw := sessionfile.NewFileSessionStore(filepath.Join(baseDir, "sessions"))
+	currentFile := filepath.Join(baseDir, "current")
+	store := &faultStore{Store: raw, metadata: raw, plans: raw, currentFile: currentFile}
+	mgr := sessions.NewManager(store, currentFile, "test")
+	const sessionID = "session-initial"
+	if _, _, err := mgr.GetOrCreateByID(sessionID); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.DefaultConfig()
+	cfg.DataDir = baseDir
+	cfg.Workspace = filepath.Join(baseDir, "workspace")
+	cfg.Memory.Enabled = false
+	registry := actor.NewRegistry(mgr, cfg, actor.DefaultRegistryConfig())
+	t.Cleanup(registry.ShutdownAll)
+	commands := codercmds.NewRegistry()
+	codercmds.RegisterAll(commands)
+	m, err := initialModel(mgr, registry, commands, cfg, sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return m, mgr, raw, store
+}
 
 type blockingEventStore struct {
 	sessions.Store
@@ -66,11 +143,9 @@ func newTestModel(t *testing.T) (*model, *sessions.Manager, *sessionfile.FileSes
 	t.Cleanup(registry.ShutdownAll)
 
 	cmdRegistry := codercmds.NewRegistry()
-	codercmds.RegisterBuiltins(cmdRegistry)
-	codercmds.RegisterInfoCommands(cmdRegistry)
-	codercmds.RegisterAgentCommands(cmdRegistry)
+	codercmds.RegisterAll(cmdRegistry)
 
-	m, err := initialModel(mgr, registry, cmdRegistry, config.DefaultConfig(), sessionID)
+	m, err := initialModel(mgr, registry, cmdRegistry, cfg, sessionID)
 	if err != nil {
 		t.Fatalf("initialModel() failed: %v", err)
 	}
@@ -86,20 +161,20 @@ func fillHistory(m *model, count int) {
 	}
 }
 
-func TestHandleSlashNewCreatesAndSwitchesCurrentSession(t *testing.T) {
+func TestHandleSlashClearCreatesAndSwitchesCurrentSession(t *testing.T) {
 	m, mgr, store := newTestModel(t)
 	oldID := m.sessionID
 	oldToken := m.subscriptionToken
 	m.appendBlock(chatBlock{kind: blockAssistant, content: "stale"})
 
-	gotModel, cmd := m.handleSlash("/new")
+	gotModel, cmd := m.handleSlash("/clear")
 	if cmd == nil {
-		t.Fatal("handleSlash(/new) returned nil cmd")
+		t.Fatal("handleSlash(/clear) returned nil cmd")
 	}
 
 	got, ok := gotModel.(*model)
 	if !ok {
-		t.Fatalf("handleSlash(/new) returned %T, want *model", gotModel)
+		t.Fatalf("handleSlash(/clear) returned %T, want *model", gotModel)
 	}
 	if got.sessionID == oldID {
 		t.Fatal("session ID did not change")
@@ -119,26 +194,8 @@ func TestHandleSlashNewCreatesAndSwitchesCurrentSession(t *testing.T) {
 	if _, err := store.GetMeta(got.sessionID); err != nil {
 		t.Fatalf("GetMeta(%q) failed: %v", got.sessionID, err)
 	}
-	if len(got.messages) != 2 || got.messages[1].kind != blockDivider {
-		t.Fatalf("messages = %#v, want preserved view plus session divider after /new", got.messages)
-	}
-}
-
-func TestHandleSlashSessionNewKeepsPostSwitchNotice(t *testing.T) {
-	m, _, _ := newTestModel(t)
-	m.appendBlock(chatBlock{kind: blockAssistant, content: "stale"})
-
-	gotModel, cmd := m.handleSlash("/session new")
-	if cmd == nil {
-		t.Fatal("handleSlash(/session new) returned nil cmd")
-	}
-
-	got := gotModel.(*model)
-	if len(got.messages) != 1 {
-		t.Fatalf("messages = %#v, want single post-switch notice", got.messages)
-	}
-	if !strings.Contains(got.messages[0].content, "created session") {
-		t.Fatalf("got message %q, want created session notice", got.messages[0].content)
+	if len(got.messages) != 0 {
+		t.Fatalf("messages = %#v, want cleared transcript after /clear", got.messages)
 	}
 }
 
@@ -171,7 +228,7 @@ func TestFailedSessionSwitchKeepsOldSessionAndTranscript(t *testing.T) {
 	m.appendBlock(chatBlock{kind: blockAssistant, content: "keep transcript"})
 	oldFeed := m.feed
 
-	m.applyResult(&codercmds.Result{ClearMessages: true, SwitchSession: "new-session"})
+	m.applyResult(codercmds.ResultOf(codercmds.ClearSessionAction{SessionID: "new-session"}))
 	if m.sessionID != "old-session" || m.feed != oldFeed {
 		t.Fatalf("session changed after failed commit: id=%q", m.sessionID)
 	}
@@ -193,8 +250,8 @@ func TestUpdateIgnoresStaleSubscriptionMessages(t *testing.T) {
 	m, _, _ := newTestModel(t)
 	oldToken := m.subscriptionToken
 
-	if _, cmd := m.handleSlash("/new"); cmd == nil {
-		t.Fatal("handleSlash(/new) returned nil cmd")
+	if _, cmd := m.handleSlash("/clear"); cmd == nil {
+		t.Fatal("handleSlash(/clear) returned nil cmd")
 	}
 	newToken := m.subscriptionToken
 	newSessionID := m.sessionID

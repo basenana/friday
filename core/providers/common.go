@@ -49,10 +49,11 @@ func NewCommonResponse() *CommonResponse {
 }
 
 type commonRequest struct {
-	systemPrompts  []string
-	tools          []ToolDefine
-	history        []types.Message
-	promptCacheKey string
+	systemPrompts   []string
+	tools           []ToolDefine
+	history         []types.Message
+	promptCacheKey  string
+	reasoningEffort string
 }
 
 func NewRequest(systemMessage string, history ...types.Message) Request {
@@ -99,6 +100,8 @@ func (s *commonRequest) PromptCacheKey() string {
 	return s.promptCacheKey
 }
 
+func (s *commonRequest) ReasoningEffort() string { return s.reasoningEffort }
+
 func (s *commonRequest) SetHistory(history []types.Message) {
 	s.history = history
 }
@@ -129,6 +132,8 @@ func (s *commonRequest) SetSystemPrompt(prompt string) {
 func (s *commonRequest) SetPromptCacheKey(key string) {
 	s.promptCacheKey = key
 }
+
+func (s *commonRequest) SetReasoningEffort(effort string) { s.reasoningEffort = effort }
 
 func (s *commonRequest) AppendHistory(messages ...types.Message) {
 	s.history = append(s.history, messages...)

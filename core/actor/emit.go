@@ -26,8 +26,9 @@ type cardEmitter interface {
 // It mirrors cards.FormOutcome but lives in the actor package to
 // avoid pulling cards into callers that only need the actor API.
 type FormOutcome struct {
-	Values    map[string]any
-	Cancelled bool
+	Values             map[string]any
+	Cancelled          bool
+	cancelEventEmitted bool
 }
 
 // EmitCard is the helper invoked by the emit_card tool handler. It is

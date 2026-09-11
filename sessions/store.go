@@ -6,6 +6,8 @@ import (
 
 	"github.com/basenana/friday/core/actor/events"
 	actorsink "github.com/basenana/friday/core/actor/sink"
+	"github.com/basenana/friday/core/collaboration"
+	"github.com/basenana/friday/core/planning"
 	"github.com/basenana/friday/core/providers"
 	coresession "github.com/basenana/friday/core/session"
 	"github.com/basenana/friday/core/types"
@@ -19,16 +21,53 @@ type EventStore interface {
 	LoadEvents(context.Context, string) ([]events.Event, error)
 }
 
+// MetadataStore is the optional structured metadata capability used by the
+// TUI. Existing/custom Store implementations are not required to support it.
+type MetadataStore interface {
+	UpdateMeta(sessionID string, patch SessionMetaPatch) error
+}
+
+// PlanningStore is the optional Plan Mode persistence capability.
+type PlanningStore interface {
+	planning.Repository
+}
+
 // SessionMeta represents metadata for a session
 type SessionMeta struct {
-	ID           string    `json:"id"`
-	Alias        string    `json:"alias,omitempty"`
-	Archived     bool      `json:"archived"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
-	MessageCount int       `json:"message_count"`
-	Summary      string    `json:"summary,omitempty"`
-	SystemPrompt string    `json:"system_prompt,omitempty"`
+	ID              string         `json:"id"`
+	Alias           string         `json:"alias,omitempty"`
+	Name            string         `json:"name,omitempty"`
+	Archived        bool           `json:"archived"`
+	CreatedAt       time.Time      `json:"created_at"`
+	UpdatedAt       time.Time      `json:"updated_at"`
+	MessageCount    int            `json:"message_count"`
+	Summary         string         `json:"summary,omitempty"`
+	SystemPrompt    string         `json:"system_prompt,omitempty"`
+	Runtime         SessionRuntime `json:"runtime,omitempty"`
+	LatestPlanID    string         `json:"latest_plan_id,omitempty"`
+	ParentSessionID string         `json:"parent_session_id,omitempty"`
+	SourcePlanID    string         `json:"source_plan_id,omitempty"`
+}
+
+type ModelSelection struct {
+	Provider string `json:"provider,omitempty"`
+	Model    string `json:"model,omitempty"`
+}
+
+type SessionRuntime struct {
+	Mode  collaboration.Mode `json:"mode,omitempty"`
+	Model ModelSelection     `json:"model,omitempty"`
+}
+
+type SessionMetaPatch struct {
+	Name            *string
+	Archived        *bool
+	Runtime         *SessionRuntime
+	Mode            *collaboration.Mode
+	Model           *ModelSelection
+	LatestPlanID    *string
+	ParentSessionID *string
+	SourcePlanID    *string
 }
 
 // Store defines the interface for session storage operations

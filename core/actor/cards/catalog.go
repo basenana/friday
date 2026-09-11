@@ -57,7 +57,12 @@ func (c Catalog) ValidateForm(s FormSchema) error {
 	if len(s.Fields) == 0 {
 		return fmt.Errorf("cards: form schema has no fields")
 	}
+	seen := make(map[string]bool, len(s.Fields))
 	for _, f := range s.Fields {
+		if seen[f.Name] {
+			return fmt.Errorf("cards: duplicate field name %q", f.Name)
+		}
+		seen[f.Name] = true
 		if err := c.ValidateField(f); err != nil {
 			return err
 		}

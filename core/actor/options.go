@@ -5,6 +5,8 @@ import (
 	"time"
 
 	"github.com/basenana/friday/core/actor/sink"
+	"github.com/basenana/friday/core/collaboration"
+	"github.com/basenana/friday/core/planning"
 	coretools "github.com/basenana/friday/core/tools"
 )
 
@@ -37,7 +39,11 @@ type Options struct {
 	// ExtraTools are appended to the actor's three card tools on
 	// every Chat call. They carry domain tools (MCP, sandbox, skills,
 	// etc.) injected by the embedding runtime.
-	extraTools []*coretools.Tool
+	extraTools     []*coretools.Tool
+	modeProvider   collaboration.ModeProvider
+	modeController collaboration.ModeController
+	planRepository planning.Repository
+	agentPlanEntry bool
 }
 
 func defaultOptions() Options {
@@ -123,6 +129,22 @@ func WithTurnTimeout(d time.Duration) Option {
 // addition to emit_card / request_form / update_card.
 func WithExtraTools(ts ...*coretools.Tool) Option {
 	return func(o *Options) { o.extraTools = append(o.extraTools, ts...) }
+}
+
+// WithPlanning enables collaboration-mode-aware planning tools.
+func WithPlanning(modes collaboration.ModeProvider, plans planning.Repository) Option {
+	return func(o *Options) {
+		o.modeProvider = modes
+		o.modeController, _ = modes.(collaboration.ModeController)
+		o.planRepository = plans
+	}
+}
+
+// WithAgentPlanEntry exposes enter_plan_mode so the model may initiate a
+// planning handoff. Enable it only for clients that can present and resolve
+// the resulting plan approval interaction.
+func WithAgentPlanEntry(enabled bool) Option {
+	return func(o *Options) { o.agentPlanEntry = enabled }
 }
 
 // Option mutates Options during construction.

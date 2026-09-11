@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync"
 
+	"github.com/basenana/friday/core/collaboration"
 	"github.com/basenana/friday/core/logger"
 	"github.com/basenana/friday/core/providers"
 	"github.com/basenana/friday/core/session"
@@ -22,11 +23,17 @@ var _ session.BeforeAgentHook = &Todo{}
 var _ session.BeforeModelHook = &Todo{}
 
 func (a *Todo) BeforeAgent(ctx context.Context, sess *session.Session, req session.AgentRequest) error {
+	if a.opt.ModeProvider != nil && a.opt.ModeProvider.CollaborationMode(sess.ID) == collaboration.ModePlan {
+		return nil
+	}
 	req.AppendTools(a.planningTools(sess)...)
 	return nil
 }
 
 func (a *Todo) BeforeModel(ctx context.Context, sess *session.Session, req providers.Request) error {
+	if a.opt.ModeProvider != nil && a.opt.ModeProvider.CollaborationMode(sess.ID) == collaboration.ModePlan {
+		return nil
+	}
 	req.AppendSystemPrompt(a.opt.SystemPrompt)
 
 	key := todoStateKey(sess)
@@ -112,4 +119,5 @@ func (a *Todo) RemoveTodo(sess *session.Session) {
 type Option struct {
 	SystemPrompt       string
 	TaskDescribePrompt string
+	ModeProvider       collaboration.ModeProvider
 }

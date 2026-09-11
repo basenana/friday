@@ -72,6 +72,8 @@ const (
 	CustomModelTimeout   = "model.timeout"
 	CustomLoopStart      = "loop.start"
 	CustomInputAccepted  = "input.accepted"
+	CustomPlanProposed   = "plan.proposed"
+	CustomModeChanged    = "mode.changed"
 )
 
 // Event is the universal envelope. Fields follow AG-UI wire naming

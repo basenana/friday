@@ -29,7 +29,7 @@ func (m *model) updateDetail(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if msg.Code == tea.KeyEsc {
 		m.detail = nil
 		m.layout()
-		return m, nil
+		return m.dispatchIfIdle()
 	}
 	var cmd tea.Cmd
 	m.detail.view, cmd = m.detail.view.Update(msg)

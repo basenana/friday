@@ -5,33 +5,30 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/basenana/friday/bus"
 	codercmds "github.com/basenana/friday/coder/commands"
+	"github.com/basenana/friday/core/collaboration"
+	"github.com/basenana/friday/core/planning"
 	"github.com/basenana/friday/core/types"
+	"github.com/basenana/friday/sessions"
 )
 
 func (m *model) handleSlash(text string) (tea.Model, tea.Cmd) {
-	parts := strings.Fields(text)
-	if len(parts) == 0 {
+	name, rawArgs, parts := parseSlash(text)
+	if name == "" {
 		return m, nil
-	}
-	name := strings.ToLower(strings.TrimPrefix(parts[0], "/"))
-	if name == "open" {
-		return m.handleOpenCommand(parts[1:])
-	}
-	if name == "show" {
-		return m.handleShowCommand(parts[1:])
 	}
 	cmd, found := m.cmdRegistry.Lookup(name)
 	if !found {
-		m.appendBlock(chatBlock{kind: blockError, content: "unknown command: " + parts[0] + " (try /help)"})
+		m.appendBlock(chatBlock{kind: blockError, content: "unknown command: /" + name + " (try /help)"})
 		return m.dispatchIfIdle()
 	}
 	result, err := cmd.Execute(&codercmds.Context{
-		Ctx: context.Background(), SessionID: m.sessionID, Args: parts[1:],
+		Ctx: context.Background(), SessionID: m.sessionID, Args: parts, RawArgs: rawArgs,
 		SessMgr: m.sessMgr, ActorReg: m.registry, Config: m.cfg,
 	})
 	if err != nil {
@@ -41,103 +38,286 @@ func (m *model) handleSlash(text string) (tea.Model, tea.Cmd) {
 	return m.applyResult(result)
 }
 
+func parseSlash(text string) (name, rawArgs string, args []string) {
+	text = strings.TrimSpace(text)
+	if !strings.HasPrefix(text, "/") {
+		return "", "", nil
+	}
+	body := strings.TrimPrefix(text, "/")
+	cut := strings.IndexAny(body, " \t\r\n")
+	if cut < 0 {
+		return strings.ToLower(body), "", nil
+	}
+	name = strings.ToLower(body[:cut])
+	rawArgs = strings.TrimSpace(body[cut:])
+	return name, rawArgs, strings.Fields(rawArgs)
+}
+
 func (m *model) applyResult(r *codercmds.Result) (tea.Model, tea.Cmd) {
 	if r == nil {
 		return m.dispatchIfIdle()
 	}
 	var cmds []tea.Cmd
-	if r.SwitchSession != "" && r.SwitchSession != m.sessionID {
-		if cmd, err := m.switchSession(r.SwitchSession, r.PreserveTranscript); err != nil {
-			m.appendBlock(chatBlock{kind: blockError, content: err.Error()})
-		} else if cmd != nil {
+	for _, action := range r.Actions {
+		if cmd := m.applyCommandAction(action); cmd != nil {
 			cmds = append(cmds, cmd)
 		}
 	}
-	if r.ClearMessages && (r.SwitchSession == "" || r.SwitchSession == m.sessionID) {
-		m.messages = nil
-		m.cards = make(map[string]*cardState)
-		m.seenInputs = make(map[string]bool)
-		m.invalidateRendered()
-	}
-	if r.Quit {
-		m.quitting = true
-		m.closeFeed()
-		m.registry.Shutdown(m.sessionID)
-		cmds = append(cmds, tea.Quit)
-	}
-	if r.RunAgent != "" {
-		if cmd := m.runAgentCmd(r.RunAgent, r.AgentInput); cmd != nil {
-			cmds = append(cmds, cmd)
-		}
-	}
-	if r.Message != "" {
-		m.appendBlock(chatBlock{kind: blockAssistant, content: r.Message})
-	}
-	if !m.running && len(m.queued) > 0 {
+	if m.canDispatchQueued() {
 		cmds = append(cmds, func() tea.Msg { return dispatchQueuedMsg{} })
 	}
 	return m, tea.Batch(cmds...)
 }
 
+func (m *model) applyCommandAction(action codercmds.Action) tea.Cmd {
+	for _, handler := range []func(codercmds.Action) (bool, tea.Cmd){
+		m.applyLifecycleAction,
+		m.applySessionAction,
+		m.applyContentAction,
+		m.applyTaskAction,
+		m.applyModelAction,
+		m.applyCollaborationAction,
+	} {
+		if handled, cmd := handler(action); handled {
+			return cmd
+		}
+	}
+	m.appendBlock(chatBlock{kind: blockError, content: fmt.Sprintf("unsupported command action %T", action)})
+	return nil
+}
+
+func (m *model) applyLifecycleAction(action codercmds.Action) (bool, tea.Cmd) {
+	switch action := action.(type) {
+	case codercmds.AppendMessageAction:
+		if action.Content != "" {
+			m.appendBlock(chatBlock{kind: blockAssistant, content: action.Content})
+		}
+		return true, nil
+	case codercmds.QuitAction:
+		m.quitting = true
+		m.closeFeed()
+		m.registry.Shutdown(m.sessionID)
+		return true, tea.Quit
+	}
+	return false, nil
+}
+
+func (m *model) applySessionAction(action codercmds.Action) (bool, tea.Cmd) {
+	switch action := action.(type) {
+	case codercmds.ClearSessionAction:
+		if action.SessionID == "" || action.SessionID == m.sessionID {
+			m.appendBlock(chatBlock{kind: blockError, content: "clear: invalid new session ID"})
+			return true, nil
+		}
+		cmd, err := m.switchSession(action.SessionID)
+		if err != nil {
+			m.appendBlock(chatBlock{kind: blockError, content: err.Error()})
+			return true, nil
+		}
+		return true, tea.Batch(tea.ClearScreen, cmd)
+	case codercmds.OpenResumeAction:
+		m.openResumeSelector()
+		return true, nil
+	case codercmds.ResumeSessionAction:
+		meta, err := m.sessMgr.ResolveActiveSession(action.Target)
+		if err != nil {
+			m.appendBlock(chatBlock{kind: blockError, content: err.Error()})
+			return true, nil
+		}
+		cmd, err := m.switchSession(meta.ID)
+		if err != nil {
+			m.appendBlock(chatBlock{kind: blockError, content: err.Error()})
+			return true, nil
+		}
+		return true, cmd
+	case codercmds.RenameSessionAction:
+		if name, err := m.sessMgr.Rename(m.sessionID, action.Name); err != nil {
+			m.appendBlock(chatBlock{kind: blockError, content: "rename: " + err.Error()})
+		} else {
+			m.appendBlock(chatBlock{kind: blockDivider, content: "renamed · " + name})
+		}
+		return true, nil
+	case codercmds.ArchiveSessionAction:
+		m.requestSessionConfirmation("archive", action.Target)
+		return true, nil
+	case codercmds.DeleteSessionAction:
+		m.requestSessionConfirmation("delete", action.Target)
+		return true, nil
+	}
+	return false, nil
+}
+
+func (m *model) applyContentAction(action codercmds.Action) (bool, tea.Cmd) {
+	switch action := action.(type) {
+	case codercmds.OpenCardAction:
+		_, cmd := m.handleOpenCommand([]string{action.ID})
+		return true, cmd
+	case codercmds.ShowToolAction:
+		_, cmd := m.handleShowCommand([]string{action.ID})
+		return true, cmd
+	case codercmds.ShowDiffAction:
+		return true, m.showDiff()
+	case codercmds.CopyResponseAction:
+		m.copyResponse(action.Index)
+		return true, nil
+	}
+	return false, nil
+}
+
+func (m *model) applyTaskAction(action codercmds.Action) (bool, tea.Cmd) {
+	switch action := action.(type) {
+	case codercmds.ShowTasksAction:
+		m.openTasksSelector()
+		return true, nil
+	case codercmds.StopTaskAction:
+		if action.ID == "all" {
+			m.commandConfirm = &commandConfirmation{action: "stop", target: "all", label: "all background tasks"}
+		} else if err := m.registry.KillTask(m.sessionID, action.ID); err != nil {
+			m.appendBlock(chatBlock{kind: blockError, content: "stop: " + err.Error()})
+		} else {
+			m.appendBlock(chatBlock{kind: blockDivider, content: "stopped task " + action.ID})
+		}
+		return true, nil
+	}
+	return false, nil
+}
+
+func (m *model) applyModelAction(action codercmds.Action) (bool, tea.Cmd) {
+	switch action := action.(type) {
+	case codercmds.OpenModelAction:
+		m.openModelSelector()
+		return true, nil
+	case codercmds.SetModelAction:
+		model, err := m.resolveModel(action.Target)
+		if err != nil {
+			m.appendBlock(chatBlock{kind: blockError, content: err.Error()})
+			return true, nil
+		}
+		_, cmd := m.applyModel(model)
+		return true, cmd
+	case codercmds.ShowStatusAction:
+		m.showStatus()
+		return true, nil
+	}
+	return false, nil
+}
+
+func (m *model) applyCollaborationAction(action codercmds.Action) (bool, tea.Cmd) {
+	switch action := action.(type) {
+	case codercmds.RunAgentAction:
+		return true, m.runAgentCmd(action.Agent, action.Input)
+	case codercmds.SetModeAction:
+		mode := action.Mode
+		if mode == collaboration.ModePlan && m.mode == mode && action.Prompt == "" && m.latestPlan != nil && m.latestPlan.Status == planning.ArtifactProposed {
+			m.planHandoff = &planHandoffState{}
+			return true, nil
+		}
+		if err := m.sessMgr.SetMode(m.sessionID, mode); err != nil {
+			m.appendBlock(chatBlock{kind: blockError, content: "set mode: " + err.Error()})
+			return true, nil
+		}
+		m.mode = mode
+		m.appendBlock(chatBlock{kind: blockDivider, content: "mode · " + string(mode)})
+		if action.Prompt != "" {
+			_, cmd := m.startUserTurn(action.Prompt, bus.DeliveryNormal)
+			return true, cmd
+		}
+		return true, nil
+	}
+	return false, nil
+}
+
 func (m *model) dispatchIfIdle() (tea.Model, tea.Cmd) {
-	if !m.running && len(m.queued) > 0 {
+	if m.canDispatchQueued() {
 		return m, func() tea.Msg { return dispatchQueuedMsg{} }
 	}
 	return m, nil
 }
 
-func (m *model) switchSession(newID string, preserveTranscript bool) (tea.Cmd, error) {
+func (m *model) canDispatchQueued() bool {
+	return !m.running && len(m.queued) > 0 && m.form == nil && m.planHandoff == nil &&
+		m.commandConfirm == nil && m.selector == nil && m.detail == nil && m.confirm == nil
+}
+
+func (m *model) switchSession(newID string) (tea.Cmd, error) {
+	if newID == m.sessionID {
+		return nil, nil
+	}
 	_, created, err := m.sessMgr.GetOrCreateDetachedByID(newID)
 	if err != nil {
 		return nil, fmt.Errorf("prepare session %s: %w", shortID(newID), err)
 	}
-	rollbackCreated := func() {
+	rollbackCreated := func() error {
 		if created {
-			_ = m.sessMgr.GetStore().Delete(newID)
+			return m.sessMgr.GetStore().Delete(newID)
+		}
+		return nil
+	}
+	if created {
+		oldRuntime, runtimeErr := m.sessMgr.Runtime(m.sessionID)
+		if runtimeErr != nil {
+			return nil, sessionSwitchError(fmt.Errorf("load current session runtime: %w", runtimeErr), rollbackCreated())
+		}
+		oldRuntime.Mode = collaboration.ModeDefault
+		if err := m.sessMgr.UpdateMeta(newID, sessions.SessionMetaPatch{Runtime: &oldRuntime}); err != nil {
+			return nil, sessionSwitchError(fmt.Errorf("initialize session runtime: %w", err), rollbackCreated())
 		}
 	}
+	if err := normalizeSessionModel(m.sessMgr, m.cfg, newID); err != nil {
+		return nil, sessionSwitchError(fmt.Errorf("validate session model: %w", err), rollbackCreated())
+	}
+	latestPlan, err := m.sessMgr.LoadLatestPlan(newID)
+	if err != nil {
+		return nil, sessionSwitchError(fmt.Errorf("load session plan: %w", err), rollbackCreated())
+	}
+	activeModel, _ := configuredSessionModel(m.sessMgr, m.cfg, newID)
 
 	newFeed := bus.SubscribeAgentFeed(m.registry.Bus(), newID)
 	if _, err := m.registry.GetOrCreate(newID); err != nil {
 		newFeed.Close()
-		rollbackCreated()
-		return nil, fmt.Errorf("prepare actor %s: %w", shortID(newID), err)
+		return nil, sessionSwitchError(fmt.Errorf("prepare actor %s: %w", shortID(newID), err), rollbackCreated())
 	}
 
-	var projection transcriptProjection
-	if !preserveTranscript {
-		projection, err = m.projectTranscript(newID)
-		if err != nil {
-			newFeed.Close()
-			m.registry.Shutdown(newID)
-			rollbackCreated()
-			return nil, fmt.Errorf("restore session %s: %w", shortID(newID), err)
-		}
+	projection, err := m.projectTranscript(newID)
+	if err != nil {
+		newFeed.Close()
+		m.registry.Shutdown(newID)
+		return nil, sessionSwitchError(fmt.Errorf("restore session %s: %w", shortID(newID), err), rollbackCreated())
 	}
 	if err := m.sessMgr.SetCurrentID(newID); err != nil {
 		newFeed.Close()
 		m.registry.Shutdown(newID)
-		rollbackCreated()
-		return nil, fmt.Errorf("activate session %s: %w", shortID(newID), err)
+		return nil, sessionSwitchError(fmt.Errorf("activate session %s: %w", shortID(newID), err), rollbackCreated())
 	}
 
 	oldID, oldFeed := m.sessionID, m.feed
 	m.sessionID, m.feed = newID, newFeed
+	m.mode = m.sessMgr.CollaborationMode(newID)
+	m.latestPlan = latestPlan
+	m.activeModel = activeModel
 	m.subscriptionToken++
 	m.tokenCount, m.iteration = 0, 0
 	m.running, m.cancelling, m.steeringPending = false, false, false
+	m.runStartedAt = time.Time{}
+	m.runActivity = ""
+	m.lastFinishedRun = ""
+	m.planHandoff = nil
 	m.queued = nil
 	m.resetStreaming()
-	if preserveTranscript {
-		m.appendBlock(chatBlock{kind: blockDivider, content: "new session · " + shortID(newID)})
-	} else {
-		m.applyProjection(projection)
-	}
+	m.applyProjection(projection)
+	m.restorePlanHandoff()
 	if oldFeed != nil {
 		oldFeed.Close()
 	}
 	m.registry.Shutdown(oldID)
 	return m.waitForActorEvent(), nil
+}
+
+func sessionSwitchError(cause, cleanup error) error {
+	if cleanup == nil {
+		return cause
+	}
+	return fmt.Errorf("%w; cleanup session: %v", cause, cleanup)
 }
 
 func (m *model) runAgentCmd(agentName, input string) tea.Cmd {
@@ -178,15 +358,10 @@ func (m *model) refreshMenu() {
 	}
 	query := strings.ToLower(strings.TrimPrefix(value, "/"))
 	var items []menuItem
-	if query == "" || strings.Contains("/open open a rich-card artifact", query) {
-		items = append(items, menuItem{value: "/open ", label: "/open", description: "Open a rich-card artifact"})
-	}
-	if query == "" || strings.Contains("/show inspect complete tool output", query) {
-		items = append(items, menuItem{value: "/show ", label: "/show", description: "Inspect complete tool output"})
-	}
 	for _, cmd := range m.cmdRegistry.List() {
 		label := "/" + cmd.Name()
-		if query == "" || strings.Contains(strings.ToLower(label+" "+cmd.Description()), query) {
+		search := label + " " + cmd.Description() + " " + strings.Join(cmd.Aliases(), " ")
+		if query == "" || strings.Contains(strings.ToLower(search), query) {
 			items = append(items, menuItem{value: label, label: label, description: cmd.Description()})
 		}
 	}
@@ -223,7 +398,7 @@ func (m *model) acceptMenuSelection(closeMenu bool) {
 	}
 	item := m.menu.items[m.menu.selected]
 	value := item.value
-	if m.menu.mode == menuCommands && item.label != "/open" && item.label != "/show" {
+	if m.menu.mode == menuCommands {
 		value += " "
 	}
 	m.textarea.SetValue(value)

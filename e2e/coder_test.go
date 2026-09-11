@@ -23,11 +23,9 @@ import (
 // dispatches all built-in and agent-backed commands.
 func TestCoder_CommandRegistry(t *testing.T) {
 	reg := codercmds.NewRegistry()
-	codercmds.RegisterBuiltins(reg)
-	codercmds.RegisterInfoCommands(reg)
-	codercmds.RegisterAgentCommands(reg)
+	codercmds.RegisterAll(reg)
 
-	expected := []string{"clear", "new", "quit", "help", "cost", "context", "compact", "model", "session", "plan", "review", "advisor"}
+	expected := []string{"advisor", "archive", "clear", "compact", "context", "copy", "delete", "diff", "help", "model", "open", "plan", "quit", "rename", "resume", "review", "show", "status", "stop", "tasks"}
 	for _, name := range expected {
 		if _, ok := reg.Lookup(name); !ok {
 			t.Errorf("expected command %q to be registered", name)
@@ -38,14 +36,16 @@ func TestCoder_CommandRegistry(t *testing.T) {
 	if _, ok := reg.Lookup("exit"); !ok {
 		t.Error("alias 'exit' should resolve to 'quit'")
 	}
-	if _, ok := reg.Lookup("sessions"); !ok {
-		t.Error("alias 'sessions' should resolve to 'session'")
+	for _, removed := range []string{"new", "session", "sessions", "cost"} {
+		if _, ok := reg.Lookup(removed); ok {
+			t.Errorf("removed command %q is still registered", removed)
+		}
 	}
 }
 
-// TestCoder_Commands_PlanReturnsRunAgent verifies /plan command produces a
-// Result that signals agent delegation.
-func TestCoder_Commands_PlanReturnsRunAgent(t *testing.T) {
+// TestCoder_Commands_PlanEntersPersistentMode verifies /plan changes the
+// collaboration mode and forwards the task to the current session.
+func TestCoder_Commands_PlanEntersPersistentMode(t *testing.T) {
 	reg := codercmds.NewRegistry()
 	codercmds.RegisterAgentCommands(reg)
 
@@ -53,12 +53,16 @@ func TestCoder_Commands_PlanReturnsRunAgent(t *testing.T) {
 	if !ok {
 		t.Fatal("plan command not found")
 	}
-	result, err := cmd.Execute(&codercmds.Context{Args: []string{"implement", "login"}})
+	result, err := cmd.Execute(&codercmds.Context{Args: []string{"implement", "login"}, RawArgs: "implement login"})
 	if err != nil {
 		t.Fatalf("plan Execute error: %v", err)
 	}
-	if result.RunAgent != coderagents.NamePlanner {
-		t.Errorf("plan RunAgent = %q, want %q", result.RunAgent, coderagents.NamePlanner)
+	if len(result.Actions) != 1 {
+		t.Fatalf("unexpected plan result: %+v", result)
+	}
+	action, ok := result.Actions[0].(codercmds.SetModeAction)
+	if !ok || action.Mode != "plan" || action.Prompt != "implement login" {
+		t.Errorf("unexpected plan action: %+v", result.Actions[0])
 	}
 }
 
@@ -208,7 +212,7 @@ func TestCoder_AgentModelOverride(t *testing.T) {
 		Key:      "primary-key",
 	}
 	cfg := &config.Config{
-		Model:  base,
+		Model: base,
 		Agents: map[string]config.ModelConfig{
 			"explorer": {Model: "gpt-4o-mini"},
 		},

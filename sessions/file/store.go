@@ -9,11 +9,13 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/basenana/friday/core/actor/events"
 	actorsink "github.com/basenana/friday/core/actor/sink"
 	"github.com/basenana/friday/core/contextmgr"
+	"github.com/basenana/friday/core/planning"
 	"github.com/basenana/friday/core/providers"
 	coresession "github.com/basenana/friday/core/session"
 	"github.com/basenana/friday/core/types"
@@ -26,7 +28,8 @@ const (
 )
 
 type FileSessionStore struct {
-	basePath string
+	basePath  string
+	metaLocks sync.Map // session ID -> *sync.Mutex
 }
 
 func NewFileSessionStore(basePath string) *FileSessionStore {
@@ -187,6 +190,14 @@ func (s *FileSessionStore) sessionMemoryPath(id string) string {
 	return filepath.Join(s.sessionDir(id), "session_memory.json")
 }
 
+func (s *FileSessionStore) plansDir(id string) string {
+	return filepath.Join(s.sessionDir(id), "plans")
+}
+
+func (s *FileSessionStore) planPath(id, planID string) string {
+	return filepath.Join(s.plansDir(id), planID+".json")
+}
+
 // Store interface implementation
 
 func (s *FileSessionStore) Create(sessionID string, llm providers.Client, opts ...coresession.Option) (*coresession.Session, error) {
@@ -208,12 +219,7 @@ func (s *FileSessionStore) Create(sessionID string, llm providers.Client, opts .
 		MessageCount: 0,
 	}
 
-	metaData, err := json.MarshalIndent(meta, "", "  ")
-	if err != nil {
-		return nil, err
-	}
-
-	if err := os.WriteFile(s.metaPath(sessionID), metaData, 0644); err != nil {
+	if err := writeJSONAtomic(s.metaPath(sessionID), meta, 0o644); err != nil {
 		return nil, err
 	}
 
@@ -254,6 +260,11 @@ func (s *FileSessionStore) Load(sessionID string, llm providers.Client, opts ...
 }
 
 func (s *FileSessionStore) Delete(sessionID string) error {
+	unlock, err := s.lockMeta(sessionID)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	sessionDir := s.sessionDir(sessionID)
 	return os.RemoveAll(sessionDir)
 }
@@ -310,6 +321,11 @@ func (s *FileSessionStore) GetMeta(sessionID string) (*sessions.SessionMeta, err
 }
 
 func (s *FileSessionStore) UpdateAlias(sessionID, alias string) error {
+	unlock, err := s.lockMeta(sessionID)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	meta, err := s.loadMeta(sessionID)
 	if err != nil {
 		return err
@@ -318,7 +334,50 @@ func (s *FileSessionStore) UpdateAlias(sessionID, alias string) error {
 	return s.saveMeta(sessionID, meta)
 }
 
+func (s *FileSessionStore) UpdateMeta(sessionID string, patch sessions.SessionMetaPatch) error {
+	unlock, err := s.lockMeta(sessionID)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	meta, err := s.loadMeta(sessionID)
+	if err != nil {
+		return err
+	}
+	if patch.Name != nil {
+		meta.Name = *patch.Name
+	}
+	if patch.Archived != nil {
+		meta.Archived = *patch.Archived
+	}
+	if patch.Runtime != nil {
+		meta.Runtime = *patch.Runtime
+	}
+	if patch.Mode != nil {
+		meta.Runtime.Mode = *patch.Mode
+	}
+	if patch.Model != nil {
+		meta.Runtime.Model = *patch.Model
+	}
+	if patch.LatestPlanID != nil {
+		meta.LatestPlanID = *patch.LatestPlanID
+	}
+	if patch.ParentSessionID != nil {
+		meta.ParentSessionID = *patch.ParentSessionID
+	}
+	if patch.SourcePlanID != nil {
+		meta.SourcePlanID = *patch.SourcePlanID
+	}
+	meta.UpdatedAt = time.Now()
+	return s.saveMeta(sessionID, meta)
+}
+
 func (s *FileSessionStore) Archive(sessionID string) error {
+	unlock, err := s.lockMeta(sessionID)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	meta, err := s.loadMeta(sessionID)
 	if err != nil {
 		return err
@@ -328,6 +387,11 @@ func (s *FileSessionStore) Archive(sessionID string) error {
 }
 
 func (s *FileSessionStore) Unarchive(sessionID string) error {
+	unlock, err := s.lockMeta(sessionID)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	meta, err := s.loadMeta(sessionID)
 	if err != nil {
 		return err
@@ -358,7 +422,7 @@ func (s *FileSessionStore) AppendMessages(sessionID string, msgs ...types.Messag
 	}
 
 	if appendedCount > 0 {
-		s.updateMeta(sessionID, appendedCount)
+		return s.updateMeta(sessionID, appendedCount)
 	}
 
 	return nil
@@ -493,7 +557,138 @@ func (s *FileSessionStore) ReadSessionMemory(sessionID string) (*contextmgr.Sess
 	return &record, nil
 }
 
+func (s *FileSessionStore) SavePlan(sessionID string, plan planning.Artifact) error {
+	if err := validatePlan(sessionID, plan, true); err != nil {
+		return err
+	}
+	unlock, err := s.lockMeta(sessionID)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	meta, err := s.loadMeta(sessionID)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(s.plansDir(sessionID), 0o755); err != nil {
+		return err
+	}
+	if err := writeJSONAtomic(s.planPath(sessionID, plan.ID), plan, 0o600); err != nil {
+		return err
+	}
+	if meta.LatestPlanID != "" {
+		return nil
+	}
+	meta.LatestPlanID = plan.ID
+	meta.UpdatedAt = time.Now()
+	return s.saveMeta(sessionID, meta)
+}
+
+func (s *FileSessionStore) ProposePlan(sessionID string, plan planning.Artifact) (*planning.Artifact, error) {
+	plan.Status = planning.ArtifactProposed
+	if err := validatePlan(sessionID, plan, false); err != nil {
+		return nil, err
+	}
+	unlock, err := s.lockMeta(sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+	meta, err := s.loadMeta(sessionID)
+	if err != nil {
+		return nil, err
+	}
+	plan.Version = 1
+	if meta.LatestPlanID != "" {
+		previous, err := s.loadPlanFile(sessionID, meta.LatestPlanID)
+		if err != nil {
+			return nil, fmt.Errorf("load latest plan: %w", err)
+		}
+		plan.Version = previous.Version + 1
+	}
+	if err := os.MkdirAll(s.plansDir(sessionID), 0o755); err != nil {
+		return nil, err
+	}
+	if err := writeJSONAtomic(s.planPath(sessionID, plan.ID), plan, 0o600); err != nil {
+		return nil, err
+	}
+	// Commit the latest pointer after the artifact exists. A crash between the
+	// two writes leaves only an orphan artifact; the previous plan remains the
+	// authoritative latest version and no actionable plan is lost.
+	meta.LatestPlanID = plan.ID
+	meta.UpdatedAt = time.Now()
+	if err := s.saveMeta(sessionID, meta); err != nil {
+		return nil, err
+	}
+	return &plan, nil
+}
+
+func (s *FileSessionStore) LoadPlan(sessionID, planID string) (*planning.Artifact, error) {
+	if !validPlanID(planID) {
+		return nil, fmt.Errorf("invalid plan id")
+	}
+	plan, err := s.loadPlanFile(sessionID, planID)
+	if err != nil {
+		return nil, err
+	}
+	if meta, metaErr := s.loadMeta(sessionID); metaErr == nil && meta.LatestPlanID != planID && plan.Status == planning.ArtifactProposed {
+		plan.Status = planning.ArtifactSuperseded
+	}
+	return plan, nil
+}
+
+func (s *FileSessionStore) loadPlanFile(sessionID, planID string) (*planning.Artifact, error) {
+	data, err := os.ReadFile(s.planPath(sessionID, planID))
+	if err != nil {
+		return nil, err
+	}
+	var plan planning.Artifact
+	if err := json.Unmarshal(data, &plan); err != nil {
+		return nil, err
+	}
+	if plan.ID != planID || plan.SessionID != sessionID || plan.Version < 1 || !validPlanStatus(plan.Status) {
+		return nil, fmt.Errorf("plan artifact identity mismatch")
+	}
+	return &plan, nil
+}
+
+func validatePlan(sessionID string, plan planning.Artifact, requireVersion bool) error {
+	if !validPlanID(plan.ID) || plan.SessionID != sessionID || (requireVersion && plan.Version < 1) || strings.TrimSpace(plan.Title) == "" || strings.TrimSpace(plan.Markdown) == "" || !validPlanStatus(plan.Status) {
+		return fmt.Errorf("invalid plan artifact")
+	}
+	return nil
+}
+
+func validPlanID(id string) bool {
+	return id != "" && id == strings.TrimSpace(id) && !strings.ContainsAny(id, `/\`) && id != "." && id != ".."
+}
+
+func validPlanStatus(status planning.ArtifactStatus) bool {
+	switch status {
+	case planning.ArtifactProposed, planning.ArtifactAccepted, planning.ArtifactSuperseded:
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *FileSessionStore) LoadLatestPlan(sessionID string) (*planning.Artifact, error) {
+	meta, err := s.loadMeta(sessionID)
+	if err != nil {
+		return nil, err
+	}
+	if meta.LatestPlanID == "" {
+		return nil, nil
+	}
+	return s.LoadPlan(sessionID, meta.LatestPlanID)
+}
+
 func (s *FileSessionStore) updateMetaCount(sessionID string, count int) error {
+	unlock, err := s.lockMeta(sessionID)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	meta, err := s.loadMeta(sessionID)
 	if err != nil {
 		return err
@@ -504,6 +699,11 @@ func (s *FileSessionStore) updateMetaCount(sessionID string, count int) error {
 }
 
 func (s *FileSessionStore) updateMeta(sessionID string, added int) error {
+	unlock, err := s.lockMeta(sessionID)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	metaPath := s.metaPath(sessionID)
 	data, err := os.ReadFile(metaPath)
 	if err != nil {
@@ -518,12 +718,22 @@ func (s *FileSessionStore) updateMeta(sessionID string, added int) error {
 	meta.UpdatedAt = time.Now()
 	meta.MessageCount += added
 
-	metaData, err := json.MarshalIndent(meta, "", "  ")
-	if err != nil {
-		return err
-	}
+	return s.saveMeta(sessionID, &meta)
+}
 
-	return os.WriteFile(metaPath, metaData, 0644)
+func (s *FileSessionStore) lockMeta(sessionID string) (func(), error) {
+	value, _ := s.metaLocks.LoadOrStore(sessionID, &sync.Mutex{})
+	local := value.(*sync.Mutex)
+	local.Lock()
+	releaseFile, err := acquireMetadataFileLock(filepath.Join(s.sessionDir(sessionID), ".session.lock"))
+	if err != nil {
+		local.Unlock()
+		return nil, err
+	}
+	return func() {
+		releaseFile()
+		local.Unlock()
+	}, nil
 }
 
 func (s *FileSessionStore) loadMeta(sessionID string) (*sessions.SessionMeta, error) {
@@ -544,9 +754,37 @@ func (s *FileSessionStore) loadMeta(sessionID string) (*sessions.SessionMeta, er
 
 func (s *FileSessionStore) saveMeta(sessionID string, meta *sessions.SessionMeta) error {
 	metaPath := s.metaPath(sessionID)
-	metaData, err := json.MarshalIndent(meta, "", "  ")
+	return writeJSONAtomic(metaPath, meta, 0o644)
+}
+
+func writeJSONAtomic(path string, value any, mode os.FileMode) error {
+	data, err := json.MarshalIndent(value, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(metaPath, metaData, 0644)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".friday-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+	if err := tmp.Chmod(mode); err != nil {
+		tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, path)
 }

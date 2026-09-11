@@ -10,9 +10,17 @@ import (
 	"github.com/basenana/friday/config"
 	coreactor "github.com/basenana/friday/core/actor"
 	"github.com/basenana/friday/core/actor/events"
+	"github.com/basenana/friday/sandbox"
 	"github.com/basenana/friday/sessions"
 	"github.com/basenana/friday/sessions/file"
 )
+
+func TestCountRunningTasks(t *testing.T) {
+	tasks := []*sandbox.Task{nil, {Status: sandbox.TaskRunning}, {Status: sandbox.TaskCompleted}, {Status: sandbox.TaskRunning}}
+	if got := countRunningTasks(tasks); got != 2 {
+		t.Fatalf("countRunningTasks = %d, want 2", got)
+	}
+}
 
 func newTestRegistry(t *testing.T, cfgMod func(*RegistryConfig)) *Registry {
 	t.Helper()
@@ -181,6 +189,19 @@ func TestRegistry_ShutdownAll(t *testing.T) {
 	}
 	// Idempotent.
 	r.ShutdownAll()
+}
+
+func TestResolveTaskIDSupportsUniquePrefixes(t *testing.T) {
+	tasks := []*sandbox.Task{{ID: "abcdef1234"}, {ID: "abc9999999"}}
+	if got, err := resolveTaskID(tasks, "abcdef"); err != nil || got != "abcdef1234" {
+		t.Fatalf("unique prefix = %q, err=%v", got, err)
+	}
+	if _, err := resolveTaskID(tasks, "abc"); err == nil {
+		t.Fatal("ambiguous prefix was accepted")
+	}
+	if _, err := resolveTaskID(tasks, "missing"); err == nil {
+		t.Fatal("missing task was accepted")
+	}
 }
 
 func TestRegistry_SendTrySendPreempt(t *testing.T) {

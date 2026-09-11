@@ -764,6 +764,7 @@ func (m *model) updateOpenConfirmation(key tea.KeyPressMsg) (tea.Model, tea.Cmd)
 	case "n", "esc":
 		m.confirm = nil
 		m.layout()
+		return m.dispatchIfIdle()
 	}
 	return m, nil
 }

@@ -7,7 +7,7 @@ require (
 	charm.land/bubbletea/v2 v2.0.9
 	charm.land/lipgloss/v2 v2.0.6
 	github.com/a2aproject/a2a-go v0.3.13
-	github.com/basenana/friday/core v0.0.0-20260702124215-2d8e154af31f
+	github.com/basenana/friday/core v0.0.0-20260910142944-53bc64b6c1f2
 	github.com/charmbracelet/glamour v1.0.0
 	github.com/charmbracelet/x/ansi v0.11.8
 	github.com/davecgh/go-spew v1.1.1

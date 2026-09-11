@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"time"
 
 	"github.com/basenana/friday/config"
 	"github.com/basenana/friday/core/actor/events"
@@ -65,6 +66,8 @@ func buildTranscriptProjection(sessMgr *sessions.Manager, cfg *config.Config, wo
 	}
 	p.running = false
 	p.currentRunID = ""
+	p.runStartedAt = time.Time{}
+	p.runActivity = ""
 	p.resetStreaming()
 
 	return transcriptProjection{
@@ -82,6 +85,9 @@ func (m *model) applyProjection(p transcriptProjection) {
 	m.iteration = p.iteration
 	m.running = false
 	m.currentRunID = ""
+	m.lastFinishedRun = ""
+	m.runStartedAt = time.Time{}
+	m.runActivity = ""
 	m.form = nil
 	m.resetStreaming()
 }

@@ -68,6 +68,7 @@ type Field struct {
 type FormSchema struct {
 	Title       string  `json:"title,omitempty"`
 	Description string  `json:"description,omitempty"`
+	Variant     string  `json:"variant,omitempty"`
 	Fields      []Field `json:"fields"`
 	SubmitLabel string  `json:"submit_label,omitempty"`
 	CancelLabel string  `json:"cancel_label,omitempty"`

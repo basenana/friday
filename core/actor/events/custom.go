@@ -66,3 +66,18 @@ type InputAcceptedBody struct {
 	Text     string `json:"text"`
 	Delivery string `json:"delivery,omitempty"`
 }
+
+type PlanProposedBody struct {
+	PlanID   string `json:"plan_id"`
+	Version  int    `json:"version"`
+	Title    string `json:"title"`
+	Markdown string `json:"markdown"`
+}
+
+// ModeChangedBody records a durable collaboration-mode transition initiated
+// by an actor tool. Source distinguishes it from UI-local mode changes.
+type ModeChangedBody struct {
+	Mode   string `json:"mode"`
+	Source string `json:"source,omitempty"`
+	Reason string `json:"reason,omitempty"`
+}

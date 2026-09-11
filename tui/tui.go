@@ -5,6 +5,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"charm.land/bubbles/v2/spinner"
 	"charm.land/bubbles/v2/textarea"
@@ -17,19 +18,21 @@ import (
 	codercmds "github.com/basenana/friday/coder/commands"
 	"github.com/basenana/friday/config"
 	"github.com/basenana/friday/core/actor/events"
+	"github.com/basenana/friday/core/collaboration"
+	"github.com/basenana/friday/core/planning"
 	"github.com/basenana/friday/core/types"
 	"github.com/basenana/friday/sessions"
 )
 
 // Run launches the interactive TUI. Blocks until the user quits.
 func Run(sessMgr *sessions.Manager, cfg *config.Config, sessionID string) error {
-	registry := actor.NewRegistry(sessMgr, cfg, actor.DefaultRegistryConfig())
+	registryConfig := actor.DefaultRegistryConfig()
+	registryConfig.AgentPlanEntry = true
+	registry := actor.NewRegistry(sessMgr, cfg, registryConfig)
 	defer registry.ShutdownAll()
 
 	cmdRegistry := codercmds.NewRegistry()
-	codercmds.RegisterBuiltins(cmdRegistry)
-	codercmds.RegisterInfoCommands(cmdRegistry)
-	codercmds.RegisterAgentCommands(cmdRegistry)
+	codercmds.RegisterAll(cmdRegistry)
 
 	m := loadingModel(sessMgr, registry, cmdRegistry, cfg, sessionID)
 	m.alternateScreen = useAlternateScreen(cfg.TUI.AlternateScreen)
@@ -104,9 +107,15 @@ type model struct {
 	form             *formState
 	confirm          *openConfirmation
 	detail           *detailState
+	selector         *selectorState
+	commandConfirm   *commandConfirmation
+	planHandoff      *planHandoffState
 
 	running         bool
 	currentRunID    string
+	lastFinishedRun string
+	runStartedAt    time.Time
+	runActivity     string
 	cancelling      bool
 	steeringPending bool
 	textBuf         strings.Builder
@@ -117,8 +126,11 @@ type model struct {
 	promptHistory   []string
 	historyIndex    int
 
-	tokenCount int
-	iteration  int
+	tokenCount  int
+	iteration   int
+	mode        collaboration.Mode
+	latestPlan  *planning.Artifact
+	activeModel config.ModelConfig
 
 	width, height      int
 	quitting           bool
@@ -126,6 +138,7 @@ type model struct {
 	loading            bool
 	requestedSessionID string
 	fatalErr           error
+	now                func() time.Time
 }
 
 func initialModel(sessMgr *sessions.Manager, registry *actor.Registry, cmdRegistry *codercmds.Registry, cfg *config.Config, sessionID string) (*model, error) {
@@ -135,6 +148,12 @@ func initialModel(sessMgr *sessions.Manager, registry *actor.Registry, cmdRegist
 	}
 	if err := m.loadTranscript(sessionID); err != nil {
 		m.appendBlock(chatBlock{kind: blockError, content: "restore transcript: " + err.Error()})
+	}
+	if plan, err := sessMgr.LoadLatestPlan(sessionID); err != nil {
+		m.appendBlock(chatBlock{kind: blockError, content: "restore plan: " + err.Error()})
+	} else {
+		m.latestPlan = plan
+		m.restorePlanHandoff()
 	}
 	return m, nil
 }
@@ -162,7 +181,10 @@ func baseModel(sessMgr *sessions.Manager, registry *actor.Registry, cmdRegistry 
 		spinner:   spinner.New(spinner.WithSpinner(spinner.Dot), spinner.WithStyle(accentStyle)),
 		toolCalls: make(map[string]*toolCallBlock), seenInputs: make(map[string]bool),
 		cards: make(map[string]*cardState), historyIndex: -1, darkBackground: true,
+		now: time.Now,
 	}
+	m.mode = sessMgr.CollaborationMode(sessionID)
+	m.activeModel, _ = configuredSessionModel(sessMgr, cfg, sessionID)
 	// Focus after the textarea has reached its final storage location. The
 	// component keeps an internal pointer to its active style, so focusing a
 	// temporary value before copying it can leave that pointer attached to the
@@ -215,9 +237,17 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			m.appendBlock(chatBlock{kind: blockError, content: "open: " + msg.err.Error()})
 		}
-		return m, nil
+		return m.dispatchIfIdle()
 	case cardSourceLoadedMsg:
 		m.applyCardSourceLoaded(msg)
+		return m, nil
+	case diffLoadedMsg:
+		if msg.err != nil {
+			m.appendBlock(chatBlock{kind: blockError, content: "diff: " + msg.err.Error()})
+		} else {
+			m.detail = newDetailState("working tree diff", msg.content, m.width, m.height)
+			m.layout()
+		}
 		return m, nil
 	case initialSessionLoadedMsg:
 		m.loading = false
@@ -227,9 +257,17 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.sessionID = msg.sessionID
+		m.mode = m.sessMgr.CollaborationMode(msg.sessionID)
+		m.activeModel, _ = configuredSessionModel(m.sessMgr, m.cfg, msg.sessionID)
 		m.feed = msg.feed
 		m.subscriptionToken++
 		m.applyProjection(msg.projection)
+		if plan, err := m.sessMgr.LoadLatestPlan(msg.sessionID); err != nil {
+			m.appendBlock(chatBlock{kind: blockError, content: "restore plan: " + err.Error()})
+		} else {
+			m.latestPlan = plan
+			m.restorePlanHandoff()
+		}
 		m.layout()
 		return m, m.waitForActorEvent()
 	case dispatchQueuedMsg:
@@ -245,6 +283,15 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.detail != nil {
 			return m.updateDetail(msg)
+		}
+		if m.planHandoff != nil {
+			return m.updatePlanHandoff(msg)
+		}
+		if m.commandConfirm != nil {
+			return m.updateCommandConfirmation(msg)
+		}
+		if m.selector != nil {
+			return m.updateSelector(msg)
 		}
 		if m.confirm != nil {
 			return m.updateOpenConfirmation(msg)
@@ -270,7 +317,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.running {
 			cmds = append(cmds, m.spinner.Tick)
 		}
-		if msg.event.Type == events.KindRunFinished && !m.running && len(m.queued) > 0 {
+		if msg.event.Type == events.KindRunFinished && m.canDispatchQueued() {
 			cmds = append(cmds, func() tea.Msg { return dispatchQueuedMsg{} })
 		}
 		return m, tea.Batch(cmds...)
@@ -305,6 +352,9 @@ func (m *model) loadInitialSession() tea.Cmd {
 		}
 		projection, err := buildTranscriptProjection(sessMgr, cfg, workdir, width, height, sessionID)
 		if err != nil {
+			return initialSessionLoadedMsg{sessionID: sessionID, err: err}
+		}
+		if err := normalizeSessionModel(sessMgr, cfg, sessionID); err != nil {
 			return initialSessionLoadedMsg{sessionID: sessionID, err: err}
 		}
 		feed := bus.SubscribeAgentFeed(registry.Bus(), sessionID)
@@ -377,6 +427,13 @@ func (m *model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if msg.String() == "ctrl+r" {
 		m.openHistoryMenu()
 		return m, nil
+	}
+	if msg.String() == "shift+tab" && !m.running && strings.TrimSpace(m.textarea.Value()) == "" {
+		next := collaboration.ModePlan
+		if m.mode == collaboration.ModePlan {
+			next = collaboration.ModeDefault
+		}
+		return m.applyResult(codercmds.ResultOf(codercmds.SetModeAction{Mode: next}))
 	}
 	if msg.Code == tea.KeyPgUp || msg.Code == tea.KeyPgDown || msg.String() == "ctrl+u" || msg.String() == "ctrl+d" {
 		var cmd tea.Cmd
@@ -465,11 +522,19 @@ func (m *model) submitComposer() (tea.Model, tea.Cmd) {
 	m.rememberPrompt(text)
 	m.textarea.Reset()
 	m.menu = menuState{}
+	if strings.HasPrefix(text, "/") {
+		name, _, _ := parseSlash(text)
+		if cmd, ok := m.cmdRegistry.Lookup(name); ok && m.running {
+			if codercmds.CommandMetadata(cmd).Policy == codercmds.PolicyDeferred {
+				m.queued = append(m.queued, pendingInput{text: text})
+				m.layout()
+				return m, nil
+			}
+		}
+		return m.handleSlash(text)
+	}
 	if m.running {
 		return m.startUserTurn(text, bus.DeliverySteer)
-	}
-	if strings.HasPrefix(text, "/") {
-		return m.handleSlash(text)
 	}
 	return m.startUserTurn(text, bus.DeliveryNormal)
 }
@@ -488,7 +553,7 @@ func (m *model) queueComposer() (tea.Model, tea.Cmd) {
 }
 
 func (m *model) dispatchNextQueued() (tea.Model, tea.Cmd) {
-	if m.running || len(m.queued) == 0 {
+	if !m.canDispatchQueued() {
 		return m, nil
 	}
 	next := m.queued[0]
@@ -514,6 +579,8 @@ func (m *model) startUserTurn(text string, delivery bus.InputDelivery) (tea.Mode
 		m.steeringPending = true
 	} else {
 		m.running = true
+		m.runStartedAt = m.nowTime()
+		m.runActivity = "working"
 	}
 	m.resetStreaming()
 	return m, m.spinner.Tick
@@ -540,22 +607,37 @@ func (m *model) handleActorEvent(evt events.Event) tea.Cmd {
 	var cmd tea.Cmd
 	switch evt.Type {
 	case events.KindRunStarted:
+		if m.currentRunID != evt.RunID || m.runStartedAt.IsZero() {
+			m.runStartedAt = evt.Timestamp
+			if m.runStartedAt.IsZero() {
+				m.runStartedAt = m.nowTime()
+			}
+		}
 		m.running = true
 		m.currentRunID = evt.RunID
+		m.runActivity = "working"
 		m.cancelling = false
 		m.steeringPending = false
 	case events.KindRunFinished:
 		var d events.RunFinishedData
 		_ = events.DecodePayload(evt, &d)
 		m.flushStreaming(d.StopReason == "cancelled")
-		if evt.RunID == m.currentRunID || m.currentRunID == "" {
+		finishedCurrent := evt.RunID != m.lastFinishedRun && (evt.RunID == m.currentRunID || m.currentRunID == "")
+		if finishedCurrent {
+			m.appendRunFinished(d, evt.Timestamp)
+			m.lastFinishedRun = evt.RunID
 			m.running = false
 			m.currentRunID = ""
+			m.runStartedAt = time.Time{}
+			m.runActivity = ""
+			if m.form != nil {
+				m.appendBlock(chatBlock{kind: blockDivider, content: "unfinished form expired · ask the agent again"})
+				m.form = nil
+			}
 		}
 		m.cancelling = false
-		if !m.replaying && len(m.queued) > 0 {
-			// Defer dispatch until after this event update completes.
-			m.running = false
+		if finishedCurrent && !m.replaying && d.StopReason == "plan_completed" && m.mode == collaboration.ModePlan && m.latestPlan != nil && m.latestPlan.Status == planning.ArtifactProposed {
+			m.planHandoff = &planHandoffState{}
 		}
 	case events.KindRunError:
 		var d events.RunErrorData
@@ -564,6 +646,7 @@ func (m *model) handleActorEvent(evt events.Event) tea.Cmd {
 			m.appendBlock(chatBlock{kind: blockError, content: d.Message})
 		}
 	case events.KindTextMessageStart:
+		m.runActivity = "responding"
 		if m.reasonBuf.Len() > 0 {
 			m.appendBlock(chatBlock{kind: blockReasoning, content: m.reasonBuf.String()})
 			m.reasonBuf.Reset()
@@ -582,6 +665,7 @@ func (m *model) handleActorEvent(evt events.Event) tea.Cmd {
 	case events.KindToolCallStart:
 		var d events.ToolCallStartData
 		if events.DecodePayload(evt, &d) == nil {
+			m.runActivity = "running " + d.ToolName
 			m.toolCalls[d.ToolCallID] = &toolCallBlock{name: d.ToolName, id: d.ToolCallID}
 			m.toolOrder = append(m.toolOrder, d.ToolCallID)
 		}
@@ -595,12 +679,18 @@ func (m *model) handleActorEvent(evt events.Event) tea.Cmd {
 	case events.KindToolCallResult:
 		var d events.ToolCallResultData
 		if events.DecodePayload(evt, &d) == nil {
+			m.runActivity = "working"
 			if tc := m.toolCalls[d.ToolCallID]; tc != nil {
 				m.appendBlock(chatBlock{kind: blockToolCall, id: tc.id, toolName: tc.name,
 					content: joinToolContent(tc.input, d.Output), success: d.Success})
 				delete(m.toolCalls, d.ToolCallID)
 				m.removeToolOrder(d.ToolCallID)
 			}
+		}
+	case events.KindStepStarted:
+		var d events.StepStartedData
+		if events.DecodePayload(evt, &d) == nil && d.Kind == "model" {
+			m.runActivity = "thinking"
 		}
 	case events.KindStepFinished:
 		var d events.StepFinishedData
@@ -637,6 +727,18 @@ func (m *model) handleCustomEvent(evt events.Event) tea.Cmd {
 		}
 	case events.CustomLoopStart:
 		m.iteration++
+		m.runActivity = "thinking"
+	case events.CustomCompactStart:
+		m.runActivity = "compacting context"
+	case events.CustomCompactFinish, events.CustomCompactSkip:
+		m.runActivity = "working"
+	case events.CustomSubagentStart:
+		m.runActivity = customActivity(evt, "working with subagent")
+	case events.CustomSubagentFinish:
+		m.runActivity = "working"
+	case events.CustomModelTimeout:
+		m.runActivity = "retrying model"
+		m.appendBlock(chatBlock{kind: blockDivider, content: "model timed out · retrying"})
 	case events.CustomCardEmitted, events.CustomCardUpdated, events.CustomCardDismissed:
 		return m.handleCardEvent(evt)
 	case events.CustomFormRequested:
@@ -647,19 +749,42 @@ func (m *model) handleCustomEvent(evt events.Event) tea.Cmd {
 				m.appendBlock(chatBlock{kind: blockError, content: "form: " + err.Error()})
 			} else {
 				m.form = form
+				m.runActivity = "waiting for input"
 			}
 		}
 	case events.CustomFormSubmitted:
 		var d events.FormSubmittedBody
 		if events.DecodePayload(evt, &d) == nil && (m.form == nil || m.form.id == d.FormID) {
 			m.form = nil
+			m.runActivity = "working"
 			m.appendBlock(chatBlock{kind: blockDivider, content: "form submitted"})
 		}
 	case events.CustomFormCancelled:
 		var d events.FormCancelledBody
 		if events.DecodePayload(evt, &d) == nil && (m.form == nil || m.form.id == d.FormID) {
 			m.form = nil
+			m.runActivity = "working"
 			m.appendBlock(chatBlock{kind: blockDivider, content: "form cancelled"})
+		}
+	case events.CustomPlanProposed:
+		var d events.PlanProposedBody
+		if events.DecodePayload(evt, &d) == nil {
+			m.latestPlan = &planning.Artifact{ID: d.PlanID, SessionID: m.sessionID, Version: d.Version, Title: d.Title, Markdown: d.Markdown, Status: planning.ArtifactProposed, CreatedAt: evt.Timestamp}
+			m.appendBlock(chatBlock{kind: blockAssistant, content: "# " + d.Title + "\n\n" + d.Markdown})
+		}
+	case events.CustomModeChanged:
+		var d events.ModeChangedBody
+		if events.DecodePayload(evt, &d) == nil {
+			if mode, err := collaboration.ParseMode(d.Mode); err == nil {
+				m.mode = mode
+				if !m.replaying {
+					label := "mode · " + string(mode)
+					if d.Source != "" {
+						label += " · " + d.Source
+					}
+					m.appendBlock(chatBlock{kind: blockDivider, content: label})
+				}
+			}
 		}
 	case "status." + bus.StatusInboxDropped:
 		var d bus.InboxDropped
@@ -672,6 +797,74 @@ func (m *model) handleCustomEvent(evt events.Event) tea.Cmd {
 		}
 	}
 	return nil
+}
+
+func (m *model) nowTime() time.Time {
+	if m.now != nil {
+		return m.now()
+	}
+	return time.Now()
+}
+
+func (m *model) appendRunFinished(data events.RunFinishedData, finishedAt time.Time) {
+	duration := time.Duration(data.DurationMs) * time.Millisecond
+	if data.DurationMs <= 0 && !m.runStartedAt.IsZero() && !finishedAt.IsZero() {
+		duration = finishedAt.Sub(m.runStartedAt)
+	}
+	if duration < 0 {
+		duration = 0
+	}
+	label := "completed in " + formatElapsed(duration)
+	switch data.StopReason {
+	case "plan_completed":
+		label = "plan ready in " + formatElapsed(duration)
+	case "cancelled":
+		label = "cancelled after " + formatElapsed(duration)
+	case "error":
+		label = "failed after " + formatElapsed(duration)
+	}
+	m.appendBlock(chatBlock{kind: blockDivider, content: label})
+}
+
+func (m *model) currentElapsed() time.Duration {
+	if m.runStartedAt.IsZero() {
+		return 0
+	}
+	elapsed := m.nowTime().Sub(m.runStartedAt)
+	if elapsed < 0 {
+		return 0
+	}
+	return elapsed
+}
+
+func formatElapsed(d time.Duration) string {
+	if d < time.Second {
+		return "<1s"
+	}
+	d = d.Truncate(time.Second)
+	if d < time.Minute {
+		return fmt.Sprintf("%ds", int(d/time.Second))
+	}
+	if d < time.Hour {
+		return fmt.Sprintf("%dm %02ds", int(d/time.Minute), int(d%time.Minute/time.Second))
+	}
+	return fmt.Sprintf("%dh %02dm", int(d/time.Hour), int(d%time.Hour/time.Minute))
+}
+
+func customActivity(evt events.Event, fallback string) string {
+	var data events.CustomData
+	if events.DecodePayload(evt, &data) == nil {
+		if agent, _ := data.Body["agent"].(string); strings.TrimSpace(agent) != "" {
+			return "working with " + strings.TrimSpace(agent)
+		}
+	}
+	return fallback
+}
+
+func (m *model) restorePlanHandoff() {
+	if m.mode == collaboration.ModePlan && m.latestPlan != nil && m.latestPlan.Status == planning.ArtifactProposed && !m.running {
+		m.planHandoff = &planHandoffState{}
+	}
 }
 
 func (m *model) resetStreaming() {
@@ -729,6 +922,9 @@ func (m *model) closeFeed() {
 
 func (m *model) bindSession(sessionID string) error {
 	m.closeFeed()
+	if err := normalizeSessionModel(m.sessMgr, m.cfg, sessionID); err != nil {
+		return fmt.Errorf("validate session model: %w", err)
+	}
 	feed := bus.SubscribeAgentFeed(m.registry.Bus(), sessionID)
 	if _, err := m.registry.GetOrCreate(sessionID); err != nil {
 		feed.Close()

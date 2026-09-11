@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -16,6 +17,9 @@ import (
 	"github.com/basenana/friday/bus"
 	"github.com/basenana/friday/config"
 	coreactor "github.com/basenana/friday/core/actor"
+	"github.com/basenana/friday/core/collaboration"
+	"github.com/basenana/friday/core/planning"
+	"github.com/basenana/friday/sandbox"
 	"github.com/basenana/friday/sessions"
 	"github.com/basenana/friday/setup"
 )
@@ -41,6 +45,9 @@ type RegistryConfig struct {
 	// creates a private bus; share one bus across registries (or pass
 	// the registry's own Bus()) when consumers need to observe actors.
 	Bus *eventbus.Bus
+	// AgentPlanEntry exposes enter_plan_mode to the agent. It should only be
+	// enabled by interactive clients that implement plan approval.
+	AgentPlanEntry bool
 }
 
 // DefaultRegistryConfig returns a sensible default configuration.
@@ -120,7 +127,8 @@ func (r *Registry) GetOrCreate(sessionID string) (*coreactor.Actor, error) {
 		old.close(r.cfg.ShutdownGrace)
 	}
 
-	agentCtx, err := setup.NewAgent(r.sessMgr, r.appCfg, setup.WithSessionID(sessionID))
+	agentCfg := r.configForSession(sessionID)
+	agentCtx, err := setup.NewAgent(r.sessMgr, agentCfg, setup.WithSessionID(sessionID))
 	if err != nil {
 		return nil, fmt.Errorf("setup agent for session %s: %w", sessionID, err)
 	}
@@ -129,6 +137,18 @@ func (r *Registry) GetOrCreate(sessionID string) (*coreactor.Actor, error) {
 	e.lastActive.Store(time.Now().UnixNano())
 
 	opts := []coreactor.Option{coreactor.WithTurnLifecycle(e)}
+	if modes, ok := r.sessMgr.(interface {
+		CollaborationMode(string) collaboration.Mode
+	}); ok {
+		if provider, ok := r.sessMgr.(interface{ GetStore() sessions.Store }); ok {
+			if plans, ok := provider.GetStore().(planning.Repository); ok {
+				opts = append(opts, coreactor.WithPlanning(modes, plans))
+				if r.cfg.AgentPlanEntry {
+					opts = append(opts, coreactor.WithAgentPlanEntry(true))
+				}
+			}
+		}
+	}
 	if provider, ok := r.sessMgr.(interface{ GetStore() sessions.Store }); ok {
 		if eventStore, ok := provider.GetStore().(sessions.EventStore); ok {
 			eventSink, sinkErr := eventStore.OpenEventSink(r.ctx, sessionID)
@@ -154,6 +174,98 @@ func (r *Registry) GetOrCreate(sessionID string) (*coreactor.Actor, error) {
 	r.entries[sessionID] = e
 	bus.PublishStatus(r.bus, sessionID, e.actor.ID(), bus.StatusCreated)
 	return e.actor, nil
+}
+
+func (r *Registry) configForSession(sessionID string) *config.Config {
+	copy := *r.appCfg
+	provider, ok := r.sessMgr.(interface{ GetStore() sessions.Store })
+	if !ok {
+		return &copy
+	}
+	meta, err := provider.GetStore().GetMeta(sessionID)
+	if err != nil || meta.Runtime.Model.Model == "" {
+		return &copy
+	}
+	for _, candidate := range r.appCfg.ChatModels() {
+		if candidate.Model == meta.Runtime.Model.Model && candidate.Provider == meta.Runtime.Model.Provider {
+			copy.Model = candidate
+			copy.Models = nil
+			return &copy
+		}
+	}
+	return &copy
+}
+
+// Reconfigure replaces an idle session actor so provider-level settings such
+// as the selected model take effect. The persisted transcript remains intact.
+func (r *Registry) Reconfigure(sessionID string) error {
+	if count := countRunningTasks(r.ListTasks(sessionID)); count > 0 {
+		return fmt.Errorf("cannot reconfigure session with %d running background task(s)", count)
+	}
+	r.Shutdown(sessionID)
+	_, err := r.GetOrCreate(sessionID)
+	return err
+}
+
+func countRunningTasks(tasks []*sandbox.Task) int {
+	count := 0
+	for _, task := range tasks {
+		if task != nil && task.Status == sandbox.TaskRunning {
+			count++
+		}
+	}
+	return count
+}
+
+func (r *Registry) ListTasks(sessionID string) []*sandbox.Task {
+	r.mu.Lock()
+	entry := r.entries[sessionID]
+	r.mu.Unlock()
+	if entry == nil || entry.stopped.Load() || entry.agentCtx == nil || entry.agentCtx.TaskManager == nil {
+		return nil
+	}
+	return entry.agentCtx.TaskManager.List("")
+}
+
+func (r *Registry) KillTask(sessionID, taskID string) error {
+	r.mu.Lock()
+	entry := r.entries[sessionID]
+	r.mu.Unlock()
+	if entry == nil || entry.stopped.Load() || entry.agentCtx == nil || entry.agentCtx.TaskManager == nil {
+		return fmt.Errorf("session actor is not running")
+	}
+	if taskID == "all" {
+		entry.agentCtx.TaskManager.KillAll()
+		return nil
+	}
+	resolved, err := resolveTaskID(entry.agentCtx.TaskManager.List(""), taskID)
+	if err != nil {
+		return err
+	}
+	return entry.agentCtx.TaskManager.Kill(resolved)
+}
+
+func resolveTaskID(tasks []*sandbox.Task, target string) (string, error) {
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return "", fmt.Errorf("task id is required")
+	}
+	var matches []string
+	for _, task := range tasks {
+		if task.ID == target {
+			return task.ID, nil
+		}
+		if strings.HasPrefix(task.ID, target) {
+			matches = append(matches, task.ID)
+		}
+	}
+	if len(matches) == 1 {
+		return matches[0], nil
+	}
+	if len(matches) > 1 {
+		return "", fmt.Errorf("ambiguous task prefix %q", target)
+	}
+	return "", fmt.Errorf("task not found: %s", target)
 }
 
 // Get returns the live Actor for sessionID, if any.

@@ -40,15 +40,19 @@ type client struct {
 // which the OpenAI SDK params do not model. These fields follow the
 // MiniMax-style dialect: they are only attached for third-party hosts,
 // because api.openai.com rejects unknown top-level fields.
-func (c *client) reasoningOpts() []option.RequestOption {
+func (c *client) reasoningOpts(requestEffort ...string) []option.RequestOption {
 	if !isThirdPartyHost(c.host, "api.openai.com") {
 		return nil
 	}
 	var opts []option.RequestOption
+	effort := c.model.ReasoningEffort
+	if len(requestEffort) > 0 && requestEffort[0] != "" {
+		effort = requestEffort[0]
+	}
 	if c.model.ReasoningSplit {
 		opts = append(opts, option.WithJSONSet("reasoning_split", true))
 	}
-	if c.model.ReasoningEffort == providers.ReasoningEffortNone {
+	if effort == providers.ReasoningEffortNone {
 		opts = append(opts, option.WithJSONSet("thinking", map[string]string{"type": "disabled"}))
 	}
 	return opts
@@ -128,7 +132,7 @@ func (c *client) Completion(ctx context.Context, request providers.Request) prov
 			c.logger.Infow("client-side llm api throttled", "wait", time.Since(startAt).String())
 		}
 
-		stream := c.openai.Chat.Completions.NewStreaming(ctx, *p, c.reasoningOpts()...)
+		stream := c.openai.Chat.Completions.NewStreaming(ctx, *p, c.reasoningOpts(providers.RequestReasoningEffort(request))...)
 
 		for stream.Next() {
 			chunk := stream.Current()
@@ -202,7 +206,7 @@ Retry:
 		c.logger.Infow("client-side llm api throttled", "wait", time.Since(startAt).String())
 	}
 
-	opts := append(c.reasoningOpts(),
+	opts := append(c.reasoningOpts(providers.RequestReasoningEffort(request)),
 		option.WithJSONSet("stream", false), // for some model using stream as default
 	)
 	response, err := c.openai.Chat.Completions.New(ctx, *p, opts...)
@@ -276,7 +280,11 @@ func (c *client) chatCompletionNewParams(request providers.Request) *openai.Chat
 	if c.model.PresencePenalty != nil {
 		p.PresencePenalty = param.NewOpt(*c.model.PresencePenalty)
 	}
-	if e := c.model.ReasoningEffort; e != "" && e != providers.ReasoningEffortDefault && e != providers.ReasoningEffortNone {
+	e := providers.RequestReasoningEffort(request)
+	if e == "" {
+		e = c.model.ReasoningEffort
+	}
+	if e != "" && e != providers.ReasoningEffortDefault && e != providers.ReasoningEffortNone {
 		p.ReasoningEffort = shared.ReasoningEffort(e)
 	}
 	if key := request.PromptCacheKey(); key != "" {

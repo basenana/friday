@@ -66,6 +66,28 @@ type Request interface {
 	AppendSystemPrompt(...string)
 }
 
+// ReasoningEffortRequest is an optional request capability. Keeping it out of
+// Request preserves compatibility with custom request implementations.
+type ReasoningEffortRequest interface {
+	ReasoningEffort() string
+	SetReasoningEffort(string)
+}
+
+func RequestReasoningEffort(req Request) string {
+	if capable, ok := req.(ReasoningEffortRequest); ok {
+		return capable.ReasoningEffort()
+	}
+	return ""
+}
+
+func SetRequestReasoningEffort(req Request, effort string) bool {
+	if capable, ok := req.(ReasoningEffortRequest); ok {
+		capable.SetReasoningEffort(effort)
+		return true
+	}
+	return false
+}
+
 type Response interface {
 	Message() <-chan Delta
 	Error() <-chan error

@@ -7,7 +7,8 @@ import (
 
 // RouteEvent maps an actor event to its bus topic for session sid.
 // The second return is false when the event is not routable and must
-// be dropped at the bridge (RAW, STATE_*, unknown CUSTOM names).
+// be dropped at the bridge (RAW, STATE_*, or unnamed CUSTOM events). Unknown
+// named CUSTOM events fall back to a safe observation topic.
 //
 // The tracker is updated as a side effect: TOOL_CALL_START records the
 // tool name for the call id, TOOL_CALL_RESULT evicts it, and
@@ -69,8 +70,15 @@ func routeCustom(sid string, evt events.Event, _ *ToolCallTracker) (string, bool
 	case events.CustomCompactStart, events.CustomCompactFinish, events.CustomCompactSkip,
 		events.CustomSubagentStart, events.CustomSubagentFinish,
 		events.CustomTodoUpdate, events.CustomModelTimeout, events.CustomLoopStart,
-		events.CustomInputAccepted:
+		events.CustomInputAccepted, events.CustomPlanProposed, events.CustomModeChanged:
 		return bus.TopicObs(sid, evt.Name), true
+	}
+	// Actor custom events are internal but extensible. Preserve new event names
+	// on the envelope while flattening their topic section so additions cannot
+	// be silently lost merely because this switch has not learned a specialized
+	// route yet.
+	if evt.Name != "" {
+		return bus.TopicObs(sid, bus.SanitizeToolName(evt.Name)), true
 	}
 	return "", false
 }

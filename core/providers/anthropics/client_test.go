@@ -1269,6 +1269,16 @@ func TestMessageCreateParamsReasoningEffort(t *testing.T) {
 	}
 }
 
+func TestRequestReasoningEffortOverridesModel(t *testing.T) {
+	cli := &client{model: Model{Name: "claude-test", ReasoningEffort: providers.ReasoningEffortNone}, host: "https://open.bigmodel.cn/api/anthropic"}
+	req := providers.NewRequest("summarize this conversation")
+	providers.SetRequestReasoningEffort(req, providers.ReasoningEffortMedium)
+	params := cli.messageCreateParams(req)
+	if params.OutputConfig.Effort != "medium" || len(cli.reasoningOpts(providers.RequestReasoningEffort(req))) != 0 {
+		t.Fatalf("request override not applied: effort=%q opts=%d", params.OutputConfig.Effort, len(cli.reasoningOpts(providers.RequestReasoningEffort(req))))
+	}
+}
+
 func messageHasCacheControl(msg anthropic.MessageParam) bool {
 	for _, block := range msg.Content {
 		if contentBlockHasCacheControl(block) {

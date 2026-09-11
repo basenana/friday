@@ -57,10 +57,13 @@ func makeRequestFormTool(a *Actor) *coretools.Tool {
 		// Block until user responds.
 		outcome, err := a.waitForRegisteredForm(ctx, formID, waiter)
 		if err != nil {
+			a.EmitCustom(events.CustomFormCancelled, formID, events.FormCancelledBody{FormID: formID})
 			return coretools.NewToolResultError("form wait failed: " + err.Error()), nil
 		}
 		if outcome.Cancelled {
-			a.EmitCustom(events.CustomFormCancelled, formID, events.FormCancelledBody{FormID: formID})
+			if !outcome.cancelEventEmitted {
+				a.EmitCustom(events.CustomFormCancelled, formID, events.FormCancelledBody{FormID: formID})
+			}
 			return coretools.NewToolResultText(`{"cancelled":true}`), nil
 		}
 		a.EmitCustom(events.CustomFormSubmitted, formID, events.FormSubmittedBody{

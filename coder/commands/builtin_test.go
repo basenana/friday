@@ -5,13 +5,25 @@ import (
 	"testing"
 )
 
+func actionAt[T Action](t *testing.T, result *Result, index int) T {
+	t.Helper()
+	if result == nil || index < 0 || index >= len(result.Actions) {
+		t.Fatalf("missing action %d in %#v", index, result)
+	}
+	action, ok := result.Actions[index].(T)
+	if !ok {
+		t.Fatalf("action %d = %T, want %T", index, result.Actions[index], *new(T))
+	}
+	return action
+}
+
 func TestClearCmd(t *testing.T) {
 	r, err := clearCmd{}.Execute(nil)
 	if err != nil {
 		t.Fatalf("clear Execute error: %v", err)
 	}
-	if !r.ClearMessages {
-		t.Error("clear should set ClearMessages=true")
+	if actionAt[ClearSessionAction](t, r, 0).SessionID == "" {
+		t.Error("clear should create a target session ID")
 	}
 }
 
@@ -20,19 +32,7 @@ func TestQuitCmd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("quit Execute error: %v", err)
 	}
-	if !r.Quit {
-		t.Error("quit should set Quit=true")
-	}
-}
-
-func TestNewCmd(t *testing.T) {
-	r, err := newCmd{}.Execute(nil)
-	if err != nil {
-		t.Fatalf("new Execute error: %v", err)
-	}
-	if r.SwitchSession == "" {
-		t.Error("new should set SwitchSession to a new ID")
-	}
+	actionAt[QuitAction](t, r, 0)
 }
 
 func TestHelpCmd(t *testing.T) {
@@ -42,39 +42,36 @@ func TestHelpCmd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("help Execute error: %v", err)
 	}
-	if !strings.Contains(r.Message, "Available commands") {
-		t.Errorf("help message missing header; got: %q", r.Message)
+	message := actionAt[AppendMessageAction](t, r, 0).Content
+	if !strings.Contains(message, "Available commands") {
+		t.Errorf("help message missing header; got: %q", message)
 	}
-	if !strings.Contains(r.Message, "/clear") {
-		t.Errorf("help message should list /clear; got: %q", r.Message)
+	if !strings.Contains(message, "/clear") {
+		t.Errorf("help message should list /clear; got: %q", message)
 	}
 }
 
-func TestPlanCmd_NoArgsReturnsUsage(t *testing.T) {
+func TestPlanCmd_NoArgsEntersPlanMode(t *testing.T) {
 	ctx := &Context{Args: nil}
 	r, err := newPlanCmd().Execute(ctx)
 	if err != nil {
 		t.Fatalf("plan Execute error: %v", err)
 	}
-	if r.RunAgent != "" {
-		t.Errorf("plan with no args should not set RunAgent; got %q", r.RunAgent)
-	}
-	if !strings.Contains(r.Message, "usage") {
-		t.Errorf("plan with no args should return usage message; got %q", r.Message)
+	action := actionAt[SetModeAction](t, r, 0)
+	if action.Mode != "plan" || action.Prompt != "" {
+		t.Fatalf("unexpected plan action: %+v", action)
 	}
 }
 
-func TestPlanCmd_WithArgsDelegates(t *testing.T) {
-	ctx := &Context{Args: []string{"implement", "login"}}
+func TestPlanCmd_WithArgsEntersAndSubmits(t *testing.T) {
+	ctx := &Context{Args: []string{"implement", "login"}, RawArgs: "implement login"}
 	r, err := newPlanCmd().Execute(ctx)
 	if err != nil {
 		t.Fatalf("plan Execute error: %v", err)
 	}
-	if r.RunAgent != "planner" {
-		t.Errorf("plan RunAgent = %q, want %q", r.RunAgent, "planner")
-	}
-	if !strings.Contains(r.AgentInput, "implement") {
-		t.Errorf("plan AgentInput should contain args; got %q", r.AgentInput)
+	action := actionAt[SetModeAction](t, r, 0)
+	if action.Mode != "plan" || action.Prompt != "implement login" {
+		t.Fatalf("unexpected plan action: %+v", action)
 	}
 }
 
@@ -84,11 +81,12 @@ func TestReviewCmd_NoArgsUsesDefaultDiff(t *testing.T) {
 	if err != nil {
 		t.Fatalf("review Execute error: %v", err)
 	}
-	if r.RunAgent != "reviewer" {
-		t.Errorf("review RunAgent = %q, want %q", r.RunAgent, "reviewer")
+	action := actionAt[RunAgentAction](t, r, 0)
+	if action.Agent != "reviewer" {
+		t.Errorf("review agent = %q, want %q", action.Agent, "reviewer")
 	}
-	if !strings.Contains(r.AgentInput, "git status --short") || !strings.Contains(r.AgentInput, "untracked files") {
-		t.Errorf("review with no args should inspect status and untracked files; got %q", r.AgentInput)
+	if !strings.Contains(action.Input, "git status --short") || !strings.Contains(action.Input, "untracked files") {
+		t.Errorf("review with no args should inspect status and untracked files; got %q", action.Input)
 	}
 }
 
@@ -98,8 +96,9 @@ func TestAdvisorCmd_NoArgsReturnsUsage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("advisor Execute error: %v", err)
 	}
-	if !strings.Contains(r.Message, "usage") {
-		t.Errorf("advisor with no args should return usage; got %q", r.Message)
+	message := actionAt[AppendMessageAction](t, r, 0).Content
+	if !strings.Contains(message, "usage") {
+		t.Errorf("advisor with no args should return usage; got %q", message)
 	}
 }
 
@@ -109,7 +108,7 @@ func TestAdvisorCmd_WithArgsDelegates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("advisor Execute error: %v", err)
 	}
-	if r.RunAgent != "advisor" {
-		t.Errorf("advisor RunAgent = %q, want %q", r.RunAgent, "advisor")
+	if action := actionAt[RunAgentAction](t, r, 0); action.Agent != "advisor" {
+		t.Errorf("advisor agent = %q, want %q", action.Agent, "advisor")
 	}
 }

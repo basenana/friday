@@ -32,6 +32,21 @@ func TestTUIAlternateScreenValidation(t *testing.T) {
 	}
 }
 
+func TestPlanReasoningEffortDefaultsAndValidation(t *testing.T) {
+	cfg := DefaultConfig()
+	if cfg.Collaboration.Plan.ReasoningEffort != "medium" {
+		t.Fatalf("default plan effort = %q", cfg.Collaboration.Plan.ReasoningEffort)
+	}
+	cfg.Collaboration.Plan.ReasoningEffort = ""
+	if err := cfg.validate(); err != nil || cfg.Collaboration.Plan.ReasoningEffort != "medium" {
+		t.Fatalf("empty plan effort default: effort=%q err=%v", cfg.Collaboration.Plan.ReasoningEffort, err)
+	}
+	cfg.Collaboration.Plan.ReasoningEffort = "impossible"
+	if err := cfg.validate(); err == nil {
+		t.Fatal("invalid plan effort was accepted")
+	}
+}
+
 func TestResolveImageModel(t *testing.T) {
 	tests := []struct {
 		name          string

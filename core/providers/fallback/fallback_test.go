@@ -126,6 +126,21 @@ func TestFallback_FirstModelSucceeds(t *testing.T) {
 	}
 }
 
+func TestStripImagesPreservesReasoningEffort(t *testing.T) {
+	req := providers.NewRequest("system", types.Message{
+		Role: types.RoleUser, Content: "inspect", Image: &types.ImageContent{Type: types.ImageTypeURL, URL: "https://example.test/image.png"},
+	})
+	providers.SetRequestReasoningEffort(req, "medium")
+
+	stripped := StripImagesFromRequest(req)
+	if got := providers.RequestReasoningEffort(stripped); got != "medium" {
+		t.Fatalf("reasoning effort = %q, want medium", got)
+	}
+	if RequestHasImage(stripped) {
+		t.Fatal("stripped request still contains an image")
+	}
+}
+
 func TestFallback_FallsToSecondModel(t *testing.T) {
 	broken := &fakeClient{name: "broken", completionErrs: []error{errors.New("connection refused")}}
 	ok := &fakeClient{name: "ok", streamContent: []string{"recovered"}, contextWindow: 50_000}

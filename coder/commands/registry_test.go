@@ -1,6 +1,10 @@
 package commands
 
-import "testing"
+import (
+	"reflect"
+	"strings"
+	"testing"
+)
 
 func TestRegistry_RegisterAndLookup(t *testing.T) {
 	reg := NewRegistry()
@@ -47,5 +51,43 @@ func TestRegistry_ListReturnsAll(t *testing.T) {
 	reg.Register(quitCmd{})
 	if len(reg.List()) != 2 {
 		t.Errorf("List returned %d, want 2", len(reg.List()))
+	}
+}
+
+func TestRegisterAllDefinesCanonicalCommandSurface(t *testing.T) {
+	reg := NewRegistry()
+	RegisterAll(reg)
+	var got []string
+	for _, cmd := range reg.List() {
+		got = append(got, cmd.Name())
+	}
+	want := []string{"advisor", "archive", "clear", "compact", "context", "copy", "delete", "diff", "help", "model", "open", "plan", "quit", "rename", "resume", "review", "show", "status", "stop", "tasks"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("commands = %v, want %v", got, want)
+	}
+	for _, removed := range []string{"new", "session", "sessions", "cost"} {
+		if _, ok := reg.Lookup(removed); ok {
+			t.Errorf("removed command %q is registered", removed)
+		}
+	}
+	help, err := helpCmd{registry: reg}.Execute(nil)
+	message := actionAt[AppendMessageAction](t, help, 0).Content
+	if err != nil || !strings.Contains(message, "/open") || !strings.Contains(message, "/show") || !strings.Contains(message, "Shift+Tab") {
+		t.Fatalf("help is incomplete: %q, err=%v", message, err)
+	}
+}
+
+func TestCommandRunPolicies(t *testing.T) {
+	reg := NewRegistry()
+	RegisterAll(reg)
+	immediate := map[string]bool{"context": true, "copy": true, "diff": true, "help": true, "open": true, "show": true, "status": true, "stop": true, "tasks": true}
+	for _, cmd := range reg.List() {
+		want := PolicyDeferred
+		if immediate[cmd.Name()] {
+			want = PolicyImmediate
+		}
+		if got := CommandMetadata(cmd).Policy; got != want {
+			t.Errorf("/%s policy = %q, want %q", cmd.Name(), got, want)
+		}
 	}
 }

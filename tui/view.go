@@ -8,6 +8,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/basenana/friday/core/planning"
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/x/ansi"
 )
@@ -219,13 +220,19 @@ func (m *model) View() tea.View {
 		if preview := m.renderStreaming(); preview != "" {
 			blocks = append(blocks, preview)
 		}
-		label := "working"
+		label := m.runActivity
+		if label == "" {
+			label = "working"
+		}
+		if m.form != nil {
+			label = "waiting for input"
+		}
 		if m.steeringPending {
 			label = "steering"
 		} else if m.cancelling {
 			label = "cancelling"
 		}
-		blocks = append(blocks, accentStyle.Render(m.spinner.View()+" "+label+"…"))
+		blocks = append(blocks, accentStyle.Render(m.spinner.View()+" "+label+"… · "+formatElapsed(m.currentElapsed())))
 	}
 	wasAtBottom := m.viewport.AtBottom()
 	m.viewport.SetContent(joinConversationBlocks(blocks))
@@ -239,6 +246,12 @@ func (m *model) View() tea.View {
 	}
 	if m.form != nil {
 		parts = append(parts, m.form.View(m.width))
+	} else if m.planHandoff != nil {
+		parts = append(parts, m.planHandoff.View(m.width))
+	} else if m.commandConfirm != nil {
+		parts = append(parts, m.commandConfirm.View(m.width))
+	} else if m.selector != nil {
+		parts = append(parts, m.selector.View(m.width))
 	} else if m.detail != nil {
 		parts = append(parts, m.detail.View(m.width))
 	} else if m.confirm != nil {
@@ -273,6 +286,10 @@ func (m *model) layout() {
 	}
 	if m.form != nil {
 		extra += m.form.Height(width)
+		extra -= composerLines + 2
+	}
+	if m.planHandoff != nil || m.commandConfirm != nil || m.selector != nil {
+		extra += min(m.height/2, 12)
 		extra -= composerLines + 2
 	}
 	if m.detail != nil {
@@ -329,23 +346,26 @@ func (m *model) renderMenu() string {
 }
 
 func (m *model) renderStatus() string {
-	modelName := m.cfg.PrimaryModel().Model
+	modelName := m.activeModel.Model
 	if modelName == "" {
 		modelName = "model?"
 	}
-	parts := []string{"friday", modelName, "session:" + shortID(m.sessionID)}
+	parts := []string{"friday", modelName, string(m.mode), "session:" + shortID(m.sessionID)}
+	if m.latestPlan != nil && m.latestPlan.Status == planning.ArtifactProposed {
+		parts = append(parts, "plan ready")
+	}
 	if m.workdir != "" {
 		parts = append(parts, filepath.Base(m.workdir))
 	}
 	if m.tokenCount > 0 {
-		if window := m.cfg.PrimaryModel().ContextWindow; window > 0 {
+		if window := m.activeModel.ContextWindow; window > 0 {
 			parts = append(parts, fmt.Sprintf("%s/%s", fmtTokens(m.tokenCount), fmtTokens(int(window))))
 		} else {
 			parts = append(parts, fmtTokens(m.tokenCount)+" tokens")
 		}
 	}
 	if m.running {
-		parts = append(parts, "● running")
+		parts = append(parts, "● running "+formatElapsed(m.currentElapsed()))
 	}
 	if !m.viewport.AtBottom() {
 		parts = append(parts, "↑ history")

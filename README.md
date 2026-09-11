@@ -123,9 +123,66 @@ and interactive forms, and supports Codex-style follow-ups:
 
 - `Enter` sends a prompt; while a task is running it steers the task immediately.
 - `Tab` completes slash commands; while running it queues the prompt for the next turn.
+- `Shift+Tab` toggles Default/Plan Mode while idle.
 - `Ctrl+J` inserts a newline, `Ctrl+G` opens `$VISUAL`/`$EDITOR`, and `Ctrl+R` searches prompt history.
 - `Esc` cancels the current task, while `Ctrl+C` exits.
 - Type `/` for the command menu. Use `/open <card-id>` for a confirmed external artifact preview and `/show <tool-id>` for complete tool output.
+
+#### TUI commands
+
+| Area | Commands |
+|------|----------|
+| Session | `/clear`, `/resume [id\|name]`, `/rename <name>`, `/archive [id\|name]`, `/delete [id\|name]`, `/quit` |
+| Collaboration | `/plan [task]`, `/plan off`, `/review [instructions]`, `/advisor <question>` |
+| Model and context | `/model [provider/model\|model]`, `/status`, `/context`, `/compact` |
+| Working tree and output | `/diff`, `/copy [n]`, `/open <card-id>`, `/show <tool-call-id>` |
+| Background tasks | `/tasks`, `/stop <task-id\|all>` |
+| Help | `/help [command]` |
+
+`/clear` is the single new-conversation command: it creates a session, clears
+the transcript, returns to Default Mode, and inherits the current model. Model
+choices are stored per session. `/resume` lists active sessions only; archived
+sessions remain available through the external `friday sessions` CLI.
+
+#### Plan Mode
+
+Plan Mode is a persistent collaboration mode on the current session. It
+inspects the repository and resolves design decisions, but its read-only
+behavior is prompt-enforced rather than a separate filesystem sandbox. The
+model submits a versioned plan artifact only after the design is complete.
+
+```text
+/plan, Shift+Tab, or enter_plan_mode
+                    |
+                    v
+ inspect context -> ask material questions -> submit_plan
+                                              |
+                  +---------------------------+------------------------+
+                  |                           |                        |
+      Approve + implement here   Approve + fresh session       Request changes
+                  |                           |                        |
+           Default Mode             lineage + Default Mode         Plan Mode
+```
+
+The implementation is split across `core/collaboration` (mode instructions
+and reasoning override), `core/planning` (artifacts and terminal submission),
+`core/actor` (planning tools and events), `sessions` (runtime and artifact
+persistence), `coder/commands` (command contracts), and `tui` (selectors,
+handoff, rendering, and queued-command coordination).
+
+The agent may enter Plan Mode itself when a task has material ambiguity or
+needs design approval. While a turn is active, the TUI shows wall-clock
+elapsed time and its current activity; every completed, cancelled, failed, or
+plan-producing turn ends with a visible duration marker.
+
+Plan Mode uses the session's selected model and defaults to `medium` reasoning
+effort. Override it in JSON or YAML:
+
+```yaml
+collaboration:
+  plan:
+    reasoning_effort: high
+```
 
 The alternate screen defaults to `auto` (disabled under Zellij). Override it
 with `tui.alternate_screen: always` or `never` in JSON/YAML configuration.

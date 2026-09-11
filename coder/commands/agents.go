@@ -4,17 +4,16 @@ import (
 	"strings"
 
 	coderagents "github.com/basenana/friday/coder/agents"
+	"github.com/basenana/friday/core/collaboration"
 )
 
-// agentBackedCmd is a command that delegates to a coder agent.
-// It returns a Result with RunAgent set; the TUI forwards that request through
-// the main actor, which delegates via the run_task tool.
+// agentBackedCmd contains the shared metadata and input assembly for commands
+// that delegate to a coder agent.
 type agentBackedCmd struct {
 	name        string
 	aliases     []string
 	desc        string
 	agent       string
-	prepend     string // optional text prepended to user input
 	requireArgs bool
 }
 
@@ -22,39 +21,30 @@ func (c agentBackedCmd) Name() string        { return c.name }
 func (c agentBackedCmd) Aliases() []string   { return c.aliases }
 func (c agentBackedCmd) Description() string { return c.desc }
 
-// buildInput combines the prepend text (if any) with the user's args.
 func (c agentBackedCmd) buildInput(args []string) string {
-	parts := make([]string, 0, 2)
-	if c.prepend != "" {
-		parts = append(parts, c.prepend)
-	}
-	if len(args) > 0 {
-		parts = append(parts, strings.Join(args, " "))
-	}
-	return strings.Join(parts, "\n\n")
+	return strings.Join(args, " ")
 }
 
 // --- /plan ---
 
-type planCmd struct{ agentBackedCmd }
+type planCmd struct{}
 
-func newPlanCmd() planCmd {
-	return planCmd{agentBackedCmd{
-		name:        "plan",
-		desc:        "Interview the planner agent to produce a structured implementation plan",
-		agent:       coderagents.NamePlanner,
-		requireArgs: true,
-	}}
+func newPlanCmd() planCmd         { return planCmd{} }
+func (planCmd) Name() string      { return "plan" }
+func (planCmd) Aliases() []string { return nil }
+func (planCmd) Description() string {
+	return "Enter Plan Mode, optionally with a planning task (/plan off to exit)"
+}
+
+func (planCmd) Metadata() Metadata {
+	return Metadata{Usage: "/plan [task] | /plan off", Category: "Collaborate", Policy: PolicyDeferred}
 }
 
 func (p planCmd) Execute(ctx *Context) (*Result, error) {
-	if p.requireArgs && len(ctx.Args) == 0 {
-		return &Result{Message: "usage: /plan <task description>"}, nil
+	if len(ctx.Args) > 0 && strings.EqualFold(ctx.Args[0], "off") && len(ctx.Args) == 1 {
+		return ResultOf(SetModeAction{Mode: collaboration.ModeDefault}), nil
 	}
-	return &Result{
-		RunAgent:   p.agent,
-		AgentInput: p.buildInput(ctx.Args),
-	}, nil
+	return ResultOf(SetModeAction{Mode: collaboration.ModePlan, Prompt: strings.TrimSpace(ctx.RawArgs)}), nil
 }
 
 // --- /review ---
@@ -69,16 +59,17 @@ func newReviewCmd() reviewCmd {
 	}}
 }
 
+func (reviewCmd) Metadata() Metadata {
+	return Metadata{Usage: "/review [instructions]", Category: "Collaborate", Policy: PolicyDeferred}
+}
+
 func (r reviewCmd) Execute(ctx *Context) (*Result, error) {
 	input := r.buildInput(ctx.Args)
 	// If the user did not specify, ask reviewer to review the current diff.
-	if strings.TrimSpace(stripPrefix(input)) == "" {
+	if strings.TrimSpace(input) == "" {
 		input = "Review the uncommitted changes in this repository. Run `git status --short`, `git diff`, and `git diff --staged` to see them. If there are untracked files, read those files directly and include them in the review, then produce your verdict."
 	}
-	return &Result{
-		RunAgent:   r.agent,
-		AgentInput: input,
-	}, nil
+	return ResultOf(RunAgentAction{Agent: r.agent, Input: input}), nil
 }
 
 // --- /advisor ---
@@ -95,24 +86,15 @@ func newAdvisorCmd() advisorCmd {
 	}}
 }
 
-func (a advisorCmd) Execute(ctx *Context) (*Result, error) {
-	if a.requireArgs && len(ctx.Args) == 0 {
-		return &Result{Message: "usage: /advisor <question>"}, nil
-	}
-	return &Result{
-		RunAgent:   a.agent,
-		AgentInput: a.buildInput(ctx.Args),
-	}, nil
+func (advisorCmd) Metadata() Metadata {
+	return Metadata{Usage: "/advisor <question>", Category: "Collaborate", Policy: PolicyDeferred}
 }
 
-// stripPrefix is a tiny helper that removes the standard review preamble when
-// checking whether the user supplied any args of their own.
-func stripPrefix(s string) string {
-	const preamble = "Review the uncommitted changes in this repository."
-	if len(s) >= len(preamble) && s[:len(preamble)] == preamble {
-		return s[len(preamble):]
+func (a advisorCmd) Execute(ctx *Context) (*Result, error) {
+	if a.requireArgs && len(ctx.Args) == 0 {
+		return MessageResult("usage: /advisor <question>"), nil
 	}
-	return s
+	return ResultOf(RunAgentAction{Agent: a.agent, Input: a.buildInput(ctx.Args)}), nil
 }
 
 // RegisterAgentCommands registers /plan, /review, /advisor.

@@ -10,6 +10,7 @@ import (
 	"github.com/basenana/friday/config"
 	"github.com/basenana/friday/core/agents"
 	"github.com/basenana/friday/core/api"
+	"github.com/basenana/friday/core/collaboration"
 	"github.com/basenana/friday/core/contextmgr"
 	"github.com/basenana/friday/core/logger"
 	"github.com/basenana/friday/core/planning"
@@ -166,7 +167,8 @@ func NewAgent(sessionMgr SessionManager, cfg *config.Config, opts ...Option) (*A
 		return nil, fmt.Errorf("load workspace content: %w", err)
 	}
 
-	planningHook := planning.New(planning.Option{})
+	planningHook := planning.New(planning.Option{ModeProvider: collaborationProvider(sessionMgr)})
+	collaborationHook := collaboration.NewHook(collaborationProvider(sessionMgr), cfg.Collaboration.Plan.ReasoningEffort)
 	skillLoader := skills.NewLoader(ws.SkillsPath())
 	if err := skillLoader.Load(); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: failed to load skills: %v\n", err)
@@ -271,6 +273,10 @@ func NewAgent(sessionMgr SessionManager, cfg *config.Config, opts ...Option) (*A
 		newMemoryHook(ws),
 		contextHook,
 		subagentHook,
+		// Keep collaboration instructions last so Plan Mode remains the
+		// highest-precedence request-scoped behavioral contract.
+		collaborationHook,
+		planning.TerminalHook{ModeProvider: collaborationProvider(sessionMgr)},
 	}
 	replaceSessionHooks(sess, sharedHooks...)
 
@@ -292,6 +298,11 @@ func NewAgent(sessionMgr SessionManager, cfg *config.Config, opts ...Option) (*A
 		Memory:      memSys,
 		TaskManager: taskManager,
 	}, nil
+}
+
+func collaborationProvider(sessionMgr SessionManager) collaboration.ModeProvider {
+	provider, _ := sessionMgr.(collaboration.ModeProvider)
+	return provider
 }
 
 // Close releases all resources owned by the AgentContext.

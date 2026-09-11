@@ -39,16 +39,22 @@ func TestRouteEvent(t *testing.T) {
 		{"form submitted", events.NewEvent(events.KindCustom, "r").WithName(events.CustomFormSubmitted), bus.TopicForm(sid, "submitted")},
 		{"form cancelled", events.NewEvent(events.KindCustom, "r").WithName(events.CustomFormCancelled), bus.TopicForm(sid, "cancelled")},
 		{"compact start", events.NewEvent(events.KindCustom, "r").WithName(events.CustomCompactStart), bus.TopicObs(sid, "compact.start")},
+		{"compact finish", events.NewEvent(events.KindCustom, "r").WithName(events.CustomCompactFinish), bus.TopicObs(sid, "compact.finish")},
+		{"compact skip", events.NewEvent(events.KindCustom, "r").WithName(events.CustomCompactSkip), bus.TopicObs(sid, "compact.skip")},
+		{"subagent start", events.NewEvent(events.KindCustom, "r").WithName(events.CustomSubagentStart), bus.TopicObs(sid, "subagent.start")},
 		{"subagent finish", events.NewEvent(events.KindCustom, "r").WithName(events.CustomSubagentFinish), bus.TopicObs(sid, "subagent.finish")},
 		{"todo update", events.NewEvent(events.KindCustom, "r").WithName(events.CustomTodoUpdate), bus.TopicObs(sid, "todo.update")},
 		{"model timeout", events.NewEvent(events.KindCustom, "r").WithName(events.CustomModelTimeout), bus.TopicObs(sid, "model.timeout")},
 		{"loop start", events.NewEvent(events.KindCustom, "r").WithName(events.CustomLoopStart), bus.TopicObs(sid, "loop.start")},
 		{"input accepted", events.NewEvent(events.KindCustom, "r").WithName(events.CustomInputAccepted), bus.TopicObs(sid, "input.accepted")},
+		{"plan proposed", events.NewEvent(events.KindCustom, "r").WithName(events.CustomPlanProposed), bus.TopicObs(sid, "plan.proposed")},
+		{"mode changed", events.NewEvent(events.KindCustom, "r").WithName(events.CustomModeChanged), bus.TopicObs(sid, "mode.changed")},
 		{"step started", events.NewEvent(events.KindStepStarted, "r"), bus.TopicObs(sid, "step")},
 		{"step finished", events.NewEvent(events.KindStepFinished, "r"), bus.TopicObs(sid, "step")},
 		{"raw dropped", events.NewEvent(events.KindRaw, "r"), ""},
 		{"state dropped", events.NewEvent(events.KindStateSnapshot, "r"), ""},
-		{"unknown custom dropped", events.NewEvent(events.KindCustom, "r").WithName("mystery.event"), ""},
+		{"unknown custom observed", events.NewEvent(events.KindCustom, "r").WithName("mystery.event"), bus.TopicObs(sid, "mystery_event")},
+		{"unnamed custom dropped", events.NewEvent(events.KindCustom, "r"), ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

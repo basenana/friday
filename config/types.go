@@ -3,17 +3,26 @@ package config
 import "github.com/basenana/friday/sandbox"
 
 type Config struct {
-	Model      ModelConfig            `yaml:"model" json:"model"`
-	Models     []ModelConfig          `yaml:"models" json:"models"`
-	ImageModel ModelConfig            `yaml:"image_model" json:"image_model"`
-	Agents     map[string]ModelConfig `yaml:"agents" json:"agents"`
-	DataDir    string                 `yaml:"data_dir" json:"data_dir"`
-	Workspace  string                 `yaml:"workspace" json:"workspace"`
-	Memory     MemoryConfig           `yaml:"memory" json:"memory"`
-	Session    SessionConfig          `yaml:"session" json:"session"`
-	Log        LogConfig              `yaml:"log" json:"log"`
-	Sandbox    *sandbox.Config        `yaml:"sandbox" json:"sandbox"`
-	TUI        TUIConfig              `yaml:"tui" json:"tui"`
+	Model         ModelConfig            `yaml:"model" json:"model"`
+	Models        []ModelConfig          `yaml:"models" json:"models"`
+	ImageModel    ModelConfig            `yaml:"image_model" json:"image_model"`
+	Agents        map[string]ModelConfig `yaml:"agents" json:"agents"`
+	DataDir       string                 `yaml:"data_dir" json:"data_dir"`
+	Workspace     string                 `yaml:"workspace" json:"workspace"`
+	Memory        MemoryConfig           `yaml:"memory" json:"memory"`
+	Session       SessionConfig          `yaml:"session" json:"session"`
+	Log           LogConfig              `yaml:"log" json:"log"`
+	Sandbox       *sandbox.Config        `yaml:"sandbox" json:"sandbox"`
+	TUI           TUIConfig              `yaml:"tui" json:"tui"`
+	Collaboration CollaborationConfig    `yaml:"collaboration" json:"collaboration"`
+}
+
+type CollaborationConfig struct {
+	Plan PlanModeConfig `yaml:"plan" json:"plan"`
+}
+
+type PlanModeConfig struct {
+	ReasoningEffort string `yaml:"reasoning_effort" json:"reasoning_effort"`
 }
 
 type TUIConfig struct {
@@ -71,7 +80,8 @@ func DefaultConfig() *Config {
 		Session: SessionConfig{
 			DefaultAgent: "react",
 		},
-		TUI:     TUIConfig{AlternateScreen: "auto"},
-		Sandbox: sandbox.DefaultConfig(),
+		TUI:           TUIConfig{AlternateScreen: "auto"},
+		Collaboration: CollaborationConfig{Plan: PlanModeConfig{ReasoningEffort: "medium"}},
+		Sandbox:       sandbox.DefaultConfig(),
 	}
 }

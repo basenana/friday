@@ -25,6 +25,7 @@ type formFieldState struct {
 
 type formState struct {
 	id, title, description string
+	variant                string
 	fields                 []formFieldState
 	active                 int
 	editor                 textarea.Model
@@ -53,7 +54,7 @@ func newFormState(id string, raw map[string]any, width int) (*formState, error) 
 	editor.SetWidth(max(width-10, 20))
 	editor.SetHeight(1)
 	removeTextareaBackground(&editor)
-	f := &formState{id: id, title: schema.Title, description: schema.Description, editor: editor}
+	f := &formState{id: id, title: schema.Title, description: schema.Description, variant: schema.Variant, editor: editor}
 	f.editor.Focus()
 	for _, field := range schema.Fields {
 		state := formFieldState{schema: field, multi: make(map[int]bool)}
@@ -135,13 +136,52 @@ func isTextField(kind cards.FieldType) bool {
 }
 
 func (f *formState) move(delta int) {
-	if len(f.fields) == 0 {
+	visible := f.visibleFieldIndexes()
+	if len(visible) == 0 {
 		return
 	}
 	f.commitEditor()
-	f.active = (f.active + delta + len(f.fields)) % len(f.fields)
+	position := 0
+	for i, index := range visible {
+		if index == f.active {
+			position = i
+			break
+		}
+	}
+	position = (position + delta + len(visible)) % len(visible)
+	f.active = visible[position]
 	f.loadEditor()
 	f.err = ""
+}
+
+// visibleFieldIndexes implements the request_user_input convention where a
+// select named "foo" may be followed by "foo_other". The free-form input is
+// shown only when the user actually chooses Other.
+func (f *formState) visibleFieldIndexes() []int {
+	visible := make([]int, 0, len(f.fields))
+	for i := range f.fields {
+		if f.variant == "plan_questions" && strings.HasSuffix(f.fields[i].schema.Name, "_other") {
+			base := strings.TrimSuffix(f.fields[i].schema.Name, "_other")
+			if i > 0 && f.fields[i-1].schema.Name == base && f.fields[i-1].schema.Type == cards.FieldSelect {
+				selectField := &f.fields[i-1]
+				if len(selectField.schema.Options) <= selectField.option || !strings.EqualFold(fmt.Sprint(selectField.schema.Options[selectField.option].Value), "Other") {
+					continue
+				}
+			}
+		}
+		visible = append(visible, i)
+	}
+	return visible
+}
+
+func (f *formState) conditionalOtherVisible(index int) bool {
+	if f.variant != "plan_questions" || index <= 0 || index >= len(f.fields) || !strings.HasSuffix(f.fields[index].schema.Name, "_other") {
+		return false
+	}
+	base := strings.TrimSuffix(f.fields[index].schema.Name, "_other")
+	selectField := &f.fields[index-1]
+	return selectField.schema.Name == base && selectField.schema.Type == cards.FieldSelect &&
+		len(selectField.schema.Options) > selectField.option && strings.EqualFold(fmt.Sprint(selectField.schema.Options[selectField.option].Value), "Other")
 }
 
 func (m *model) updateForm(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -241,6 +281,12 @@ func (m *model) submitForm() (tea.Model, tea.Cmd) {
 	f.commitEditor()
 	values := make(map[string]any, len(f.fields))
 	for i := range f.fields {
+		if f.conditionalOtherVisible(i) && strings.TrimSpace(f.fields[i].text) == "" {
+			f.active = i
+			f.loadEditor()
+			f.err = "Please provide the other answer"
+			return m, nil
+		}
 		value, err := m.formValue(&f.fields[i])
 		if err != nil {
 			f.active = i
@@ -489,9 +535,15 @@ func (m *model) validateNestedValue(schema cards.Field, value any, path string) 
 }
 
 func (f *formState) Height(width int) int {
-	height := min(len(f.fields), 8) + 5
+	height := min(len(f.visibleFieldIndexes()), 8) + 5
 	if field := f.current(); field != nil && isTextField(field.schema.Type) {
 		height += f.editor.Height()
+	}
+	if field := f.current(); field != nil && field.schema.Help != "" {
+		height++
+	}
+	if field := f.current(); field != nil && field.schema.Type == cards.FieldSelect && len(field.schema.Options) > field.option && field.schema.Options[field.option].Description != "" {
+		height++
 	}
 	if f.description != "" {
 		height++
@@ -511,15 +563,21 @@ func (f *formState) View(width int) string {
 	if f.description != "" {
 		lines = append(lines, mutedStyle.Render(terminalSafe(f.description)))
 	}
-	start := 0
-	if f.active >= 8 {
-		start = f.active - 7
+	visible := f.visibleFieldIndexes()
+	activePosition := 0
+	for i, index := range visible {
+		if index == f.active {
+			activePosition = i
+			break
+		}
 	}
-	end := min(start+8, len(f.fields))
+	start := max(activePosition-7, 0)
+	end := min(start+8, len(visible))
 	if start > 0 {
 		lines = append(lines, mutedStyle.Render(fmt.Sprintf("↑ %d earlier fields", start)))
 	}
-	for i := start; i < end; i++ {
+	for position := start; position < end; position++ {
+		i := visible[position]
 		field := &f.fields[i]
 		label := field.schema.Label
 		if label == "" {
@@ -539,9 +597,17 @@ func (f *formState) View(width int) string {
 		} else {
 			lines = append(lines, line+"  "+mutedStyle.Render(value))
 		}
+		if i == f.active && field.schema.Help != "" {
+			lines = append(lines, mutedStyle.Render(terminalSafe(field.schema.Help)))
+		}
+		if i == f.active && field.schema.Type == cards.FieldSelect && len(field.schema.Options) > field.option {
+			if description := field.schema.Options[field.option].Description; description != "" {
+				lines = append(lines, mutedStyle.Render(terminalSafe(description)))
+			}
+		}
 	}
-	if end < len(f.fields) {
-		lines = append(lines, mutedStyle.Render(fmt.Sprintf("↓ %d more fields", len(f.fields)-end)))
+	if end < len(visible) {
+		lines = append(lines, mutedStyle.Render(fmt.Sprintf("↓ %d more fields", len(visible)-end)))
 	}
 	if f.err != "" {
 		lines = append(lines, errorStyle.Render(terminalSafe(f.err)))

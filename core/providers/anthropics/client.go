@@ -50,8 +50,12 @@ type client struct {
 // which the Anthropic SDK params do not model. The field is only understood
 // by some Anthropic-compatible gateways; the real API rejects it with 400,
 // so it is only attached when the base URL is not api.anthropic.com.
-func (c *client) reasoningOpts() []option.RequestOption {
-	if c.model.ReasoningEffort != providers.ReasoningEffortNone {
+func (c *client) reasoningOpts(requestEffort ...string) []option.RequestOption {
+	effort := c.model.ReasoningEffort
+	if len(requestEffort) > 0 && requestEffort[0] != "" {
+		effort = requestEffort[0]
+	}
+	if effort != providers.ReasoningEffortNone {
 		return nil
 	}
 	if !isThirdPartyHost(c.host, "api.anthropic.com") {
@@ -139,7 +143,7 @@ func (c *client) Completion(ctx context.Context, request providers.Request) prov
 			c.logger.Infow("client-side llm api throttled", "wait", time.Since(startAt).String())
 		}
 
-		stream := c.anthropic.Messages.NewStreaming(ctx, *params, c.reasoningOpts()...)
+		stream := c.anthropic.Messages.NewStreaming(ctx, *params, c.reasoningOpts(providers.RequestReasoningEffort(request))...)
 
 		for stream.Next() {
 			event := stream.Current()
@@ -206,7 +210,7 @@ Retry:
 		c.logger.Infow("client-side llm api throttled", "wait", time.Since(startAt).String())
 	}
 
-	message, err := c.anthropic.Messages.New(ctx, *params, c.reasoningOpts()...)
+	message, err := c.anthropic.Messages.New(ctx, *params, c.reasoningOpts(providers.RequestReasoningEffort(request))...)
 	if err != nil {
 		if common.IsRetriableError(err) && retries < common.MaxRetriableAttempts {
 			retries++
@@ -275,7 +279,11 @@ func (c *client) messageCreateParams(request providers.Request) *anthropic.Messa
 	if c.model.Temperature != nil {
 		params.Temperature = anthropic.Float(*c.model.Temperature)
 	}
-	if e := c.model.ReasoningEffort; e != "" && e != providers.ReasoningEffortDefault && e != providers.ReasoningEffortNone {
+	e := providers.RequestReasoningEffort(request)
+	if e == "" {
+		e = c.model.ReasoningEffort
+	}
+	if e != "" && e != providers.ReasoningEffortDefault && e != providers.ReasoningEffortNone {
 		// The Anthropic API only accepts low/medium/high efforts; clamp the
 		// higher generic levels (xhigh/max) down to high.
 		if e == providers.ReasoningEffortXHigh || e == providers.ReasoningEffortMax {

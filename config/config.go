@@ -62,6 +62,9 @@ func Load(configPath string) (*Config, error) {
 }
 
 func (c *Config) validate() error {
+	if strings.TrimSpace(c.Collaboration.Plan.ReasoningEffort) == "" {
+		c.Collaboration.Plan.ReasoningEffort = providers.ReasoningEffortMedium
+	}
 	switch strings.ToLower(strings.TrimSpace(c.TUI.AlternateScreen)) {
 	case "", "auto", "always", "never":
 	default:
@@ -74,6 +77,9 @@ func (c *Config) validate() error {
 		if e := m.ReasoningEffort; e != "" && !providers.IsValidReasoningEffort(e) {
 			return fmt.Errorf("invalid models entry %q: reasoning_effort %q must be one of default, none, low, medium, high, xhigh, max", m.Model, e)
 		}
+	}
+	if e := c.Collaboration.Plan.ReasoningEffort; !providers.IsValidReasoningEffort(e) {
+		return fmt.Errorf("invalid collaboration.plan.reasoning_effort %q: must be one of default, none, low, medium, high, xhigh, max", e)
 	}
 	return nil
 }

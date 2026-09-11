@@ -20,6 +20,9 @@ type RunFinishedData struct {
 	// StopReason is why the run terminated: "end_turn" (normal),
 	// "cancelled" (preemption / shutdown / context cancel), or "error".
 	StopReason string `json:"stop_reason,omitempty"`
+	// DurationMs is the actor-level wall-clock duration of the turn. Older
+	// persisted events omit it and consumers may fall back to timestamps.
+	DurationMs int64 `json:"duration_ms,omitempty"`
 }
 
 // Interrupt describes a pending human-in-the-loop interrupt carried by

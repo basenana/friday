@@ -51,6 +51,32 @@ func TestRunFinishedStopReason_EndTurn(t *testing.T) {
 	}
 }
 
+func TestRunFinishedIncludesActorDuration(t *testing.T) {
+	mock := newMockAgent(chatScript{deltas: []types.Delta{{Content: "hi"}}, delay: 20 * time.Millisecond})
+	a, _ := newTestActor(mock)
+	sub := a.Subscribe()
+	a.Start(context.Background())
+	defer a.Stop()
+
+	if err := a.Send(context.Background(), UserTextMessage{Text: "go"}); err != nil {
+		t.Fatal(err)
+	}
+	for {
+		evt := <-sub.Events()
+		if evt.Type != events.KindRunFinished {
+			continue
+		}
+		var data events.RunFinishedData
+		if err := events.DecodePayload(evt, &data); err != nil {
+			t.Fatal(err)
+		}
+		if data.DurationMs < 15 {
+			t.Fatalf("duration_ms = %d", data.DurationMs)
+		}
+		return
+	}
+}
+
 func TestRunFinishedStopReason_Error(t *testing.T) {
 	mock := newMockAgent(chatScript{streamErr: errors.New("llm exploded")})
 	a, _ := newTestActor(mock)
