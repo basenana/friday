@@ -86,6 +86,13 @@ func TestRunningSlashCommandsRespectRunPolicy(t *testing.T) {
 	if len(m.queued) != 1 || m.queued[0].text != "/plan design auth" {
 		t.Fatalf("deferred plan command was not queued: %#v", m.queued)
 	}
+
+	m.textarea.SetValue("/compact")
+	got, _ = m.submitComposer()
+	m = got.(*model)
+	if len(m.queued) != 2 || m.queued[1].text != "/compact" {
+		t.Fatalf("deferred compact command was not queued: %#v", m.queued)
+	}
 }
 
 func TestPlanModeCommandsAndShortcut(t *testing.T) {

@@ -235,6 +235,8 @@ func (m *model) View() tea.View {
 		blocks = append(blocks, accentStyle.Render(m.spinner.View()+" "+label+"… · "+formatElapsed(m.currentElapsed())))
 	} else if m.planCompacting {
 		blocks = append(blocks, accentStyle.Render(m.spinner.View()+" compacting context for approved plan…"))
+	} else if m.manualCompacting {
+		blocks = append(blocks, accentStyle.Render(m.spinner.View()+" compacting context…"))
 	}
 	wasAtBottom := m.viewport.AtBottom()
 	m.viewport.SetContent(joinConversationBlocks(blocks))
@@ -370,6 +372,8 @@ func (m *model) renderStatus() string {
 		parts = append(parts, "● running "+formatElapsed(m.currentElapsed()))
 	} else if m.planCompacting {
 		parts = append(parts, "● compacting plan context")
+	} else if m.manualCompacting {
+		parts = append(parts, "● compacting context")
 	}
 	if !m.viewport.AtBottom() {
 		parts = append(parts, "↑ history")

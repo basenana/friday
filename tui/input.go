@@ -109,6 +109,15 @@ func (m *model) applyLifecycleAction(action codercmds.Action) (bool, tea.Cmd) {
 
 func (m *model) applySessionAction(action codercmds.Action) (bool, tea.Cmd) {
 	switch action := action.(type) {
+	case codercmds.CompactSessionAction:
+		lifecycle, ok := m.registry.Lifecycle(m.sessionID)
+		if !ok || lifecycle.Current() == nil {
+			m.appendBlock(chatBlock{kind: blockError, content: "compact: active session unavailable"})
+			return true, nil
+		}
+		m.manualCompacting = true
+		m.layout()
+		return true, tea.Batch(compactManually(m.sessionID, lifecycle.Current()), m.spinner.Tick)
 	case codercmds.ClearSessionAction:
 		if m.projectMgr != nil {
 			newID, err := m.createProjectRoot(true)
@@ -267,7 +276,7 @@ func (m *model) dispatchIfIdle() (tea.Model, tea.Cmd) {
 }
 
 func (m *model) canDispatchQueued() bool {
-	return !m.running && !m.planCompacting && len(m.queued) > 0 && m.form == nil && m.planHandoff == nil &&
+	return !m.running && !m.planCompacting && !m.manualCompacting && len(m.queued) > 0 && m.form == nil && m.planHandoff == nil &&
 		m.commandConfirm == nil && m.selector == nil && m.detail == nil && m.confirm == nil
 }
 

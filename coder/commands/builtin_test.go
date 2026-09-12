@@ -35,6 +35,14 @@ func TestQuitCmd(t *testing.T) {
 	actionAt[QuitAction](t, r, 0)
 }
 
+func TestCompactCmdReturnsAsyncAction(t *testing.T) {
+	r, err := compactCmd{}.Execute(nil)
+	if err != nil {
+		t.Fatalf("compact Execute error: %v", err)
+	}
+	actionAt[CompactSessionAction](t, r, 0)
+}
+
 func TestHelpCmd(t *testing.T) {
 	reg := NewRegistry()
 	RegisterBuiltins(reg)

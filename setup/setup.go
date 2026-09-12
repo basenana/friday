@@ -220,6 +220,7 @@ func NewAgent(sessionMgr SessionManager, cfg *config.Config, opts ...Option) (*A
 		SessionMemoryStore: sessionMemoryStoreFromManager(sessionMgr),
 		ReservedTokens:     approvedPlanHook.ReservedTokens,
 	})
+	refocusHook := contextmgr.NewRefocusHook()
 
 	workdir := options.workdir
 	if workdir == "" {
@@ -310,6 +311,7 @@ func NewAgent(sessionMgr SessionManager, cfg *config.Config, opts ...Option) (*A
 		// projection accounts for the extra per-request messages.
 		newMemoryHook(ws),
 		contextHook,
+		refocusHook,
 		approvedPlanHook,
 		subagentHook,
 		// Keep collaboration instructions last so Plan Mode remains the

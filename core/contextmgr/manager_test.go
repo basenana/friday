@@ -96,6 +96,15 @@ func TestBeforeModelPublishesCompactFinishOnlyWhenMicroCompactApplies(t *testing
 	if !containsEventWithMethod(got, types.EventCompactFinish, "micro_compact") {
 		t.Fatalf("expected compact.finish(method=micro_compact) in %#v", got)
 	}
+	finish := findContextCompactEvent(got, types.EventCompactFinish, "micro_compact")
+	for _, field := range []string{"trigger", "status", "tokens_before", "tokens_after", "saved_tokens", "duration_ms"} {
+		if finish == nil || finish.Data[field] == "" {
+			t.Fatalf("micro compact finish missing %q: %#v", field, finish)
+		}
+	}
+	if finish.Data["trigger"] != "soft" || finish.Data["status"] != "ok" {
+		t.Fatalf("unexpected micro compact payload: %#v", finish.Data)
+	}
 	if containsEventType(got, types.EventCompactSkip) {
 		t.Fatalf("did not expect compact.skip when micro-compact applies: %#v", got)
 	}
@@ -182,6 +191,10 @@ func TestBeforeModelPublishesCompactSkipWhenMicroCompactDoesNotApply(t *testing.
 	assertEventTypes(t, got, types.EventCompactStart)
 	if !containsEventWithMethod(got, types.EventCompactSkip, "micro_compact") {
 		t.Fatalf("expected compact.skip(method=micro_compact) in %#v", got)
+	}
+	skip := findContextCompactEvent(got, types.EventCompactSkip, "micro_compact")
+	if skip == nil || skip.Data["trigger"] != "soft" || skip.Data["reason"] != "not_beneficial" || skip.Data["tokens_before"] == "" {
+		t.Fatalf("unexpected micro compact skip payload: %#v", skip)
 	}
 	if containsEventWithMethod(got, types.EventCompactFinish, "micro_compact") {
 		t.Fatalf("did not expect compact.finish when micro-compact is skipped: %#v", got)
@@ -356,6 +369,35 @@ func TestBeforeModelHardCompactRewritesHistory(t *testing.T) {
 	// The compact summary should use the summaryPrefix and lead the history
 	if !strings.Contains(sess.GetHistory()[0].Content, "Several lengthy dialogues") {
 		t.Fatalf("expected compact summary message at the start of history after hard compact, got %q", sess.GetHistory()[0].Content)
+	}
+}
+
+func TestBeforeModelHardCompactPublishesSkipAndFailureStatistics(t *testing.T) {
+	llm := &failingCompactClient{}
+	sess := session.New("sess-hard-event-failure", llm, session.WithHistory(
+		types.Message{Role: types.RoleUser, Content: strings.Repeat("large request ", 300)},
+		types.Message{Role: types.RoleAssistant, Content: strings.Repeat("large response ", 300)},
+	))
+	eventCh, unsubscribe := sess.SubscribeEvents()
+	defer unsubscribe()
+
+	mgr := New(llm, Config{ContextWindow: 1_000, SoftThresholdRatio: 0.10, HardThresholdRatio: 0.15})
+	req := providers.NewRequest("", sess.GetHistory()...)
+	if err := mgr.BeforeModel(stdctx.Background(), sess, req); err != nil {
+		t.Fatalf("BeforeModel() error = %v", err)
+	}
+
+	events := drainEvents(eventCh)
+	skip := findContextCompactEvent(events, types.EventCompactSkip, "session_memory")
+	if skip == nil || skip.Data["trigger"] != "hard" || skip.Data["reason"] != "no_session_memory" {
+		t.Fatalf("unexpected session-memory skip: %#v", skip)
+	}
+	fail := findContextCompactEvent(events, types.EventCompactFinish, "summary")
+	if fail == nil || fail.Data["trigger"] != "hard" || fail.Data["status"] != "failed" || fail.Data["error"] == "" || fail.Data["tokens_before"] == "" {
+		t.Fatalf("unexpected summary failure: %#v", fail)
+	}
+	if _, ok := fail.Data["tokens_after"]; ok {
+		t.Fatalf("failed event must not contain tokens_after: %#v", fail.Data)
 	}
 }
 
@@ -591,6 +633,15 @@ func containsEventWithMethod(events []types.Event, target types.EventType, metho
 		}
 	}
 	return false
+}
+
+func findContextCompactEvent(events []types.Event, target types.EventType, method string) *types.Event {
+	for i := range events {
+		if events[i].Type == target && events[i].Data["method"] == method {
+			return &events[i]
+		}
+	}
+	return nil
 }
 
 func assertEventTypes(t *testing.T, events []types.Event, want ...types.EventType) {

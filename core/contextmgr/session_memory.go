@@ -3,6 +3,7 @@ package contextmgr
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync/atomic"
@@ -12,6 +13,26 @@ import (
 	"github.com/basenana/friday/core/session"
 	"github.com/basenana/friday/core/types"
 )
+
+var (
+	// ErrNoSessionMemory indicates that hard compaction must fall back to a
+	// different strategy because no session-memory baseline is available.
+	ErrNoSessionMemory = errors.New("no session memory available")
+	// ErrMemoryCompactExceedsThreshold indicates that the session-memory
+	// projection would still be too large and summary compaction should run.
+	ErrMemoryCompactExceedsThreshold = errors.New("session memory compact exceeds threshold")
+)
+
+func memoryCompactDeclineReason(err error) (string, bool) {
+	switch {
+	case errors.Is(err, ErrNoSessionMemory):
+		return "no_session_memory", true
+	case errors.Is(err, ErrMemoryCompactExceedsThreshold):
+		return "exceeds_soft_threshold", true
+	default:
+		return "", false
+	}
+}
 
 // SessionMemoryRecord is the on-disk representation of session memory.
 // It is stored as session_memory.json alongside the session history.
@@ -324,7 +345,7 @@ func (m *Manager) compactWithSessionMemory(ctx context.Context, sess *session.Se
 	st := sess.EnsureContextState()
 	historyTokens := countTokens(sess, history)
 	if st.LastSyncedAt.IsZero() || len(st.SessionMemory) == 0 {
-		return fmt.Errorf("no session memory available")
+		return ErrNoSessionMemory
 	}
 
 	// Collect messages after the sync boundary as the tail.
@@ -340,7 +361,7 @@ func (m *Manager) compactWithSessionMemory(ctx context.Context, sess *session.Se
 
 	totalProjected := smTokens + tailTokens
 	if totalProjected > st.PromptBudget.SoftThreshold {
-		return fmt.Errorf("session memory compact exceeds threshold")
+		return ErrMemoryCompactExceedsThreshold
 	}
 
 	compacted := make([]types.Message, 0, len(st.SessionMemory)+len(tail))

@@ -20,6 +20,7 @@ import (
 	"github.com/basenana/friday/config"
 	"github.com/basenana/friday/core/collaboration"
 	"github.com/basenana/friday/core/planning"
+	"github.com/basenana/friday/core/session"
 	"github.com/basenana/friday/core/types"
 	"github.com/basenana/friday/sandbox"
 	"github.com/basenana/friday/sessions"
@@ -742,14 +743,73 @@ type planCompactFinishedMsg struct {
 	err       error
 }
 
+type manualCompactFinishedMsg struct {
+	sessionID      string
+	beforeTokens   int64
+	afterTokens    int64
+	beforeMessages int
+	afterMessages  int
+	duration       time.Duration
+	err            error
+}
+
+type manualCompactor interface {
+	CompactHistoryWithTrigger(context.Context, session.CompactTrigger) error
+	HistoryLen() int
+	Tokens() int64
+}
+
+func compactManually(sessionID string, sess manualCompactor) tea.Cmd {
+	return func() tea.Msg {
+		startedAt := time.Now()
+		beforeTokens := sess.Tokens()
+		beforeMessages := sess.HistoryLen()
+		err := sess.CompactHistoryWithTrigger(context.Background(), session.CompactTriggerManual)
+		return manualCompactFinishedMsg{
+			sessionID:      sessionID,
+			beforeTokens:   beforeTokens,
+			afterTokens:    sess.Tokens(),
+			beforeMessages: beforeMessages,
+			afterMessages:  sess.HistoryLen(),
+			duration:       time.Since(startedAt),
+			err:            err,
+		}
+	}
+}
+
+func (m *model) finishManualCompact(msg manualCompactFinishedMsg) (tea.Model, tea.Cmd) {
+	m.manualCompacting = false
+	if msg.sessionID != m.sessionID {
+		m.appendBlock(chatBlock{kind: blockError, content: "compact: session changed while compacting"})
+		m.layout()
+		return m.dispatchIfIdle()
+	}
+	if msg.err != nil {
+		m.appendBlock(chatBlock{kind: blockError, content: "compact: " + msg.err.Error()})
+		m.layout()
+		return m.dispatchIfIdle()
+	}
+
+	m.tokenCount = int(msg.afterTokens)
+	saved := msg.beforeTokens - msg.afterTokens
+	stats := fmt.Sprintf("context compacted · %d → %d tokens · saved %d", msg.beforeTokens, msg.afterTokens, saved)
+	if msg.beforeTokens > 0 {
+		stats += fmt.Sprintf(" (%.1f%%)", float64(saved)/float64(msg.beforeTokens)*100)
+	}
+	stats += fmt.Sprintf(" · %d → %d messages · %s", msg.beforeMessages, msg.afterMessages, formatElapsed(msg.duration))
+	m.appendBlock(chatBlock{kind: blockDivider, content: stats})
+	m.layout()
+	return m.dispatchIfIdle()
+}
+
 type planCompactor interface {
-	CompactHistory(context.Context) error
+	CompactHistoryWithTrigger(context.Context, session.CompactTrigger) error
 	Tokens() int64
 }
 
 func compactForPlanApproval(sessionID, planID string, sess planCompactor) tea.Cmd {
 	return func() tea.Msg {
-		err := sess.CompactHistory(context.Background())
+		err := sess.CompactHistoryWithTrigger(context.Background(), session.CompactTriggerPlanHandoff)
 		return planCompactFinishedMsg{sessionID: sessionID, planID: planID, tokens: int(sess.Tokens()), err: err}
 	}
 }

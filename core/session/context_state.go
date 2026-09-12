@@ -37,6 +37,10 @@ type ContextState struct {
 	pendingMu     sync.Mutex
 	PendingMemory any
 
+	// PendingRefocus holds an agent-provided summary that the context manager
+	// applies before the next model call.
+	PendingRefocus string
+
 	// TokenCheckpoint stores the last known accurate token count from an LLM response.
 	// When PromptTokens > 0, the total context size can be calculated as:
 	//   PromptTokens + estimated tokens for messages added since Index
@@ -98,6 +102,7 @@ func cloneContextState(src *ContextState) *ContextState {
 	dst.MicroCompactPrefix = append([]types.Message(nil), src.MicroCompactPrefix...)
 	dst.pendingMu = sync.Mutex{} // fresh mutex for the clone
 	dst.PendingMemory = nil      // fork starts with no pending
+	dst.PendingRefocus = ""
 	return &dst
 }
 
@@ -113,6 +118,20 @@ func (cs *ContextState) DrainPendingMemory() any {
 	v := cs.PendingMemory
 	cs.PendingMemory = nil
 	return v
+}
+
+func (cs *ContextState) StorePendingRefocus(summary string) {
+	cs.pendingMu.Lock()
+	cs.PendingRefocus = summary
+	cs.pendingMu.Unlock()
+}
+
+func (cs *ContextState) DrainPendingRefocus() string {
+	cs.pendingMu.Lock()
+	defer cs.pendingMu.Unlock()
+	summary := cs.PendingRefocus
+	cs.PendingRefocus = ""
+	return summary
 }
 
 func (cs *ContextState) ResetMicroCompact() {

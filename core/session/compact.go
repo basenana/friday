@@ -49,7 +49,7 @@ func (s *Session) autoCompactHistory(ctx context.Context, req providers.Request)
 		return nil
 	}
 
-	if err := s.CompactHistory(ctx); err != nil {
+	if err := s.CompactHistoryWithTrigger(ctx, CompactTriggerThreshold); err != nil {
 		return err
 	}
 
@@ -58,6 +58,10 @@ func (s *Session) autoCompactHistory(ctx context.Context, req providers.Request)
 }
 
 func (s *Session) CompactHistory(ctx context.Context) error {
+	return s.CompactHistoryWithTrigger(ctx, CompactTriggerManual)
+}
+
+func (s *Session) CompactHistoryWithTrigger(ctx context.Context, trigger CompactTrigger) (retErr error) {
 	ctx, span := tracing.Start(ctx, "session.compact",
 		tracing.WithAttributes(
 			tracing.String("session.id", s.ID),
@@ -71,14 +75,28 @@ func (s *Session) CompactHistory(ctx context.Context) error {
 	if len(history) == 0 {
 		return nil
 	}
+	if trigger == "" {
+		trigger = CompactTriggerManual
+	}
+	beforeTokens := tokenCount(history)
+	startedAt := time.Now()
+	attemptedMethod := "summary"
 
 	s.PublishEvent(types.Event{
 		Type: types.EventCompactStart,
 		Data: map[string]string{
 			"history_len": strconv.Itoa(len(history)),
-			"trigger":     "threshold",
+			"trigger":     string(trigger),
 		},
 	})
+	defer func() {
+		if retErr != nil {
+			s.PublishEvent(types.Event{
+				Type: types.EventCompactFinish,
+				Data: CompactFailData(attemptedMethod, trigger, beforeTokens, time.Since(startedAt), retErr),
+			})
+		}
+	}()
 
 	ctxState := s.EnsureContextState()
 
@@ -87,6 +105,7 @@ func (s *Session) CompactHistory(ctx context.Context) error {
 
 	// Without an LLM, fallback to keeping the last N messages instead of guessing.
 	if s.llm == nil {
+		attemptedMethod = "truncate"
 		compacted := truncateToLastN(history, compactFallbackKeepMessages)
 		if err := s.ReplaceHistory(compacted...); err != nil {
 			return err
@@ -96,7 +115,7 @@ func (s *Session) CompactHistory(ctx context.Context) error {
 		ctxState.LastCompactionTokens = tokenCount(history)
 		s.PublishEvent(types.Event{
 			Type: types.EventCompactFinish,
-			Data: map[string]string{"method": "truncate"},
+			Data: CompactFinishData("truncate", trigger, beforeTokens, tokenCount(compacted), time.Since(startedAt)),
 		})
 		return nil
 	}
@@ -106,6 +125,7 @@ func (s *Session) CompactHistory(ctx context.Context) error {
 		return err
 	}
 	if strings.TrimSpace(summary) == "" {
+		attemptedMethod = "truncate"
 		// LLM returned empty summary; fallback to keeping the last N messages.
 		compacted := truncateToLastN(history, compactFallbackKeepMessages)
 		if err := s.ReplaceHistory(compacted...); err != nil {
@@ -116,7 +136,7 @@ func (s *Session) CompactHistory(ctx context.Context) error {
 		ctxState.LastCompactionTokens = tokenCount(history)
 		s.PublishEvent(types.Event{
 			Type: types.EventCompactFinish,
-			Data: map[string]string{"method": "truncate"},
+			Data: CompactFinishData("truncate", trigger, beforeTokens, tokenCount(compacted), time.Since(startedAt)),
 		})
 		return nil
 	}
@@ -130,7 +150,7 @@ func (s *Session) CompactHistory(ctx context.Context) error {
 	ctxState.LastCompactionTokens = tokenCount(history)
 	s.PublishEvent(types.Event{
 		Type: types.EventCompactFinish,
-		Data: map[string]string{"method": "summary"},
+		Data: CompactFinishData("summary", trigger, beforeTokens, tokenCount(compacted), time.Since(startedAt)),
 	})
 	return nil
 }

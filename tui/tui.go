@@ -155,6 +155,7 @@ type model struct {
 	commandConfirm   *commandConfirmation
 	planHandoff      *planHandoffState
 	planCompacting   bool
+	manualCompacting bool
 
 	running         bool
 	currentRunID    string
@@ -328,6 +329,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.waitForActorEvent()
 	case planCompactFinishedMsg:
 		return m.finishPlanApproval(msg)
+	case manualCompactFinishedMsg:
+		return m.finishManualCompact(msg)
 	case dispatchQueuedMsg:
 		return m.dispatchNextQueued()
 	case tea.KeyPressMsg:
@@ -336,7 +339,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.closeFeed()
 			return m, tea.Quit
 		}
-		if m.loading || m.fatalErr != nil || m.planCompacting {
+		if m.loading || m.fatalErr != nil || m.planCompacting || m.manualCompacting {
 			return m, nil
 		}
 		if m.detail != nil {
@@ -384,7 +387,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case spinner.TickMsg:
 		var cmd tea.Cmd
 		m.spinner, cmd = m.spinner.Update(msg)
-		if m.loading || m.running || m.planCompacting {
+		if m.loading || m.running || m.planCompacting || m.manualCompacting {
 			return m, cmd
 		}
 		return m, nil

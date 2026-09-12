@@ -37,6 +37,7 @@ type DeleteSessionAction struct{ Target string }
 type OpenModelAction struct{}
 type SetModelAction struct{ Target string }
 type ShowStatusAction struct{}
+type CompactSessionAction struct{}
 type SetModeAction struct {
 	Mode   collaboration.Mode
 	Prompt string
@@ -60,6 +61,7 @@ func (DeleteSessionAction) commandAction()  {}
 func (OpenModelAction) commandAction()      {}
 func (SetModelAction) commandAction()       {}
 func (ShowStatusAction) commandAction()     {}
+func (CompactSessionAction) commandAction() {}
 func (SetModeAction) commandAction()        {}
 
 func ResultOf(actions ...Action) *Result { return &Result{Actions: actions} }

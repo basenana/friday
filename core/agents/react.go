@@ -137,7 +137,7 @@ func (a *react) reactLoop(ctx context.Context, sess *session.Session, resp *api.
 				continue
 			}
 			if isMaxTokensError(err) {
-				compactErr := sess.CompactHistory(ctx)
+				compactErr := sess.CompactHistoryWithTrigger(ctx, session.CompactTriggerOverflow)
 				if compactErr == nil {
 					loopTimes++ // count the compact-attempt as a loop iteration
 					if loopTimes > a.option.MaxLoopTimes {

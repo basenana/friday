@@ -41,17 +41,8 @@ func (compactCmd) Description() string { return "Compact the conversation histor
 func (compactCmd) Metadata() Metadata {
 	return Metadata{Usage: "/compact", Category: "Info", Policy: PolicyDeferred}
 }
-func (compactCmd) Execute(ctx *Context) (*Result, error) {
-	sess := currentSession(ctx)
-	if sess == nil {
-		return MessageResult("no active session"), nil
-	}
-	before := len(sess.History)
-	if err := sess.CompactHistory(ctx.Ctx); err != nil {
-		return MessageResult("compact failed: " + err.Error()), nil
-	}
-	after := len(sess.History)
-	return MessageResult(fmt.Sprintf("Compacted: %d → %d messages", before, after)), nil
+func (compactCmd) Execute(_ *Context) (*Result, error) {
+	return ResultOf(CompactSessionAction{}), nil
 }
 
 // --- /model ---

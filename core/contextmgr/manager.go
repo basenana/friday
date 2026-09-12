@@ -110,28 +110,35 @@ func (m *Manager) BeforeModel(ctx stdctx.Context, sess *session.Session, req pro
 	m.ensureSessionMemory(ctx, sess)
 	m.maybeStartAsyncSessionMemory(sess, st, history)
 
+	if refocusSummary := st.DrainPendingRefocus(); refocusSummary != "" {
+		projected, projectedTokens = m.applyRefocusCompact(ctx, sess, refocusSummary)
+		// ReplaceHistory installs a cloned ContextState. Refresh both the state
+		// and history so later projection stages cannot restore discarded text.
+		st = sess.EnsureContextState()
+		history = projected
+	}
+
 	if projectedTokens > budget.SoftThreshold {
 		sess.PublishEvent(types.Event{
 			Type: types.EventCompactStart,
 			Data: map[string]string{
 				"history_len": strconv.Itoa(len(history)),
-				"trigger":     "soft",
+				"trigger":     string(session.CompactTriggerSoft),
 			},
 		})
 		var applied bool
+		tokensBefore := projectedTokens
+		startedAt := time.Now()
 		projected, projectedTokens, applied = m.applyMicroCompact(sess, st, history, projectedTokens)
 		if applied {
 			sess.PublishEvent(types.Event{
 				Type: types.EventCompactFinish,
-				Data: map[string]string{"method": "micro_compact"},
+				Data: session.CompactFinishData("micro_compact", session.CompactTriggerSoft, tokensBefore, projectedTokens, time.Since(startedAt)),
 			})
 		} else {
 			sess.PublishEvent(types.Event{
 				Type: types.EventCompactSkip,
-				Data: map[string]string{
-					"method": "micro_compact",
-					"reason": "not_beneficial",
-				},
+				Data: session.CompactSkipData("micro_compact", session.CompactTriggerSoft, "not_beneficial", tokensBefore, time.Since(startedAt)),
 			})
 		}
 	}
@@ -141,7 +148,7 @@ func (m *Manager) BeforeModel(ctx stdctx.Context, sess *session.Session, req pro
 			Type: types.EventCompactStart,
 			Data: map[string]string{
 				"history_len": strconv.Itoa(len(history)),
-				"trigger":     "hard",
+				"trigger":     string(session.CompactTriggerHard),
 			},
 		})
 		projected, projectedTokens = m.applyHardCompact(ctx, sess, history)
@@ -205,7 +212,10 @@ func (m *Manager) applyHardCompact(ctx stdctx.Context, sess *session.Session, hi
 		"hard_threshold", sess.EnsureContextState().PromptBudget.HardThreshold,
 	)
 
-	if err := m.compactWithSessionMemory(ctx, sess, history); err == nil {
+	tokensBefore := countTokens(sess, history)
+	startedAt := time.Now()
+	errMemory := m.compactWithSessionMemory(ctx, sess, history)
+	if errMemory == nil {
 		projected := sess.GetHistory()
 		tokens := countTokens(sess, projected)
 		m.logger.Infow("[COMPACT] session memory compact applied",
@@ -214,11 +224,23 @@ func (m *Manager) applyHardCompact(ctx stdctx.Context, sess *session.Session, hi
 		)
 		sess.PublishEvent(types.Event{
 			Type: types.EventCompactFinish,
-			Data: map[string]string{"method": "session_memory"},
+			Data: session.CompactFinishData("session_memory", session.CompactTriggerHard, tokensBefore, tokens, time.Since(startedAt)),
 		})
 		return projected, tokens
 	}
+	if reason, expected := memoryCompactDeclineReason(errMemory); expected {
+		sess.PublishEvent(types.Event{
+			Type: types.EventCompactSkip,
+			Data: session.CompactSkipData("session_memory", session.CompactTriggerHard, reason, tokensBefore, time.Since(startedAt)),
+		})
+	} else {
+		sess.PublishEvent(types.Event{
+			Type: types.EventCompactFinish,
+			Data: session.CompactFailData("session_memory", session.CompactTriggerHard, tokensBefore, time.Since(startedAt), errMemory),
+		})
+	}
 
+	startedAt = time.Now()
 	if err := m.compactWithSummary(ctx, sess, history); err == nil {
 		projected := sess.GetHistory()
 		tokens := countTokens(sess, projected)
@@ -228,9 +250,14 @@ func (m *Manager) applyHardCompact(ctx stdctx.Context, sess *session.Session, hi
 		)
 		sess.PublishEvent(types.Event{
 			Type: types.EventCompactFinish,
-			Data: map[string]string{"method": "summary"},
+			Data: session.CompactFinishData("summary", session.CompactTriggerHard, tokensBefore, tokens, time.Since(startedAt)),
 		})
 		return projected, tokens
+	} else {
+		sess.PublishEvent(types.Event{
+			Type: types.EventCompactFinish,
+			Data: session.CompactFailData("summary", session.CompactTriggerHard, tokensBefore, time.Since(startedAt), err),
+		})
 	}
 
 	m.logger.Errorw("all compaction methods failed",
