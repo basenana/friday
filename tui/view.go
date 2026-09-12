@@ -233,6 +233,8 @@ func (m *model) View() tea.View {
 			label = "cancelling"
 		}
 		blocks = append(blocks, accentStyle.Render(m.spinner.View()+" "+label+"… · "+formatElapsed(m.currentElapsed())))
+	} else if m.planCompacting {
+		blocks = append(blocks, accentStyle.Render(m.spinner.View()+" compacting context for approved plan…"))
 	}
 	wasAtBottom := m.viewport.AtBottom()
 	m.viewport.SetContent(joinConversationBlocks(blocks))
@@ -366,6 +368,8 @@ func (m *model) renderStatus() string {
 	}
 	if m.running {
 		parts = append(parts, "● running "+formatElapsed(m.currentElapsed()))
+	} else if m.planCompacting {
+		parts = append(parts, "● compacting plan context")
 	}
 	if !m.viewport.AtBottom() {
 		parts = append(parts, "↑ history")

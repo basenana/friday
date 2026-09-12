@@ -22,12 +22,12 @@ type transcriptProjection struct {
 }
 
 func (m *model) projectTranscript(sessionID string) (transcriptProjection, error) {
-	return buildTranscriptProjection(m.sessMgr, m.cfg, m.workdir, m.width, m.height, sessionID)
+	return buildTranscriptProjection(m.runtime, m.cfg, m.workdir, m.width, m.height, sessionID)
 }
 
-func buildTranscriptProjection(sessMgr *sessions.Manager, cfg *config.Config, workdir string, width, height int, sessionID string) (transcriptProjection, error) {
+func buildTranscriptProjection(sessMgr sessionRuntime, cfg *config.Config, workdir string, width, height int, sessionID string) (transcriptProjection, error) {
 	p := &model{
-		sessMgr: sessMgr, cfg: cfg, workdir: workdir, width: width, height: height,
+		runtime: sessMgr, cfg: cfg, workdir: workdir, width: width, height: height,
 		seenInputs: make(map[string]bool), cards: make(map[string]*cardState),
 		toolCalls: make(map[string]*toolCallBlock), historyIndex: -1, replaying: true,
 	}

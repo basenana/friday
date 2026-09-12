@@ -495,3 +495,78 @@ func TestCalibratedMessageTokensPersistAcrossReload(t *testing.T) {
 		t.Fatalf("expected persisted calibrated tokens=42, got %d", history[0].Tokens)
 	}
 }
+
+func TestSessionRecordsPersistAcrossReload(t *testing.T) {
+	ctx := context.Background()
+	store := NewFileSessionStore(t.TempDir())
+	sess, err := store.Create("record-session", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sess.UpdateRecord(ctx, "file_instructions.test", func([]byte) ([]byte, error) {
+		return []byte(`{"version":1,"directories":["."]}`), nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	reloaded, err := store.Load("record-session", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := reloaded.ReadRecord(ctx, "file_instructions.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != `{"version":1,"directories":["."]}` {
+		t.Fatalf("record = %s", got)
+	}
+	if _, err := os.Stat(filepath.Join(store.sessionDir("record-session"), "state", "file_instructions.test.json")); err != nil {
+		t.Fatalf("record file: %v", err)
+	}
+}
+
+func TestSessionRecordUpdatesAreSerializedAcrossStores(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	first := NewFileSessionStore(dir)
+	second := NewFileSessionStore(dir)
+	if _, err := first.Create("record-session", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	start := make(chan struct{})
+	errCh := make(chan error, 2)
+	var wg sync.WaitGroup
+	for _, store := range []*FileSessionStore{first, second} {
+		wg.Add(1)
+		go func(store *FileSessionStore) {
+			defer wg.Done()
+			<-start
+			errCh <- store.UpdateSessionRecord(ctx, "record-session", "counter", func(current []byte) ([]byte, error) {
+				value := 0
+				if len(current) > 0 {
+					_, err := fmt.Sscanf(string(current), "%d", &value)
+					if err != nil {
+						return nil, err
+					}
+				}
+				return []byte(fmt.Sprintf("%d", value+1)), nil
+			})
+		}(store)
+	}
+	close(start)
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := first.ReadSessionRecord(ctx, "record-session", "counter")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "2" {
+		t.Fatalf("counter = %q, want 2", got)
+	}
+}

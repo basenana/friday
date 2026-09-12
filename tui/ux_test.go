@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -129,7 +130,7 @@ func TestPlanHandoffPausesQueueAndCanKeepPlanning(t *testing.T) {
 	if _, cmd := m.dispatchNextQueued(); cmd != nil || len(m.queued) != 1 {
 		t.Fatalf("queue dispatched behind handoff: cmd=%v queue=%v", cmd != nil, m.queued)
 	}
-	m.planHandoff.selected = 2
+	m.planHandoff.selected = 1
 	got, cmd := m.updatePlanHandoff(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = got.(*model)
 	if m.planHandoff != nil || m.mode != collaboration.ModePlan || m.latestPlan.Status != planning.ArtifactProposed || cmd == nil {
@@ -216,49 +217,60 @@ func TestRestoreProposedPlanReopensHandoff(t *testing.T) {
 	}
 }
 
-func TestPlanHandoffImplementsHereAndFresh(t *testing.T) {
-	t.Run("current", func(t *testing.T) {
-		m, mgr, _ := newTestModel(t)
-		plan := planning.Artifact{ID: "plan-current", SessionID: m.sessionID, Version: 1, Title: "Current", Status: planning.ArtifactProposed, Markdown: "## Summary\ncurrent plan"}
-		if err := mgr.SavePlan(m.sessionID, plan); err != nil {
-			t.Fatal(err)
-		}
-		m.mode, m.latestPlan, m.planHandoff = collaboration.ModePlan, &plan, &planHandoffState{}
-		got, cmd := m.updatePlanHandoff(tea.KeyPressMsg{Code: tea.KeyEnter})
-		m = got.(*model)
-		if cmd == nil || !m.running || m.mode != collaboration.ModeDefault || m.latestPlan.Status != planning.ArtifactAccepted {
-			t.Fatalf("current handoff: cmd=%v running=%v mode=%q plan=%+v", cmd != nil, m.running, m.mode, m.latestPlan)
-		}
-		if last := m.messages[len(m.messages)-1].content; !strings.Contains(last, plan.Markdown) {
-			t.Fatalf("implementation prompt omitted plan: %q", last)
-		}
-	})
+func TestPlanHandoffCompactsAndImplementsInCurrentSession(t *testing.T) {
+	m, mgr, raw := newTestModel(t)
+	plan := planning.Artifact{ID: "plan-current", SessionID: m.sessionID, Version: 1, Title: "Current", Status: planning.ArtifactProposed, Markdown: "## Summary\ncurrent plan"}
+	if err := mgr.SavePlan(m.sessionID, plan); err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.SetMode(m.sessionID, collaboration.ModePlan); err != nil {
+		t.Fatal(err)
+	}
+	before, err := raw.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalID := m.sessionID
+	m.mode, m.latestPlan, m.planHandoff = collaboration.ModePlan, &plan, &planHandoffState{}
 
-	t.Run("fresh", func(t *testing.T) {
-		m, mgr, _ := newTestModel(t)
-		oldID := m.sessionID
-		if err := mgr.SetModel(oldID, sessions.ModelSelection{Provider: "openai", Model: "gpt-4o"}); err != nil {
-			t.Fatal(err)
-		}
-		plan := planning.Artifact{ID: "plan-fresh", SessionID: oldID, Version: 1, Title: "Fresh", Status: planning.ArtifactProposed, Markdown: "## Summary\nfresh plan"}
-		if err := mgr.SavePlan(oldID, plan); err != nil {
-			t.Fatal(err)
-		}
-		m.mode, m.latestPlan, m.planHandoff = collaboration.ModePlan, &plan, &planHandoffState{selected: 1}
-		got, cmd := m.updatePlanHandoff(tea.KeyPressMsg{Code: tea.KeyEnter})
-		m = got.(*model)
-		if cmd == nil || m.sessionID == oldID || !m.running || m.mode != collaboration.ModeDefault {
-			t.Fatalf("fresh handoff: cmd=%v id=%q running=%v mode=%q", cmd != nil, m.sessionID, m.running, m.mode)
-		}
-		meta, err := mgr.GetStore().GetMeta(m.sessionID)
-		if err != nil || meta.ParentSessionID != oldID || meta.SourcePlanID != plan.ID || meta.Runtime.Model.Model != "gpt-4o" {
-			t.Fatalf("fresh lineage/runtime = %+v, err=%v", meta, err)
-		}
-	})
+	got, cmd := m.updatePlanHandoff(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = got.(*model)
+	if cmd == nil || !m.planCompacting || m.running {
+		t.Fatalf("approval did not start compact: cmd=%v compacting=%v running=%v", cmd != nil, m.planCompacting, m.running)
+	}
+	rawMsg := cmd()
+	msg, ok := rawMsg.(planCompactFinishedMsg)
+	if !ok {
+		t.Fatalf("compact command returned %T", rawMsg)
+	}
+	got, _ = m.Update(msg)
+	m = got.(*model)
+	after, err := raw.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.sessionID != originalID || len(after) != len(before) {
+		t.Fatalf("approval changed session: id=%q want=%q sessions=%d/%d", m.sessionID, originalID, len(after), len(before))
+	}
+	if m.planCompacting || !m.running || m.mode != collaboration.ModeDefault || m.latestPlan.Status != planning.ArtifactAccepted {
+		t.Fatalf("handoff: compacting=%v running=%v mode=%q plan=%+v", m.planCompacting, m.running, m.mode, m.latestPlan)
+	}
+	persisted, err := raw.LoadLatestPlan(originalID)
+	if err != nil || persisted == nil || persisted.Status != planning.ArtifactAccepted {
+		t.Fatalf("persisted plan = %+v, err=%v", persisted, err)
+	}
+	meta, err := raw.GetMeta(originalID)
+	if err != nil || meta.Runtime.Mode != collaboration.ModeDefault {
+		t.Fatalf("persisted mode = %+v, err=%v", meta, err)
+	}
+	last := m.messages[len(m.messages)-1].content
+	if strings.Contains(last, plan.Markdown) || last != "Implement the approved plan. Re-read relevant files as needed and verify the result." {
+		t.Fatalf("implementation prompt = %q", last)
+	}
 }
 
 func TestPlanHandoffFailuresRestoreProposalAndQueue(t *testing.T) {
-	setup := func(t *testing.T, selected int) (*model, *sessions.Manager, *sessionfile.FileSessionStore, *faultStore, planning.Artifact) {
+	setup := func(t *testing.T) (*model, *sessions.Manager, *sessionfile.FileSessionStore, *faultStore, planning.Artifact) {
 		t.Helper()
 		m, mgr, raw, faults := newFaultTestModel(t)
 		plan := planning.Artifact{ID: "plan-fault", SessionID: m.sessionID, Version: 1, Title: "Fault", Status: planning.ArtifactProposed, Markdown: "## Summary\nfault plan"}
@@ -268,15 +280,15 @@ func TestPlanHandoffFailuresRestoreProposalAndQueue(t *testing.T) {
 		if err := mgr.SetMode(m.sessionID, collaboration.ModePlan); err != nil {
 			t.Fatal(err)
 		}
-		m.mode, m.latestPlan, m.planHandoff = collaboration.ModePlan, &plan, &planHandoffState{selected: selected}
+		m.mode, m.latestPlan, m.planHandoff = collaboration.ModePlan, &plan, &planHandoffState{}
 		m.queued = []pendingInput{{text: "keep queued"}}
 		return m, mgr, raw, faults, plan
 	}
 
 	t.Run("accept save", func(t *testing.T) {
-		m, _, raw, faults, plan := setup(t, 0)
+		m, _, raw, faults, plan := setup(t)
 		faults.failNextSave = true
-		m.updatePlanHandoff(tea.KeyPressMsg{Code: tea.KeyEnter})
+		m.finishPlanApproval(planCompactFinishedMsg{sessionID: m.sessionID, planID: plan.ID})
 		persisted, _ := raw.LoadPlan(plan.SessionID, plan.ID)
 		if m.planHandoff == nil || m.latestPlan.Status != planning.ArtifactProposed || persisted.Status != planning.ArtifactProposed || len(m.queued) != 1 || m.running {
 			t.Fatalf("failed acceptance was not rolled back: popup=%v latest=%+v persisted=%+v queue=%v running=%v", m.planHandoff != nil, m.latestPlan, persisted, m.queued, m.running)
@@ -284,54 +296,22 @@ func TestPlanHandoffFailuresRestoreProposalAndQueue(t *testing.T) {
 	})
 
 	t.Run("mode update", func(t *testing.T) {
-		m, _, raw, faults, plan := setup(t, 0)
+		m, _, raw, faults, plan := setup(t)
 		faults.failMode = true
-		m.updatePlanHandoff(tea.KeyPressMsg{Code: tea.KeyEnter})
+		m.finishPlanApproval(planCompactFinishedMsg{sessionID: m.sessionID, planID: plan.ID})
 		persisted, _ := raw.LoadPlan(plan.SessionID, plan.ID)
 		if m.planHandoff == nil || m.mode != collaboration.ModePlan || m.latestPlan.Status != planning.ArtifactProposed || persisted.Status != planning.ArtifactProposed || len(m.queued) != 1 {
 			t.Fatalf("mode failure was not rolled back: popup=%v mode=%q latest=%+v persisted=%+v queue=%v", m.planHandoff != nil, m.mode, m.latestPlan, persisted, m.queued)
 		}
 	})
 
-	t.Run("fresh lineage", func(t *testing.T) {
-		m, mgr, raw, faults, plan := setup(t, 1)
-		before, _ := raw.List()
-		faults.failLineage = true
-		m.updatePlanHandoff(tea.KeyPressMsg{Code: tea.KeyEnter})
-		after, _ := raw.List()
+	t.Run("compact", func(t *testing.T) {
+		m, _, raw, _, plan := setup(t)
+		m.planCompacting = true
+		m.finishPlanApproval(planCompactFinishedMsg{sessionID: m.sessionID, planID: plan.ID, err: errors.New("injected compact failure")})
 		persisted, _ := raw.LoadPlan(plan.SessionID, plan.ID)
-		current, _ := mgr.GetCurrentID()
-		if m.planHandoff == nil || m.sessionID != plan.SessionID || current != plan.SessionID || persisted.Status != planning.ArtifactProposed || len(after) != len(before) || len(m.queued) != 1 {
-			t.Fatalf("fresh failure leaked state: popup=%v session=%q current=%q persisted=%+v sessions=%d/%d queue=%v", m.planHandoff != nil, m.sessionID, current, persisted, len(after), len(before), m.queued)
-		}
-	})
-
-	t.Run("fresh create", func(t *testing.T) {
-		m, _, raw, faults, plan := setup(t, 1)
-		before, _ := raw.List()
-		faults.failCreate = true
-		m.updatePlanHandoff(tea.KeyPressMsg{Code: tea.KeyEnter})
-		after, _ := raw.List()
-		persisted, _ := raw.LoadPlan(plan.SessionID, plan.ID)
-		if m.planHandoff == nil || m.sessionID != plan.SessionID || persisted.Status != planning.ArtifactProposed || len(after) != len(before) || len(m.queued) != 1 {
-			t.Fatalf("create failure leaked state: popup=%v session=%q persisted=%+v sessions=%d/%d queue=%v", m.planHandoff != nil, m.sessionID, persisted, len(after), len(before), m.queued)
-		}
-	})
-
-	t.Run("fresh activation", func(t *testing.T) {
-		m, _, raw, faults, plan := setup(t, 1)
-		before, _ := raw.List()
-		if err := os.Remove(faults.currentFile); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.Mkdir(faults.currentFile, 0o755); err != nil {
-			t.Fatal(err)
-		}
-		m.updatePlanHandoff(tea.KeyPressMsg{Code: tea.KeyEnter})
-		after, _ := raw.List()
-		persisted, _ := raw.LoadPlan(plan.SessionID, plan.ID)
-		if m.planHandoff == nil || m.sessionID != plan.SessionID || persisted.Status != planning.ArtifactProposed || len(after) != len(before) || len(m.queued) != 1 {
-			t.Fatalf("activation failure leaked state: popup=%v session=%q persisted=%+v sessions=%d/%d queue=%v", m.planHandoff != nil, m.sessionID, persisted, len(after), len(before), m.queued)
+		if m.planCompacting || m.planHandoff == nil || m.mode != collaboration.ModePlan || persisted.Status != planning.ArtifactProposed || len(m.queued) != 1 || m.running {
+			t.Fatalf("compact failure state: compacting=%v popup=%v mode=%q persisted=%+v queue=%v running=%v", m.planCompacting, m.planHandoff != nil, m.mode, persisted, m.queued, m.running)
 		}
 	})
 }

@@ -881,7 +881,7 @@ func (c *budgetFakeClient) MaxOutputTokens() int64 { return c.maxOutput }
 func TestBuildBudgetFloorCappedByMaxOutput(t *testing.T) {
 	t.Run("small window: floor does not defeat max-output subtraction", func(t *testing.T) {
 		m := New(&budgetFakeClient{window: 32 * 1024, maxOutput: 16 * 1024}, Config{})
-		budget := m.buildBudget()
+		budget := m.buildBudget(nil)
 		// Effective input budget must be window-maxOutput = 16K, not the 16K floor
 		// restoring (almost) the whole 32K window.
 		effective := int64(32*1024) - int64(16*1024)
@@ -900,7 +900,7 @@ func TestBuildBudgetFloorCappedByMaxOutput(t *testing.T) {
 
 	t.Run("large window: existing behavior preserved", func(t *testing.T) {
 		m := New(&budgetFakeClient{window: 200 * 1000, maxOutput: 16 * 1024}, Config{})
-		budget := m.buildBudget()
+		budget := m.buildBudget(nil)
 		effective := int64(200*1000) - int64(16*1024)
 		wantSoft := int64(float64(effective) * defaultSoftThresholdRatio)
 		wantHard := int64(float64(effective) * defaultHardThresholdRatio)
@@ -911,7 +911,7 @@ func TestBuildBudgetFloorCappedByMaxOutput(t *testing.T) {
 
 	t.Run("window smaller than max output keeps the floored behavior", func(t *testing.T) {
 		m := New(&budgetFakeClient{window: 16 * 1024, maxOutput: 32 * 1024}, Config{})
-		budget := m.buildBudget()
+		budget := m.buildBudget(nil)
 		// window-maxOutput <= 0, so the floor keeps its old clamped value (the window itself).
 		effective := int64(16 * 1024)
 		wantSoft := int64(float64(effective) * defaultSoftThresholdRatio)
@@ -919,4 +919,47 @@ func TestBuildBudgetFloorCappedByMaxOutput(t *testing.T) {
 			t.Fatalf("SoftThreshold = %d, want the existing clamped-window behavior %d", budget.SoftThreshold, wantSoft)
 		}
 	})
+}
+
+func TestBuildBudgetSubtractsRequestScopedReserve(t *testing.T) {
+	sess := session.New("reserved", nil)
+	const reserve int64 = 12 * 1024
+	m := New(&budgetFakeClient{window: 128 * 1024, maxOutput: 16 * 1024}, Config{
+		ReservedTokens: func(got *session.Session) int64 {
+			if got != sess {
+				t.Fatalf("reserve session = %p, want %p", got, sess)
+			}
+			return reserve
+		},
+	})
+	budget := m.buildBudget(sess)
+	effective := int64(128*1024) - int64(16*1024) - reserve
+	if want := int64(float64(effective) * defaultSoftThresholdRatio); budget.SoftThreshold != want {
+		t.Fatalf("SoftThreshold = %d, want %d", budget.SoftThreshold, want)
+	}
+	if want := int64(float64(effective) * defaultHardThresholdRatio); budget.HardThreshold != want {
+		t.Fatalf("HardThreshold = %d, want %d", budget.HardThreshold, want)
+	}
+	if budget.ReservedTokens != reserve {
+		t.Fatalf("ReservedTokens = %d, want %d", budget.ReservedTokens, reserve)
+	}
+}
+
+func TestBeforeModelEnablesPromptCacheForLargeRequestScopedReserve(t *testing.T) {
+	sess := session.New("plan-cache", nil, session.WithHistory(
+		types.Message{Role: types.RoleUser, Content: "implement"},
+	))
+	m := New(nil, Config{
+		ContextWindow: 128 * 1024,
+		ReservedTokens: func(*session.Session) int64 {
+			return defaultSessionMemoryThreshold + 1
+		},
+	})
+	req := providers.NewRequest("", sess.GetHistory()...)
+	if err := m.BeforeModel(stdctx.Background(), sess, req); err != nil {
+		t.Fatal(err)
+	}
+	if req.PromptCacheKey() == "" {
+		t.Fatal("large accepted-plan reserve did not enable prompt caching")
+	}
 }

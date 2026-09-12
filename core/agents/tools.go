@@ -68,7 +68,7 @@ func toolCall(ctx context.Context, sess *session.Session, use *ToolUse, td *tool
 	defer span.End()
 	defer func() { tracing.DeferStatus(span, &retErr) }()
 
-	req := &tools.Request{SessionID: sess.ID}
+	req := &tools.Request{SessionID: sess.ID, SessionRecords: sess}
 	args, ok := common.ParseToolUseArguments(use.Arguments)
 	if !ok {
 		return "", false, fmt.Errorf("tool %s arguments must be a JSON object, got: %s", use.Name, truncateToolArgs(use.Arguments))
@@ -110,11 +110,12 @@ func toolCall(ctx context.Context, sess *session.Session, use *ToolUse, td *tool
 // into the model's context.
 type modelToolResult struct {
 	Content []tools.Content `json:"content"`
+	FYI     string          `json:"fyi,omitempty"`
 	IsError bool            `json:"is_error,omitempty"`
 }
 
 func marshalToolResultForModel(result *tools.Result) (string, error) {
-	view := modelToolResult{Content: result.Content, IsError: result.IsError}
+	view := modelToolResult{Content: result.Content, FYI: result.FYI, IsError: result.IsError}
 	content, err := json.Marshal(view)
 	if err != nil {
 		return "", err

@@ -22,6 +22,15 @@ const (
 	maxEditFileSize = 10 * 1024 * 1024
 )
 
+const (
+	FsReadToolName   = toolFsRead
+	FsWriteToolName  = toolFsWrite
+	FsListToolName   = toolFsList
+	FsDeleteToolName = toolFsDelete
+	FsMkdirToolName  = toolFsMkdir
+	FsEditToolName   = toolFsEdit
+)
+
 type fsAccessMode int
 
 const (
@@ -29,20 +38,107 @@ const (
 	fsAccessWrite
 )
 
+type FileAccessMode int
+
+const (
+	FileAccessRead FileAccessMode = iota
+	FileAccessWrite
+)
+
+// FileSystem is the domain-level backend used by the native filesystem tools.
+// Resolve applies backend path and access policy and returns a canonical path;
+// the remaining methods operate on paths returned by Resolve.
+type FileSystem interface {
+	Resolve(context.Context, string, FileAccessMode) (string, error)
+	Stat(context.Context, string) (os.FileInfo, error)
+	ReadFile(context.Context, string) ([]byte, error)
+	ReadDir(context.Context, string) ([]os.DirEntry, error)
+	WriteFile(context.Context, string, []byte) error
+	Remove(context.Context, string) error
+	Mkdir(context.Context, string) error
+}
+
+type localFileSystem struct {
+	exec    *Executor
+	workdir string
+}
+
+func NewLocalFileSystem(exec *Executor, workdir string) FileSystem {
+	return &localFileSystem{exec: exec, workdir: workdir}
+}
+
+func (f *localFileSystem) Resolve(ctx context.Context, path string, mode FileAccessMode) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	access := fsAccessRead
+	if mode == FileAccessWrite {
+		access = fsAccessWrite
+	}
+	return resolveToolPath(f.exec.config, f.workdir, path, access)
+}
+
+func (f *localFileSystem) Stat(ctx context.Context, path string) (os.FileInfo, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return os.Stat(path)
+}
+
+func (f *localFileSystem) ReadFile(ctx context.Context, path string) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return os.ReadFile(path)
+}
+
+func (f *localFileSystem) ReadDir(ctx context.Context, path string) ([]os.DirEntry, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return os.ReadDir(path)
+}
+
+func (f *localFileSystem) WriteFile(ctx context.Context, path string, content []byte) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return writeFileAtomic(path, content, 0o644)
+}
+
+func (f *localFileSystem) Remove(ctx context.Context, path string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return os.RemoveAll(path)
+}
+
+func (f *localFileSystem) Mkdir(ctx context.Context, path string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return os.MkdirAll(path, 0o755)
+}
+
 // NewFsTools creates file system tools that operate directly on the filesystem.
 // workdir is the current working directory, which will be injected into tool descriptions.
 func NewFsTools(exec *Executor, workdir string) []*tools.Tool {
+	return NewFsToolsWithFileSystem(NewLocalFileSystem(exec, workdir), workdir)
+}
+
+// NewFsToolsWithFileSystem creates the native filesystem tools over fs.
+func NewFsToolsWithFileSystem(fs FileSystem, workdir string) []*tools.Tool {
 	return []*tools.Tool{
-		newFsReadTool(exec, workdir),
-		newFsWriteTool(exec, workdir),
-		newFsListTool(exec, workdir),
-		newFsDeleteTool(exec, workdir),
-		newFsMkdirTool(exec, workdir),
-		newFsEditTool(exec, workdir),
+		newFsReadTool(fs, workdir),
+		newFsWriteTool(fs, workdir),
+		newFsListTool(fs, workdir),
+		newFsDeleteTool(fs, workdir),
+		newFsMkdirTool(fs, workdir),
+		newFsEditTool(fs, workdir),
 	}
 }
 
-func newFsReadTool(exec *Executor, workdir string) *tools.Tool {
+func newFsReadTool(fs FileSystem, workdir string) *tools.Tool {
 	desc := fmt.Sprintf(`Read the contents of a file.
 
 Current working directory: %s
@@ -53,23 +149,27 @@ Parameters:
 	return tools.NewTool(toolFsRead,
 		tools.WithDescription(desc),
 		tools.WithString("path", tools.Description("The path to the file"), tools.Required()),
-		tools.WithToolHandler(fsReadHandler(exec, workdir)),
+		tools.WithToolHandler(fsReadFileSystemHandler(fs)),
 	)
 }
 
 func fsReadHandler(exec *Executor, workdir string) tools.ToolHandlerFunc {
+	return fsReadFileSystemHandler(NewLocalFileSystem(exec, workdir))
+}
+
+func fsReadFileSystemHandler(fs FileSystem) tools.ToolHandlerFunc {
 	return func(ctx context.Context, req *tools.Request) (*tools.Result, error) {
 		path, ok := req.Arguments["path"].(string)
 		if !ok || path == "" {
 			return tools.NewToolResultError("path is required"), nil
 		}
 
-		absPath, err := resolveToolPath(exec.config, workdir, path, fsAccessRead)
+		absPath, err := fs.Resolve(ctx, path, FileAccessRead)
 		if err != nil {
 			return tools.NewToolResultError(fmt.Sprintf("invalid path: %s", err)), nil
 		}
 
-		info, err := os.Stat(absPath)
+		info, err := fs.Stat(ctx, absPath)
 		if err != nil {
 			return tools.NewToolResultError(fmt.Sprintf("failed to stat file: %s", err)), nil
 		}
@@ -77,7 +177,7 @@ func fsReadHandler(exec *Executor, workdir string) tools.ToolHandlerFunc {
 			return tools.NewToolResultError(fmt.Sprintf("failed to read file: path is a directory: %s", path)), nil
 		}
 
-		content, err := os.ReadFile(absPath)
+		content, err := fs.ReadFile(ctx, absPath)
 		if err != nil {
 			return tools.NewToolResultError(fmt.Sprintf("failed to read file: %s", err)), nil
 		}
@@ -86,7 +186,7 @@ func fsReadHandler(exec *Executor, workdir string) tools.ToolHandlerFunc {
 	}
 }
 
-func newFsWriteTool(exec *Executor, workdir string) *tools.Tool {
+func newFsWriteTool(fs FileSystem, workdir string) *tools.Tool {
 	desc := fmt.Sprintf(`Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Parent directories are created automatically.
 
 Current working directory: %s
@@ -99,11 +199,15 @@ Parameters:
 		tools.WithDescription(desc),
 		tools.WithString("path", tools.Description("The path to the file"), tools.Required()),
 		tools.WithString("content", tools.Description("The content to write to the file"), tools.Required()),
-		tools.WithToolHandler(fsWriteHandler(exec, workdir)),
+		tools.WithToolHandler(fsWriteFileSystemHandler(fs)),
 	)
 }
 
 func fsWriteHandler(exec *Executor, workdir string) tools.ToolHandlerFunc {
+	return fsWriteFileSystemHandler(NewLocalFileSystem(exec, workdir))
+}
+
+func fsWriteFileSystemHandler(fs FileSystem) tools.ToolHandlerFunc {
 	return func(ctx context.Context, req *tools.Request) (*tools.Result, error) {
 		path, ok := req.Arguments["path"].(string)
 		if !ok || path == "" {
@@ -114,12 +218,12 @@ func fsWriteHandler(exec *Executor, workdir string) tools.ToolHandlerFunc {
 			return tools.NewToolResultError("content is required"), nil
 		}
 
-		absPath, err := resolveToolPath(exec.config, workdir, path, fsAccessWrite)
+		absPath, err := fs.Resolve(ctx, path, FileAccessWrite)
 		if err != nil {
 			return tools.NewToolResultError(fmt.Sprintf("invalid path: %s", err)), nil
 		}
 
-		if err := writeFileAtomic(absPath, []byte(content), 0o644); err != nil {
+		if err := fs.WriteFile(ctx, absPath, []byte(content)); err != nil {
 			return tools.NewToolResultError(fmt.Sprintf("failed to write file: %s", err)), nil
 		}
 
@@ -127,7 +231,7 @@ func fsWriteHandler(exec *Executor, workdir string) tools.ToolHandlerFunc {
 	}
 }
 
-func newFsListTool(exec *Executor, workdir string) *tools.Tool {
+func newFsListTool(fs FileSystem, workdir string) *tools.Tool {
 	desc := fmt.Sprintf(`List files and directories in a directory. Use '.' to list the current directory.
 
 Current working directory: %s
@@ -138,23 +242,27 @@ Parameters:
 	return tools.NewTool(toolFsList,
 		tools.WithDescription(desc),
 		tools.WithString("path", tools.Description("The directory path to list. Use '.' for current directory."), tools.Required()),
-		tools.WithToolHandler(fsListHandler(exec, workdir)),
+		tools.WithToolHandler(fsListFileSystemHandler(fs)),
 	)
 }
 
 func fsListHandler(exec *Executor, workdir string) tools.ToolHandlerFunc {
+	return fsListFileSystemHandler(NewLocalFileSystem(exec, workdir))
+}
+
+func fsListFileSystemHandler(fs FileSystem) tools.ToolHandlerFunc {
 	return func(ctx context.Context, req *tools.Request) (*tools.Result, error) {
 		path, ok := req.Arguments["path"].(string)
 		if !ok || path == "" {
 			path = "."
 		}
 
-		absPath, err := resolveToolPath(exec.config, workdir, path, fsAccessRead)
+		absPath, err := fs.Resolve(ctx, path, FileAccessRead)
 		if err != nil {
 			return tools.NewToolResultError(fmt.Sprintf("invalid path: %s", err)), nil
 		}
 
-		entries, err := os.ReadDir(absPath)
+		entries, err := fs.ReadDir(ctx, absPath)
 		if err != nil {
 			return tools.NewToolResultError(fmt.Sprintf("failed to list directory: %s", err)), nil
 		}
@@ -171,7 +279,7 @@ func fsListHandler(exec *Executor, workdir string) tools.ToolHandlerFunc {
 	}
 }
 
-func newFsDeleteTool(exec *Executor, workdir string) *tools.Tool {
+func newFsDeleteTool(fs FileSystem, workdir string) *tools.Tool {
 	desc := fmt.Sprintf(`Delete a file or directory. WARNING: This cannot be undone.
 
 Current working directory: %s
@@ -182,23 +290,27 @@ Parameters:
 	return tools.NewTool(toolFsDelete,
 		tools.WithDescription(desc),
 		tools.WithString("path", tools.Description("The path to the file or directory to delete"), tools.Required()),
-		tools.WithToolHandler(fsDeleteHandler(exec, workdir)),
+		tools.WithToolHandler(fsDeleteFileSystemHandler(fs)),
 	)
 }
 
 func fsDeleteHandler(exec *Executor, workdir string) tools.ToolHandlerFunc {
+	return fsDeleteFileSystemHandler(NewLocalFileSystem(exec, workdir))
+}
+
+func fsDeleteFileSystemHandler(fs FileSystem) tools.ToolHandlerFunc {
 	return func(ctx context.Context, req *tools.Request) (*tools.Result, error) {
 		path, ok := req.Arguments["path"].(string)
 		if !ok || path == "" {
 			return tools.NewToolResultError("path is required"), nil
 		}
 
-		absPath, err := resolveToolPath(exec.config, workdir, path, fsAccessWrite)
+		absPath, err := fs.Resolve(ctx, path, FileAccessWrite)
 		if err != nil {
 			return tools.NewToolResultError(fmt.Sprintf("invalid path: %s", err)), nil
 		}
 
-		if err := os.RemoveAll(absPath); err != nil {
+		if err := fs.Remove(ctx, absPath); err != nil {
 			return tools.NewToolResultError(fmt.Sprintf("failed to delete: %s", err)), nil
 		}
 
@@ -206,7 +318,7 @@ func fsDeleteHandler(exec *Executor, workdir string) tools.ToolHandlerFunc {
 	}
 }
 
-func newFsMkdirTool(exec *Executor, workdir string) *tools.Tool {
+func newFsMkdirTool(fs FileSystem, workdir string) *tools.Tool {
 	desc := fmt.Sprintf(`Create a directory. Parent directories are created automatically.
 
 Current working directory: %s
@@ -217,23 +329,27 @@ Parameters:
 	return tools.NewTool(toolFsMkdir,
 		tools.WithDescription(desc),
 		tools.WithString("path", tools.Description("The directory path to create"), tools.Required()),
-		tools.WithToolHandler(fsMkdirHandler(exec, workdir)),
+		tools.WithToolHandler(fsMkdirFileSystemHandler(fs)),
 	)
 }
 
 func fsMkdirHandler(exec *Executor, workdir string) tools.ToolHandlerFunc {
+	return fsMkdirFileSystemHandler(NewLocalFileSystem(exec, workdir))
+}
+
+func fsMkdirFileSystemHandler(fs FileSystem) tools.ToolHandlerFunc {
 	return func(ctx context.Context, req *tools.Request) (*tools.Result, error) {
 		path, ok := req.Arguments["path"].(string)
 		if !ok || path == "" {
 			return tools.NewToolResultError("path is required"), nil
 		}
 
-		absPath, err := resolveToolPath(exec.config, workdir, path, fsAccessWrite)
+		absPath, err := fs.Resolve(ctx, path, FileAccessWrite)
 		if err != nil {
 			return tools.NewToolResultError(fmt.Sprintf("invalid path: %s", err)), nil
 		}
 
-		if err := os.MkdirAll(absPath, 0o755); err != nil {
+		if err := fs.Mkdir(ctx, absPath); err != nil {
 			return tools.NewToolResultError(fmt.Sprintf("failed to create directory: %s", err)), nil
 		}
 
@@ -241,7 +357,7 @@ func fsMkdirHandler(exec *Executor, workdir string) tools.ToolHandlerFunc {
 	}
 }
 
-func newFsEditTool(exec *Executor, workdir string) *tools.Tool {
+func newFsEditTool(fs FileSystem, workdir string) *tools.Tool {
 	desc := fmt.Sprintf(`Edit a file by searching and replacing text.
 
 Current working directory: %s
@@ -263,11 +379,15 @@ Usage notes:
 		tools.WithString("search_string", tools.Description("The text to search for"), tools.Required()),
 		tools.WithString("replace_string", tools.Description("The text to replace with"), tools.Required()),
 		tools.WithString("occurrences", tools.Description(`Replace scope: "first" (default) or "all"`), tools.Enum("first", "all")),
-		tools.WithToolHandler(fsEditHandler(exec, workdir)),
+		tools.WithToolHandler(fsEditFileSystemHandler(fs)),
 	)
 }
 
 func fsEditHandler(exec *Executor, workdir string) tools.ToolHandlerFunc {
+	return fsEditFileSystemHandler(NewLocalFileSystem(exec, workdir))
+}
+
+func fsEditFileSystemHandler(fs FileSystem) tools.ToolHandlerFunc {
 	return func(ctx context.Context, req *tools.Request) (*tools.Result, error) {
 		path, ok := req.Arguments["path"].(string)
 		if !ok || path == "" {
@@ -291,12 +411,12 @@ func fsEditHandler(exec *Executor, workdir string) tools.ToolHandlerFunc {
 
 		replaceAll := occurrences == "all"
 
-		absPath, err := resolveToolPath(exec.config, workdir, path, fsAccessWrite)
+		absPath, err := fs.Resolve(ctx, path, FileAccessWrite)
 		if err != nil {
 			return tools.NewToolResultError(fmt.Sprintf("invalid path: %s", err)), nil
 		}
 
-		fileInfo, err := os.Stat(absPath)
+		fileInfo, err := fs.Stat(ctx, absPath)
 		if err != nil {
 			return tools.NewToolResultError(fmt.Sprintf("failed to stat file: %s", err)), nil
 		}
@@ -307,7 +427,7 @@ func fsEditHandler(exec *Executor, workdir string) tools.ToolHandlerFunc {
 			return tools.NewToolResultError(fmt.Sprintf("file too large (%d bytes), maximum allowed is %d bytes", fileInfo.Size(), maxEditFileSize)), nil
 		}
 
-		content, err := os.ReadFile(absPath)
+		content, err := fs.ReadFile(ctx, absPath)
 		if err != nil {
 			return tools.NewToolResultError(fmt.Sprintf("failed to read file: %s", err)), nil
 		}
@@ -332,7 +452,7 @@ func fsEditHandler(exec *Executor, workdir string) tools.ToolHandlerFunc {
 			return tools.NewToolResultError(fmt.Sprintf("result file too large (%d bytes), maximum allowed is %d bytes", len(newContent), maxEditFileSize)), nil
 		}
 
-		if err := writeFileAtomic(absPath, []byte(newContent), 0o644); err != nil {
+		if err := fs.WriteFile(ctx, absPath, []byte(newContent)); err != nil {
 			return tools.NewToolResultError(fmt.Sprintf("failed to write file: %s", err)), nil
 		}
 

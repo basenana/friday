@@ -2,6 +2,7 @@ package agents
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -11,6 +12,23 @@ import (
 	"github.com/basenana/friday/core/tools"
 	"github.com/basenana/friday/core/types"
 )
+
+func TestMarshalToolResultForModelIncludesFYI(t *testing.T) {
+	encoded, err := marshalToolResultForModel(&tools.Result{
+		Content: []tools.Content{tools.TextContent{Type: "text", Text: "file"}},
+		FYI:     "## AGENTS.md\n\nrules",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result map[string]any
+	if err := json.Unmarshal([]byte(encoded), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result["fyi"] != "## AGENTS.md\n\nrules" {
+		t.Fatalf("fyi = %#v", result["fyi"])
+	}
+}
 
 func TestTruncateToolResult(t *testing.T) {
 	t.Run("fallback to default when PromptBudget not initialized", func(t *testing.T) {

@@ -19,6 +19,10 @@ func fuzzyMatching(s1, s2 string) bool {
 }
 
 func callExploreTool(self *ExpertAgent, sess *session.Session, exploreTools []*tools.Tool) tools.ToolHandlerFunc {
+	return callExploreToolWithForker(self, sess, nil, exploreTools)
+}
+
+func callExploreToolWithForker(self *ExpertAgent, sess *session.Session, forker SessionForker, exploreTools []*tools.Tool) tools.ToolHandlerFunc {
 	return func(ctx context.Context, request *tools.Request) (*tools.Result, error) {
 		// Guard: prevent nested subagent spawning in forked sessions
 		if request.SessionID != sess.Root.ID {
@@ -33,7 +37,17 @@ func callExploreTool(self *ExpertAgent, sess *session.Session, exploreTools []*t
 			return tools.NewToolResultError("missing required parameter: task_describe"), nil
 		}
 
-		subSession := sess.Fork()
+		var subSession *session.Session
+		if forker != nil {
+			var err error
+			subSession, err = forker.Fork()
+			if err != nil {
+				return tools.NewToolResultError(err.Error()), nil
+			}
+			defer forker.Release(subSession)
+		} else {
+			subSession = sess.Fork()
+		}
 		ctx, span := tracing.Start(ctx, "explore.call",
 			tracing.WithAttributes(
 				tracing.TruncateAttr("explore.input", userMessage),
@@ -90,6 +104,10 @@ func callExploreTool(self *ExpertAgent, sess *session.Session, exploreTools []*t
 }
 
 func callSubagentTool(agents []ExpertAgent, sess *session.Session, subagentTools []*tools.Tool) tools.ToolHandlerFunc {
+	return callSubagentToolWithForker(agents, sess, nil, subagentTools)
+}
+
+func callSubagentToolWithForker(agents []ExpertAgent, sess *session.Session, forker SessionForker, subagentTools []*tools.Tool) tools.ToolHandlerFunc {
 	return func(ctx context.Context, request *tools.Request) (*tools.Result, error) {
 		// Guard: prevent nested subagent spawning in forked sessions
 		if request.SessionID != sess.Root.ID {
@@ -109,7 +127,17 @@ func callSubagentTool(agents []ExpertAgent, sess *session.Session, subagentTools
 			return tools.NewToolResultError("missing required parameter: task_describe"), nil
 		}
 
-		subSession := sess.Fork()
+		var subSession *session.Session
+		if forker != nil {
+			var err error
+			subSession, err = forker.Fork()
+			if err != nil {
+				return tools.NewToolResultError(err.Error()), nil
+			}
+			defer forker.Release(subSession)
+		} else {
+			subSession = sess.Fork()
+		}
 		ctx, span := tracing.Start(ctx, "subagent.call",
 			tracing.WithAttributes(
 				tracing.String("subagent.name", agentName),

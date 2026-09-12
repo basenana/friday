@@ -31,6 +31,9 @@ type Config struct {
 	SessionMemoryThreshold int64
 
 	SessionMemoryStore SessionMemoryStore
+	// ReservedTokens reports stable request-scoped context that is injected
+	// after projection, such as an accepted implementation plan.
+	ReservedTokens func(*session.Session) int64
 }
 
 type Manager struct {
@@ -65,7 +68,7 @@ func New(llm providers.Client, cfg Config) *Manager {
 
 func (m *Manager) BeforeModel(ctx stdctx.Context, sess *session.Session, req providers.Request) error {
 	st := sess.EnsureContextState()
-	st.PromptBudget = m.buildBudget()
+	st.PromptBudget = m.buildBudget(sess)
 	history := req.History()
 	budget := st.PromptBudget
 
@@ -75,7 +78,8 @@ func (m *Manager) BeforeModel(ctx stdctx.Context, sess *session.Session, req pro
 		projectedTokens += session.EstimateHistoryTokens(history[sessLen:])
 	}
 
-	if req.PromptCacheKey() == "" && projectedTokens > defaultSessionMemoryThreshold {
+	requestTokens := projectedTokens + budget.ReservedTokens
+	if req.PromptCacheKey() == "" && requestTokens > defaultSessionMemoryThreshold {
 		// Only enable prompt caching once the conversation has more than a
 		// trivial number of turns. Tiny histories don't benefit from caching,
 		// and setting a cache key too early creates churn as the conversation
@@ -86,7 +90,7 @@ func (m *Manager) BeforeModel(ctx stdctx.Context, sess *session.Session, req pro
 				nonSystem++
 			}
 		}
-		if nonSystem > 3 {
+		if nonSystem > 3 || budget.ReservedTokens > defaultSessionMemoryThreshold {
 			req.SetPromptCacheKey(promptCacheKeyForSession(sess))
 		}
 	}
@@ -97,6 +101,7 @@ func (m *Manager) BeforeModel(ctx stdctx.Context, sess *session.Session, req pro
 		"session_memory_messages", len(st.SessionMemory),
 		"last_synced_at", st.LastSyncedAt,
 		"projected_tokens", projectedTokens,
+		"reserved_tokens", budget.ReservedTokens,
 		"context_window", budget.ContextWindow,
 		"soft_threshold", budget.SoftThreshold,
 		"hard_threshold", budget.HardThreshold,
@@ -338,7 +343,7 @@ func (m *Manager) compactWithSummary(ctx stdctx.Context, sess *session.Session, 
 	return nil
 }
 
-func (m *Manager) buildBudget() session.PromptBudget {
+func (m *Manager) buildBudget(sess *session.Session) session.PromptBudget {
 	window := m.cfg.ContextWindow
 	if provider, ok := m.llm.(providers.ContextWindowProvider); ok && provider.ContextWindow() > 0 {
 		window = provider.ContextWindow()
@@ -349,30 +354,45 @@ func (m *Manager) buildBudget() session.PromptBudget {
 	if mp, ok := m.llm.(providers.MaxOutputTokensProvider); ok {
 		maxOutput = mp.MaxOutputTokens()
 	}
-	effective := window
-	if maxOutput > 0 {
-		effective = window - maxOutput
+	var reserved int64
+	if m.cfg.ReservedTokens != nil {
+		reserved = m.cfg.ReservedTokens(sess)
+		if reserved < 0 {
+			reserved = 0
+		}
 	}
-	// Floor: input keeps at least 25% of the window (min 16K), clamped to window
-	// so tiny windows are never inflated. The floor is further capped at
-	// window-maxOutput (when positive) so the max-output subtraction still
-	// bites on small windows — otherwise a 16K floor would restore the full
-	// budget on any window <= 64K.
+	effective := window - reserved
+	if maxOutput > 0 {
+		effective -= maxOutput
+	}
+	if effective < 0 {
+		effective = 0
+	}
+	// Floor: input keeps at least 25% of the window (min 16K), clamped to the
+	// capacity left after output and request-scoped reserves. This prevents the
+	// floor from reintroducing capacity already promised to an accepted plan.
 	floor := maxInt64(window/4, 16*1024)
 	if floor > window {
 		floor = window
 	}
-	if windowMinusOutput := window - maxOutput; windowMinusOutput > 0 && floor > windowMinusOutput {
-		floor = windowMinusOutput
+	if available := window - maxOutput - reserved; available >= 0 && floor > available {
+		floor = available
+	} else if available < 0 && reserved > 0 {
+		floor = 0
 	}
 	if effective < floor {
 		effective = floor
 	}
+	tailTarget := maxInt64(effective/5, 8*1024)
+	if tailTarget > effective {
+		tailTarget = effective
+	}
 	return session.PromptBudget{
-		ContextWindow: window,
-		SoftThreshold: int64(float64(effective) * m.cfg.SoftThresholdRatio),
-		HardThreshold: int64(float64(effective) * m.cfg.HardThresholdRatio),
-		TailTarget:    maxInt64(effective/5, 8*1024),
+		ContextWindow:  window,
+		SoftThreshold:  int64(float64(effective) * m.cfg.SoftThresholdRatio),
+		HardThreshold:  int64(float64(effective) * m.cfg.HardThresholdRatio),
+		TailTarget:     tailTarget,
+		ReservedTokens: reserved,
 	}
 }
 

@@ -16,6 +16,13 @@ type Subagents struct {
 	runTaskToolDescription string
 }
 
+// SessionForker is the root-bound capability exposed to subagent tools. It
+// intentionally has no global session lookup or mutation methods.
+type SessionForker interface {
+	Fork() (*session.Session, error)
+	Release(*session.Session) error
+}
+
 var _ session.BeforeModelHook = &Subagents{}
 var _ session.BeforeAgentHook = &Subagents{}
 
@@ -48,7 +55,7 @@ func (a *Subagents) buildExploreTool(sess *session.Session) *tools.Tool {
 			tools.Required(),
 			tools.Description("Describe what to explore, research, or investigate. Be specific about what information you need back in the report."),
 		),
-		tools.WithToolHandler(callExploreTool(a.option.SelfAgent, sess, a.option.ExploreTools)),
+		tools.WithToolHandler(callExploreToolWithForker(a.option.SelfAgent, sess, a.option.SessionForker, a.option.ExploreTools)),
 	)
 }
 
@@ -63,7 +70,7 @@ func (a *Subagents) buildRunTaskTool(sess *session.Session) *tools.Tool {
 			tools.Required(),
 			tools.Description("Provide a concise description of the task for the expert agent, including all necessary context."),
 		),
-		tools.WithToolHandler(callSubagentTool(a.option.ExpertAgents, sess, a.option.ExpertTools)),
+		tools.WithToolHandler(callSubagentToolWithForker(a.option.ExpertAgents, sess, a.option.SessionForker, a.option.ExpertTools)),
 	)
 }
 
@@ -112,8 +119,9 @@ type Option struct {
 	ExploreTools []*tools.Tool
 	ExpertTools  []*tools.Tool
 
-	SelfAgent    *ExpertAgent
-	ExpertAgents []ExpertAgent
+	SelfAgent     *ExpertAgent
+	ExpertAgents  []ExpertAgent
+	SessionForker SessionForker
 }
 
 type ExpertAgent struct {

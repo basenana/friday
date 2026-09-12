@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	coderagents "github.com/basenana/friday/coder/agents"
+	"github.com/basenana/friday/coder/filetools"
 	"github.com/basenana/friday/config"
 	"github.com/basenana/friday/core/agents"
 	"github.com/basenana/friday/core/api"
@@ -30,6 +31,7 @@ import (
 type AgentContext struct {
 	Client      providers.Client
 	Workspace   *workspace.Workspace
+	Lifecycle   sessions.SessionLifecycle
 	Session     *coreSession.Session
 	Agent       agents.Agent
 	Memory      *memory.MemorySystem
@@ -45,6 +47,8 @@ type options struct {
 	verbose        bool
 	extraTools     []*tools.Tool
 	providerClient providers.Client
+	lifecycle      sessions.SessionLifecycle
+	workdir        string
 }
 
 type SessionManager interface {
@@ -96,6 +100,20 @@ func WithProviderClient(c providers.Client) Option {
 	}
 }
 
+// WithWorkdir pins all filesystem and process tools to one canonical runtime
+// root. Interactive project callers should always set it explicitly.
+func WithWorkdir(workdir string) Option {
+	return func(o *options) { o.workdir = workdir }
+}
+
+// NewAgentWithLifecycle builds an agent around an already-selected root
+// lifecycle. The agent cannot use services to switch or enumerate roots;
+// services are retained only for metadata/planning persistence capabilities.
+func NewAgentWithLifecycle(lifecycle sessions.SessionLifecycle, services SessionManager, cfg *config.Config, opts ...Option) (*AgentContext, error) {
+	opts = append(opts, func(o *options) { o.lifecycle = lifecycle })
+	return NewAgent(services, cfg, opts...)
+}
+
 func NewAgent(sessionMgr SessionManager, cfg *config.Config, opts ...Option) (*AgentContext, error) {
 	options := &options{}
 	for _, opt := range opts {
@@ -113,7 +131,9 @@ func NewAgent(sessionMgr SessionManager, cfg *config.Config, opts ...Option) (*A
 		client = c
 	}
 
-	sessionMgr.SetLLM(client)
+	if options.lifecycle == nil {
+		sessionMgr.SetLLM(client)
+	}
 
 	ws := workspace.NewWorkspace(cfg.WorkspacePath(), cfg.MemoryPath())
 	var err error
@@ -125,18 +145,25 @@ func NewAgent(sessionMgr SessionManager, cfg *config.Config, opts ...Option) (*A
 	sessionOpts := []coreSession.Option{coreSession.WithState(fileState)}
 
 	var sess *coreSession.Session
-	switch {
-	case options.sessionID != "":
-		sess, _, err = sessionMgr.GetOrCreateByID(options.sessionID, sessionOpts...)
-
-	case options.isolate:
-		sess, _, err = sessionMgr.CreateIsolated(sessionOpts...)
-
-	case options.temporary:
-		sess, _, err = sessionMgr.CreateTemporary(sessionOpts...)
-
-	default:
-		sess, _, _, err = sessionMgr.GetOrCreateCurrent(sessionOpts...)
+	lifecycle := options.lifecycle
+	if lifecycle != nil {
+		sess = lifecycle.Current()
+	} else {
+		switch {
+		case options.sessionID != "":
+			sess, _, err = sessionMgr.GetOrCreateByID(options.sessionID, sessionOpts...)
+		case options.isolate:
+			sess, _, err = sessionMgr.CreateIsolated(sessionOpts...)
+		case options.temporary:
+			sess, _, err = sessionMgr.CreateTemporary(sessionOpts...)
+		default:
+			sess, _, _, err = sessionMgr.GetOrCreateCurrent(sessionOpts...)
+		}
+		if err == nil {
+			if provider, ok := sessionMgr.(interface{ GetStore() sessions.Store }); ok {
+				lifecycle = sessions.BindLifecycle(sess, client, provider.GetStore())
+			}
+		}
 	}
 	if err != nil {
 		return nil, fmt.Errorf("get/create session: %w", err)
@@ -187,12 +214,17 @@ func NewAgent(sessionMgr SessionManager, cfg *config.Config, opts ...Option) (*A
 	teamRegistry.Refresh()
 	teamHook := teams.NewHook(teamRegistry, cfg.TeamsPath())
 
+	approvedPlanHook := planning.NewApprovedPlanContextHook(planRepositoryFromManager(sessionMgr))
 	contextHook := contextmgr.New(client, contextmgr.Config{
 		ContextWindow:      cfg.Model.ContextWindow,
 		SessionMemoryStore: sessionMemoryStoreFromManager(sessionMgr),
+		ReservedTokens:     approvedPlanHook.ReservedTokens,
 	})
 
-	workdir, _ := os.Getwd()
+	workdir := options.workdir
+	if workdir == "" {
+		workdir, _ = os.Getwd()
+	}
 
 	var allTools []*tools.Tool
 	sandboxCfg := cfg.Sandbox
@@ -200,8 +232,12 @@ func NewAgent(sessionMgr SessionManager, cfg *config.Config, opts ...Option) (*A
 		sandboxCfg = sandbox.DefaultConfig()
 	}
 	sandboxExec := sandbox.NewExecutor(sandboxCfg)
-	fsTools := sandbox.NewFsTools(sandboxExec, workdir)
-	allTools = append(allTools, fsTools...)
+	fileHook, err := filetools.New(sandboxExec, workdir)
+	if err != nil {
+		return nil, fmt.Errorf("create file tools: %w", err)
+	}
+	_ = fileHook.BeforeAgent(context.Background(), sess, nil)
+	allTools = append(allTools, fileHook.Tools()...)
 	imageTool := sandbox.NewImageTool(sandboxExec, workdir, newImageAnalyzer(cfg))
 	allTools = append(allTools, imageTool)
 	bashTool := sandbox.NewBashTool(sandboxExec, workdir)
@@ -261,17 +297,20 @@ func NewAgent(sessionMgr SessionManager, cfg *config.Config, opts ...Option) (*A
 		// Do not pass request-level tool overrides into forked subagents.
 		// Their filtered agent-level tool set is the authority; otherwise
 		// request tools would re-expand privileges at runtime.
-		ExpertAgents: expertAgents,
+		ExpertAgents:  expertAgents,
+		SessionForker: lifecycle,
 	})
 
 	sharedHooks := []coreSession.Hook{
 		planningHook,
 		skillHook,
 		teamHook,
+		fileHook,
 		// Memory must be injected before the context manager runs so its
 		// projection accounts for the extra per-request messages.
 		newMemoryHook(ws),
 		contextHook,
+		approvedPlanHook,
 		subagentHook,
 		// Keep collaboration instructions last so Plan Mode remains the
 		// highest-precedence request-scoped behavioral contract.
@@ -286,13 +325,14 @@ func NewAgent(sessionMgr SessionManager, cfg *config.Config, opts ...Option) (*A
 	// package stays free of agent-construction concerns.
 	proposalLoader := proposals.NewLoader(cfg.ProposalsPath())
 	proposalRunnerFactory := buildProposalRunnerFactory(
-		client, allTools, sharedHooks, sessionMgr, teamRegistry, cfg, loaded,
+		client, allTools, sharedHooks, lifecycle, teamRegistry, cfg, loaded,
 	)
 	sess.RegisterHook(proposals.NewHook(proposalLoader, proposalRunnerFactory))
 
 	return &AgentContext{
 		Client:      client,
 		Workspace:   ws,
+		Lifecycle:   lifecycle,
 		Session:     sess,
 		Agent:       agent,
 		Memory:      memSys,
@@ -309,7 +349,11 @@ func collaborationProvider(sessionMgr SessionManager) collaboration.ModeProvider
 // KillAll runs first so in-flight tasks are stopped before the session event bus is torn down.
 func (ac *AgentContext) Close() {
 	ac.TaskManager.KillAll()
-	ac.Session.Close()
+	if ac.Lifecycle != nil {
+		_ = ac.Lifecycle.Close()
+	} else {
+		ac.Session.Close()
+	}
 }
 
 func (ac *AgentContext) Chat(ctx context.Context, message string) *api.Response {
@@ -331,6 +375,15 @@ func sessionMemoryStoreFromManager(sessionMgr SessionManager) contextmgr.Session
 		return nil
 	}
 	return store
+}
+
+func planRepositoryFromManager(sessionMgr SessionManager) planning.Repository {
+	provider, ok := sessionMgr.(interface{ GetStore() sessions.Store })
+	if !ok {
+		return nil
+	}
+	repository, _ := provider.GetStore().(planning.Repository)
+	return repository
 }
 
 func (ac *AgentContext) ChatWithImageRefs(ctx context.Context, message string, imageRefs ...string) *api.Response {
@@ -397,7 +450,7 @@ func buildProposalRunnerFactory(
 	client providers.Client,
 	allTools []*tools.Tool,
 	sharedHooks []coreSession.Hook,
-	sessionMgr SessionManager,
+	lifecycle sessions.SessionLifecycle,
 	teamRegistry *teams.Registry,
 	cfg *config.Config,
 	loaded *workspace.LoadedContent,
@@ -411,6 +464,9 @@ func buildProposalRunnerFactory(
 	systemPrompt := workspace.ComposeSystemPrompt(loaded)
 
 	return func(proposal *proposals.Proposal, designDoc string) (*proposals.Runner, proposals.ExecutionStrategy, error) {
+		if lifecycle == nil {
+			return nil, nil, fmt.Errorf("session lifecycle is unavailable")
+		}
 		loader := proposals.NewLoader(cfg.ProposalsPath())
 
 		if proposal.OwningTeam != "" {
@@ -431,13 +487,19 @@ func buildProposalRunnerFactory(
 				return nil, nil, fmt.Errorf("load members: %w", err)
 			}
 			sessionFactory := proposals.SessionFactory(func(proposalID, assignee string) (*coreSession.Session, error) {
-				key := fmt.Sprintf("proposal-%s-%s", proposalID, assignee)
-				s, _, err := getOrCreateManagedSession(
-					sessionMgr, key, sharedHooks, coreSession.WithState(workspace.NewFileState(cfg.StatePath())),
+				key := fmt.Sprintf("proposal/%s/member/%s", proposalID, assignee)
+				resumeID := ""
+				if proposal.Sessions != nil {
+					resumeID = proposal.Sessions[assignee]
+				}
+				s, _, err := lifecycle.GetOrCreateAssociated(
+					context.Background(), sessions.AssociatedSpec{Key: key, ResumeID: resumeID},
+					coreSession.WithState(workspace.NewFileState(cfg.StatePath())),
 				)
 				if err != nil {
 					return nil, err
 				}
+				replaceSessionHooks(s, sharedHooks...)
 				if proposal.Sessions == nil {
 					proposal.Sessions = map[string]string{}
 				}
@@ -455,14 +517,19 @@ func buildProposalRunnerFactory(
 		}
 
 		// Single-agent mode: one detached session for the whole proposal.
-		proposalKey := fmt.Sprintf("proposal-%s", proposal.ID)
-		proposalSession, _, err := getOrCreateManagedSession(
-			sessionMgr, proposalKey, sharedHooks,
+		proposalKey := fmt.Sprintf("proposal/%s/self", proposal.ID)
+		resumeID := ""
+		if proposal.Sessions != nil {
+			resumeID = proposal.Sessions["self"]
+		}
+		proposalSession, _, err := lifecycle.GetOrCreateAssociated(
+			context.Background(), sessions.AssociatedSpec{Key: proposalKey, ResumeID: resumeID},
 			coreSession.WithState(workspace.NewFileState(cfg.StatePath())),
 		)
 		if err != nil {
 			return nil, nil, fmt.Errorf("create proposal session: %w", err)
 		}
+		replaceSessionHooks(proposalSession, sharedHooks...)
 		if proposal.Sessions == nil {
 			proposal.Sessions = map[string]string{}
 		}
@@ -474,25 +541,22 @@ func buildProposalRunnerFactory(
 	}
 }
 
-func getOrCreateManagedSession(
-	sessionMgr SessionManager,
-	sessionID string,
-	hooks []coreSession.Hook,
-	opts ...coreSession.Option,
-) (*coreSession.Session, bool, error) {
+func replaceSessionHooks(sess *coreSession.Session, hooks ...coreSession.Hook) {
+	sess.CleanHooks()
+	for _, hook := range hooks {
+		sess.RegisterHook(hook)
+	}
+}
+
+// getOrCreateManagedSession is retained for legacy tests and non-lifecycle
+// adapters. New agent paths use SessionLifecycle.GetOrCreateAssociated.
+func getOrCreateManagedSession(sessionMgr SessionManager, sessionID string, hooks []coreSession.Hook, opts ...coreSession.Option) (*coreSession.Session, bool, error) {
 	sess, created, err := sessionMgr.GetOrCreateDetachedByID(sessionID, opts...)
 	if err != nil {
 		return nil, false, err
 	}
 	replaceSessionHooks(sess, hooks...)
 	return sess, created, nil
-}
-
-func replaceSessionHooks(sess *coreSession.Session, hooks ...coreSession.Hook) {
-	sess.CleanHooks()
-	for _, hook := range hooks {
-		sess.RegisterHook(hook)
-	}
 }
 
 // toolTraceSinkForConfig returns the default tool-trace sink: trace events go

@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -37,6 +38,8 @@ type Session struct {
 	Temporary bool
 
 	compactThreshold int64
+	recordStore      RecordStore
+	records          map[string][]byte
 
 	hooks     []Hook
 	llm       providers.Client
@@ -53,6 +56,7 @@ func New(id string, llm providers.Client, options ...Option) *Session {
 		History:          make([]types.Message, 0, 10),
 		Context:          newContextState(),
 		compactThreshold: CompactThreshold,
+		records:          make(map[string][]byte),
 		hooks:            make([]Hook, 0),
 		CreatedAt:        time.Now(),
 		llm:              llm,
@@ -86,6 +90,7 @@ func (s *Session) Fork() *Session {
 		CreatedAt:        time.Now(),
 		Temporary:        s.Temporary,
 		compactThreshold: s.compactThreshold,
+		records:          cloneRecords(s.records),
 		hooks:            s.hooks,
 		llm:              s.llm,
 	}
@@ -93,6 +98,74 @@ func (s *Session) Fork() *Session {
 	s.mu.Unlock()
 
 	return fork
+}
+
+// NewTemporaryChild creates a fresh, in-memory child session attached to s's
+// root. Unlike Fork it does not copy conversation history or context. The
+// child inherits the parent's hooks and provider so it can be used by the same
+// agent runtime, but it never receives a message writer.
+func (s *Session) NewTemporaryChild(options ...Option) *Session {
+	s.mu.Lock()
+	hooks := append([]Hook(nil), s.hooks...)
+	childOptions := append([]Option{WithHooks(hooks...)}, options...)
+	childOptions = append(childOptions, WithTemporary(true), WithMessageWriter(nil))
+	child := New(types.NewID(), s.llm, childOptions...)
+	child.Root = s.Root
+	if child.Root == nil {
+		child.Root = s
+	}
+	child.Parent = s
+	s.Children = append(s.Children, child)
+	s.mu.Unlock()
+	return child
+}
+
+// AttachChild associates an independently-created session with this session's
+// root. It is used for persisted auxiliary sessions that are loaded through a
+// store but execute inside the current root lifecycle.
+func (s *Session) AttachChild(child *Session) error {
+	if child == nil || child == s {
+		return fmt.Errorf("invalid child session")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, existing := range s.Children {
+		if existing == child || existing.ID == child.ID {
+			return nil
+		}
+	}
+	child.Root = s.Root
+	if child.Root == nil {
+		child.Root = s
+	}
+	child.Parent = s
+	s.Children = append(s.Children, child)
+	return nil
+}
+
+// DetachChild removes a child association without closing the root event bus.
+func (s *Session) DetachChild(child *Session) bool {
+	if child == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i, existing := range s.Children {
+		if existing == child {
+			s.Children = append(s.Children[:i], s.Children[i+1:]...)
+			child.Parent = nil
+			child.Root = child
+			return true
+		}
+	}
+	return false
+}
+
+// ChildrenSnapshot returns a race-safe copy of the direct children.
+func (s *Session) ChildrenSnapshot() []*Session {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return append([]*Session(nil), s.Children...)
 }
 
 // trimOrphanedToolCalls removes the last assistant tool-call message if any of
@@ -292,6 +365,12 @@ func WithCompactThreshold(ct int64) Option {
 func WithMessageWriter(w MessageWriter) Option {
 	return func(s *Session) {
 		s.writer = w
+	}
+}
+
+func WithRecordStore(store RecordStore) Option {
+	return func(s *Session) {
+		s.recordStore = store
 	}
 }
 

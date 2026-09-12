@@ -140,6 +140,10 @@ func (c *Config) SessionsPath() string {
 	return filepath.Join(c.DataDirPath(), "sessions")
 }
 
+func (c *Config) ProjectsPath() string {
+	return filepath.Join(c.DataDirPath(), "projects")
+}
+
 func (c *Config) MemoryPath() string {
 	return filepath.Join(c.DataDirPath(), "memory")
 }

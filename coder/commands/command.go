@@ -3,7 +3,6 @@ package commands
 import (
 	"context"
 
-	"github.com/basenana/friday/actor"
 	"github.com/basenana/friday/config"
 	"github.com/basenana/friday/core/collaboration"
 	"github.com/basenana/friday/sessions"
@@ -77,9 +76,11 @@ type Context struct {
 	SessionID string
 	Args      []string // tokens after the command name (whitespace-split)
 	RawArgs   string   // exact text after the command name
-	SessMgr   *sessions.Manager
-	ActorReg  *actor.Registry
-	Config    *config.Config
+	Session   sessions.SessionLifecycle
+	// SessMgr is retained for non-project compatibility while callers migrate
+	// to the root-bound Session capability above.
+	SessMgr *sessions.Manager
+	Config  *config.Config
 }
 
 type RunPolicy string

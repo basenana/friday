@@ -1,8 +1,12 @@
 package main
 
 import (
+	"fmt"
+	"os"
+
 	"github.com/spf13/cobra"
 
+	projectpkg "github.com/basenana/friday/coder/project"
 	"github.com/basenana/friday/tui"
 )
 
@@ -20,7 +24,15 @@ Features:
   - Enter to steer and Tab to queue while a task runs
   - Adaptive alternate-screen behavior`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return tui.Run(sessMgr, cfg, tuiSessionID)
+		cwd, err := os.Getwd()
+		if err != nil {
+			return fmt.Errorf("get project directory: %w", err)
+		}
+		proj, err := projectpkg.Open(cwd, projectpkg.NewFileStore(cfg.ProjectsPath()))
+		if err != nil {
+			return fmt.Errorf("open project: %w", err)
+		}
+		return tui.RunProject(projectpkg.NewManager(proj, sessMgr), cfg, tuiSessionID)
 	},
 }
 

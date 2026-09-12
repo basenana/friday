@@ -27,9 +27,14 @@ func (m *model) handleSlash(text string) (tea.Model, tea.Cmd) {
 		m.appendBlock(chatBlock{kind: blockError, content: "unknown command: /" + name + " (try /help)"})
 		return m.dispatchIfIdle()
 	}
+	lifecycle, _ := m.registry.Lifecycle(m.sessionID)
+	legacyManager := m.sessMgr
+	if m.projectMgr != nil {
+		legacyManager = nil
+	}
 	result, err := cmd.Execute(&codercmds.Context{
 		Ctx: context.Background(), SessionID: m.sessionID, Args: parts, RawArgs: rawArgs,
-		SessMgr: m.sessMgr, ActorReg: m.registry, Config: m.cfg,
+		Session: lifecycle, SessMgr: legacyManager, Config: m.cfg,
 	})
 	if err != nil {
 		m.appendBlock(chatBlock{kind: blockError, content: err.Error()})
@@ -105,6 +110,20 @@ func (m *model) applyLifecycleAction(action codercmds.Action) (bool, tea.Cmd) {
 func (m *model) applySessionAction(action codercmds.Action) (bool, tea.Cmd) {
 	switch action := action.(type) {
 	case codercmds.ClearSessionAction:
+		if m.projectMgr != nil {
+			newID, err := m.createProjectRoot(true)
+			if err != nil {
+				m.appendBlock(chatBlock{kind: blockError, content: "clear: " + err.Error()})
+				return true, nil
+			}
+			cmd, err := m.switchSession(newID)
+			if err != nil {
+				_ = m.projectMgr.DeleteRoot(newID)
+				m.appendBlock(chatBlock{kind: blockError, content: err.Error()})
+				return true, nil
+			}
+			return true, tea.Batch(tea.ClearScreen, cmd)
+		}
 		if action.SessionID == "" || action.SessionID == m.sessionID {
 			m.appendBlock(chatBlock{kind: blockError, content: "clear: invalid new session ID"})
 			return true, nil
@@ -119,7 +138,13 @@ func (m *model) applySessionAction(action codercmds.Action) (bool, tea.Cmd) {
 		m.openResumeSelector()
 		return true, nil
 	case codercmds.ResumeSessionAction:
-		meta, err := m.sessMgr.ResolveActiveSession(action.Target)
+		var meta *sessions.SessionMeta
+		var err error
+		if m.projectMgr != nil {
+			meta, err = m.projectMgr.Resolve(action.Target)
+		} else {
+			meta, err = m.sessMgr.ResolveActiveSession(action.Target)
+		}
 		if err != nil {
 			m.appendBlock(chatBlock{kind: blockError, content: err.Error()})
 			return true, nil
@@ -131,7 +156,14 @@ func (m *model) applySessionAction(action codercmds.Action) (bool, tea.Cmd) {
 		}
 		return true, cmd
 	case codercmds.RenameSessionAction:
-		if name, err := m.sessMgr.Rename(m.sessionID, action.Name); err != nil {
+		var name string
+		var err error
+		if m.projectMgr != nil {
+			name, err = m.projectMgr.Rename(m.sessionID, action.Name)
+		} else {
+			name, err = m.sessMgr.Rename(m.sessionID, action.Name)
+		}
+		if err != nil {
 			m.appendBlock(chatBlock{kind: blockError, content: "rename: " + err.Error()})
 		} else {
 			m.appendBlock(chatBlock{kind: blockDivider, content: "renamed · " + name})
@@ -212,7 +244,7 @@ func (m *model) applyCollaborationAction(action codercmds.Action) (bool, tea.Cmd
 			m.planHandoff = &planHandoffState{}
 			return true, nil
 		}
-		if err := m.sessMgr.SetMode(m.sessionID, mode); err != nil {
+		if err := m.runtime.SetMode(m.sessionID, mode); err != nil {
 			m.appendBlock(chatBlock{kind: blockError, content: "set mode: " + err.Error()})
 			return true, nil
 		}
@@ -235,7 +267,7 @@ func (m *model) dispatchIfIdle() (tea.Model, tea.Cmd) {
 }
 
 func (m *model) canDispatchQueued() bool {
-	return !m.running && len(m.queued) > 0 && m.form == nil && m.planHandoff == nil &&
+	return !m.running && !m.planCompacting && len(m.queued) > 0 && m.form == nil && m.planHandoff == nil &&
 		m.commandConfirm == nil && m.selector == nil && m.detail == nil && m.confirm == nil
 }
 
@@ -243,9 +275,24 @@ func (m *model) switchSession(newID string) (tea.Cmd, error) {
 	if newID == m.sessionID {
 		return nil, nil
 	}
-	_, created, err := m.sessMgr.GetOrCreateDetachedByID(newID)
-	if err != nil {
-		return nil, fmt.Errorf("prepare session %s: %w", shortID(newID), err)
+	created := false
+	var err error
+	if m.projectMgr != nil {
+		has, containsErr := m.projectMgr.Contains(newID)
+		if containsErr != nil {
+			return nil, containsErr
+		}
+		if !has {
+			return nil, fmt.Errorf("session is not referenced by this project: %s", shortID(newID))
+		}
+		if _, err = m.projectMgr.GetMeta(newID); err != nil {
+			return nil, fmt.Errorf("prepare session %s: %w", shortID(newID), err)
+		}
+	} else {
+		_, created, err = m.sessMgr.GetOrCreateDetachedByID(newID)
+		if err != nil {
+			return nil, fmt.Errorf("prepare session %s: %w", shortID(newID), err)
+		}
 	}
 	rollbackCreated := func() error {
 		if created {
@@ -254,23 +301,23 @@ func (m *model) switchSession(newID string) (tea.Cmd, error) {
 		return nil
 	}
 	if created {
-		oldRuntime, runtimeErr := m.sessMgr.Runtime(m.sessionID)
+		oldRuntime, runtimeErr := m.runtime.Runtime(m.sessionID)
 		if runtimeErr != nil {
 			return nil, sessionSwitchError(fmt.Errorf("load current session runtime: %w", runtimeErr), rollbackCreated())
 		}
 		oldRuntime.Mode = collaboration.ModeDefault
-		if err := m.sessMgr.UpdateMeta(newID, sessions.SessionMetaPatch{Runtime: &oldRuntime}); err != nil {
+		if err := m.runtime.UpdateMeta(newID, sessions.SessionMetaPatch{Runtime: &oldRuntime}); err != nil {
 			return nil, sessionSwitchError(fmt.Errorf("initialize session runtime: %w", err), rollbackCreated())
 		}
 	}
 	if err := normalizeSessionModel(m.sessMgr, m.cfg, newID); err != nil {
 		return nil, sessionSwitchError(fmt.Errorf("validate session model: %w", err), rollbackCreated())
 	}
-	latestPlan, err := m.sessMgr.LoadLatestPlan(newID)
+	latestPlan, err := m.runtime.LoadLatestPlan(newID)
 	if err != nil {
 		return nil, sessionSwitchError(fmt.Errorf("load session plan: %w", err), rollbackCreated())
 	}
-	activeModel, _ := configuredSessionModel(m.sessMgr, m.cfg, newID)
+	activeModel, _ := configuredSessionModel(m.runtime, m.cfg, newID)
 
 	newFeed := bus.SubscribeAgentFeed(m.registry.Bus(), newID)
 	if _, err := m.registry.GetOrCreate(newID); err != nil {
@@ -284,7 +331,12 @@ func (m *model) switchSession(newID string) (tea.Cmd, error) {
 		m.registry.Shutdown(newID)
 		return nil, sessionSwitchError(fmt.Errorf("restore session %s: %w", shortID(newID), err), rollbackCreated())
 	}
-	if err := m.sessMgr.SetCurrentID(newID); err != nil {
+	if m.projectMgr != nil {
+		err = m.projectMgr.Activate(newID)
+	} else {
+		err = m.sessMgr.SetCurrentID(newID)
+	}
+	if err != nil {
 		newFeed.Close()
 		m.registry.Shutdown(newID)
 		return nil, sessionSwitchError(fmt.Errorf("activate session %s: %w", shortID(newID), err), rollbackCreated())
@@ -292,7 +344,7 @@ func (m *model) switchSession(newID string) (tea.Cmd, error) {
 
 	oldID, oldFeed := m.sessionID, m.feed
 	m.sessionID, m.feed = newID, newFeed
-	m.mode = m.sessMgr.CollaborationMode(newID)
+	m.mode = m.runtime.CollaborationMode(newID)
 	m.latestPlan = latestPlan
 	m.activeModel = activeModel
 	m.subscriptionToken++
@@ -311,6 +363,29 @@ func (m *model) switchSession(newID string) (tea.Cmd, error) {
 	}
 	m.registry.Shutdown(oldID)
 	return m.waitForActorEvent(), nil
+}
+
+func (m *model) createProjectRoot(inheritRuntime bool) (string, error) {
+	lifecycle, err := m.projectMgr.CreateRoot(context.Background(), nil)
+	if err != nil {
+		return "", err
+	}
+	id := lifecycle.RootID()
+	_ = lifecycle.Close()
+	if !inheritRuntime || m.sessionID == "" {
+		return id, nil
+	}
+	runtimeState, err := m.runtime.Runtime(m.sessionID)
+	if err != nil {
+		_ = m.projectMgr.DeleteRoot(id)
+		return "", err
+	}
+	runtimeState.Mode = collaboration.ModeDefault
+	if err := m.runtime.UpdateMeta(id, sessions.SessionMetaPatch{Runtime: &runtimeState}); err != nil {
+		_ = m.projectMgr.DeleteRoot(id)
+		return "", err
+	}
+	return id, nil
 }
 
 func sessionSwitchError(cause, cleanup error) error {

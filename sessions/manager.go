@@ -1,6 +1,7 @@
 package sessions
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -40,6 +41,43 @@ func (m *Manager) GetStore() Store {
 // SetLLM sets the LLM client for the manager
 func (m *Manager) SetLLM(llm providers.Client) {
 	m.llm = llm
+}
+
+// CreateRoot creates a persisted top-level session using the explicitly
+// supplied client and returns a lifecycle bound to it. Unlike legacy manager
+// methods it never changes a global current pointer.
+func (m *Manager) CreateRoot(_ context.Context, client providers.Client, opts ...coresession.Option) (SessionLifecycle, error) {
+	if err := m.store.EnsureDir(); err != nil {
+		return nil, err
+	}
+	id := types.NewID()
+	sess, err := m.store.Create(id, client, opts...)
+	if err != nil {
+		return nil, err
+	}
+	if alias := m.generateAlias(); alias != "" {
+		if err := m.store.UpdateAlias(id, alias); err != nil {
+			cleanupErr := m.store.Delete(id)
+			if cleanupErr != nil {
+				return nil, fmt.Errorf("initialize root session: %w; cleanup: %v", err, cleanupErr)
+			}
+			return nil, err
+		}
+	}
+	return newLifecycle(sess, client, m.store), nil
+}
+
+// OpenRoot opens an existing persisted top-level session. Missing IDs are
+// returned as errors and are never created implicitly.
+func (m *Manager) OpenRoot(_ context.Context, id string, client providers.Client, opts ...coresession.Option) (SessionLifecycle, error) {
+	if err := m.store.EnsureDir(); err != nil {
+		return nil, err
+	}
+	sess, err := m.store.Load(id, client, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return newLifecycle(sess, client, m.store), nil
 }
 
 // GetCurrentID returns the current session ID, or empty string if none
@@ -336,7 +374,22 @@ func (m *Manager) Archive(sessionID string) error {
 	return m.UpdateMeta(sessionID, SessionMetaPatch{Archived: &archived})
 }
 
-func (m *Manager) Delete(sessionID string) error { return m.store.Delete(sessionID) }
+func (m *Manager) DeleteRoot(sessionID string) error {
+	if relations, ok := m.store.(RelationStore); ok {
+		items, err := relations.ListRelations(sessionID)
+		if err != nil && !errors.Is(err, os.ErrNotExist) && !os.IsNotExist(err) {
+			return err
+		}
+		for _, relation := range items {
+			if err := m.store.Delete(relation.SessionID); err != nil && !errors.Is(err, os.ErrNotExist) && !os.IsNotExist(err) {
+				return fmt.Errorf("delete associated session %s: %w", relation.SessionID, err)
+			}
+		}
+	}
+	return m.store.Delete(sessionID)
+}
+
+func (m *Manager) Delete(sessionID string) error { return m.DeleteRoot(sessionID) }
 
 func (m *Manager) SavePlan(sessionID string, plan planning.Artifact) error {
 	store, ok := m.store.(PlanningStore)

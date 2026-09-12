@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strconv"
@@ -16,6 +17,7 @@ import (
 	"github.com/basenana/friday/actor"
 	"github.com/basenana/friday/bus"
 	codercmds "github.com/basenana/friday/coder/commands"
+	projectpkg "github.com/basenana/friday/coder/project"
 	"github.com/basenana/friday/config"
 	"github.com/basenana/friday/core/actor/events"
 	"github.com/basenana/friday/core/collaboration"
@@ -38,6 +40,31 @@ func Run(sessMgr *sessions.Manager, cfg *config.Config, sessionID string) error 
 	m.alternateScreen = useAlternateScreen(cfg.TUI.AlternateScreen)
 	// Do not enable terminal mouse reporting: leaving it disabled preserves the
 	// terminal's native click-and-drag text selection behavior.
+	final, err := tea.NewProgram(m).Run()
+	if err != nil {
+		return err
+	}
+	if result, ok := final.(*model); ok && result.fatalErr != nil {
+		return result.fatalErr
+	}
+	return nil
+}
+
+// RunProject launches the TUI with project-scoped root-session selection.
+func RunProject(projectMgr *projectpkg.Manager, cfg *config.Config, sessionID string) error {
+	registryConfig := actor.DefaultRegistryConfig()
+	registryConfig.AgentPlanEntry = true
+	registryConfig.Catalog = projectMgr
+	registryConfig.Workdir = projectMgr.Project().Root()
+	registry := actor.NewRegistry(projectMgr.Base(), cfg, registryConfig)
+	defer registry.ShutdownAll()
+
+	cmdRegistry := codercmds.NewRegistry()
+	codercmds.RegisterAll(cmdRegistry)
+	m := loadingModelAt(projectMgr.Base(), registry, cmdRegistry, cfg, sessionID, projectMgr.Project().Root())
+	m.projectMgr = projectMgr
+	m.runtime = projectMgr
+	m.alternateScreen = useAlternateScreen(cfg.TUI.AlternateScreen)
 	final, err := tea.NewProgram(m).Run()
 	if err != nil {
 		return err
@@ -81,12 +108,29 @@ type menuItem struct {
 	value, label, description string
 }
 
+// sessionRuntime is the narrow persisted capability used by the TUI after a
+// root has been selected. Project mode supplies project.Manager; legacy mode
+// supplies sessions.Manager.
+type sessionRuntime interface {
+	GetStore() sessions.Store
+	CollaborationMode(string) collaboration.Mode
+	Runtime(string) (sessions.SessionRuntime, error)
+	UpdateMeta(string, sessions.SessionMetaPatch) error
+	SetMode(string, collaboration.Mode) error
+	SetModel(string, sessions.ModelSelection) error
+	ClearModel(string) error
+	LoadLatestPlan(string) (*planning.Artifact, error)
+	SavePlan(string, planning.Artifact) error
+}
+
 type model struct {
-	sessMgr   *sessions.Manager
-	registry  *actor.Registry
-	sessionID string
-	feed      *bus.Feed
-	workdir   string
+	sessMgr    *sessions.Manager
+	runtime    sessionRuntime
+	projectMgr *projectpkg.Manager
+	registry   *actor.Registry
+	sessionID  string
+	feed       *bus.Feed
+	workdir    string
 
 	cmdRegistry *codercmds.Registry
 	cfg         *config.Config
@@ -110,6 +154,7 @@ type model struct {
 	selector         *selectorState
 	commandConfirm   *commandConfirmation
 	planHandoff      *planHandoffState
+	planCompacting   bool
 
 	running         bool
 	currentRunID    string
@@ -159,13 +204,21 @@ func initialModel(sessMgr *sessions.Manager, registry *actor.Registry, cmdRegist
 }
 
 func loadingModel(sessMgr *sessions.Manager, registry *actor.Registry, cmdRegistry *codercmds.Registry, cfg *config.Config, requestedSessionID string) *model {
-	m := baseModel(sessMgr, registry, cmdRegistry, cfg, requestedSessionID)
+	return loadingModelAt(sessMgr, registry, cmdRegistry, cfg, requestedSessionID, "")
+}
+
+func loadingModelAt(sessMgr *sessions.Manager, registry *actor.Registry, cmdRegistry *codercmds.Registry, cfg *config.Config, requestedSessionID, workdir string) *model {
+	m := baseModelAt(sessMgr, registry, cmdRegistry, cfg, requestedSessionID, workdir)
 	m.loading = true
 	m.requestedSessionID = requestedSessionID
 	return m
 }
 
 func baseModel(sessMgr *sessions.Manager, registry *actor.Registry, cmdRegistry *codercmds.Registry, cfg *config.Config, sessionID string) *model {
+	return baseModelAt(sessMgr, registry, cmdRegistry, cfg, sessionID, "")
+}
+
+func baseModelAt(sessMgr *sessions.Manager, registry *actor.Registry, cmdRegistry *codercmds.Registry, cfg *config.Config, sessionID, workdir string) *model {
 	configureTheme(true)
 	ta := textarea.New()
 	ta.Placeholder = "Send a message…  / commands · Ctrl+G editor"
@@ -176,22 +229,25 @@ func baseModel(sessMgr *sessions.Manager, registry *actor.Registry, cmdRegistry 
 	removeTextareaBackground(&ta)
 
 	m := &model{
-		sessMgr: sessMgr, registry: registry, cmdRegistry: cmdRegistry, cfg: cfg,
+		sessMgr: sessMgr, runtime: sessMgr, registry: registry, cmdRegistry: cmdRegistry, cfg: cfg,
 		sessionID: sessionID, textarea: ta, viewport: viewport.New(viewport.WithWidth(80), viewport.WithHeight(20)),
 		spinner:   spinner.New(spinner.WithSpinner(spinner.Dot), spinner.WithStyle(accentStyle)),
 		toolCalls: make(map[string]*toolCallBlock), seenInputs: make(map[string]bool),
 		cards: make(map[string]*cardState), historyIndex: -1, darkBackground: true,
 		now: time.Now,
 	}
-	m.mode = sessMgr.CollaborationMode(sessionID)
-	m.activeModel, _ = configuredSessionModel(sessMgr, cfg, sessionID)
+	m.mode = m.runtime.CollaborationMode(sessionID)
+	m.activeModel, _ = configuredSessionModel(m.runtime, cfg, sessionID)
 	// Focus after the textarea has reached its final storage location. The
 	// component keeps an internal pointer to its active style, so focusing a
 	// temporary value before copying it can leave that pointer attached to the
 	// discarded copy.
 	m.textarea.Focus()
-	if wd, err := os.Getwd(); err == nil {
-		m.workdir = wd
+	m.workdir = workdir
+	if m.workdir == "" {
+		if wd, err := os.Getwd(); err == nil {
+			m.workdir = wd
+		}
 	}
 	return m
 }
@@ -257,12 +313,12 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.sessionID = msg.sessionID
-		m.mode = m.sessMgr.CollaborationMode(msg.sessionID)
-		m.activeModel, _ = configuredSessionModel(m.sessMgr, m.cfg, msg.sessionID)
+		m.mode = m.runtime.CollaborationMode(msg.sessionID)
+		m.activeModel, _ = configuredSessionModel(m.runtime, m.cfg, msg.sessionID)
 		m.feed = msg.feed
 		m.subscriptionToken++
 		m.applyProjection(msg.projection)
-		if plan, err := m.sessMgr.LoadLatestPlan(msg.sessionID); err != nil {
+		if plan, err := m.runtime.LoadLatestPlan(msg.sessionID); err != nil {
 			m.appendBlock(chatBlock{kind: blockError, content: "restore plan: " + err.Error()})
 		} else {
 			m.latestPlan = plan
@@ -270,6 +326,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.layout()
 		return m, m.waitForActorEvent()
+	case planCompactFinishedMsg:
+		return m.finishPlanApproval(msg)
 	case dispatchQueuedMsg:
 		return m.dispatchNextQueued()
 	case tea.KeyPressMsg:
@@ -278,7 +336,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.closeFeed()
 			return m, tea.Quit
 		}
-		if m.loading || m.fatalErr != nil {
+		if m.loading || m.fatalErr != nil || m.planCompacting {
 			return m, nil
 		}
 		if m.detail != nil {
@@ -326,7 +384,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case spinner.TickMsg:
 		var cmd tea.Cmd
 		m.spinner, cmd = m.spinner.Update(msg)
-		if m.loading || m.running {
+		if m.loading || m.running || m.planCompacting {
 			return m, cmd
 		}
 		return m, nil
@@ -342,19 +400,52 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *model) loadInitialSession() tea.Cmd {
-	sessMgr, registry := m.sessMgr, m.registry
+	sessMgr, runtime, registry, projectMgr := m.sessMgr, m.runtime, m.registry, m.projectMgr
 	requested := m.requestedSessionID
 	cfg, workdir, width, height := m.cfg, m.workdir, m.width, m.height
 	return func() tea.Msg {
+		if projectMgr != nil {
+			sessionID, created, err := prepareInitialProjectSession(projectMgr, requested)
+			if err != nil {
+				return initialSessionLoadedMsg{err: err}
+			}
+			cleanup := func() {
+				if created {
+					_ = projectMgr.DeleteRoot(sessionID)
+				}
+			}
+			projection, err := buildTranscriptProjection(runtime, cfg, workdir, width, height, sessionID)
+			if err != nil {
+				cleanup()
+				return initialSessionLoadedMsg{sessionID: sessionID, err: err}
+			}
+			if err := normalizeSessionModel(runtime, cfg, sessionID); err != nil {
+				cleanup()
+				return initialSessionLoadedMsg{sessionID: sessionID, err: err}
+			}
+			feed := bus.SubscribeAgentFeed(registry.Bus(), sessionID)
+			if _, err := registry.GetOrCreate(sessionID); err != nil {
+				feed.Close()
+				cleanup()
+				return initialSessionLoadedMsg{sessionID: sessionID, err: err}
+			}
+			if err := projectMgr.Activate(sessionID); err != nil {
+				feed.Close()
+				registry.Shutdown(sessionID)
+				cleanup()
+				return initialSessionLoadedMsg{sessionID: sessionID, err: err}
+			}
+			return initialSessionLoadedMsg{sessionID: sessionID, feed: feed, projection: projection}
+		}
 		sessionID, err := prepareInitialSessionID(sessMgr, requested)
 		if err != nil {
 			return initialSessionLoadedMsg{err: err}
 		}
-		projection, err := buildTranscriptProjection(sessMgr, cfg, workdir, width, height, sessionID)
+		projection, err := buildTranscriptProjection(runtime, cfg, workdir, width, height, sessionID)
 		if err != nil {
 			return initialSessionLoadedMsg{sessionID: sessionID, err: err}
 		}
-		if err := normalizeSessionModel(sessMgr, cfg, sessionID); err != nil {
+		if err := normalizeSessionModel(runtime, cfg, sessionID); err != nil {
 			return initialSessionLoadedMsg{sessionID: sessionID, err: err}
 		}
 		feed := bus.SubscribeAgentFeed(registry.Bus(), sessionID)
@@ -364,6 +455,36 @@ func (m *model) loadInitialSession() tea.Cmd {
 		}
 		return initialSessionLoadedMsg{sessionID: sessionID, feed: feed, projection: projection}
 	}
+}
+
+func prepareInitialProjectSession(manager *projectpkg.Manager, requested string) (string, bool, error) {
+	if requested != "" {
+		has, err := manager.Contains(requested)
+		if err != nil {
+			return "", false, err
+		}
+		if !has {
+			return "", false, fmt.Errorf("session is not referenced by this project: %s", requested)
+		}
+		if _, err := manager.GetMeta(requested); err != nil {
+			return "", false, err
+		}
+		return requested, false, nil
+	}
+	current, err := manager.CurrentID()
+	if err != nil {
+		return "", false, err
+	}
+	if current != "" {
+		return current, false, nil
+	}
+	lifecycle, err := manager.CreateRoot(context.Background(), nil)
+	if err != nil {
+		return "", false, err
+	}
+	id := lifecycle.RootID()
+	_ = lifecycle.Close()
+	return id, true, nil
 }
 
 func prepareInitialSessionID(sessMgr *sessions.Manager, requested string) (string, error) {
@@ -922,7 +1043,7 @@ func (m *model) closeFeed() {
 
 func (m *model) bindSession(sessionID string) error {
 	m.closeFeed()
-	if err := normalizeSessionModel(m.sessMgr, m.cfg, sessionID); err != nil {
+	if err := normalizeSessionModel(m.runtime, m.cfg, sessionID); err != nil {
 		return fmt.Errorf("validate session model: %w", err)
 	}
 	feed := bus.SubscribeAgentFeed(m.registry.Bus(), sessionID)

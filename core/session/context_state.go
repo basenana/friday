@@ -52,10 +52,11 @@ type TokenCheckpoint struct {
 }
 
 type PromptBudget struct {
-	ContextWindow int64
-	SoftThreshold int64
-	HardThreshold int64
-	TailTarget    int64
+	ContextWindow  int64
+	SoftThreshold  int64
+	HardThreshold  int64
+	TailTarget     int64
+	ReservedTokens int64
 }
 
 type FileRef struct {

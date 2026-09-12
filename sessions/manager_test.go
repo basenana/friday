@@ -185,12 +185,6 @@ func (m *mockStore) UpdateMeta(sessionID string, patch SessionMetaPatch) error {
 	if patch.LatestPlanID != nil {
 		meta.LatestPlanID = *patch.LatestPlanID
 	}
-	if patch.ParentSessionID != nil {
-		meta.ParentSessionID = *patch.ParentSessionID
-	}
-	if patch.SourcePlanID != nil {
-		meta.SourcePlanID = *patch.SourcePlanID
-	}
 	return nil
 }
 

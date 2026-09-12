@@ -12,6 +12,14 @@ type ToolSet interface {
 
 type ToolHandlerFunc func(ctx context.Context, request *Request) (*Result, error)
 
+// SessionRecords is a session-bound auxiliary record store exposed to tools.
+// Implementations decide whether records are persisted; temporary sessions may
+// keep them in memory only.
+type SessionRecords interface {
+	ReadRecord(ctx context.Context, namespace string) ([]byte, error)
+	UpdateRecord(ctx context.Context, namespace string, update func([]byte) ([]byte, error)) error
+}
+
 type Tool struct {
 	Name        string            `json:"name"`
 	Description string            `json:"description"`
@@ -85,12 +93,14 @@ type ToolInputSchema struct {
 }
 
 type Request struct {
-	Arguments map[string]interface{} `json:"arguments"`
-	SessionID string                 `json:"sessionId"`
+	Arguments      map[string]interface{} `json:"arguments"`
+	SessionID      string                 `json:"sessionId"`
+	SessionRecords SessionRecords         `json:"-"`
 }
 
 type Result struct {
 	Content     []Content `json:"content"`
+	FYI         string    `json:"fyi,omitempty"`
 	IsError     bool      `json:"is_error,omitempty"`
 	Retryable   bool      `json:"retryable,omitempty"`
 	RetryReason string    `json:"retry_reason,omitempty"`

@@ -157,12 +157,17 @@ model submits a versioned plan artifact only after the design is complete.
                     v
  inspect context -> ask material questions -> submit_plan
                                               |
-                  +---------------------------+------------------------+
-                  |                           |                        |
-      Approve + implement here   Approve + fresh session       Request changes
-                  |                           |                        |
-           Default Mode             lineage + Default Mode         Plan Mode
+                              +---------------+----------------+
+                              |                                |
+                Approve + compact + implement           Request changes
+                              |                                |
+                 current session + Default Mode              Plan Mode
 ```
+
+An approved plan remains attached to its session. Before each subsequent
+model call, Friday prepends the accepted plan Markdown to the first user
+message in the request. This request-only injection survives session reloads
+and history compaction without duplicating the plan in persisted history.
 
 The implementation is split across `core/collaboration` (mode instructions
 and reasoning override), `core/planning` (artifacts and terminal submission),
@@ -174,6 +179,21 @@ The agent may enter Plan Mode itself when a task has material ambiguity or
 needs design approval. While a turn is active, the TUI shows wall-clock
 elapsed time and its current activity; every completed, cancelled, failed, or
 plan-producing turn ends with a visible duration marker.
+
+#### Project instruction files
+
+The native `fs_read` and `fs_list` tools lazily discover project instructions.
+Starting at the accessed directory and walking toward the project root, Friday
+reads at most one instruction file per directory (`AGENTS.md` first, then
+`CLAUDE.md`) and returns newly discovered Markdown in the tool result's `fyi`
+field. Directories already checked by the current session are not returned
+again, including after history compaction or session reload. Forks inherit the
+parent snapshot and then track their own directories independently.
+
+Instruction discovery is limited to the native filesystem tools; shell,
+background, and external MCP tools do not participate. Editing an instruction
+file through a native filesystem tool invalidates that directory so its new
+contents are discovered on the next read or list.
 
 Plan Mode uses the session's selected model and defaults to `medium` reasoning
 effort. Override it in JSON or YAML:

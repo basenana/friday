@@ -156,7 +156,13 @@ func (m *model) updateSelector(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *model) openResumeSelector() {
-	metas, err := m.sessMgr.GetStore().ListActive()
+	var metas []sessions.SessionMeta
+	var err error
+	if m.projectMgr != nil {
+		metas, err = m.projectMgr.List(true)
+	} else {
+		metas, err = m.sessMgr.GetStore().ListActive()
+	}
 	if err != nil {
 		m.appendBlock(chatBlock{kind: blockError, content: "list sessions: " + err.Error()})
 		return
@@ -178,7 +184,7 @@ func (m *model) openResumeSelector() {
 }
 
 func (m *model) openModelSelector() {
-	runtimeState, _ := m.sessMgr.Runtime(m.sessionID)
+	runtimeState, _ := m.runtime.Runtime(m.sessionID)
 	items := make([]selectorItem, 0, len(m.cfg.ChatModels()))
 	for _, model := range m.cfg.ChatModels() {
 		current := ""
@@ -212,22 +218,22 @@ func (m *model) applyModel(model config.ModelConfig) (tea.Model, tea.Cmd) {
 		m.appendBlock(chatBlock{kind: blockError, content: fmt.Sprintf("switch model: %d background task(s) still running; stop or wait for them first", count)})
 		return m, nil
 	}
-	old, err := m.sessMgr.Runtime(m.sessionID)
+	old, err := m.runtime.Runtime(m.sessionID)
 	if err != nil {
 		m.appendBlock(chatBlock{kind: blockError, content: err.Error()})
 		return m, nil
 	}
 	selection := sessions.ModelSelection{Provider: model.Provider, Model: model.Model}
-	if err := m.sessMgr.SetModel(m.sessionID, selection); err != nil {
+	if err := m.runtime.SetModel(m.sessionID, selection); err != nil {
 		m.appendBlock(chatBlock{kind: blockError, content: err.Error()})
 		return m, nil
 	}
 	if err := m.registry.Reconfigure(m.sessionID); err != nil {
 		var rollbackErr error
 		if old.Model.Model == "" {
-			rollbackErr = m.sessMgr.ClearModel(m.sessionID)
+			rollbackErr = m.runtime.ClearModel(m.sessionID)
 		} else {
-			rollbackErr = m.sessMgr.SetModel(m.sessionID, old.Model)
+			rollbackErr = m.runtime.SetModel(m.sessionID, old.Model)
 		}
 		if rollbackErr == nil {
 			rollbackErr = m.registry.Reconfigure(m.sessionID)
@@ -313,12 +319,44 @@ func (m *model) updateCommandConfirmation(key tea.KeyPressMsg) (tea.Model, tea.C
 		return m, nil
 	}
 	current := c.target == m.sessionID
+	if current && m.projectMgr != nil {
+		newID, err := m.createProjectRoot(true)
+		if err != nil {
+			m.appendBlock(chatBlock{kind: blockError, content: "prepare replacement: " + err.Error()})
+			return m, nil
+		}
+		cmd, err := m.switchSession(newID)
+		if err != nil {
+			_ = m.projectMgr.DeleteRoot(newID)
+			m.appendBlock(chatBlock{kind: blockError, content: err.Error()})
+			return m, nil
+		}
+		if c.action == "archive" {
+			err = m.projectMgr.Archive(c.target)
+		} else {
+			err = m.projectMgr.DeleteRoot(c.target)
+		}
+		if err != nil {
+			m.appendBlock(chatBlock{kind: blockError, content: c.action + ": " + err.Error()})
+		} else {
+			m.appendBlock(chatBlock{kind: blockDivider, content: c.action + "d · " + c.label})
+		}
+		return m, cmd
+	}
 	m.registry.Shutdown(c.target)
 	var err error
 	if c.action == "archive" {
-		err = m.sessMgr.Archive(c.target)
+		if m.projectMgr != nil {
+			err = m.projectMgr.Archive(c.target)
+		} else {
+			err = m.sessMgr.Archive(c.target)
+		}
 	} else {
-		err = m.sessMgr.Delete(c.target)
+		if m.projectMgr != nil {
+			err = m.projectMgr.DeleteRoot(c.target)
+		} else {
+			err = m.sessMgr.Delete(c.target)
+		}
 	}
 	if err != nil {
 		m.appendBlock(chatBlock{kind: blockError, content: c.action + ": " + err.Error()})
@@ -328,7 +366,8 @@ func (m *model) updateCommandConfirmation(key tea.KeyPressMsg) (tea.Model, tea.C
 		m.appendBlock(chatBlock{kind: blockDivider, content: c.action + "d · " + c.label})
 		return m, nil
 	}
-	cmd, switchErr := m.switchSession(types.NewID())
+	newID := types.NewID()
+	cmd, switchErr := m.switchSession(newID)
 	if switchErr != nil {
 		m.appendBlock(chatBlock{kind: blockError, content: switchErr.Error()})
 		return m, nil
@@ -340,7 +379,13 @@ func (m *model) requestSessionConfirmation(action, target string) {
 	id := m.sessionID
 	label := "current"
 	if target != "" {
-		meta, err := m.sessMgr.ResolveActiveSession(target)
+		var meta *sessions.SessionMeta
+		var err error
+		if m.projectMgr != nil {
+			meta, err = m.projectMgr.Resolve(target)
+		} else {
+			meta, err = m.sessMgr.ResolveActiveSession(target)
+		}
 		if err != nil {
 			m.appendBlock(chatBlock{kind: blockError, content: err.Error()})
 			return
@@ -355,7 +400,7 @@ func (m *model) requestSessionConfirmation(action, target string) {
 }
 
 func (m *model) showStatus() {
-	meta, _ := m.sessMgr.GetStore().GetMeta(m.sessionID)
+	meta, _ := m.runtime.GetStore().GetMeta(m.sessionID)
 	model := m.activeModel
 	name := "(unnamed)"
 	if meta != nil && meta.Name != "" {
@@ -571,7 +616,7 @@ func runGitLimited(ctx context.Context, workdir string, limit int, args ...strin
 
 // configuredSessionModel resolves the complete configured model record for a
 // persisted selection. The bool reports whether a valid override was found.
-func configuredSessionModel(sessMgr *sessions.Manager, cfg *config.Config, sessionID string) (config.ModelConfig, bool) {
+func configuredSessionModel(sessMgr sessionRuntime, cfg *config.Config, sessionID string) (config.ModelConfig, bool) {
 	fallback := cfg.PrimaryModel()
 	runtimeState, err := sessMgr.Runtime(sessionID)
 	if err != nil || runtimeState.Model.Model == "" {
@@ -585,7 +630,7 @@ func configuredSessionModel(sessMgr *sessions.Manager, cfg *config.Config, sessi
 	return fallback, false
 }
 
-func normalizeSessionModel(sessMgr *sessions.Manager, cfg *config.Config, sessionID string) error {
+func normalizeSessionModel(sessMgr sessionRuntime, cfg *config.Config, sessionID string) error {
 	runtimeState, err := sessMgr.Runtime(sessionID)
 	if err != nil || runtimeState.Model.Model == "" {
 		return err
@@ -643,7 +688,7 @@ func writeClipboard(value string) error {
 type planHandoffState struct{ selected int }
 
 func (p *planHandoffState) View(width int) string {
-	options := []string{"Approve · implement here", "Approve · fresh session", "Request changes"}
+	options := []string{"Approve · implement", "Request changes"}
 	lines := []string{accentStyle.Copy().Bold(true).Render("Plan ready")}
 	for i, option := range options {
 		prefix := "  "
@@ -664,84 +709,87 @@ func (m *model) updatePlanHandoff(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	switch key.Code {
 	case tea.KeyUp:
-		m.planHandoff.selected = (m.planHandoff.selected + 2) % 3
+		m.planHandoff.selected = (m.planHandoff.selected + 1) % 2
 	case tea.KeyDown:
-		m.planHandoff.selected = (m.planHandoff.selected + 1) % 3
+		m.planHandoff.selected = (m.planHandoff.selected + 1) % 2
 	case tea.KeyEnter:
 		choice := m.planHandoff.selected
 		m.planHandoff = nil
-		if choice == 2 {
+		if choice == 1 {
 			m.appendBlock(chatBlock{kind: blockDivider, content: "plan changes requested · send feedback below"})
 			return m.dispatchIfIdle()
 		}
 		if m.latestPlan == nil {
 			return m, nil
 		}
-		if err := m.persistPlanStatus(planning.ArtifactAccepted); err != nil {
-			m.appendBlock(chatBlock{kind: blockError, content: "accept plan: " + err.Error()})
-			m.planHandoff = &planHandoffState{selected: choice}
+		lifecycle, ok := m.registry.Lifecycle(m.sessionID)
+		if !ok || lifecycle.Current() == nil {
+			m.appendBlock(chatBlock{kind: blockError, content: "approve plan: active session unavailable"})
+			m.planHandoff = &planHandoffState{}
 			return m, nil
 		}
-		if choice == 0 {
-			if err := m.sessMgr.SetMode(m.sessionID, collaboration.ModeDefault); err != nil {
-				restoreErr := m.persistPlanStatus(planning.ArtifactProposed)
-				message := "exit Plan Mode: " + err.Error()
-				if restoreErr != nil {
-					message += "; restore plan: " + restoreErr.Error()
-				}
-				m.appendBlock(chatBlock{kind: blockError, content: message})
-				m.planHandoff = &planHandoffState{selected: choice}
-				return m, nil
-			}
-			m.mode = collaboration.ModeDefault
-			prompt := "Implement the approved plan below. Re-read relevant files, execute every step, and verify the result.\n\n" + m.latestPlan.Markdown
-			return m.startUserTurn(prompt, bus.DeliveryNormal)
-		}
-		oldID, plan := m.sessionID, *m.latestPlan
-		queued := append([]pendingInput(nil), m.queued...)
-		_, newID, err := m.sessMgr.CreateIsolated()
-		if err != nil {
-			restoreErr := m.persistPlanStatus(planning.ArtifactProposed)
-			m.planHandoff = &planHandoffState{selected: choice}
-			message := "create implementation session: " + err.Error()
-			if restoreErr != nil {
-				message += "; restore plan: " + restoreErr.Error()
-			}
-			m.appendBlock(chatBlock{kind: blockError, content: message})
-			return m, nil
-		}
-		rollbackFresh := func(cause error) (tea.Model, tea.Cmd) {
-			restoreErr := m.persistPlanStatus(planning.ArtifactProposed)
-			deleteErr := m.sessMgr.Delete(newID)
-			message := cause.Error()
-			if restoreErr != nil {
-				message += "; restore plan: " + restoreErr.Error()
-			}
-			if deleteErr != nil {
-				message += "; delete prepared session: " + deleteErr.Error()
-			}
-			m.appendBlock(chatBlock{kind: blockError, content: message})
-			m.planHandoff = &planHandoffState{selected: choice}
-			return m, nil
-		}
-		runtimeState, err := m.sessMgr.Runtime(oldID)
-		if err != nil {
-			return rollbackFresh(fmt.Errorf("load planning runtime: %w", err))
-		}
-		runtimeState.Mode = collaboration.ModeDefault
-		if err := m.sessMgr.UpdateMeta(newID, sessions.SessionMetaPatch{Runtime: &runtimeState, ParentSessionID: &oldID, SourcePlanID: &plan.ID}); err != nil {
-			return rollbackFresh(fmt.Errorf("initialize implementation session: %w", err))
-		}
-		waitCmd, err := m.switchSession(newID)
-		if err != nil {
-			return rollbackFresh(err)
-		}
-		m.queued = queued
-		prompt := "A previous planning session produced the approved plan below. Implement it in this fresh context, re-read files as needed, and verify the result.\n\n" + plan.Markdown
-		_, sendCmd := m.startUserTurn(prompt, bus.DeliveryNormal)
-		return m, tea.Batch(waitCmd, sendCmd)
+		m.planCompacting = true
+		m.layout()
+		return m, compactForPlanApproval(m.sessionID, m.latestPlan.ID, lifecycle.Current())
 	}
 	return m, nil
+}
+
+type planCompactFinishedMsg struct {
+	sessionID string
+	planID    string
+	tokens    int
+	err       error
+}
+
+type planCompactor interface {
+	CompactHistory(context.Context) error
+	Tokens() int64
+}
+
+func compactForPlanApproval(sessionID, planID string, sess planCompactor) tea.Cmd {
+	return func() tea.Msg {
+		err := sess.CompactHistory(context.Background())
+		return planCompactFinishedMsg{sessionID: sessionID, planID: planID, tokens: int(sess.Tokens()), err: err}
+	}
+}
+
+func (m *model) finishPlanApproval(msg planCompactFinishedMsg) (tea.Model, tea.Cmd) {
+	m.planCompacting = false
+	if msg.sessionID != m.sessionID || m.latestPlan == nil || msg.planID != m.latestPlan.ID {
+		m.appendBlock(chatBlock{kind: blockError, content: "approve plan: session or plan changed while compacting"})
+		m.layout()
+		return m.dispatchIfIdle()
+	}
+	if msg.err != nil {
+		m.appendBlock(chatBlock{kind: blockError, content: "compact before implementation: " + msg.err.Error()})
+		m.planHandoff = &planHandoffState{}
+		m.layout()
+		return m, nil
+	}
+
+	m.tokenCount = msg.tokens
+	if err := m.persistPlanStatus(planning.ArtifactAccepted); err != nil {
+		m.appendBlock(chatBlock{kind: blockError, content: "accept plan: " + err.Error()})
+		m.planHandoff = &planHandoffState{}
+		m.layout()
+		return m, nil
+	}
+	if err := m.runtime.SetMode(m.sessionID, collaboration.ModeDefault); err != nil {
+		restoreErr := m.persistPlanStatus(planning.ArtifactProposed)
+		message := "exit Plan Mode: " + err.Error()
+		if restoreErr != nil {
+			message += "; restore plan: " + restoreErr.Error()
+		}
+		m.appendBlock(chatBlock{kind: blockError, content: message})
+		m.planHandoff = &planHandoffState{}
+		m.layout()
+		return m, nil
+	}
+
+	m.mode = collaboration.ModeDefault
+	m.appendBlock(chatBlock{kind: blockDivider, content: "context compacted · implementing approved plan"})
+	return m.startUserTurn("Implement the approved plan. Re-read relevant files as needed and verify the result.", bus.DeliveryNormal)
 }
 
 func (m *model) persistPlanStatus(status planning.ArtifactStatus) error {
@@ -756,7 +804,7 @@ func (m *model) persistPlanStatus(status planning.ArtifactStatus) error {
 	} else {
 		updated.AcceptedAt = nil
 	}
-	if err := m.sessMgr.SavePlan(updated.SessionID, updated); err != nil {
+	if err := m.runtime.SavePlan(updated.SessionID, updated); err != nil {
 		return err
 	}
 	*m.latestPlan = updated

@@ -86,6 +86,9 @@ func (statusCmd) Execute(_ *Context) (*Result, error) { return ResultOf(ShowStat
 
 // currentSession fetches the session behind ctx.SessionID.
 func currentSession(ctx *Context) *session.Session {
+	if ctx.Session != nil {
+		return ctx.Session.Current()
+	}
 	if ctx.SessMgr == nil || ctx.SessionID == "" {
 		return nil
 	}

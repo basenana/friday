@@ -32,21 +32,45 @@ type PlanningStore interface {
 	planning.Repository
 }
 
+// Relation describes a persisted session that is private to a root session's
+// lifecycle (for example a proposal worker). Related sessions are deliberately
+// not part of project or global-current selection.
+type Relation struct {
+	Version   int       `json:"version"`
+	RootID    string    `json:"root_id"`
+	Key       string    `json:"key"`
+	SessionID string    `json:"session_id"`
+	Kind      string    `json:"kind"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+const RelationKindAssociated = "associated"
+
+// RelationStore is the optional persistence capability used by a bound
+// SessionLifecycle. AcquireRelationLock serializes the read/create/write
+// sequence across processes; callers must always invoke the returned unlock.
+type RelationStore interface {
+	GetRelation(rootID, key string) (*Relation, error)
+	PutRelation(Relation) error
+	DeleteRelation(rootID, key string) error
+	ListRelations(rootID string) ([]Relation, error)
+	AcquireRelationLock(rootID, key string) (unlock func(), err error)
+}
+
 // SessionMeta represents metadata for a session
 type SessionMeta struct {
-	ID              string         `json:"id"`
-	Alias           string         `json:"alias,omitempty"`
-	Name            string         `json:"name,omitempty"`
-	Archived        bool           `json:"archived"`
-	CreatedAt       time.Time      `json:"created_at"`
-	UpdatedAt       time.Time      `json:"updated_at"`
-	MessageCount    int            `json:"message_count"`
-	Summary         string         `json:"summary,omitempty"`
-	SystemPrompt    string         `json:"system_prompt,omitempty"`
-	Runtime         SessionRuntime `json:"runtime,omitempty"`
-	LatestPlanID    string         `json:"latest_plan_id,omitempty"`
-	ParentSessionID string         `json:"parent_session_id,omitempty"`
-	SourcePlanID    string         `json:"source_plan_id,omitempty"`
+	ID           string         `json:"id"`
+	Alias        string         `json:"alias,omitempty"`
+	Name         string         `json:"name,omitempty"`
+	Archived     bool           `json:"archived"`
+	CreatedAt    time.Time      `json:"created_at"`
+	UpdatedAt    time.Time      `json:"updated_at"`
+	MessageCount int            `json:"message_count"`
+	Summary      string         `json:"summary,omitempty"`
+	SystemPrompt string         `json:"system_prompt,omitempty"`
+	Runtime      SessionRuntime `json:"runtime,omitempty"`
+	LatestPlanID string         `json:"latest_plan_id,omitempty"`
 }
 
 type ModelSelection struct {
@@ -60,14 +84,12 @@ type SessionRuntime struct {
 }
 
 type SessionMetaPatch struct {
-	Name            *string
-	Archived        *bool
-	Runtime         *SessionRuntime
-	Mode            *collaboration.Mode
-	Model           *ModelSelection
-	LatestPlanID    *string
-	ParentSessionID *string
-	SourcePlanID    *string
+	Name         *string
+	Archived     *bool
+	Runtime      *SessionRuntime
+	Mode         *collaboration.Mode
+	Model        *ModelSelection
+	LatestPlanID *string
 }
 
 // Store defines the interface for session storage operations

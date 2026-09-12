@@ -2,6 +2,7 @@ package file
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -28,8 +29,9 @@ const (
 )
 
 type FileSessionStore struct {
-	basePath  string
-	metaLocks sync.Map // session ID -> *sync.Mutex
+	basePath      string
+	metaLocks     sync.Map // session ID -> *sync.Mutex
+	relationLocks sync.Map // root ID + relation key -> *sync.Mutex
 }
 
 func NewFileSessionStore(basePath string) *FileSessionStore {
@@ -58,6 +60,10 @@ func (s *FileSessionStore) historyPath(id string) string {
 
 func (s *FileSessionStore) eventsPath(id string) string {
 	return filepath.Join(s.sessionDir(id), "events.jsonl")
+}
+
+func (s *FileSessionStore) recordPath(id, namespace string) string {
+	return filepath.Join(s.sessionDir(id), "state", namespace+".json")
 }
 
 // OpenEventSink opens the append-only actor event log for a session.
@@ -194,6 +200,23 @@ func (s *FileSessionStore) plansDir(id string) string {
 	return filepath.Join(s.sessionDir(id), "plans")
 }
 
+func (s *FileSessionStore) relationsDir(rootID string) string {
+	return filepath.Join(s.sessionDir(rootID), "related")
+}
+
+func relationKeyHash(key string) string {
+	sum := sha256.Sum256([]byte(key))
+	return fmt.Sprintf("%x", sum[:])
+}
+
+func (s *FileSessionStore) relationPath(rootID, key string) string {
+	return filepath.Join(s.relationsDir(rootID), relationKeyHash(key)+".json")
+}
+
+func (s *FileSessionStore) relationLockPath(rootID, key string) string {
+	return filepath.Join(s.relationsDir(rootID), ".locks", relationKeyHash(key)+".lock")
+}
+
 func (s *FileSessionStore) planPath(id, planID string) string {
 	return filepath.Join(s.plansDir(id), planID+".json")
 }
@@ -227,7 +250,10 @@ func (s *FileSessionStore) Create(sessionID string, llm providers.Client, opts .
 		return nil, err
 	}
 
-	sess := coresession.New(sessionID, llm, append(opts, coresession.WithMessageWriter(s))...)
+	sess := coresession.New(sessionID, llm, append(opts,
+		coresession.WithMessageWriter(s),
+		coresession.WithRecordStore(s),
+	)...)
 	return sess, nil
 }
 
@@ -254,6 +280,7 @@ func (s *FileSessionStore) Load(sessionID string, llm providers.Client, opts ...
 	sess := coresession.New(sessionID, llm, append(opts,
 		coresession.WithHistory(messages...),
 		coresession.WithMessageWriter(s),
+		coresession.WithRecordStore(s),
 	)...)
 
 	return sess, nil
@@ -267,6 +294,57 @@ func (s *FileSessionStore) Delete(sessionID string) error {
 	defer unlock()
 	sessionDir := s.sessionDir(sessionID)
 	return os.RemoveAll(sessionDir)
+}
+
+// ReadSessionRecord loads namespaced auxiliary state stored beside the
+// session history.
+func (s *FileSessionStore) ReadSessionRecord(ctx context.Context, sessionID, namespace string) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if !validRecordNamespace(namespace) {
+		return nil, fmt.Errorf("invalid session record namespace %q", namespace)
+	}
+
+	unlock, err := s.lockMeta(sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+	data, err := os.ReadFile(s.recordPath(sessionID, namespace))
+	if os.IsNotExist(err) {
+		return nil, coresession.ErrRecordNotFound
+	}
+	return data, err
+}
+
+// UpdateSessionRecord applies one serialized read-modify-write update.
+func (s *FileSessionStore) UpdateSessionRecord(ctx context.Context, sessionID, namespace string, update func([]byte) ([]byte, error)) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if !validRecordNamespace(namespace) {
+		return fmt.Errorf("invalid session record namespace %q", namespace)
+	}
+	if update == nil {
+		return errors.New("session record update is required")
+	}
+
+	unlock, err := s.lockMeta(sessionID)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+
+	current, err := os.ReadFile(s.recordPath(sessionID, namespace))
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	next, err := update(current)
+	if err != nil {
+		return err
+	}
+	return writeBytesAtomic(s.recordPath(sessionID, namespace), next, 0o600)
 }
 
 func (s *FileSessionStore) List() ([]sessions.SessionMeta, error) {
@@ -362,12 +440,6 @@ func (s *FileSessionStore) UpdateMeta(sessionID string, patch sessions.SessionMe
 	if patch.LatestPlanID != nil {
 		meta.LatestPlanID = *patch.LatestPlanID
 	}
-	if patch.ParentSessionID != nil {
-		meta.ParentSessionID = *patch.ParentSessionID
-	}
-	if patch.SourcePlanID != nil {
-		meta.SourcePlanID = *patch.SourcePlanID
-	}
 	meta.UpdatedAt = time.Now()
 	return s.saveMeta(sessionID, meta)
 }
@@ -398,6 +470,90 @@ func (s *FileSessionStore) Unarchive(sessionID string) error {
 	}
 	meta.Archived = false
 	return s.saveMeta(sessionID, meta)
+}
+
+// AcquireRelationLock serializes relation creation across goroutines and
+// processes. Callers must release the returned lock.
+func (s *FileSessionStore) AcquireRelationLock(rootID, key string) (func(), error) {
+	lockKey := rootID + "\x00" + key
+	value, _ := s.relationLocks.LoadOrStore(lockKey, &sync.Mutex{})
+	mu := value.(*sync.Mutex)
+	mu.Lock()
+	unlockFile, err := acquireMetadataFileLock(s.relationLockPath(rootID, key))
+	if err != nil {
+		mu.Unlock()
+		return nil, err
+	}
+	return func() {
+		unlockFile()
+		mu.Unlock()
+	}, nil
+}
+
+func (s *FileSessionStore) GetRelation(rootID, key string) (*sessions.Relation, error) {
+	data, err := os.ReadFile(s.relationPath(rootID, key))
+	if err != nil {
+		return nil, err
+	}
+	var relation sessions.Relation
+	if err := json.Unmarshal(data, &relation); err != nil {
+		return nil, err
+	}
+	if relation.Version != 1 || relation.RootID != rootID || relation.Key != key || !validRelationSessionID(relation.SessionID) || relation.SessionID == rootID || relation.Kind != sessions.RelationKindAssociated {
+		return nil, fmt.Errorf("session relation identity mismatch")
+	}
+	return &relation, nil
+}
+
+func (s *FileSessionStore) PutRelation(relation sessions.Relation) error {
+	if relation.Version != 1 || relation.RootID == "" || relation.Key == "" || !validRelationSessionID(relation.SessionID) || relation.SessionID == relation.RootID || relation.Kind != sessions.RelationKindAssociated {
+		return fmt.Errorf("invalid session relation")
+	}
+	if err := os.MkdirAll(s.relationsDir(relation.RootID), 0o755); err != nil {
+		return err
+	}
+	return writeJSONAtomic(s.relationPath(relation.RootID, relation.Key), relation, 0o600)
+}
+
+func (s *FileSessionStore) DeleteRelation(rootID, key string) error {
+	err := os.Remove(s.relationPath(rootID, key))
+	if os.IsNotExist(err) {
+		return nil
+	}
+	return err
+}
+
+func (s *FileSessionStore) ListRelations(rootID string) ([]sessions.Relation, error) {
+	entries, err := os.ReadDir(s.relationsDir(rootID))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	result := make([]sessions.Relation, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(s.relationsDir(rootID), entry.Name()))
+		if err != nil {
+			return nil, err
+		}
+		var relation sessions.Relation
+		if err := json.Unmarshal(data, &relation); err != nil {
+			return nil, err
+		}
+		if relation.Version != 1 || relation.RootID != rootID || relation.Key == "" || !validRelationSessionID(relation.SessionID) || relation.SessionID == rootID || relation.Kind != sessions.RelationKindAssociated {
+			return nil, fmt.Errorf("session relation identity mismatch")
+		}
+		result = append(result, relation)
+	}
+	return result, nil
+}
+
+func validRelationSessionID(id string) bool {
+	return id != "" && id == strings.TrimSpace(id) && id != "." && id != ".." && !strings.ContainsAny(id, `/\`)
 }
 
 func (s *FileSessionStore) AppendMessages(sessionID string, msgs ...types.Message) error {
@@ -663,6 +819,10 @@ func validPlanID(id string) bool {
 	return id != "" && id == strings.TrimSpace(id) && !strings.ContainsAny(id, `/\`) && id != "." && id != ".."
 }
 
+func validRecordNamespace(namespace string) bool {
+	return validPlanID(namespace)
+}
+
 func validPlanStatus(status planning.ArtifactStatus) bool {
 	switch status {
 	case planning.ArtifactProposed, planning.ArtifactAccepted, planning.ArtifactSuperseded:
@@ -762,6 +922,10 @@ func writeJSONAtomic(path string, value any, mode os.FileMode) error {
 	if err != nil {
 		return err
 	}
+	return writeBytesAtomic(path, data, mode)
+}
+
+func writeBytesAtomic(path string, data []byte, mode os.FileMode) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}

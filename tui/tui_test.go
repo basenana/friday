@@ -17,8 +17,6 @@ import (
 	"github.com/basenana/friday/core/actor/events"
 	actorsink "github.com/basenana/friday/core/actor/sink"
 	"github.com/basenana/friday/core/planning"
-	"github.com/basenana/friday/core/providers"
-	coresession "github.com/basenana/friday/core/session"
 	"github.com/basenana/friday/sessions"
 	sessionfile "github.com/basenana/friday/sessions/file"
 )
@@ -29,24 +27,11 @@ type faultStore struct {
 	plans        sessions.PlanningStore
 	failNextSave bool
 	failMode     bool
-	failLineage  bool
-	failCreate   bool
-	currentFile  string
-}
-
-func (s *faultStore) Create(sessionID string, llm providers.Client, opts ...coresession.Option) (*coresession.Session, error) {
-	if s.failCreate {
-		return nil, fmt.Errorf("injected create failure")
-	}
-	return s.Store.Create(sessionID, llm, opts...)
 }
 
 func (s *faultStore) UpdateMeta(sessionID string, patch sessions.SessionMetaPatch) error {
 	if s.failMode && patch.Mode != nil {
 		return fmt.Errorf("injected mode failure")
-	}
-	if s.failLineage && patch.ParentSessionID != nil {
-		return fmt.Errorf("injected lineage failure")
 	}
 	return s.metadata.UpdateMeta(sessionID, patch)
 }
@@ -76,7 +61,7 @@ func newFaultTestModel(t *testing.T) (*model, *sessions.Manager, *sessionfile.Fi
 	baseDir := t.TempDir()
 	raw := sessionfile.NewFileSessionStore(filepath.Join(baseDir, "sessions"))
 	currentFile := filepath.Join(baseDir, "current")
-	store := &faultStore{Store: raw, metadata: raw, plans: raw, currentFile: currentFile}
+	store := &faultStore{Store: raw, metadata: raw, plans: raw}
 	mgr := sessions.NewManager(store, currentFile, "test")
 	const sessionID = "session-initial"
 	if _, _, err := mgr.GetOrCreateByID(sessionID); err != nil {

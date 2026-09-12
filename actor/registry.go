@@ -19,13 +19,21 @@ import (
 	coreactor "github.com/basenana/friday/core/actor"
 	"github.com/basenana/friday/core/collaboration"
 	"github.com/basenana/friday/core/planning"
+	coresession "github.com/basenana/friday/core/session"
 	"github.com/basenana/friday/sandbox"
 	"github.com/basenana/friday/sessions"
 	"github.com/basenana/friday/setup"
+	"github.com/basenana/friday/workspace"
 )
 
 // RegistryConfig tunes the Registry.
 type RegistryConfig struct {
+	// Catalog opens root sessions for actors. When nil, Registry preserves the
+	// legacy setup path, including its get-or-create behavior.
+	Catalog sessions.RootCatalog
+	// Workdir is the canonical runtime root used by file validation and agent
+	// tools. Empty preserves the legacy cwd fallback.
+	Workdir string
 	// IdleTimeout is how long an actor with no turn activity is kept
 	// alive before being shut down and evicted. Default 5m.
 	IdleTimeout time.Duration
@@ -70,6 +78,7 @@ type Registry struct {
 	cfg     RegistryConfig
 	sessMgr setup.SessionManager
 	appCfg  *config.Config
+	catalog sessions.RootCatalog
 	workdir string
 	bus     *eventbus.Bus
 
@@ -92,12 +101,18 @@ func NewRegistry(sessMgr setup.SessionManager, appCfg *config.Config, cfg Regist
 		cfg.Bus = eventbus.NewBus()
 	}
 	ctx, cancel := context.WithCancel(context.Background())
+	catalog := cfg.Catalog
+	workdir := strings.TrimSpace(cfg.Workdir)
+	if workdir == "" {
+		workdir = workdirOrPWD()
+	}
 	r := &Registry{
 		entries: make(map[string]*managedActor),
 		cfg:     cfg,
 		sessMgr: sessMgr,
 		appCfg:  appCfg,
-		workdir: workdirOrPWD(),
+		catalog: catalog,
+		workdir: workdir,
 		bus:     cfg.Bus,
 		ctx:     ctx,
 		cancel:  cancel,
@@ -128,7 +143,25 @@ func (r *Registry) GetOrCreate(sessionID string) (*coreactor.Actor, error) {
 	}
 
 	agentCfg := r.configForSession(sessionID)
-	agentCtx, err := setup.NewAgent(r.sessMgr, agentCfg, setup.WithSessionID(sessionID))
+	var agentCtx *setup.AgentContext
+	var err error
+	if r.catalog != nil {
+		client, clientErr := setup.CreateProviderClient(agentCfg)
+		if clientErr != nil {
+			return nil, fmt.Errorf("create provider for session %s: %w", sessionID, clientErr)
+		}
+		lifecycle, openErr := r.catalog.OpenRoot(r.ctx, sessionID, client, coresession.WithState(workspace.NewFileState(agentCfg.StatePath())))
+		if openErr != nil {
+			return nil, fmt.Errorf("open session lifecycle %s: %w", sessionID, openErr)
+		}
+		agentCtx, err = setup.NewAgentWithLifecycle(lifecycle, r.sessMgr, agentCfg,
+			setup.WithProviderClient(client), setup.WithWorkdir(r.workdir))
+		if err != nil {
+			_ = lifecycle.Close()
+		}
+	} else {
+		agentCtx, err = setup.NewAgent(r.sessMgr, agentCfg, setup.WithSessionID(sessionID), setup.WithWorkdir(r.workdir))
+	}
 	if err != nil {
 		return nil, fmt.Errorf("setup agent for session %s: %w", sessionID, err)
 	}
@@ -277,6 +310,18 @@ func (r *Registry) Get(sessionID string) (*coreactor.Actor, bool) {
 		return nil, false
 	}
 	return e.actor, true
+}
+
+// Lifecycle returns the root-bound session capability held by a live actor.
+// It intentionally does not expose the registry's global session manager.
+func (r *Registry) Lifecycle(sessionID string) (sessions.SessionLifecycle, bool) {
+	r.mu.Lock()
+	e, ok := r.entries[sessionID]
+	r.mu.Unlock()
+	if !ok || e.stopped.Load() || e.agentCtx == nil || e.agentCtx.Lifecycle == nil {
+		return nil, false
+	}
+	return e.agentCtx.Lifecycle, true
 }
 
 // Subscribe returns an event-stream subscription for the live actor of
