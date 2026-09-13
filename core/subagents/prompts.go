@@ -24,7 +24,7 @@ The clone is stateless and returns one report. Give complete context, request sp
 </explore>
 `
 
-	EXPLORE_DESC_PROMPT = `Launch a short-lived clone in a forked session to investigate and return a single structured report.
+	EXPLORE_DESCRIPTION_PROMPT = `Launch a short-lived clone in a forked session to investigate and return a single structured report.
 
 Use this tool for:
 - reading multiple files or tracing execution paths
@@ -36,7 +36,7 @@ Avoid this tool for:
 - direct edits or implementation work
 - tasks that clearly belong to a named expert
 
-Write task_describe so it includes:
+Write task so it includes:
 - the question to answer or issue to investigate
 - relevant scope, files, subsystems, or hypotheses when known
 - the exact findings you want back in the report
@@ -60,14 +60,14 @@ Each expert call is stateless and returns one result. Provide full context, cons
 </run_task>
 `
 
-	EXPERT_DESC_PROMPT = `Delegate work to a specialized expert agent.
+	EXPERT_DESCRIPTION_PROMPT = `Delegate work to a specialized expert agent.
 
 Available expert agents:
 {available_agents}
 
-Select agent_name by matching the task to the agent's describe text. Do not guess from the name alone.
+Select agent_name by matching the task to the agent's description. Do not guess from the name alone.
 
-Use task_describe to provide:
+Use task to provide:
 - the task to complete
 - relevant context, constraints, and expected output
 - any files, artifacts, or checks the expert should pay attention to
@@ -91,16 +91,16 @@ func initSystemPrompts(opt Option) []string {
 	return prompts
 }
 
-func initExpertDescribePrompt(opt Option) string {
+func initExpertDescriptionPrompt(opt Option) string {
 	buf := &bytes.Buffer{}
 	buf.WriteString("<available_agents>\n")
 
 	for _, agt := range opt.ExpertAgents {
 		buf.WriteString(fmt.Sprintf("<agent_name>%s</agent_name>\n", agt.Name))
-		buf.WriteString(fmt.Sprintf("<describe>\n%s\n</describe>\n", agt.Describe))
+		buf.WriteString(fmt.Sprintf("<description>\n%s\n</description>\n", agt.Description))
 	}
 
 	buf.WriteString("</available_agents>\n")
 
-	return strings.ReplaceAll(opt.RunTaskDescribePrompt, "{available_agents}", buf.String())
+	return strings.ReplaceAll(opt.RunTaskDescriptionPrompt, "{available_agents}", buf.String())
 }

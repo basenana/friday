@@ -44,7 +44,6 @@ func TestHookFiltersCollaborationToolsByCurrentMode(t *testing.T) {
 		tools.NewTool(EnterPlanModeToolName),
 		tools.NewTool(RequestUserInputToolName),
 		tools.NewTool(SubmitPlanToolName),
-		tools.NewTool("request_form"),
 		tools.NewTool("write_todos"),
 		tools.NewTool("bash"),
 	}
@@ -69,7 +68,7 @@ func TestHookFiltersCollaborationToolsByCurrentMode(t *testing.T) {
 	if err := NewHook(fixedModes{"s": ModeDefault}).BeforeModel(context.Background(), session.New("s", nil), defaultReq); err != nil {
 		t.Fatal(err)
 	}
-	assertNames(t, defaultReq.ToolDefines(), EnterPlanModeToolName, "request_form", "write_todos", "bash")
+	assertNames(t, defaultReq.ToolDefines(), EnterPlanModeToolName, RequestUserInputToolName, "write_todos", "bash")
 	if !strings.Contains(defaultReq.SystemPrompt(), "may call enter_plan_mode") {
 		t.Fatalf("missing default collaboration instructions: %q", defaultReq.SystemPrompt())
 	}

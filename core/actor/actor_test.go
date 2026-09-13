@@ -205,19 +205,13 @@ func TestActor_CancelledQueuedInputDoesNotDiscardOtherInput(t *testing.T) {
 	}
 }
 
-// TestActor_EmitCardTool verifies that an agent invoking emit_card
-// produces a card.emitted Custom event with the supplied payload.
-func TestActor_EmitCardTool(t *testing.T) {
+func TestActor_ShowMermaidTool(t *testing.T) {
 	mock := newMockAgent(
 		chatScript{
 			toolCall: &scriptedToolCall{
-				name: "emit_card",
+				name: "show_mermaid",
 				arguments: map[string]any{
-					"kind":  "file",
-					"title": "Result",
-					"component": map[string]any{
-						"path": "/sandbox/out.txt",
-					},
+					"source": "flowchart LR\nA --> B",
 				},
 			},
 			deltas: []types.Delta{{Content: "done"}},
@@ -240,14 +234,14 @@ func TestActor_EmitCardTool(t *testing.T) {
 			if err := events.DecodePayload(e, &body); err != nil {
 				t.Fatalf("decode: %v", err)
 			}
-			if body.Kind != "file" {
-				t.Fatalf("kind=file expected, got %s", body.Kind)
+			if body.Kind != "mermaid" {
+				t.Fatalf("kind=mermaid expected, got %s", body.Kind)
 			}
 			if body.CardID == "" {
 				t.Fatalf("card_id should be set")
 			}
-			if path, _ := body.Component["path"].(string); path != "/sandbox/out.txt" {
-				t.Fatalf("component.path mismatch: %v", body.Component)
+			if source, _ := body.Component["source"].(string); source != "flowchart LR\nA --> B" {
+				t.Fatalf("component.source mismatch: %v", body.Component)
 			}
 			found = true
 		}
@@ -257,24 +251,14 @@ func TestActor_EmitCardTool(t *testing.T) {
 	}
 }
 
-// TestActor_RequestForm_Submit verifies the full form interrupt cycle:
-// the agent calls request_form, the actor emits form.requested, the
-// test submits values, the tool returns them, and form.submitted fires.
-func TestActor_RequestForm_Submit(t *testing.T) {
+func TestActor_RequestUserInputSubmit(t *testing.T) {
 	mock := newMockAgent(
 		chatScript{
 			toolCall: &scriptedToolCall{
-				name: "request_form",
+				name: "request_user_input",
 				arguments: map[string]any{
-					"schema": map[string]any{
-						"title": "Pick one",
-						"fields": []map[string]any{
-							{"name": "organism", "type": "select",
-								"options": []map[string]any{
-									{"label": "Human", "value": "hsapiens"},
-								}},
-						},
-					},
+					"question_1": "Which organism?",
+					"options_1":  []any{"Human", "Other species"},
 				},
 			},
 		},
@@ -293,7 +277,7 @@ func TestActor_RequestForm_Submit(t *testing.T) {
 	if formID == "" {
 		t.Fatalf("no form.requested observed")
 	}
-	if err := a.SubmitForm(formID, map[string]any{"organism": "hsapiens"}); err != nil {
+	if err := a.SubmitForm(formID, map[string]any{"question_1": "Human"}); err != nil {
 		t.Fatalf("SubmitForm: %v", err)
 	}
 
@@ -303,7 +287,7 @@ func TestActor_RequestForm_Submit(t *testing.T) {
 	mock.mu.Lock()
 	defer mock.mu.Unlock()
 	if len(mock.toolCalls) == 0 {
-		t.Fatalf("expected request_form to have been invoked")
+		t.Fatalf("expected request_user_input to have been invoked")
 	}
 }
 

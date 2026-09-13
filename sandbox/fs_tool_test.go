@@ -25,6 +25,19 @@ func textResult(t *testing.T, result *tools.Result) string {
 	return text.Text
 }
 
+func TestFsListPathDefaultsToCurrentDirectory(t *testing.T) {
+	tool := newFsListTool(nil, ".")
+	path := tool.InputSchema.Properties["path"].(map[string]any)
+	if path["default"] != "." {
+		t.Fatalf("path default = %#v", path["default"])
+	}
+	for _, required := range tool.InputSchema.Required {
+		if required == "path" {
+			t.Fatal("path should be optional")
+		}
+	}
+}
+
 func TestFsWritePreservesEOFContent(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.Sandbox.Enabled = false

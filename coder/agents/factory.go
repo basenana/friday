@@ -71,9 +71,9 @@ func (f *ClientFactory) BuildExpertAgents(specs []*AgentSpec, allTools []*tools.
 			return nil, err
 		}
 		out = append(out, subagents.ExpertAgent{
-			Name:     spec.Name,
-			Describe: spec.Description,
-			Agent:    agent,
+			Name:        spec.Name,
+			Description: spec.Description,
+			Agent:       agent,
 		})
 	}
 	return out, nil

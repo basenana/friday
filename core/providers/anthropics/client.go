@@ -421,11 +421,13 @@ func (c *client) messageCreateParams(request providers.Request) *anthropic.Messa
 		if props, ok := paramsMap["properties"].(map[string]any); ok {
 			properties = props
 		}
-		if req, ok := paramsMap["required"].([]any); ok {
-			required = make([]string, len(req))
-			for i, r := range req {
-				if s, ok := r.(string); ok {
-					required[i] = s
+		switch req := paramsMap["required"].(type) {
+		case []string:
+			required = append(required, req...)
+		case []any:
+			for _, value := range req {
+				if name, ok := value.(string); ok {
+					required = append(required, name)
 				}
 			}
 		}

@@ -39,7 +39,7 @@ func TestBeforeModel_SliceAliasing(t *testing.T) {
 
 	// Set up a todo list so BeforeModel mutates history
 	todo.todoMaps[todoStateKey(sess)] = &TodoList{
-		Todos: []*TodoItem{{Describe: "task1", Status: "pending"}},
+		Todos: []*TodoItem{{Description: "task1", Status: "pending"}},
 	}
 
 	err := todo.BeforeModel(context.Background(), sess, req)
@@ -67,7 +67,7 @@ func TestBeforeModel_InsertsBeforeLastUserMessage(t *testing.T) {
 	req := providers.NewRequest("", original...)
 
 	todo.todoMaps[todoStateKey(sess)] = &TodoList{
-		Todos: []*TodoItem{{Describe: "task1", Status: "pending"}},
+		Todos: []*TodoItem{{Description: "task1", Status: "pending"}},
 	}
 
 	err := todo.BeforeModel(context.Background(), sess, req)
@@ -100,7 +100,7 @@ func TestBeforeModel_AppendsAfterToolMessage(t *testing.T) {
 	req := providers.NewRequest("", original...)
 
 	todo.todoMaps[todoStateKey(sess)] = &TodoList{
-		Todos: []*TodoItem{{Describe: "task1", Status: "pending"}},
+		Todos: []*TodoItem{{Description: "task1", Status: "pending"}},
 	}
 
 	err := todo.BeforeModel(context.Background(), sess, req)
@@ -126,7 +126,7 @@ func TestRemoveTodo(t *testing.T) {
 	key := todoStateKey(sess)
 
 	todo.todoMaps[key] = &TodoList{
-		Todos: []*TodoItem{{Describe: "task1", Status: "pending"}},
+		Todos: []*TodoItem{{Description: "task1", Status: "pending"}},
 	}
 
 	if _, ok := todo.todoMaps[key]; !ok {
@@ -146,8 +146,8 @@ func TestNew_DefaultPrompts(t *testing.T) {
 	if todo.opt.SystemPrompt != DEFAULT_PLANNING_PROMPT {
 		t.Fatalf("expected default system prompt, got %s", todo.opt.SystemPrompt)
 	}
-	if todo.opt.TaskDescribePrompt != DEFAULT_TASK_DESC_PROMPT {
-		t.Fatalf("expected default task describe prompt, got %s", todo.opt.TaskDescribePrompt)
+	if todo.opt.TaskDescriptionPrompt != DEFAULT_TASK_DESCRIPTION_PROMPT {
+		t.Fatalf("expected default task description prompt, got %s", todo.opt.TaskDescriptionPrompt)
 	}
 }
 
@@ -162,6 +162,21 @@ func TestTodoStatusValidation(t *testing.T) {
 	}
 }
 
+func TestWriteTodosContractUsesDescriptionAndCompleteExample(t *testing.T) {
+	tool := New(Option{}).planningTools(session.New("session", nil))[0]
+	if errors := tool.ValidateDefinition(2); len(errors) != 0 {
+		t.Fatalf("definition errors: %v", errors)
+	}
+	item := tool.InputSchema.Properties["todo_list"].(map[string]any)["items"].(map[string]any)
+	properties := item["properties"].(map[string]any)
+	if _, exists := properties["description"]; !exists {
+		t.Fatal("description field missing")
+	}
+	if _, exists := properties["describe"]; exists {
+		t.Fatal("legacy describe field exposed")
+	}
+}
+
 func TestWriteTodosAcceptsBlockedStatus(t *testing.T) {
 	todo := New(Option{})
 	sess := session.New(types.NewID(), nil)
@@ -169,8 +184,8 @@ func TestWriteTodosAcceptsBlockedStatus(t *testing.T) {
 		SessionID: sess.ID,
 		Arguments: map[string]interface{}{
 			"todo_list": []any{map[string]interface{}{
-				"describe": "Wait for publication confirmation",
-				"status":   "blocked",
+				"description": "Wait for publication confirmation",
+				"status":      "blocked",
 			}},
 		},
 	})
@@ -186,8 +201,8 @@ func TestWriteTodosRejectsUnknownStatus(t *testing.T) {
 		SessionID: sess.ID,
 		Arguments: map[string]interface{}{
 			"todo_list": []any{map[string]interface{}{
-				"describe": "Wait for publication confirmation",
-				"status":   "waiting",
+				"description": "Wait for publication confirmation",
+				"status":      "waiting",
 			}},
 		},
 	})

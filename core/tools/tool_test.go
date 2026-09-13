@@ -1,61 +1,65 @@
 package tools
 
 import (
-	"context"
 	"strings"
 	"testing"
 )
 
-func TestValidateRequiredArguments(t *testing.T) {
+func TestValidateArguments(t *testing.T) {
 	tool := NewTool("demo_search",
-		WithString("pattern", Required(), Description("Text pattern to search for.")),
-		WithString("path", Description("Directory path to search in.")),
+		WithString("pattern", Required(), MinLength(2), Description("Text pattern to search for.")),
+		WithArray("paths", Required(), MinItems(1), UniqueItems(true), Items(map[string]any{"type": "string", "minLength": 1}), Description("Paths to search.")),
 	)
 
-	t.Run("all required supplied", func(t *testing.T) {
-		if msg := tool.ValidateRequiredArguments(map[string]interface{}{"pattern": "hello"}); msg != "" {
-			t.Fatalf("expected no message, got %q", msg)
-		}
-	})
-
-	t.Run("missing required parameter includes name and description", func(t *testing.T) {
-		msg := tool.ValidateRequiredArguments(map[string]interface{}{})
-		if msg == "" {
-			t.Fatal("expected validation message")
-		}
-		if !strings.Contains(msg, "'pattern'") {
-			t.Fatalf("expected parameter name in message, got %q", msg)
-		}
-		if !strings.Contains(msg, "Text pattern to search for.") {
-			t.Fatalf("expected parameter description in message, got %q", msg)
-		}
-		if !strings.Contains(msg, "retry the tool call") {
-			t.Fatalf("expected retry guidance in message, got %q", msg)
-		}
-	})
-
-	t.Run("empty string counts as supplied", func(t *testing.T) {
-		if msg := tool.ValidateRequiredArguments(map[string]interface{}{"pattern": ""}); msg != "" {
-			t.Fatalf("expected empty string to be treated as supplied, got %q", msg)
-		}
-	})
-
-	t.Run("optional parameter absent is fine", func(t *testing.T) {
-		if msg := tool.ValidateRequiredArguments(map[string]interface{}{"pattern": "x"}); msg != "" {
-			t.Fatalf("expected no message, got %q", msg)
-		}
-	})
+	valid := map[string]any{"pattern": "go", "paths": []any{"core", "sandbox"}}
+	if message := tool.ValidateArguments(valid); message != "" {
+		t.Fatalf("valid arguments rejected: %s", message)
+	}
+	for name, arguments := range map[string]map[string]any{
+		"missing":   {"pattern": "go"},
+		"short":     {"pattern": "g", "paths": []any{"core"}},
+		"duplicate": {"pattern": "go", "paths": []any{"core", "core"}},
+		"unknown":   {"pattern": "go", "paths": []any{"core"}, "legacy": true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if message := tool.ValidateArguments(arguments); message == "" || !strings.Contains(message, "retry") {
+				t.Fatalf("expected actionable validation error, got %q", message)
+			}
+		})
+	}
 }
 
-func TestValidateRequiredArgumentsNoDescription(t *testing.T) {
-	tool := NewTool("demo",
-		WithString("name", Required()),
-		WithToolHandler(func(ctx context.Context, req *Request) (*Result, error) {
-			return NewToolResultText("ok"), nil
-		}),
+func TestValidateDefinitionRequiresDescriptionsExamplesAndShallowSchemas(t *testing.T) {
+	valid := NewTool("batch",
+		WithDescription("Run a batch."),
+		WithArray("tasks", Required(), Description("Tasks to run."), Items(map[string]any{"type": "string"})),
+		WithExample(map[string]any{"tasks": []any{"audit tools"}}),
 	)
-	msg := tool.ValidateRequiredArguments(map[string]interface{}{})
-	if !strings.Contains(msg, "'name'") {
-		t.Fatalf("expected parameter name in message, got %q", msg)
+	if errors := valid.ValidateDefinition(2); len(errors) != 0 {
+		t.Fatalf("valid definition errors: %v", errors)
+	}
+
+	invalid := NewTool("nested",
+		WithArray("items", Items(map[string]any{"type": "array", "items": map[string]any{"type": "object"}})),
+	)
+	errors := invalid.ValidateDefinition(2)
+	if len(errors) < 3 {
+		t.Fatalf("expected description, example, and depth errors, got %v", errors)
+	}
+}
+
+func TestExamplesAreIncludedInDescription(t *testing.T) {
+	tool := NewTool("demo", WithDescription("Do the thing."), WithExample(map[string]any{"name": "value"}))
+	if description := tool.GetDescription(); !strings.Contains(description, "Example:\n{\"name\":\"value\"}") {
+		t.Fatalf("description = %q", description)
+	}
+}
+
+func TestMarkdownTitle(t *testing.T) {
+	if title := MarkdownTitle("text\n# Tool redesign\nbody", "fallback"); title != "Tool redesign" {
+		t.Fatalf("title = %q", title)
+	}
+	if title := MarkdownTitle("#not-a-heading", "fallback"); title != "fallback" {
+		t.Fatalf("fallback title = %q", title)
 	}
 }

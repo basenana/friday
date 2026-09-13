@@ -50,8 +50,7 @@ func TestSkills_LoadFromDir(t *testing.T) {
 	}
 }
 
-// TestSkills_HookInjectsTools verifies the skills hook injects its toolset
-// into an agent request.
+// TestSkills_HookInjectsTools verifies the skills hook exposes load_skill.
 func TestSkills_HookInjectsTools(t *testing.T) {
 	cfg := loadConfig(t)
 
@@ -71,12 +70,12 @@ func TestSkills_HookInjectsTools(t *testing.T) {
 
 		resp := agent.Chat(ctx, &api.Request{
 			Session:     sess,
-			UserMessage: "Use the list_skills tool to tell me what skills are available. Just list names.",
+			UserMessage: "Use load_skill to load the listed 'test-skill', then report its name.",
 		})
 		collectResponse(t, ctx, resp)
 
-		if !historyHasToolCall(sess, "list_skills", 1) {
-			return errAssertion{msg: "list_skills not invoked"}
+		if !historyHasToolCall(sess, "load_skill", 1) {
+			return errAssertion{msg: "load_skill not invoked"}
 		}
 		return nil
 	})
@@ -102,7 +101,7 @@ func TestSkills_AgentCallsLoadSkill(t *testing.T) {
 
 		resp := agent.Chat(ctx, &api.Request{
 			Session:     sess,
-			UserMessage: "First use list_skills to see skills, then use load_skill to load the 'test-skill' instructions. Report what you found.",
+			UserMessage: "Use load_skill to load the listed 'test-skill' instructions. Report what you found.",
 		})
 		collectResponse(t, ctx, resp)
 
@@ -196,7 +195,7 @@ func TestSkills_Delete(t *testing.T) {
 }
 
 // TestSkills_InstructionsInPrompt verifies the end-to-end progressive
-// disclosure flow: list_skills → load_skill loads SKILL.md instructions into
+// disclosure flow: load_skill loads SKILL.md instructions into
 // the model context, and the loaded skill's behavioural directive takes
 // effect. The test-skill instructs the agent to finish responses with
 // TEST_SKILL_LOADED, so we assert that phrase appears in the final reply.
@@ -219,7 +218,7 @@ func TestSkills_InstructionsInPrompt(t *testing.T) {
 
 		resp := agent.Chat(ctx, &api.Request{
 			Session:     sess,
-			UserMessage: "First use list_skills to see skills, then use load_skill to load the 'test-skill' instructions. After loading, say hello.",
+			UserMessage: "Use load_skill to load the listed 'test-skill' instructions. After loading, say hello.",
 		})
 		content, _ := collectResponse(t, ctx, resp)
 

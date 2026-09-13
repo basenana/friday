@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 )
@@ -21,58 +22,44 @@ type SessionRecords interface {
 }
 
 type Tool struct {
-	Name        string            `json:"name"`
-	Description string            `json:"description"`
-	Annotations map[string]string `json:"annotations,omitempty"`
-	InputSchema ToolInputSchema   `json:"inputSchema"`
-	Handler     ToolHandlerFunc   `json:"-"`
+	Name        string                   `json:"name"`
+	Description string                   `json:"description"`
+	Annotations map[string]string        `json:"annotations,omitempty"`
+	InputSchema ToolInputSchema          `json:"inputSchema"`
+	Examples    []map[string]interface{} `json:"-"`
+	Handler     ToolHandlerFunc          `json:"-"`
 }
 
 func (t *Tool) JsonSchema() map[string]interface{} {
-	if t.InputSchema.Required == nil {
-		t.InputSchema.Required = make([]string, 0)
+	required := t.InputSchema.Required
+	if required == nil {
+		required = []string{}
 	}
-	return map[string]interface{}{"type": "object", "properties": t.InputSchema.Properties, "required": t.InputSchema.Required}
+	return map[string]interface{}{
+		"type":                 "object",
+		"properties":           t.InputSchema.Properties,
+		"required":             required,
+		"additionalProperties": false,
+	}
 }
 
-func (t *Tool) GetName() string               { return t.Name }
-func (t *Tool) GetDescription() string        { return t.Description }
+func (t *Tool) GetName() string { return t.Name }
+func (t *Tool) GetDescription() string {
+	description := strings.TrimSpace(t.Description)
+	for i, example := range t.Examples {
+		raw, err := json.Marshal(example)
+		if err != nil {
+			continue
+		}
+		label := "Example"
+		if len(t.Examples) > 1 {
+			label = fmt.Sprintf("Example %d", i+1)
+		}
+		description += fmt.Sprintf("\n\n%s:\n%s", label, raw)
+	}
+	return description
+}
 func (t *Tool) GetParameters() map[string]any { return t.JsonSchema() }
-
-// ValidateRequiredArguments checks that every parameter declared as required
-// in the tool's input schema is present in args. It returns an empty string
-// when all required arguments are supplied; otherwise it returns an
-// agent-actionable message naming each missing parameter together with its
-// schema description, so the model can correct the call on retry instead of
-// receiving an opaque server-side validation error. Empty-string values are
-// treated as supplied: some tools legitimately accept them (e.g. an empty
-// replace_string deletes text), so value-level validation stays with handlers.
-func (t *Tool) ValidateRequiredArguments(args map[string]interface{}) string {
-	var missing []string
-	for _, name := range t.InputSchema.Required {
-		if _, ok := args[name]; !ok {
-			missing = append(missing, name)
-		}
-	}
-	if len(missing) == 0 {
-		return ""
-	}
-	parts := make([]string, 0, len(missing))
-	for _, name := range missing {
-		desc := ""
-		if schema, ok := t.InputSchema.Properties[name].(map[string]interface{}); ok {
-			if d, ok := schema["description"].(string); ok {
-				desc = d
-			}
-		}
-		if desc != "" {
-			parts = append(parts, fmt.Sprintf("'%s' (%s)", name, desc))
-		} else {
-			parts = append(parts, fmt.Sprintf("'%s'", name))
-		}
-	}
-	return fmt.Sprintf("missing required parameter(s): %s. Provide them and retry the tool call.", strings.Join(parts, ", "))
-}
 
 func NewTool(name string, options ...ToolOption) *Tool {
 	t := &Tool{
@@ -177,6 +164,14 @@ func WithToolAnnotations(annotations map[string]string) ToolOption {
 func WithToolHandler(handler ToolHandlerFunc) ToolOption {
 	return func(t *Tool) {
 		t.Handler = handler
+	}
+}
+
+// WithExample adds one complete, valid invocation example. Providers append
+// examples to the model-visible description in a consistent format.
+func WithExample(example map[string]interface{}) ToolOption {
+	return func(t *Tool) {
+		t.Examples = append(t.Examples, example)
 	}
 }
 
@@ -316,115 +311,47 @@ func DefaultArray[T any](value []T) PropertyOption {
 // Property Type Helpers
 //
 
-// WithBoolean adds a boolean property to the tool schema.
-// It accepts property options to configure the boolean property's behavior and constraints.
 func WithBoolean(name string, opts ...PropertyOption) ToolOption {
-	return func(t *Tool) {
-		schema := map[string]interface{}{
-			"type": "boolean",
-		}
-
-		for _, opt := range opts {
-			opt(schema)
-		}
-
-		// Remove required from property schema and add to InputSchema.required
-		if required, ok := schema["required"].(bool); ok && required {
-			delete(schema, "required")
-			t.InputSchema.Required = append(t.InputSchema.Required, name)
-		}
-
-		t.InputSchema.Properties[name] = schema
-	}
+	return withProperty(name, "boolean", opts)
 }
 
-// WithNumber adds a number property to the tool schema.
-// It accepts property options to configure the number property's behavior and constraints.
 func WithNumber(name string, opts ...PropertyOption) ToolOption {
-	return func(t *Tool) {
-		schema := map[string]interface{}{
-			"type": "number",
-		}
-
-		for _, opt := range opts {
-			opt(schema)
-		}
-
-		// Remove required from property schema and add to InputSchema.required
-		if required, ok := schema["required"].(bool); ok && required {
-			delete(schema, "required")
-			t.InputSchema.Required = append(t.InputSchema.Required, name)
-		}
-
-		t.InputSchema.Properties[name] = schema
-	}
+	return withProperty(name, "number", opts)
 }
 
-// WithString adds a string property to the tool schema.
-// It accepts property options to configure the string property's behavior and constraints.
+func WithInteger(name string, opts ...PropertyOption) ToolOption {
+	return withProperty(name, "integer", opts)
+}
+
 func WithString(name string, opts ...PropertyOption) ToolOption {
-	return func(t *Tool) {
-		schema := map[string]interface{}{
-			"type": "string",
-		}
-
-		for _, opt := range opts {
-			opt(schema)
-		}
-
-		// Remove required from property schema and add to InputSchema.required
-		if required, ok := schema["required"].(bool); ok && required {
-			delete(schema, "required")
-			t.InputSchema.Required = append(t.InputSchema.Required, name)
-		}
-
-		t.InputSchema.Properties[name] = schema
-	}
+	return withProperty(name, "string", opts)
 }
 
-// WithObject adds an object property to the tool schema.
-// It accepts property options to configure the object property's behavior and constraints.
 func WithObject(name string, opts ...PropertyOption) ToolOption {
 	return func(t *Tool) {
-		schema := map[string]interface{}{
-			"type":       "object",
-			"properties": map[string]interface{}{},
-		}
-
-		for _, opt := range opts {
-			opt(schema)
-		}
-
-		// Remove required from property schema and add to InputSchema.required
-		if required, ok := schema["required"].(bool); ok && required {
-			delete(schema, "required")
-			t.InputSchema.Required = append(t.InputSchema.Required, name)
-		}
-
-		t.InputSchema.Properties[name] = schema
+		addProperty(t, name, map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}, opts)
 	}
 }
 
-// WithArray adds an array property to the tool schema.
-// It accepts property options to configure the array property's behavior and constraints.
 func WithArray(name string, opts ...PropertyOption) ToolOption {
+	return withProperty(name, "array", opts)
+}
+
+func withProperty(name, propertyType string, opts []PropertyOption) ToolOption {
 	return func(t *Tool) {
-		schema := map[string]interface{}{
-			"type": "array",
-		}
-
-		for _, opt := range opts {
-			opt(schema)
-		}
-
-		// Remove required from property schema and add to InputSchema.required
-		if required, ok := schema["required"].(bool); ok && required {
-			delete(schema, "required")
-			t.InputSchema.Required = append(t.InputSchema.Required, name)
-		}
-
-		t.InputSchema.Properties[name] = schema
+		addProperty(t, name, map[string]interface{}{"type": propertyType}, opts)
 	}
+}
+
+func addProperty(t *Tool, name string, schema map[string]interface{}, opts []PropertyOption) {
+	for _, opt := range opts {
+		opt(schema)
+	}
+	if required, _ := schema["required"].(bool); required {
+		delete(schema, "required")
+		t.InputSchema.Required = append(t.InputSchema.Required, name)
+	}
+	t.InputSchema.Properties[name] = schema
 }
 
 // Properties defines the properties for an object schema

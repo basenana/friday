@@ -62,9 +62,7 @@ type Field struct {
 	Fields []Field `json:"fields,omitempty"`
 }
 
-// FormSchema is the A2UI Form payload emitted by request_form. The
-// actor emits this verbatim (as map[string]any) inside the
-// form.requested Custom event.
+// FormSchema is the A2UI payload carried by a form.requested event.
 type FormSchema struct {
 	Title       string  `json:"title,omitempty"`
 	Description string  `json:"description,omitempty"`
@@ -77,8 +75,7 @@ type FormSchema struct {
 // CardKind implements Component.
 func (FormSchema) CardKind() Kind { return KindForm }
 
-// FormOutcome is what request_form returns to the agent when the user
-// submits or cancels.
+// FormOutcome contains submitted values or cancellation state.
 type FormOutcome struct {
 	Values    map[string]any `json:"values,omitempty"`
 	Cancelled bool           `json:"cancelled,omitempty"`

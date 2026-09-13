@@ -32,9 +32,9 @@ func callExploreToolWithForker(self *ExpertAgent, sess *session.Session, forker 
 			), nil
 		}
 
-		userMessage, ok := request.Arguments["task_describe"].(string)
+		userMessage, ok := request.Arguments["task"].(string)
 		if !ok || userMessage == "" {
-			return tools.NewToolResultError("missing required parameter: task_describe"), nil
+			return tools.NewToolResultError("missing required parameter: task"), nil
 		}
 
 		var subSession *session.Session
@@ -122,9 +122,9 @@ func callSubagentToolWithForker(agents []ExpertAgent, sess *session.Session, for
 			return tools.NewToolResultError("missing required parameter: agent_name"), nil
 		}
 
-		userMessage, ok := request.Arguments["task_describe"].(string)
+		userMessage, ok := request.Arguments["task"].(string)
 		if !ok || userMessage == "" {
-			return tools.NewToolResultError("missing required parameter: task_describe"), nil
+			return tools.NewToolResultError("missing required parameter: task"), nil
 		}
 
 		var subSession *session.Session

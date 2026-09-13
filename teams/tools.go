@@ -75,10 +75,11 @@ func teamCommentTool(registry *Registry, teamsPath string) *tools.Tool {
 	return tools.NewTool("team_comment",
 		tools.WithDescription("Post a comment to the active team's collective log. Use this to surface questions, progress notes, or reviews to teammates."),
 		tools.WithString("text", tools.Required(), tools.Description("Comment body")),
-		tools.WithString("to", tools.Description("Comma-separated recipient names (optional)")),
-		tools.WithString("kind", tools.Description("Comment kind: review|note|question|progress")),
+		tools.WithArray("to", tools.Items(map[string]any{"type": "string", "minLength": 1}), tools.UniqueItems(true), tools.Description("Optional recipient names. Omit to address the whole team.")),
+		tools.WithString("kind", tools.Enum("review", "note", "question", "progress"), tools.Description("Comment kind. Omit when no category is needed.")),
 		tools.WithString("proposal_id", tools.Description("Anchor: proposal ID (optional)")),
 		tools.WithString("task_id", tools.Description("Anchor: task ID (optional)")),
+		tools.WithExample(map[string]any{"text": "Please review the provider schema changes.", "to": []any{"reviewer"}, "kind": "review", "proposal_id": "tool-redesign", "task_id": "T03"}),
 		tools.WithToolHandler(func(ctx context.Context, req *tools.Request) (*tools.Result, error) {
 			t := registry.Active()
 			if t == nil {
@@ -89,12 +90,10 @@ func teamCommentTool(registry *Registry, teamsPath string) *tools.Tool {
 				return tools.NewToolResultError("missing required parameter: text"), nil
 			}
 			kind, _ := req.Arguments["kind"].(string)
-			toStr, _ := req.Arguments["to"].(string)
 			var to []string
-			for _, s := range strings.Split(toStr, ",") {
-				if s = strings.TrimSpace(s); s != "" {
-					to = append(to, s)
-				}
+			recipients, _ := req.Arguments["to"].([]any)
+			for _, name := range recipients {
+				to = append(to, name.(string))
 			}
 			propID, _ := req.Arguments["proposal_id"].(string)
 			taskID, _ := req.Arguments["task_id"].(string)
@@ -122,8 +121,8 @@ func teamListCommentsTool(registry *Registry, teamsPath string) *tools.Tool {
 		tools.WithString("proposal_id", tools.Description("Filter by anchor proposal ID")),
 		tools.WithString("task_id", tools.Description("Filter by anchor task ID")),
 		tools.WithString("from", tools.Description("Filter by author")),
-		tools.WithString("kind", tools.Description("Filter by kind")),
-		tools.WithNumber("limit", tools.Description("Max number of comments to return")),
+		tools.WithString("kind", tools.Enum("review", "note", "question", "progress"), tools.Description("Filter by comment kind.")),
+		tools.WithInteger("limit", tools.Min(1), tools.Description("Maximum number of comments to return.")),
 		tools.WithToolHandler(func(ctx context.Context, req *tools.Request) (*tools.Result, error) {
 			t := registry.Active()
 			if t == nil {

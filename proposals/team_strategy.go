@@ -265,8 +265,8 @@ func memberExtraTools(teamsPath string, registry *teams.Registry, team *teams.Te
 	return []*tools.Tool{
 		tools.NewTool("team_comment",
 			tools.WithDescription("Post a comment to the active team's collective log (e.g. surface a blocker, question, or progress)."),
-			tools.WithString("text", tools.Required()),
-			tools.WithString("kind", tools.Description("review|note|question|progress")),
+			tools.WithString("text", tools.Required(), tools.Description("Comment body.")),
+			tools.WithString("kind", tools.Enum("review", "note", "question", "progress"), tools.Description("Comment kind. Omit when no category is needed.")),
 			tools.WithToolHandler(func(ctx context.Context, req *tools.Request) (*tools.Result, error) {
 				text, _ := req.Arguments["text"].(string)
 				kind, _ := req.Arguments["kind"].(string)

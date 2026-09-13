@@ -68,7 +68,7 @@ func (h *Hook) BeforeModel(_ context.Context, sess *session.Session, req provide
 	if h.modes.CollaborationMode(sess.ID) != ModePlan {
 		hasEnterPlanTool := hasToolDefine(req.ToolDefines(), EnterPlanModeToolName)
 		req.SetToolDefines(filterToolDefines(req.ToolDefines(), func(name string) bool {
-			return name != RequestUserInputToolName && name != SubmitPlanToolName
+			return name != SubmitPlanToolName
 		}))
 		if hasEnterPlanTool {
 			req.AppendSystemPrompt(DefaultInstructions)
@@ -76,7 +76,7 @@ func (h *Hook) BeforeModel(_ context.Context, sess *session.Session, req provide
 		return nil
 	}
 	req.SetToolDefines(filterToolDefines(req.ToolDefines(), func(name string) bool {
-		return name != EnterPlanModeToolName && name != "request_form" && name != "write_todos"
+		return name != EnterPlanModeToolName && name != "write_todos"
 	}))
 	req.AppendSystemPrompt(PlanInstructions)
 	if h.effort != "" {
@@ -120,7 +120,7 @@ Work conversationally in three phases:
 
 Ask only questions that materially change the plan. Prefer request_user_input for structured choices. Do not submit a plan while a high-impact ambiguity remains.
 
-When the plan is decision complete, call submit_plan exactly once with a concise title and complete Markdown. The Markdown must contain Summary, Implementation Changes, Test Plan, and Assumptions sections. Do not emit a duplicate prose plan after calling submit_plan.
+When the plan is decision complete, call submit_plan exactly once with complete Markdown. Start with a concise title heading, followed by Summary, Implementation Changes, Test Plan, and Assumptions sections. Do not emit a duplicate prose plan after calling submit_plan.
 </collaboration_mode>`
 
 var _ session.BeforeModelHook = (*Hook)(nil)

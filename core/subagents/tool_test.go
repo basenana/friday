@@ -22,7 +22,7 @@ func (s *recordingSpan) SetAttributes(attrs ...tracing.Attribute) {
 	s.attrs = append(s.attrs, attrs...)
 }
 
-func (s *recordingSpan) End()                              {}
+func (s *recordingSpan) End()                                     {}
 func (s *recordingSpan) SetStatus(_ tracing.StatusCode, _ string) {}
 
 func (s *recordingSpan) attrValue(key string) (string, bool) {
@@ -33,6 +33,24 @@ func (s *recordingSpan) attrValue(key string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+func TestRunTaskContractUsesTaskAndAgentEnum(t *testing.T) {
+	hook := &Subagents{
+		option:                 Option{ExpertAgents: []ExpertAgent{{Name: "reviewer"}, {Name: "writer"}}},
+		runTaskToolDescription: "Delegate to an expert.",
+	}
+	tool := hook.buildRunTaskTool(session.New("session", nil))
+	if _, exists := tool.InputSchema.Properties["task_describe"]; exists {
+		t.Fatal("legacy task_describe field exposed")
+	}
+	if _, exists := tool.InputSchema.Properties["task"]; !exists {
+		t.Fatal("task field missing")
+	}
+	enum := tool.InputSchema.Properties["agent_name"].(map[string]any)["enum"].([]string)
+	if len(enum) != 2 || enum[0] != "reviewer" || enum[1] != "writer" {
+		t.Fatalf("agent enum = %v", enum)
+	}
 }
 
 // recordingTracer injects a recordingSpan so tests can inspect attributes.
@@ -77,8 +95,8 @@ func TestCallSubagentToolTruncatesLongInput(t *testing.T) {
 	req := &tools.Request{
 		SessionID: sess.Root.ID,
 		Arguments: map[string]interface{}{
-			"agent_name":    "worker",
-			"task_describe": longInput,
+			"agent_name": "worker",
+			"task":       longInput,
 		},
 	}
 	_, err := handler(context.Background(), req)
@@ -111,8 +129,8 @@ func TestCallSubagentToolTruncatesLongOutput(t *testing.T) {
 	req := &tools.Request{
 		SessionID: sess.Root.ID,
 		Arguments: map[string]interface{}{
-			"agent_name":    "worker",
-			"task_describe": "short task",
+			"agent_name": "worker",
+			"task":       "short task",
 		},
 	}
 	_, err := handler(context.Background(), req)
@@ -144,8 +162,8 @@ func TestCallSubagentToolShortValuesUnchanged(t *testing.T) {
 	req := &tools.Request{
 		SessionID: sess.Root.ID,
 		Arguments: map[string]interface{}{
-			"agent_name":    "worker",
-			"task_describe": "short input",
+			"agent_name": "worker",
+			"task":       "short input",
 		},
 	}
 	_, err := handler(context.Background(), req)
@@ -176,8 +194,8 @@ func TestCallSubagentTool_AntiNestingGuard(t *testing.T) {
 	req := &tools.Request{
 		SessionID: "forked-" + sess.Root.ID,
 		Arguments: map[string]interface{}{
-			"agent_name":    "worker",
-			"task_describe": "nested call",
+			"agent_name": "worker",
+			"task":       "nested call",
 		},
 	}
 	result, err := handler(context.Background(), req)
@@ -197,7 +215,7 @@ func TestCallExploreTool_AntiNestingGuard(t *testing.T) {
 	req := &tools.Request{
 		SessionID: "forked-" + sess.Root.ID,
 		Arguments: map[string]interface{}{
-			"task_describe": "nested explore",
+			"task": "nested explore",
 		},
 	}
 	result, err := handler(context.Background(), req)

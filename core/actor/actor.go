@@ -119,13 +119,9 @@ func New(agent agents.Agent, sess *session.Session, opts ...Option) *Actor {
 	if a.sink == nil {
 		a.sink = sink.Nop()
 	}
-	a.cardTools = []*coretools.Tool{
-		makeEmitCardTool(a),
-		makeRequestFormTool(a),
-		makeUpdateCardTool(a),
-	}
+	a.cardTools = append(makeShowCardTools(a), makeRequestUserInputTool(a))
 	if a.modeProvider != nil {
-		a.collabTools = []*coretools.Tool{makeRequestUserInputTool(a)}
+		a.collabTools = nil
 		if a.planRepository != nil {
 			a.collabTools = append(a.collabTools, makeSubmitPlanTool(a))
 		}
@@ -225,8 +221,7 @@ func (a *Actor) SendSteer(ctx context.Context, msg UserTextMessage) error {
 	return nil
 }
 
-// SubmitForm delivers values for a pending form, unblocking the
-// corresponding request_form tool invocation.
+// SubmitForm delivers values for a pending request_user_input call.
 func (a *Actor) SubmitForm(formID string, values map[string]any) error {
 	return a.ResolveForm(formID, FormOutcome{Values: values})
 }
@@ -256,8 +251,7 @@ func (a *Actor) ResolveForm(formID string, outcome FormOutcome) error {
 	return nil
 }
 
-// WaitForForm blocks until a matching ResolveForm call arrives or ctx
-// expires. Used by the request_form tool handler.
+// WaitForForm blocks until a matching ResolveForm call arrives or ctx expires.
 func (a *Actor) WaitForForm(ctx context.Context, formID string) (FormOutcome, error) {
 	ch := a.prepareFormWait(formID)
 	return a.waitForRegisteredForm(ctx, formID, ch)
@@ -845,24 +839,13 @@ func (a *Actor) generateRunID() string {
 	return globalIDGenerator.Next("run")
 }
 
-// assembleRequestTools returns the full tool set passed to each Chat
-// call: the actor's three card tools followed by any injected domain
-// tools.
+// assembleRequestTools returns the full tool set passed to each Chat call.
 func (a *Actor) assembleRequestTools() []*coretools.Tool {
-	planMode := a.modeProvider != nil && a.modeProvider.CollaborationMode(a.session.ID) == collaboration.ModePlan
 	if len(a.extraTools) == 0 && len(a.collabTools) == 0 {
 		return a.cardTools
 	}
 	out := make([]*coretools.Tool, 0, len(a.cardTools)+len(a.extraTools)+len(a.collabTools))
-	for _, tool := range a.cardTools {
-		// Plan Mode has a constrained, typed question tool. Hiding the generic
-		// form tool keeps planning interactions consistent and prevents the
-		// model from bypassing request_user_input's question contract.
-		if planMode && tool.Name == "request_form" {
-			continue
-		}
-		out = append(out, tool)
-	}
+	out = append(out, a.cardTools...)
 	out = append(out, a.extraTools...)
 	out = append(out, a.collabTools...)
 	return out

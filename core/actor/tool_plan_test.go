@@ -50,17 +50,15 @@ func (r *planTestRepo) SavePlan(_ string, plan planning.Artifact) error {
 }
 
 func TestRequestUserInputRoundTrip(t *testing.T) {
-	a := New(nil, session.New("session", nil), WithPlanning(planTestRuntime{}, &planTestRepo{}))
+	a := New(nil, session.New("session", nil))
 	sub := a.Subscribe()
 	defer sub.Close()
 	resultCh := make(chan *tools.Result, 1)
 	errCh := make(chan error, 1)
 	go func() {
 		result, err := makeRequestUserInputTool(a).Handler(context.Background(), &tools.Request{SessionID: "session", Arguments: map[string]any{
-			"questions": []any{map[string]any{
-				"id": "scope", "header": "Scope", "question": "Which scope?",
-				"options": []any{map[string]any{"label": "Small", "description": "Minimal"}, map[string]any{"label": "Large", "description": "Complete"}},
-			}},
+			"question_1": "Which scope?",
+			"options_1":  []any{"Small — minimal change", "Large — complete change"},
 		}})
 		if err != nil {
 			errCh <- err
@@ -83,7 +81,7 @@ func TestRequestUserInputRoundTrip(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for planning question")
 	}
-	if err := a.SubmitForm(formID, map[string]any{"scope": "Other", "scope_other": "Medium"}); err != nil {
+	if err := a.SubmitForm(formID, map[string]any{"question_1": "Other", "question_1_other": "Medium"}); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -98,19 +96,6 @@ func TestRequestUserInputRoundTrip(t *testing.T) {
 	}
 }
 
-func TestPlanningQuestionIDsCannotCollideWithOtherFields(t *testing.T) {
-	for _, id := range []string{"scope_other", "Scope", "1scope", "scope-name", ""} {
-		if validQuestionID(id) {
-			t.Errorf("validQuestionID(%q) = true", id)
-		}
-	}
-	for _, id := range []string{"scope", "scope_2", "a"} {
-		if !validQuestionID(id) {
-			t.Errorf("validQuestionID(%q) = false", id)
-		}
-	}
-}
-
 func TestRequestUserInputTimeoutEmitsCancellation(t *testing.T) {
 	a := New(nil, session.New("session", nil), WithPlanning(planTestRuntime{}, &planTestRepo{}))
 	sub := a.Subscribe()
@@ -119,10 +104,8 @@ func TestRequestUserInputTimeoutEmitsCancellation(t *testing.T) {
 	done := make(chan *tools.Result, 1)
 	go func() {
 		result, _ := makeRequestUserInputTool(a).Handler(ctx, &tools.Request{Arguments: map[string]any{
-			"questions": []any{map[string]any{
-				"id": "scope", "header": "Scope", "question": "Which scope?",
-				"options": []any{map[string]any{"label": "Small"}, map[string]any{"label": "Large"}},
-			}},
+			"question_1": "Which scope?",
+			"options_1":  []any{"Small", "Large"},
 		}})
 		done <- result
 	}()
@@ -164,12 +147,12 @@ func TestSubmitPlanPersistsArtifactAndMarksTurn(t *testing.T) {
 	repo := &planTestRepo{}
 	a := New(nil, session.New("session", nil), WithPlanning(planTestRuntime{}, repo))
 	tool := makeSubmitPlanTool(a)
-	markdown := "## Summary\nS\n## Implementation Changes\nC\n## Test Plan\nT\n## Assumptions\nA"
-	result, err := tool.Handler(context.Background(), &tools.Request{SessionID: "session", Arguments: map[string]any{"title": "Plan", "markdown": markdown}})
+	markdown := "# Plan\n## Summary\nS\n## Implementation Changes\nC\n## Test Plan\nT\n## Assumptions\nA"
+	result, err := tool.Handler(context.Background(), &tools.Request{SessionID: "session", Arguments: map[string]any{"markdown": markdown}})
 	if err != nil || result.IsError {
 		t.Fatalf("submit failed: result=%+v err=%v", result, err)
 	}
-	if repo.latest == nil || repo.latest.Version != 1 || repo.latest.Markdown != markdown {
+	if repo.latest == nil || repo.latest.Version != 1 || repo.latest.Title != "Plan" || repo.latest.Markdown != markdown {
 		t.Fatalf("saved plan = %+v", repo.latest)
 	}
 	if !a.planSubmitted.Load() {
@@ -177,18 +160,20 @@ func TestSubmitPlanPersistsArtifactAndMarksTurn(t *testing.T) {
 	}
 }
 
-func TestAssembleRequestToolsHidesGenericFormInPlanMode(t *testing.T) {
+func TestAssembleRequestToolsUsesShallowCardTools(t *testing.T) {
 	repo := &planTestRepo{}
 	a := New(nil, session.New("session", nil), WithPlanning(planTestRuntime{}, repo))
 	names := map[string]bool{}
 	for _, tool := range a.assembleRequestTools() {
 		names[tool.Name] = true
 	}
-	if !names["request_user_input"] || !names[planning.SubmitPlanToolName] {
+	if !names["request_user_input"] || !names["show_image"] || !names["show_mermaid"] || !names["show_html"] || !names["show_diff"] || !names["show_table"] || !names[planning.SubmitPlanToolName] {
 		t.Fatalf("plan tools missing: %v", names)
 	}
-	if names["request_form"] {
-		t.Fatalf("generic request_form should be hidden in Plan Mode: %v", names)
+	for _, legacy := range []string{"emit_card", "request_form", "update_card"} {
+		if names[legacy] {
+			t.Fatalf("legacy tool %q exposed: %v", legacy, names)
+		}
 	}
 }
 
@@ -198,7 +183,7 @@ func TestEnterPlanModePersistsAndEmitsModeChanged(t *testing.T) {
 	sub := a.Subscribe()
 	defer sub.Close()
 
-	result, err := makeEnterPlanModeTool(a).Handler(context.Background(), &tools.Request{Arguments: map[string]any{"reason": "design first"}})
+	result, err := makeEnterPlanModeTool(a).Handler(context.Background(), &tools.Request{Arguments: map[string]any{}})
 	if err != nil || result == nil || result.IsError {
 		t.Fatalf("enter plan mode: result=%+v err=%v", result, err)
 	}
@@ -211,7 +196,7 @@ func TestEnterPlanModePersistsAndEmitsModeChanged(t *testing.T) {
 			t.Fatalf("event = %q", evt.Name)
 		}
 		var body events.ModeChangedBody
-		if events.DecodePayload(evt, &body) != nil || body.Mode != string(collaboration.ModePlan) || body.Source != "agent" || body.Reason != "design first" {
+		if events.DecodePayload(evt, &body) != nil || body.Mode != string(collaboration.ModePlan) || body.Source != "agent" || body.Reason != "" {
 			t.Fatalf("mode event = %+v", body)
 		}
 	case <-time.After(time.Second):
@@ -258,14 +243,10 @@ func TestCollaborationHandlersRemainRegisteredAcrossModeChange(t *testing.T) {
 func TestPlanOnlyToolsRejectDefaultMode(t *testing.T) {
 	controller := &planTestController{mode: collaboration.ModeDefault}
 	a := New(nil, session.New("session", nil), WithPlanning(controller, &planTestRepo{}))
-	markdown := "## Summary\nS\n## Implementation Changes\nC\n## Test Plan\nT\n## Assumptions\nA"
-	result, err := makeSubmitPlanTool(a).Handler(context.Background(), &tools.Request{Arguments: map[string]any{"title": "Plan", "markdown": markdown}})
+	markdown := "# Plan\n## Summary\nS\n## Implementation Changes\nC\n## Test Plan\nT\n## Assumptions\nA"
+	result, err := makeSubmitPlanTool(a).Handler(context.Background(), &tools.Request{Arguments: map[string]any{"markdown": markdown}})
 	if err != nil || result == nil || !result.IsError {
 		t.Fatalf("default-mode submit result=%+v err=%v", result, err)
-	}
-	result, err = makeRequestUserInputTool(a).Handler(context.Background(), &tools.Request{Arguments: map[string]any{}})
-	if err != nil || result == nil || !result.IsError {
-		t.Fatalf("default-mode input result=%+v err=%v", result, err)
 	}
 }
 
@@ -275,7 +256,6 @@ func TestSubmitPlanRequiresMarkdownHeadings(t *testing.T) {
 	result, err := makeSubmitPlanTool(a).Handler(context.Background(), &tools.Request{
 		SessionID: "session",
 		Arguments: map[string]any{
-			"title":    "Not a plan",
 			"markdown": "This sentence mentions summary, implementation changes, test plan, and assumptions.",
 		},
 	})

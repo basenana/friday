@@ -68,15 +68,16 @@ func (a *Todo) planningTools(sess *session.Session) []*tools.Tool {
 	return []*tools.Tool{
 		tools.NewTool(
 			"write_todos",
-			tools.WithDescription(a.opt.TaskDescribePrompt),
+			tools.WithDescription(a.opt.TaskDescriptionPrompt),
 			tools.WithArray("todo_list",
 				tools.Required(),
 				tools.Items(map[string]interface{}{
 					"type": "object",
 					"properties": map[string]interface{}{
-						"describe": map[string]interface{}{
+						"description": map[string]interface{}{
 							"type":        "string",
-							"description": "Describe the task to be performed and how to determine the task's outcome in one sentence.",
+							"minLength":   1,
+							"description": "One actionable sentence describing the task and its expected outcome.",
 						},
 						"status": map[string]interface{}{
 							"type":        "string",
@@ -84,10 +85,15 @@ func (a *Todo) planningTools(sess *session.Session) []*tools.Tool {
 							"enum":        []string{"pending", "in_progress", "completed", "blocked"},
 						},
 					},
-					"required": []string{"describe", "status"},
+					"required":             []string{"description", "status"},
+					"additionalProperties": false,
 				}),
-				tools.Description("A list of tasks, each task is an object with 'describe' and 'status' fields. 'describe' is the task description, 'status' is the current state: pending, in_progress, completed, or blocked. Use blocked instead of encoding blockers in the task description."),
+				tools.Description("The complete replacement todo list. Each item requires description and status. An empty array clears the list."),
 			),
+			tools.WithExample(map[string]interface{}{"todo_list": []interface{}{
+				map[string]interface{}{"description": "Audit complex built-in tool contracts", "status": "in_progress"},
+				map[string]interface{}{"description": "Add provider wire-schema regression tests", "status": "pending"},
+			}}),
 			tools.WithToolHandler(writeTodoListHandler(a, sess)),
 		),
 	}
@@ -98,8 +104,8 @@ func New(option Option) *Todo {
 		option.SystemPrompt = DEFAULT_PLANNING_PROMPT
 	}
 
-	if option.TaskDescribePrompt == "" {
-		option.TaskDescribePrompt = DEFAULT_TASK_DESC_PROMPT
+	if option.TaskDescriptionPrompt == "" {
+		option.TaskDescriptionPrompt = DEFAULT_TASK_DESCRIPTION_PROMPT
 	}
 
 	return &Todo{
@@ -117,7 +123,7 @@ func (a *Todo) RemoveTodo(sess *session.Session) {
 }
 
 type Option struct {
-	SystemPrompt       string
-	TaskDescribePrompt string
-	ModeProvider       collaboration.ModeProvider
+	SystemPrompt          string
+	TaskDescriptionPrompt string
+	ModeProvider          collaboration.ModeProvider
 }

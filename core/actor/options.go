@@ -124,9 +124,7 @@ func WithTurnTimeout(d time.Duration) Option {
 	return func(o *Options) { o.turnTimeout = d }
 }
 
-// WithExtraTools appends domain tools to the actor's card tools on
-// every Chat call. Tools appended here are visible to the agent in
-// addition to emit_card / request_form / update_card.
+// WithExtraTools adds domain tools to every actor Chat call.
 func WithExtraTools(ts ...*coretools.Tool) Option {
 	return func(o *Options) { o.extraTools = append(o.extraTools, ts...) }
 }

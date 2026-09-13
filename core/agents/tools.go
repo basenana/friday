@@ -74,11 +74,9 @@ func toolCall(ctx context.Context, sess *session.Session, use *ToolUse, td *tool
 		return "", false, fmt.Errorf("tool %s arguments must be a JSON object, got: %s", use.Name, truncateToolArgs(use.Arguments))
 	}
 	req.Arguments = args
-
-	// Reject calls missing required parameters before they reach the handler,
-	// so the model receives an actionable message (parameter name + schema
-	// description) instead of an opaque server-side validation error.
-	if msg := td.ValidateRequiredArguments(args); msg != "" {
+	// Validate the complete advertised schema so handlers only need to enforce
+	// domain rules.
+	if msg := td.ValidateArguments(args); msg != "" {
 		span.RecordError(fmt.Errorf("tool %s %s", use.Name, msg))
 		result := tools.NewToolResultError(fmt.Sprintf("tool %s: %s", use.Name, msg))
 		content, err := marshalToolResultForModel(result)
@@ -115,6 +113,21 @@ type modelToolResult struct {
 }
 
 func marshalToolResultForModel(result *tools.Result) (string, error) {
+	if result == nil {
+		return "", fmt.Errorf("tool returned a nil result")
+	}
+	if len(result.Content) == 1 {
+		if content, ok := result.Content[0].(tools.TextContent); ok {
+			text := content.Text
+			if result.IsError {
+				text = "Error: " + text
+			}
+			if result.FYI != "" {
+				text += "\n\nFYI:\n" + result.FYI
+			}
+			return text, nil
+		}
+	}
 	view := modelToolResult{Content: result.Content, FYI: result.FYI, IsError: result.IsError}
 	content, err := json.Marshal(view)
 	if err != nil {

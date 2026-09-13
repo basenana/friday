@@ -23,12 +23,10 @@ func (a formBridgeAgent) Chat(ctx context.Context, req *api.Request) *api.Respon
 	go func() {
 		defer resp.Close()
 		for _, tool := range req.Tools {
-			if tool.Name != "request_form" {
+			if tool.Name != "request_user_input" {
 				continue
 			}
-			result, _ := tool.Handler(ctx, &tools.Request{Arguments: map[string]any{"schema": map[string]any{
-				"fields": []any{map[string]any{"name": "answer", "type": "text"}},
-			}}})
+			result, _ := tool.Handler(ctx, &tools.Request{Arguments: map[string]any{"question_1": "Continue?", "options_1": []any{"Yes", "No"}}})
 			a.result <- result
 			return
 		}
@@ -186,7 +184,7 @@ func TestInBridgeSubmitsFormWhileTurnIsRunning(t *testing.T) {
 		}
 	}
 	b.Publish(bus.TopicInbox("s1"), bus.NewFormSubmit("s1", "test", bus.FormSubmitInput{
-		FormID: formID, Values: map[string]any{"answer": "yes"},
+		FormID: formID, Values: map[string]any{"question_1": "Yes"},
 	}))
 	select {
 	case result := <-results:

@@ -48,7 +48,7 @@ Parameters:
 - image: image path or http/https URL
 - prompt: optional analysis prompt. Defaults to "Describe the image."
 - model: optional model name override for this call
-- maxBytesMb: optional maximum processed image size in megabytes. Defaults to 5
+- max_bytes_mb: optional maximum processed image size in megabytes. Defaults to 5
 
 Usage notes:
 - The tool automatically resizes and compresses large images before sending them to the model
@@ -64,7 +64,7 @@ Usage notes:
 		tools.WithString("image", tools.Required(), tools.Description("Image path or URL to analyze")),
 		tools.WithString("prompt", tools.Description("Question or instruction for the image analysis")),
 		tools.WithString("model", tools.Description("Optional model name override for this one image analysis")),
-		tools.WithNumber("maxBytesMb", tools.Description("Maximum processed image size in megabytes before upload")),
+		tools.WithNumber("max_bytes_mb", tools.Min(0.1), tools.Description("Maximum processed image size in megabytes before upload. Defaults to 5.")),
 		tools.WithToolHandler(imageToolHandler(exec, workdir, analyzer)),
 	)
 }
@@ -82,7 +82,7 @@ func imageToolHandler(exec *Executor, workdir string, analyzer ImageAnalyzer) to
 		}
 
 		modelOverride, _ := req.Arguments["model"].(string)
-		maxBytes, err := imageMaxBytesFromRequest(req.Arguments["maxBytesMb"])
+		maxBytes, err := imageMaxBytesFromRequest(req.Arguments["max_bytes_mb"])
 		if err != nil {
 			return tools.NewToolResultError(err.Error()), nil
 		}
@@ -108,10 +108,10 @@ func imageMaxBytesFromRequest(raw any) (int64, error) {
 
 	value, ok := raw.(float64)
 	if !ok {
-		return 0, fmt.Errorf("maxBytesMb must be a number")
+		return 0, fmt.Errorf("max_bytes_mb must be a number")
 	}
 	if value <= 0 {
-		return 0, fmt.Errorf("maxBytesMb must be greater than 0")
+		return 0, fmt.Errorf("max_bytes_mb must be greater than 0")
 	}
 	return int64(value * 1024 * 1024), nil
 }
@@ -171,7 +171,7 @@ func optimizeImageForModel(data []byte, mediaType string, maxBytes int64) (*type
 
 	if mediaType == "image/webp" {
 		if int64(len(data)) > maxBytes {
-			return nil, fmt.Errorf("webp image exceeds maxBytesMb and cannot be resized without additional decoder support")
+			return nil, fmt.Errorf("webp image exceeds max_bytes_mb and cannot be resized without additional decoder support")
 		}
 		return bytesToImageContent(mediaType, data), nil
 	}

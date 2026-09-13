@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/basenana/friday/config"
 	aguiactor "github.com/basenana/friday/core/actor"
 	"github.com/basenana/friday/core/actor/events"
-	"github.com/basenana/friday/config"
 	"github.com/basenana/friday/sessions"
 	"github.com/basenana/friday/sessions/file"
 	"github.com/basenana/friday/setup"
@@ -156,10 +156,8 @@ func TestAGUIActor_BasicTurn(t *testing.T) {
 	t.Logf("assistant replied: %q", text.String())
 }
 
-// TestAGUIActor_EmitCardPrompt asks the LLM to call emit_card with a small
-// file card, then asserts the subscriber sees a card.emitted Custom event
-// whose payload carries the expected path.
-func TestAGUIActor_EmitCardPrompt(t *testing.T) {
+// TestAGUIActor_ShowMermaidPrompt asks the LLM to render a small diagram.
+func TestAGUIActor_ShowMermaidPrompt(t *testing.T) {
 	cfg := loadAGUIE2EConfig(t)
 	a := newAGUIE2EActor(t, cfg)
 	sub := a.Subscribe()
@@ -168,9 +166,9 @@ func TestAGUIActor_EmitCardPrompt(t *testing.T) {
 	a.Start(ctx)
 	defer a.Shutdown(context.Background())
 
-	prompt := "You MUST call the emit_card tool exactly once. Do not write any prose. " +
-		"Call emit_card with these exact arguments: " +
-		`kind="file", title="demo", component={"path":"/sandbox/e2e-result.txt"}. ` +
+	prompt := "You MUST call the show_mermaid tool exactly once. Do not write any prose. " +
+		"Call show_mermaid with this exact argument: " +
+		`source="flowchart LR\nA --> B". ` +
 		"After the tool call you may stop."
 	if err := a.Send(ctx, aguiactor.UserTextMessage{Text: prompt}); err != nil {
 		t.Fatalf("Send: %v", err)
@@ -199,22 +197,20 @@ func TestAGUIActor_EmitCardPrompt(t *testing.T) {
 	}
 	if !cardFound {
 		t.Skipf("LLM did not emit a card (events=%d); model=%q may not reliably call custom tools. "+
-			"Actor wiring is correct (tool_count included emit_card); skipping as model-dependent.",
+			"Actor wiring is correct (tool_count included show_mermaid); skipping as model-dependent.",
 			len(seen), cfg.Model.Model)
 	}
-	if cardBody.Kind != "file" {
-		t.Fatalf("card kind=file expected, got %q", cardBody.Kind)
+	if cardBody.Kind != "mermaid" {
+		t.Fatalf("card kind=mermaid expected, got %q", cardBody.Kind)
 	}
-	if path, _ := cardBody.Component["path"].(string); !strings.Contains(path, "e2e-result") {
-		t.Fatalf("unexpected component path: %v", cardBody.Component)
+	if source, _ := cardBody.Component["source"].(string); !strings.Contains(source, "A --> B") {
+		t.Fatalf("unexpected diagram source: %v", cardBody.Component)
 	}
-	t.Logf("emit_card ok: id=%s component=%v", cardBody.CardID, cardBody.Component)
+	t.Logf("show_mermaid ok: id=%s component=%v", cardBody.CardID, cardBody.Component)
 }
 
-// TestAGUIActor_RequestFormPrompt asks the LLM to call request_form with an
-// exact schema, auto-submits the form, and verifies the actor publishes the
-// request/submitted events before finishing the run.
-func TestAGUIActor_RequestFormPrompt(t *testing.T) {
+// TestAGUIActor_RequestUserInputPrompt verifies the blocking question flow.
+func TestAGUIActor_RequestUserInputPrompt(t *testing.T) {
 	cfg := loadAGUIE2EConfig(t)
 	a := newAGUIE2EActor(t, cfg)
 	runSub := a.Subscribe()
@@ -228,15 +224,15 @@ func TestAGUIActor_RequestFormPrompt(t *testing.T) {
 	submitDone := make(chan error, 1)
 	go func() {
 		if formID, ok := aguiWaitForFormRequest(formSub, stopWatcher); ok {
-			submitDone <- a.SubmitForm(formID, map[string]any{"organism": "hsapiens"})
+			submitDone <- a.SubmitForm(formID, map[string]any{"question_1": "Human"})
 			return
 		}
 		submitDone <- nil
 	}()
 
-	prompt := `You MUST call the request_form tool exactly once. Do not answer from memory.
-Call request_form with this exact schema object:
-{"title":"Pick one","fields":[{"name":"organism","type":"select","options":[{"label":"Human","value":"hsapiens"}]}],"submit_label":"Submit","cancel_label":"Cancel"}
+	prompt := `You MUST call the request_user_input tool exactly once. Do not answer from memory.
+Call request_user_input with these exact arguments:
+{"question_1":"Which organism?","options_1":["Human","Other species"]}
 After the tool returns, reply with the single word: submitted.`
 	if err := a.Send(ctx, aguiactor.UserTextMessage{Text: prompt}); err != nil {
 		t.Fatalf("Send: %v", err)
@@ -256,7 +252,7 @@ After the tool returns, reply with the single word: submitted.`
 	}
 
 	if !aguiSawCustomEvent(seen, events.CustomFormRequested) {
-		t.Skipf("LLM did not invoke request_form (events=%d); model=%q may not reliably call custom tools.",
+		t.Skipf("LLM did not invoke request_user_input (events=%d); model=%q may not reliably call custom tools.",
 			len(seen), cfg.Model.Model)
 	}
 	if !aguiSawCustomEvent(seen, events.CustomFormSubmitted) {
@@ -265,7 +261,7 @@ After the tool returns, reply with the single word: submitted.`
 }
 
 // TestAGUIActor_PreemptCancelsFormPrompt verifies that preempting a real
-// request_form turn cancels the pending form and finishes the run.
+// request_user_input turn cancels the pending form and finishes the run.
 func TestAGUIActor_PreemptCancelsFormPrompt(t *testing.T) {
 	cfg := loadAGUIE2EConfig(t)
 	a := newAGUIE2EActor(t, cfg)
@@ -286,9 +282,9 @@ func TestAGUIActor_PreemptCancelsFormPrompt(t *testing.T) {
 		preemptDone <- nil
 	}()
 
-	prompt := `You MUST call the request_form tool exactly once. Do not write any prose first.
-Call request_form with this exact schema object:
-{"title":"Need one choice","fields":[{"name":"organism","type":"select","options":[{"label":"Human","value":"hsapiens"}]}]}
+	prompt := `You MUST call the request_user_input tool exactly once. Do not write any prose first.
+Call request_user_input with these exact arguments:
+{"question_1":"Which organism?","options_1":["Human","Other species"]}
 Stop after the tool call.`
 	if err := a.Send(ctx, aguiactor.UserTextMessage{Text: prompt}); err != nil {
 		t.Fatalf("Send: %v", err)
@@ -308,7 +304,7 @@ Stop after the tool call.`
 	}
 
 	if !aguiSawCustomEvent(seen, events.CustomFormRequested) {
-		t.Skipf("LLM did not invoke request_form (events=%d); model=%q may not reliably call custom tools.",
+		t.Skipf("LLM did not invoke request_user_input (events=%d); model=%q may not reliably call custom tools.",
 			len(seen), cfg.Model.Model)
 	}
 	if !aguiSawCustomEvent(seen, events.CustomFormCancelled) {

@@ -41,10 +41,8 @@ func (h *Hook) BeforeAgent(ctx context.Context, sess *session.Session, req sessi
 func ProposalRunTool(loader *Loader, factory RunnerFactory) *tools.Tool {
 	return tools.NewTool("proposal_run",
 		tools.WithDescription(
-			"Create and execute a proposal. Takes over the agent control loop until the task DAG completes or fails. "+
-				"Use this when a request is large enough to warrant splitting into a planned, reviewed workflow."),
-		tools.WithString("title", tools.Required(), tools.Description("Short proposal title")),
-		tools.WithString("content", tools.Required(), tools.Description("Markdown design document describing goals, scope, and acceptance criteria")),
+			"Create and execute a proposal for a large task that benefits from a planned, reviewed workflow. The first Markdown heading becomes the proposal title. Takes over the control loop until the task DAG completes or fails."),
+		tools.WithString("content", tools.Required(), tools.MinLength(1), tools.Description("Complete Markdown design document with goals, scope, and acceptance criteria.")),
 		tools.WithString("team", tools.Description("Team name to use (Team Strategy). Omit for single-agent mode.")),
 		tools.WithToolHandler(proposalRunHandler(loader, factory)),
 	)
@@ -52,11 +50,12 @@ func ProposalRunTool(loader *Loader, factory RunnerFactory) *tools.Tool {
 
 func proposalRunHandler(loader *Loader, factory RunnerFactory) tools.ToolHandlerFunc {
 	return func(ctx context.Context, req *tools.Request) (*tools.Result, error) {
-		title, _ := req.Arguments["title"].(string)
 		content, _ := req.Arguments["content"].(string)
-		if title == "" || content == "" {
-			return tools.NewToolResultError("title and content are required"), nil
+		content = strings.TrimSpace(content)
+		if content == "" {
+			return tools.NewToolResultError("content is required"), nil
 		}
+		title := tools.MarkdownTitle(content, "Proposal")
 		proposalID := newProposalID(title)
 
 		proposal := &Proposal{

@@ -110,25 +110,15 @@ func TestActor_FormSubmitMessageAsFirstInboxMessage(t *testing.T) {
 	}
 }
 
-func TestActor_RequestForm_PreemptCancelsTurnAndForm(t *testing.T) {
+func TestActor_RequestUserInputPreemptCancelsTurnAndForm(t *testing.T) {
 	mock := newMockAgent(
 		chatScript{
 			toolCall: &scriptedToolCall{
 				id:   "tool-call-1",
-				name: "request_form",
+				name: "request_user_input",
 				arguments: map[string]any{
-					"schema": map[string]any{
-						"title": "Pick one",
-						"fields": []map[string]any{
-							{
-								"name": "organism",
-								"type": "select",
-								"options": []map[string]any{
-									{"label": "Human", "value": "hsapiens"},
-								},
-							},
-						},
-					},
+					"question_1": "Which organism?",
+					"options_1":  []any{"Human", "Other species"},
 				},
 			},
 			deltas: []types.Delta{{Content: "should not arrive"}},
@@ -175,12 +165,9 @@ func TestActor_ToolEventsUseStableIDs(t *testing.T) {
 		chatScript{
 			toolCall: &scriptedToolCall{
 				id:   "tool-call-42",
-				name: "emit_card",
+				name: "show_mermaid",
 				arguments: map[string]any{
-					"kind": "file",
-					"component": map[string]any{
-						"path": "/sandbox/out.txt",
-					},
+					"source": "flowchart LR\nA --> B",
 				},
 			},
 		},
@@ -225,9 +212,11 @@ func TestActor_ToolsExposeInputSchemas(t *testing.T) {
 	a, _ := newTestActor(newMockAgent())
 
 	requiredByTool := map[string][]string{
-		"emit_card":    {"kind", "component"},
-		"request_form": {"schema"},
-		"update_card":  {"card_id", "patch"},
+		"show_image":         {"path"},
+		"show_mermaid":       {"source"},
+		"show_html":          {"path"},
+		"show_table":         {"path", "columns"},
+		"request_user_input": {"question_1"},
 	}
 
 	for _, tool := range a.Tools() {

@@ -22,18 +22,14 @@ type cardEmitter interface {
 	ResolveForm(formID string, outcome FormOutcome) error
 }
 
-// FormOutcome is shared between the actor and the request_form tool.
-// It mirrors cards.FormOutcome but lives in the actor package to
-// avoid pulling cards into callers that only need the actor API.
+// FormOutcome is the result of a blocking form interaction.
 type FormOutcome struct {
 	Values             map[string]any
 	Cancelled          bool
 	cancelEventEmitted bool
 }
 
-// EmitCard is the helper invoked by the emit_card tool handler. It is
-// also exported so tests / advanced callers can emit cards directly
-// without going through the tool layer.
+// EmitCard validates and publishes a card.
 func (a *Actor) EmitCard(kind, title string, component map[string]any) (string, error) {
 	cardKind := cards.Kind(kind)
 	pathValidator := a.filePathValidator

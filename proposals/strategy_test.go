@@ -107,13 +107,14 @@ func TestTeamStrategyLeaderSessionIsProposalScoped(t *testing.T) {
 		return sess, nil
 	}
 
+	teamsPath := t.TempDir()
 	strategy, err := NewTeamStrategy(
 		client,
 		func(string, []*tools.Tool) agents.Agent { return nil },
 		&teams.Team{Name: "alpha"},
 		[]teams.Member{{Name: "lead", Role: teams.RoleLeader}},
 		nil,
-		"",
+		teamsPath,
 		nil,
 		sessionFactory,
 	)

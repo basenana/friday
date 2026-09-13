@@ -67,27 +67,19 @@ func (r *Report) GetReport() (string, string) {
 func (r *Report) submitReportTool() *tools.Tool {
 	return tools.NewTool(
 		"submit_final_report",
-		tools.WithDescription(SUBMIT_REPORT_DESC_PROMPT),
-		tools.WithString("title",
-			tools.Required(),
-			tools.Description("The title of final report"),
-		),
+		tools.WithDescription(SUBMIT_REPORT_DESCRIPTION_PROMPT),
 		tools.WithString("markdown",
 			tools.Required(),
-			tools.Description("The content body of final report"),
+			tools.MinLength(1),
+			tools.Description("Complete final report in Markdown. Its first heading becomes the report title."),
 		),
 		tools.WithToolHandler(func(ctx context.Context, request *tools.Request) (*tools.Result, error) {
-			title, ok := request.Arguments["title"].(string)
-			if !ok || len(title) == 0 {
-				return tools.NewToolResultError("missing required parameter: title"), nil
-			}
-
 			markdown, ok := request.Arguments["markdown"].(string)
 			if !ok || len(markdown) == 0 {
 				return tools.NewToolResultError("missing required parameter: markdown"), nil
 			}
 
-			r.title = title
+			r.title = tools.MarkdownTitle(markdown, "Final report")
 			r.report = markdown
 
 			return tools.NewToolResultText("submitted"), nil

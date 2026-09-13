@@ -503,6 +503,27 @@ func TestMessageCreateParamsCacheControlMarksLastTool(t *testing.T) {
 	}
 }
 
+func TestMessageCreateParamsPreservesRequiredStringSlice(t *testing.T) {
+	cli := &client{model: Model{Name: "claude-test"}}
+	req := providers.NewRequest("")
+	req.SetToolDefines([]providers.ToolDefine{
+		providers.NewToolDefine("search", "Search files.", map[string]any{
+			"type":       "object",
+			"properties": map[string]any{"query": map[string]any{"type": "string"}},
+			"required":   []string{"query"},
+		}),
+	})
+
+	params := cli.messageCreateParams(req)
+	if len(params.Tools) != 1 || params.Tools[0].OfTool == nil {
+		t.Fatalf("tools = %#v", params.Tools)
+	}
+	required := params.Tools[0].OfTool.InputSchema.Required
+	if len(required) != 1 || required[0] != "query" {
+		t.Fatalf("required = %v", required)
+	}
+}
+
 func TestMessageCreateParamsSanitizesOrphanedToolUse(t *testing.T) {
 	cli := &client{model: Model{Name: "claude-test"}}
 	// First assistant has tool_use "tc-orphan" with no corresponding tool_result,

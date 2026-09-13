@@ -12,42 +12,16 @@ import (
 // NewSkillTools creates the skill management tools
 func NewSkillTools(registry *Registry) []*tools.Tool {
 	return []*tools.Tool{
-		newListSkillsTool(registry),
 		newLoadSkillTool(registry),
 		newListSkillFilesTool(registry),
 		newReadSkillFileTool(registry),
 	}
 }
 
-// newListSkillsTool creates the list_skills tool
-func newListSkillsTool(registry *Registry) *tools.Tool {
-	return tools.NewTool("list_skills",
-		tools.WithDescription(`List all available skills that can be loaded.
-Returns skill names and descriptions for discovery.
-Use this tool first to see what skills are available.`),
-		tools.WithToolHandler(func(ctx context.Context, req *tools.Request) (*tools.Result, error) {
-			skills := registry.List()
-			if len(skills) == 0 {
-				return tools.NewToolResultText("No skills available."), nil
-			}
-
-			result := "Available skills:\n\n"
-			for _, skill := range skills {
-				result += fmt.Sprintf("- %s: %s\n", skill.Name, skill.Description)
-			}
-			result += "\nUse load_skill(name) to load a skill's instructions."
-
-			return tools.NewToolResultText(result), nil
-		}),
-	)
-}
-
 // newLoadSkillTool creates the load_skill tool
 func newLoadSkillTool(registry *Registry) *tools.Tool {
 	return tools.NewTool("load_skill",
-		tools.WithDescription(`Load and return the complete instructions for a skill.
-Use this after discovering skills with list_skills to get the full instructions.
-The instructions will be added to the conversation context.`),
+		tools.WithDescription(`Load and return the complete instructions for one of the skills listed in the system prompt. The instructions are added to the conversation context.`),
 		tools.WithString("name",
 			tools.Required(),
 			tools.Description("The name of the skill to load"),

@@ -136,6 +136,16 @@ func TestImageToolUsesDefaultPromptAndModelOverride(t *testing.T) {
 	}
 }
 
+func TestImageToolUsesSnakeCaseSizeArgument(t *testing.T) {
+	tool := NewImageTool(NewExecutor(DefaultConfig()), t.TempDir(), &stubImageAnalyzer{})
+	if _, exists := tool.InputSchema.Properties["max_bytes_mb"]; !exists {
+		t.Fatal("max_bytes_mb field missing")
+	}
+	if _, exists := tool.InputSchema.Properties["maxBytesMb"]; exists {
+		t.Fatal("legacy maxBytesMb field exposed")
+	}
+}
+
 func TestReadImageBytesRejectsPathOutsideWorkdir(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.Sandbox.Enabled = false

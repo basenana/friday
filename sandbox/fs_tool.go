@@ -241,7 +241,7 @@ Parameters:
 
 	return tools.NewTool(toolFsList,
 		tools.WithDescription(desc),
-		tools.WithString("path", tools.Description("The directory path to list. Use '.' for current directory."), tools.Required()),
+		tools.WithString("path", tools.DefaultString("."), tools.Description("Directory path. Defaults to the current directory.")),
 		tools.WithToolHandler(fsListFileSystemHandler(fs)),
 	)
 }

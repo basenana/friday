@@ -2,7 +2,6 @@ package agents
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -21,12 +20,8 @@ func TestMarshalToolResultForModelIncludesFYI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var result map[string]any
-	if err := json.Unmarshal([]byte(encoded), &result); err != nil {
-		t.Fatal(err)
-	}
-	if result["fyi"] != "## AGENTS.md\n\nrules" {
-		t.Fatalf("fyi = %#v", result["fyi"])
+	if encoded != "file\n\nFYI:\n## AGENTS.md\n\nrules" {
+		t.Fatalf("result = %q", encoded)
 	}
 }
 
@@ -163,8 +158,8 @@ func TestToolCallModelResultOmitsExecutionControlFields(t *testing.T) {
 			t.Fatalf("model-visible tool result must not contain %q: %s", leaked, msg)
 		}
 	}
-	if !strings.Contains(msg, `"is_error":true`) {
-		t.Fatalf("expected is_error in model-visible tool result: %s", msg)
+	if msg != "Error: command failed" {
+		t.Fatalf("model-visible tool result = %q", msg)
 	}
 	if !strings.Contains(msg, "command failed") {
 		t.Fatalf("expected content text in model-visible tool result: %s", msg)

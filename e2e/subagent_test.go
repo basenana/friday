@@ -36,9 +36,9 @@ func TestSubagent_RunTask(t *testing.T) {
 			ExpertTools: workerTools,
 			ExpertAgents: []subagents.ExpertAgent{
 				{
-					Name:     "echo",
-					Describe: "Echoes text using the bash tool.",
-					Agent:    worker,
+					Name:        "echo",
+					Description: "Echoes text using the bash tool.",
+					Agent:       worker,
 				},
 			},
 		})
@@ -81,9 +81,9 @@ func TestSubagent_SessionIsolation(t *testing.T) {
 		ExpertTools: workerTools,
 		ExpertAgents: []subagents.ExpertAgent{
 			{
-				Name:     "fsworker",
-				Describe: "A worker that uses fs tools.",
-				Agent:    worker,
+				Name:        "fsworker",
+				Description: "A worker that uses fs tools.",
+				Agent:       worker,
 			},
 		},
 	})
@@ -126,7 +126,7 @@ func TestSubagent_FuzzyMatch(t *testing.T) {
 	hook := subagents.NewHook(client, subagents.Option{
 		ExpertTools: workerTools,
 		ExpertAgents: []subagents.ExpertAgent{
-			{Name: "file_editor", Describe: "Edits files.", Agent: worker},
+			{Name: "file_editor", Description: "Edits files.", Agent: worker},
 		},
 	})
 
@@ -159,7 +159,7 @@ func TestSubagent_Events(t *testing.T) {
 	hook := subagents.NewHook(client, subagents.Option{
 		ExpertTools: workerTools,
 		ExpertAgents: []subagents.ExpertAgent{
-			{Name: "helper", Describe: "Helps with tasks.", Agent: worker},
+			{Name: "helper", Description: "Helps with tasks.", Agent: worker},
 		},
 	})
 
@@ -201,7 +201,7 @@ func TestSubagent_ToolsPassthrough(t *testing.T) {
 		hook := subagents.NewHook(client, subagents.Option{
 			ExpertTools: workerTools,
 			ExpertAgents: []subagents.ExpertAgent{
-				{Name: "writer", Describe: "Writes files.", Agent: worker},
+				{Name: "writer", Description: "Writes files.", Agent: worker},
 			},
 		})
 
@@ -292,7 +292,7 @@ func TestSubagent_ReportContent(t *testing.T) {
 		hook := subagents.NewHook(client, subagents.Option{
 			ExpertTools: workerTools,
 			ExpertAgents: []subagents.ExpertAgent{
-				{Name: "reader", Describe: "Reads files and reports contents.", Agent: worker},
+				{Name: "reader", Description: "Reads files and reports contents.", Agent: worker},
 			},
 		})
 

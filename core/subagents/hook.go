@@ -51,9 +51,9 @@ func (a *Subagents) BeforeModel(ctx context.Context, sess *session.Session, req 
 func (a *Subagents) buildExploreTool(sess *session.Session) *tools.Tool {
 	return tools.NewTool("explore",
 		tools.WithDescription(a.exploreToolDescription),
-		tools.WithString("task_describe",
+		tools.WithString("task",
 			tools.Required(),
-			tools.Description("Describe what to explore, research, or investigate. Be specific about what information you need back in the report."),
+			tools.Description("Complete investigation request, including scope and the exact findings needed."),
 		),
 		tools.WithToolHandler(callExploreToolWithForker(a.option.SelfAgent, sess, a.option.SessionForker, a.option.ExploreTools)),
 	)
@@ -64,14 +64,23 @@ func (a *Subagents) buildRunTaskTool(sess *session.Session) *tools.Tool {
 		tools.WithDescription(a.runTaskToolDescription),
 		tools.WithString("agent_name",
 			tools.Required(),
+			tools.Enum(expertAgentNames(a.option.ExpertAgents)...),
 			tools.Description("The name of the expert agent to delegate to."),
 		),
-		tools.WithString("task_describe",
+		tools.WithString("task",
 			tools.Required(),
-			tools.Description("Provide a concise description of the task for the expert agent, including all necessary context."),
+			tools.Description("Complete task request, including context, constraints, and expected output."),
 		),
 		tools.WithToolHandler(callSubagentToolWithForker(a.option.ExpertAgents, sess, a.option.SessionForker, a.option.ExpertTools)),
 	)
+}
+
+func expertAgentNames(agents []ExpertAgent) []string {
+	names := make([]string, len(agents))
+	for i, agent := range agents {
+		names[i] = agent.Name
+	}
+	return names
 }
 
 func NewHook(_ providers.Client, opt Option) *Subagents {
@@ -79,21 +88,21 @@ func NewHook(_ providers.Client, opt Option) *Subagents {
 	if opt.ExploreSystemPrompt == "" {
 		opt.ExploreSystemPrompt = EXPLORE_SYSTEM_PROMPT
 	}
-	if opt.ExploreDescribePrompt == "" {
-		opt.ExploreDescribePrompt = EXPLORE_DESC_PROMPT
+	if opt.ExploreDescriptionPrompt == "" {
+		opt.ExploreDescriptionPrompt = EXPLORE_DESCRIPTION_PROMPT
 	}
 	if opt.RunTaskSystemPrompt == "" {
 		opt.RunTaskSystemPrompt = EXPERT_SYSTEM_PROMPT
 	}
-	if opt.RunTaskDescribePrompt == "" {
-		opt.RunTaskDescribePrompt = EXPERT_DESC_PROMPT
+	if opt.RunTaskDescriptionPrompt == "" {
+		opt.RunTaskDescriptionPrompt = EXPERT_DESCRIPTION_PROMPT
 	}
 
 	return &Subagents{
 		option:                 opt,
 		systemPrompts:          initSystemPrompts(opt),
-		exploreToolDescription: opt.ExploreDescribePrompt,
-		runTaskToolDescription: initExpertDescribePrompt(opt),
+		exploreToolDescription: opt.ExploreDescriptionPrompt,
+		runTaskToolDescription: initExpertDescriptionPrompt(opt),
 	}
 }
 
@@ -110,11 +119,11 @@ func cloneOption(opt Option) Option {
 }
 
 type Option struct {
-	ExploreSystemPrompt   string
-	ExploreDescribePrompt string
+	ExploreSystemPrompt      string
+	ExploreDescriptionPrompt string
 
-	RunTaskSystemPrompt   string
-	RunTaskDescribePrompt string
+	RunTaskSystemPrompt      string
+	RunTaskDescriptionPrompt string
 
 	ExploreTools []*tools.Tool
 	ExpertTools  []*tools.Tool
@@ -125,7 +134,7 @@ type Option struct {
 }
 
 type ExpertAgent struct {
-	Name     string
-	Describe string
-	Agent    agents.Agent
+	Name        string
+	Description string
+	Agent       agents.Agent
 }

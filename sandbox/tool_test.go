@@ -9,6 +9,15 @@ import (
 	"github.com/basenana/friday/core/tools"
 )
 
+func TestBashToolKeepsFunctionalOptions(t *testing.T) {
+	tool := NewBashTool(NewExecutor(DefaultConfig()), t.TempDir())
+	for _, name := range []string{"command", "timeout", "workdir"} {
+		if _, exists := tool.InputSchema.Properties[name]; !exists {
+			t.Fatalf("parameter %q missing", name)
+		}
+	}
+}
+
 func TestResolveToolWorkdirInsideBaseIsAllowed(t *testing.T) {
 	base := t.TempDir()
 	nested := filepath.Join(base, "nested")

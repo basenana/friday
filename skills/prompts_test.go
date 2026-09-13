@@ -25,3 +25,16 @@ func TestBuiltSkillsSystemPromptSortsSkillsByName(t *testing.T) {
 		t.Fatalf("expected skills to be ordered by name, got %q", prompt)
 	}
 }
+
+func TestSkillToolsDoNotDuplicatePromptDiscovery(t *testing.T) {
+	toolNames := map[string]bool{}
+	for _, tool := range NewSkillTools(NewRegistry(&Loader{})) {
+		toolNames[tool.Name] = true
+	}
+	if toolNames["list_skills"] {
+		t.Fatal("list_skills should not duplicate the skills listed in the system prompt")
+	}
+	if !toolNames["load_skill"] {
+		t.Fatal("load_skill is missing")
+	}
+}
