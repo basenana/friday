@@ -13,6 +13,7 @@ func TestBuiltinToolCardPresentations(t *testing.T) {
 	}{
 		{"write_todos", `{"todo_list":[]}`, "Update todos", ""},
 		{"request_user_input", `{"question_1":"Which scope?","options_1":["Small","Large"]}`, "Ask user", ""},
+		{"submit_plan", `{"markdown":"# Plan\\n\\nComplete plan"}`, "Submit plan", ""},
 		{"fs_read", `{"path":"main.go"}`, "Read file", "main.go"},
 		{"fs_list", `{}`, "List directory", "."},
 		{"fs_write", `{"path":"out.txt","content":"hello"}`, "Write file", "5 bytes"},
@@ -68,6 +69,33 @@ func TestRequestUserInputToolCardDefersQuestionsToInteractiveCard(t *testing.T) 
 	card := terminalSafe(m.renderToolCard(block))
 	if !strings.Contains(card, "Ask user") || strings.Contains(card, "Which scope?") || strings.Contains(card, "question_1") {
 		t.Fatalf("request_user_input tool card = %q", card)
+	}
+}
+
+func TestSubmitPlanToolCardDefersMarkdownToPlanCard(t *testing.T) {
+	configureTheme(true)
+	m := &model{width: 80}
+	block := &chatBlock{
+		id: "call-submit-plan", kind: blockToolCall, toolName: "submit_plan",
+		toolArgs: `{"markdown":"# Plan\n\n## Summary\n\nComplete plan"}`, toolArgsComplete: true,
+		toolOutput: "Plan plan-1 version 1 submitted.", success: true,
+	}
+	card := terminalSafe(m.renderToolCard(block))
+	if !strings.Contains(card, "Submit plan") || strings.Contains(card, "Complete plan") || strings.Contains(card, "Arguments") {
+		t.Fatalf("submit_plan tool card = %q", card)
+	}
+	if detail := toolDetailContent(block); !strings.Contains(detail, "Complete plan") {
+		t.Fatalf("submit_plan details lost markdown: %q", detail)
+	}
+}
+
+func TestPartialSubmitPlanArgumentsRemainHidden(t *testing.T) {
+	configureTheme(true)
+	m := &model{width: 80}
+	block := &chatBlock{toolName: "submit_plan", toolArgs: `{"markdown":"# Secret`, pending: true}
+	card := terminalSafe(m.renderToolCard(block))
+	if !strings.Contains(card, "Submit plan") || strings.Contains(card, "Secret") || strings.Contains(card, "receiving arguments") {
+		t.Fatalf("partial submit_plan tool card = %q", card)
 	}
 }
 

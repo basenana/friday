@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"charm.land/lipgloss/v2"
+	"github.com/basenana/friday/core/collaboration"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -56,7 +57,7 @@ func toolStatusStyle(block *chatBlock) (style lipgloss.Style, icon string) {
 func (m *model) presentTool(block *chatBlock) toolPresentation {
 	args, valid := decodeToolArguments(block.toolArgs)
 	if presentation, ok := m.presentBuiltinTool(block.toolName, args); ok {
-		if !valid && strings.TrimSpace(block.toolArgs) != "" && block.toolName != "write_todos" && block.toolName != "request_user_input" {
+		if !valid && strings.TrimSpace(block.toolArgs) != "" && block.toolName != "write_todos" && block.toolName != "request_user_input" && block.toolName != collaboration.SubmitPlanToolName {
 			presentation.body = unavailableToolArguments(block)
 		}
 		return presentation
@@ -81,6 +82,8 @@ func (m *model) presentBuiltinTool(name string, args map[string]any) (toolPresen
 		return toolPresentation{title: "Update todos", specialized: true}, true
 	case "request_user_input":
 		return toolPresentation{title: "Ask user", specialized: true}, true
+	case collaboration.SubmitPlanToolName:
+		return toolPresentation{title: "Submit plan", specialized: true}, true
 	case "fs_read":
 		return toolPresentation{title: "Read file", body: labeledValue("path", value("path")), specialized: true}, true
 	case "fs_list":
