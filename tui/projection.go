@@ -29,7 +29,7 @@ func buildTranscriptProjection(sessMgr sessionRuntime, cfg *config.Config, workd
 	p := &model{
 		runtime: sessMgr, cfg: cfg, workdir: workdir, width: width, height: height,
 		seenInputs: make(map[string]bool), cards: make(map[string]*cardState),
-		toolCalls:    make(map[string]*toolCallBlock),
+		toolCalls: make(map[string]int), textBlock: -1, reasonBlock: -1,
 		historyIndex: -1, replaying: true,
 	}
 
@@ -55,7 +55,7 @@ func buildTranscriptProjection(sessMgr sessionRuntime, cfg *config.Config, workd
 		}
 		p.projectMessage(msg)
 	}
-	if len(p.toolOrder) > 0 {
+	if len(p.toolCalls) > 0 {
 		p.flushStreaming(true)
 	}
 	for _, evt := range persisted {
@@ -112,19 +112,22 @@ func (m *model) projectMessage(msg types.Message) {
 			m.appendBlock(chatBlock{kind: blockAssistant, content: msg.Content})
 		}
 		for _, tc := range msg.ToolCalls {
-			m.toolCalls[tc.ID] = &toolCallBlock{id: tc.ID, name: tc.Name, input: tc.Arguments}
-			m.toolOrder = append(m.toolOrder, tc.ID)
+			m.appendBlock(chatBlock{kind: blockToolCall, id: tc.ID, toolName: tc.Name, content: tc.Arguments, pending: true})
+			m.toolCalls[tc.ID] = len(m.messages) - 1
 		}
 	case types.RoleTool:
 		if msg.ToolResult != nil {
-			tc := m.toolCalls[msg.ToolResult.CallID]
-			if tc == nil {
-				tc = &toolCallBlock{id: msg.ToolResult.CallID, name: "tool"}
+			if index, ok := m.toolCalls[msg.ToolResult.CallID]; ok && index >= 0 && index < len(m.messages) {
+				block := &m.messages[index]
+				block.content = joinToolContent(block.content, msg.ToolResult.Content)
+				block.success = msg.ToolResult.Success
+				block.pending = false
+				block.rendered = ""
+				delete(m.toolCalls, msg.ToolResult.CallID)
+			} else {
+				m.appendBlock(chatBlock{kind: blockToolCall, id: msg.ToolResult.CallID, toolName: "tool",
+					content: msg.ToolResult.Content, success: msg.ToolResult.Success})
 			}
-			m.appendBlock(chatBlock{kind: blockToolCall, id: tc.id, toolName: tc.name,
-				content: joinToolContent(tc.input, msg.ToolResult.Content), success: msg.ToolResult.Success})
-			delete(m.toolCalls, msg.ToolResult.CallID)
-			m.removeToolOrder(msg.ToolResult.CallID)
 		}
 	}
 }

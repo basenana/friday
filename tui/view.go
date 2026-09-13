@@ -25,11 +25,6 @@ const (
 	blockDivider
 )
 
-type toolCallBlock struct {
-	id, name, input, output string
-	success                 bool
-}
-
 type chatBlock struct {
 	id          string
 	kind        blockKind
@@ -37,6 +32,7 @@ type chatBlock struct {
 	rendered    string
 	toolName    string
 	success     bool
+	pending     bool
 	interrupted bool
 	card        *cardState
 }
@@ -148,8 +144,10 @@ func (m *model) renderBlock(b *chatBlock) string {
 	case blockReasoning:
 		b.rendered = mutedStyle.Render("thinking") + "\n" + reasoningStyle.Render(truncateLines(terminalSafe(b.content), 12)) + suffix
 	case blockToolCall:
-		style, icon := toolBoxStyle, "✓"
-		if !b.success {
+		style, icon := toolBoxStyle, "…"
+		if !b.pending && b.success {
+			icon = "✓"
+		} else if !b.pending {
 			style, icon = toolFailStyle, "✗"
 		}
 		body := truncateLines(terminalSafe(b.content), 10)
@@ -186,22 +184,6 @@ func truncateLines(s string, maxLines int) string {
 	return strings.Join(lines[:maxLines], "\n") + fmt.Sprintf("\n… (%d more lines)", len(lines)-maxLines)
 }
 
-func (m *model) renderStreaming() string {
-	var parts []string
-	if m.reasonBuf.Len() > 0 {
-		parts = append(parts, mutedStyle.Render("thinking…")+"\n"+reasoningStyle.Render(truncateLines(terminalSafe(m.reasonBuf.String()), 12)))
-	}
-	if m.textBuf.Len() > 0 {
-		parts = append(parts, m.markdown(m.textBuf.String()))
-	}
-	for _, id := range m.toolOrder {
-		if tc := m.toolCalls[id]; tc != nil {
-			parts = append(parts, toolBoxStyle.Render("… "+terminalSafe(tc.name)+"\n"+truncateLines(terminalSafe(tc.input), 5)))
-		}
-	}
-	return strings.Join(parts, "\n\n")
-}
-
 func (m *model) View() tea.View {
 	if m.quitting {
 		return m.newView("")
@@ -209,6 +191,7 @@ func (m *model) View() tea.View {
 	if m.loading {
 		return m.newView(lipgloss.NewStyle().Padding(1, 2).Render(accentStyle.Render(m.spinner.View() + " Loading session…")))
 	}
+	wasAtBottom := m.viewport.AtBottom()
 	m.layout()
 	var blocks []string
 	for i := range m.messages {
@@ -217,9 +200,6 @@ func (m *model) View() tea.View {
 		}
 	}
 	if m.running {
-		if preview := m.renderStreaming(); preview != "" {
-			blocks = append(blocks, preview)
-		}
 		label := m.runActivity
 		if label == "" {
 			label = "working"
@@ -238,7 +218,6 @@ func (m *model) View() tea.View {
 	} else if m.manualCompacting {
 		blocks = append(blocks, accentStyle.Render(m.spinner.View()+" compacting context…"))
 	}
-	wasAtBottom := m.viewport.AtBottom()
 	m.viewport.SetContent(joinConversationBlocks(blocks))
 	if wasAtBottom {
 		m.viewport.GotoBottom()
@@ -251,7 +230,7 @@ func (m *model) View() tea.View {
 	if m.form != nil {
 		parts = append(parts, m.form.View(m.width))
 	} else if m.planHandoff != nil {
-		parts = append(parts, m.planHandoff.View(m.width))
+		parts = append(parts, m.renderPlanHandoff())
 	} else if m.commandConfirm != nil {
 		parts = append(parts, m.commandConfirm.View(m.width))
 	} else if m.selector != nil {
@@ -277,10 +256,10 @@ func (m *model) newView(content string) tea.View {
 }
 
 func (m *model) layout() {
+	wasAtBottom := m.viewport.AtBottom()
 	width := max(m.width, 20)
-	composerLines := min(max(m.textarea.LineCount(), 1), 8)
-	m.textarea.SetHeight(composerLines)
 	m.textarea.SetWidth(max(width-6, 10))
+	composerLines := max(m.textarea.Height(), 1)
 	extra := composerLines + 3 // input border + status
 	if len(m.queued) > 0 {
 		extra += min(len(m.queued), 3) + 2
@@ -292,7 +271,11 @@ func (m *model) layout() {
 		extra += m.form.Height(width)
 		extra -= composerLines + 2
 	}
-	if m.planHandoff != nil || m.commandConfirm != nil || m.selector != nil {
+	if m.planHandoff != nil {
+		extra += m.planHandoffHeight()
+		extra -= composerLines + 2
+	}
+	if m.commandConfirm != nil || m.selector != nil {
 		extra += min(m.height/2, 12)
 		extra -= composerLines + 2
 	}
@@ -307,6 +290,9 @@ func (m *model) layout() {
 	}
 	m.viewport.SetWidth(width)
 	m.viewport.SetHeight(max(m.height-extra, 3))
+	if wasAtBottom {
+		m.viewport.GotoBottom()
+	}
 }
 
 func (m *model) renderQueue() string {

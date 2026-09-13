@@ -443,3 +443,33 @@ func TestViewAutoScrollsOnlyWhenAlreadyAtBottom(t *testing.T) {
 		t.Fatalf("YOffset = %d, want %d while reading history", m.viewport.YOffset(), offset)
 	}
 }
+
+func TestViewportKeepsFollowingWhenBottomPanelChangesHeight(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	_, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	fillHistory(m, 40)
+	_ = m.View()
+	if !m.viewport.AtBottom() {
+		t.Fatal("viewport should start at bottom")
+	}
+
+	m.latestPlan = &planning.Artifact{
+		ID: "plan-follow", SessionID: m.sessionID, Version: 1, Title: "Follow",
+		Markdown: "## Summary\n\nlatest plan content", Status: planning.ArtifactProposed,
+	}
+	m.planHandoff = &planHandoffState{}
+	_ = m.View()
+	if !m.viewport.AtBottom() {
+		t.Fatal("opening plan handoff lost bottom-follow state")
+	}
+
+	m.planHandoff = nil
+	_ = m.View()
+	m.viewport.PageUp()
+	offset := m.viewport.YOffset()
+	m.planHandoff = &planHandoffState{}
+	_ = m.View()
+	if m.viewport.YOffset() != offset {
+		t.Fatalf("opening handoff moved history reader: got %d want %d", m.viewport.YOffset(), offset)
+	}
+}

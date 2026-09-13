@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -521,6 +522,97 @@ func TestCtrlJInsertsComposerNewline(t *testing.T) {
 	}
 }
 
+func TestComposerGrowsForSoftWrappedContentWithoutFixedLimit(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	m.width, m.height = 20, 80
+	m.textarea.SetValue(strings.Repeat("界", 160))
+	m.layout()
+	if got := m.textarea.Height(); got <= 8 {
+		t.Fatalf("soft-wrapped composer height = %d, want more than old 8-line cap", got)
+	}
+
+	m.textarea.SetValue("short")
+	m.layout()
+	if got := m.textarea.Height(); got != 1 {
+		t.Fatalf("shrunk composer height = %d, want 1", got)
+	}
+}
+
+func TestTimelinePreservesReceivedTextAndToolOrder(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	runID := "run-order"
+	m.handleActorEvent(events.NewEvent(events.KindTextMessageStart, runID))
+	m.handleActorEvent(events.NewEvent(events.KindTextMessageContent, runID).WithPayload(events.TextMessageContentData{Content: "before"}))
+	m.handleActorEvent(events.NewEvent(events.KindToolCallStart, runID).WithPayload(events.ToolCallStartData{ToolCallID: "tool-1", ToolName: "shell"}))
+	m.handleActorEvent(events.NewEvent(events.KindToolCallArgs, runID).WithPayload(events.ToolCallArgsData{ToolCallID: "tool-1", PartialJSON: `{"cmd":"pwd"}`}))
+	m.handleActorEvent(events.NewEvent(events.KindToolCallResult, runID).WithPayload(events.ToolCallResultData{ToolCallID: "tool-1", Success: true, Output: "/tmp"}))
+	// The actor currently keeps one text message open across ReAct tool
+	// boundaries. A later delta must still become a new visual timeline block.
+	m.handleActorEvent(events.NewEvent(events.KindTextMessageContent, runID).WithPayload(events.TextMessageContentData{Content: "after"}))
+
+	if len(m.messages) != 3 {
+		t.Fatalf("timeline blocks = %#v", m.messages)
+	}
+	if m.messages[0].kind != blockAssistant || m.messages[0].content != "before" ||
+		m.messages[1].kind != blockToolCall || m.messages[1].pending || !m.messages[1].success ||
+		m.messages[2].kind != blockAssistant || m.messages[2].content != "after" {
+		t.Fatalf("timeline order/state = %#v", m.messages)
+	}
+	if !strings.Contains(m.messages[1].content, `{"cmd":"pwd"}`) || !strings.Contains(m.messages[1].content, "/tmp") {
+		t.Fatalf("tool content = %q", m.messages[1].content)
+	}
+}
+
+func TestParallelToolResultsUpdateOriginalStartPositions(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	runID := "run-parallel"
+	for _, tc := range []events.ToolCallStartData{
+		{ToolCallID: "first", ToolName: "first-tool"},
+		{ToolCallID: "second", ToolName: "second-tool"},
+	} {
+		m.handleActorEvent(events.NewEvent(events.KindToolCallStart, runID).WithPayload(tc))
+	}
+	m.handleActorEvent(events.NewEvent(events.KindToolCallResult, runID).WithPayload(events.ToolCallResultData{ToolCallID: "second", Success: true, Output: "second result"}))
+	m.handleActorEvent(events.NewEvent(events.KindToolCallResult, runID).WithPayload(events.ToolCallResultData{ToolCallID: "first", Success: true, Output: "first result"}))
+
+	if len(m.messages) != 2 || m.messages[0].id != "first" || m.messages[1].id != "second" {
+		t.Fatalf("tool start order changed after results: %#v", m.messages)
+	}
+	if m.messages[0].content != "first result" || m.messages[1].content != "second result" {
+		t.Fatalf("tool results not updated in place: %#v", m.messages)
+	}
+}
+
+func TestPlanHandoffRendersAndScrollsPersistedPlanWithoutTimelineDuplicate(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	m.width, m.height = 80, 24
+	lines := make([]string, 30)
+	for i := range lines {
+		lines[i] = fmt.Sprintf("- plan line %02d", i+1)
+	}
+	markdown := "## Summary\n\n" + strings.Join(lines, "\n")
+	evt := events.NewEvent(events.KindCustom, "run-plan").WithName(events.CustomPlanProposed).WithPayload(events.PlanProposedBody{
+		PlanID: "plan-visible", Version: 2, Title: "Visible plan", Markdown: markdown,
+	})
+	before := len(m.messages)
+	m.handleActorEvent(evt)
+	if len(m.messages) != before {
+		t.Fatal("proposed plan was duplicated into the conversation timeline")
+	}
+	m.planHandoff = &planHandoffState{}
+	view := m.renderPlanHandoff()
+	if !strings.Contains(view, "Visible plan") || !strings.Contains(view, "Summary") || !strings.Contains(view, "Approve") {
+		t.Fatalf("plan handoff missing content: %q", view)
+	}
+	if m.planHandoff.view.YOffset() != 0 {
+		t.Fatalf("plan viewport did not start at top: %d", m.planHandoff.view.YOffset())
+	}
+	m.updatePlanHandoff(tea.KeyPressMsg{Code: tea.KeyPgDown})
+	if m.planHandoff.view.YOffset() == 0 {
+		t.Fatal("PageDown did not scroll the plan viewport")
+	}
+}
+
 func TestCardPatchAndDismiss(t *testing.T) {
 	m, _, _ := newTestModel(t)
 	emit := events.NewEvent(events.KindCustom, "run").WithName(events.CustomCardEmitted).WithPayload(events.CardEmittedBody{
@@ -679,10 +771,10 @@ func TestCardSourceLoadsOutsideView(t *testing.T) {
 func TestUntrustedPopupAndStreamingTextIsTerminalSafe(t *testing.T) {
 	m, _, _ := newTestModel(t)
 	osc := "\x1b]52;c;UE9XTkVE\x07"
-	m.reasonBuf.WriteString("reason" + osc)
-	m.toolOrder = []string{"tool"}
-	m.toolCalls["tool"] = &toolCallBlock{name: "name" + osc, input: "args" + osc}
-	if got := m.renderStreaming(); strings.Contains(got, "UE9XTkVE") || strings.ContainsRune(got, '\a') {
+	m.appendStreamContent(blockReasoning, "reason"+osc)
+	m.appendBlock(chatBlock{kind: blockToolCall, id: "tool", toolName: "name" + osc, content: "args" + osc, pending: true})
+	got := joinConversationBlocks([]string{m.renderBlock(&m.messages[0]), m.renderBlock(&m.messages[1])})
+	if strings.Contains(got, "UE9XTkVE") || strings.ContainsRune(got, '\a') {
 		t.Fatalf("unsafe streaming output = %q", got)
 	}
 	f, err := newFormState("form", map[string]any{

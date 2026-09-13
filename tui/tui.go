@@ -169,10 +169,9 @@ type model struct {
 	runActivity     string
 	cancelling      bool
 	steeringPending bool
-	textBuf         strings.Builder
-	reasonBuf       strings.Builder
-	toolCalls       map[string]*toolCallBlock
-	toolOrder       []string
+	textBlock       int
+	reasonBlock     int
+	toolCalls       map[string]int
 	queued          []pendingInput
 	promptHistory   []string
 	historyIndex    int
@@ -229,6 +228,9 @@ func baseModelAt(sessMgr *sessions.Manager, registry *actor.Registry, cmdRegistr
 	ta := textarea.New()
 	ta.Placeholder = "Send a message…  / commands · Ctrl+G editor"
 	ta.CharLimit = 0
+	ta.DynamicHeight = true
+	ta.MinHeight = 1
+	ta.MaxHeight = 0
 	ta.SetHeight(1)
 	ta.ShowLineNumbers = false
 	ta.Prompt = "› "
@@ -238,9 +240,10 @@ func baseModelAt(sessMgr *sessions.Manager, registry *actor.Registry, cmdRegistr
 		sessMgr: sessMgr, runtime: sessMgr, registry: registry, cmdRegistry: cmdRegistry, cfg: cfg,
 		sessionID: sessionID, textarea: ta, viewport: viewport.New(viewport.WithWidth(80), viewport.WithHeight(20)),
 		spinner:   spinner.New(spinner.WithSpinner(spinner.Dot), spinner.WithStyle(accentStyle)),
-		toolCalls: make(map[string]*toolCallBlock), seenInputs: make(map[string]bool),
+		toolCalls: make(map[string]int), seenInputs: make(map[string]bool),
 		cards:        make(map[string]*cardState),
 		historyIndex: -1, darkBackground: true,
+		textBlock: -1, reasonBlock: -1,
 		now: time.Now,
 	}
 	m.loopManager = coderloop.NewManager(registry.Bus())
@@ -821,50 +824,42 @@ func (m *model) handleActorEvent(evt events.Event) tea.Cmd {
 		}
 	case events.KindTextMessageStart:
 		m.runActivity = "responding"
-		if m.reasonBuf.Len() > 0 {
-			m.appendBlock(chatBlock{kind: blockReasoning, content: m.reasonBuf.String()})
-			m.reasonBuf.Reset()
-		}
-		m.textBuf.Reset()
+		m.breakStreamSegments()
 	case events.KindTextMessageContent:
 		var d events.TextMessageContentData
 		if events.DecodePayload(evt, &d) == nil {
-			m.textBuf.WriteString(d.Content)
+			m.appendStreamContent(blockAssistant, d.Content)
 		}
 	case events.KindTextMessageEnd:
-		if m.textBuf.Len() > 0 {
-			m.appendBlock(chatBlock{kind: blockAssistant, content: m.textBuf.String()})
-		}
-		m.textBuf.Reset()
+		m.breakStreamSegments()
 	case events.KindToolCallStart:
 		var d events.ToolCallStartData
 		if events.DecodePayload(evt, &d) == nil {
 			m.runActivity = "running " + d.ToolName
-			// Reasoning is streamed before a tool call. Commit it now so the
-			// transcript preserves the order the user observed it in.
-			if m.reasonBuf.Len() > 0 {
-				m.appendBlock(chatBlock{kind: blockReasoning, content: m.reasonBuf.String()})
-				m.reasonBuf.Reset()
-			}
-			m.toolCalls[d.ToolCallID] = &toolCallBlock{name: d.ToolName, id: d.ToolCallID}
-			m.toolOrder = append(m.toolOrder, d.ToolCallID)
+			m.appendBlock(chatBlock{kind: blockToolCall, id: d.ToolCallID, toolName: d.ToolName, pending: true})
+			m.toolCalls[d.ToolCallID] = len(m.messages) - 1
 		}
 	case events.KindToolCallArgs:
 		var d events.ToolCallArgsData
 		if events.DecodePayload(evt, &d) == nil {
-			if tc := m.toolCalls[d.ToolCallID]; tc != nil {
-				tc.input += d.PartialJSON
+			if index, ok := m.toolCalls[d.ToolCallID]; ok && index >= 0 && index < len(m.messages) {
+				m.messages[index].content += d.PartialJSON
+				m.messages[index].rendered = ""
 			}
 		}
 	case events.KindToolCallResult:
 		var d events.ToolCallResultData
 		if events.DecodePayload(evt, &d) == nil {
 			m.runActivity = "working"
-			if tc := m.toolCalls[d.ToolCallID]; tc != nil {
-				m.appendBlock(chatBlock{kind: blockToolCall, id: tc.id, toolName: tc.name,
-					content: joinToolContent(tc.input, d.Output), success: d.Success})
+			if index, ok := m.toolCalls[d.ToolCallID]; ok && index >= 0 && index < len(m.messages) {
+				block := &m.messages[index]
+				block.content = joinToolContent(block.content, d.Output)
+				block.success = d.Success
+				block.pending = false
+				block.rendered = ""
 				delete(m.toolCalls, d.ToolCallID)
-				m.removeToolOrder(d.ToolCallID)
+			} else {
+				m.appendBlock(chatBlock{kind: blockToolCall, id: d.ToolCallID, toolName: "tool", content: d.Output, success: d.Success})
 			}
 		}
 	case events.KindStepStarted:
@@ -913,7 +908,7 @@ func (m *model) handleCustomEvent(evt events.Event) tea.Cmd {
 	case events.CustomReasoningDelta:
 		var d events.ReasoningDeltaBody
 		if events.DecodePayload(evt, &d) == nil {
-			m.reasonBuf.WriteString(d.Content)
+			m.appendStreamContent(blockReasoning, d.Content)
 		}
 	case events.CustomLoopStart:
 		m.iteration++
@@ -960,7 +955,6 @@ func (m *model) handleCustomEvent(evt events.Event) tea.Cmd {
 		var d events.PlanProposedBody
 		if events.DecodePayload(evt, &d) == nil {
 			m.latestPlan = &planning.Artifact{ID: d.PlanID, SessionID: m.sessionID, Version: d.Version, Title: d.Title, Markdown: d.Markdown, Status: planning.ArtifactProposed, CreatedAt: evt.Timestamp}
-			m.appendBlock(chatBlock{kind: blockAssistant, content: "# " + d.Title + "\n\n" + d.Markdown})
 		}
 	case events.CustomModeChanged:
 		var d events.ModeChangedBody
@@ -1079,23 +1073,23 @@ func (m *model) restorePlanHandoff() {
 }
 
 func (m *model) resetStreaming() {
-	m.textBuf.Reset()
-	m.reasonBuf.Reset()
-	m.toolCalls = make(map[string]*toolCallBlock)
-	m.toolOrder = nil
+	m.textBlock = -1
+	m.reasonBlock = -1
+	m.toolCalls = make(map[string]int)
 }
 
 func (m *model) flushStreaming(interrupted bool) {
-	if m.textBuf.Len() > 0 {
-		m.appendBlock(chatBlock{kind: blockAssistant, content: m.textBuf.String(), interrupted: interrupted})
+	for _, index := range []int{m.textBlock, m.reasonBlock} {
+		if index >= 0 && index < len(m.messages) {
+			m.messages[index].interrupted = interrupted
+			m.messages[index].rendered = ""
+		}
 	}
-	if m.reasonBuf.Len() > 0 {
-		m.appendBlock(chatBlock{kind: blockReasoning, content: m.reasonBuf.String(), interrupted: interrupted})
-	}
-	for _, id := range m.toolOrder {
-		if tc := m.toolCalls[id]; tc != nil {
-			m.appendBlock(chatBlock{kind: blockToolCall, id: id, toolName: tc.name,
-				content: joinToolContent(tc.input, tc.output), success: tc.success, interrupted: interrupted})
+	for _, index := range m.toolCalls {
+		if index >= 0 && index < len(m.messages) {
+			m.messages[index].pending = false
+			m.messages[index].interrupted = interrupted
+			m.messages[index].rendered = ""
 		}
 	}
 	m.resetStreaming()
@@ -1111,17 +1105,37 @@ func joinToolContent(input, output string) string {
 	return input + "\n" + output
 }
 
-func (m *model) removeToolOrder(id string) {
-	for i, candidate := range m.toolOrder {
-		if candidate == id {
-			m.toolOrder = append(m.toolOrder[:i], m.toolOrder[i+1:]...)
-			return
-		}
-	}
+func (m *model) breakStreamSegments() {
+	m.textBlock = -1
+	m.reasonBlock = -1
 }
 
 func (m *model) appendBlock(b chatBlock) {
+	m.breakStreamSegments()
 	m.messages = append(m.messages, b)
+}
+
+func (m *model) appendStreamContent(kind blockKind, content string) {
+	if content == "" {
+		return
+	}
+	index := m.textBlock
+	if kind == blockReasoning {
+		index = m.reasonBlock
+	}
+	if index < 0 || index >= len(m.messages) || m.messages[index].kind != kind {
+		m.breakStreamSegments()
+		m.messages = append(m.messages, chatBlock{kind: kind, content: content})
+		index = len(m.messages) - 1
+		if kind == blockReasoning {
+			m.reasonBlock = index
+		} else {
+			m.textBlock = index
+		}
+		return
+	}
+	m.messages[index].content += content
+	m.messages[index].rendered = ""
 }
 
 func (m *model) closeFeed() {
