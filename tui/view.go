@@ -369,7 +369,7 @@ func (m *model) renderStatus() string {
 		}
 	}
 	if m.running {
-		parts = append(parts, "● running "+formatElapsed(m.currentElapsed()))
+		parts = append(parts, "● running "+formatElapsed(m.currentElapsed()), "Enter steer", "Tab queue")
 	} else if m.planCompacting {
 		parts = append(parts, "● compacting plan context")
 	} else if m.manualCompacting {

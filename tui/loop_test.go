@@ -108,7 +108,48 @@ func TestTUITabDuringLoopPublishesNormalActorInput(t *testing.T) {
 		bus.NewScopedPreempt(m.sessionID, "test", "cleanup", bus.PreemptCurrent))
 }
 
-func TestTUIHidesLoopDriverPrompt(t *testing.T) {
+func TestTUIEnterDuringLoopPublishesSteeringInput(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	lifecycle, _ := m.registry.Lifecycle(m.sessionID)
+	sess := lifecycle.Current()
+	if err := sess.UpdateRecord(context.Background(), coderloop.StateNamespace, func([]byte) ([]byte, error) {
+		return []byte(coderloop.StateActive), nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	inbox := make(chan bus.Envelope, 1)
+	id := m.registry.Bus().SubscribeSerial([]string{bus.TopicInbox(m.sessionID)}, func(env bus.Envelope) {
+		if env.Name == bus.InboxUserText {
+			inbox <- env
+		}
+	}, eventbus.SerialConfig{Overflow: eventbus.OverflowBlock})
+	defer m.registry.Bus().Unsubscribe(id)
+
+	m.running = true
+	m.textarea.SetValue("stop changing the API; preserve compatibility")
+	got, _ := m.updateKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = got.(*model)
+	if !m.steeringPending {
+		t.Fatal("Enter did not mark immediate steering as pending")
+	}
+	select {
+	case env := <-inbox:
+		var body bus.UserTextInput
+		if err := events.DecodePayload(env.Event, &body); err != nil {
+			t.Fatal(err)
+		}
+		if body.Text != "stop changing the API; preserve compatibility" || body.Delivery != bus.DeliverySteer {
+			t.Fatalf("steering input = %+v", body)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Enter input was not published to the Actor inbox")
+	}
+
+	_, _ = m.loopManager.Cancel(context.Background(), sess)
+}
+
+func TestTUIShowsLoopPhaseButNotDriverPrompt(t *testing.T) {
 	m, _, _ := newTestModel(t)
 	before := len(m.messages)
 	evt := events.NewEvent(events.KindCustom, "loop-run").
@@ -117,7 +158,10 @@ func TestTUIHidesLoopDriverPrompt(t *testing.T) {
 			TurnID: "loop-run", Text: coderloop.BootstrapPrompt, Sources: []string{"loop"},
 		})
 	m.handleActorEvent(evt)
-	if len(m.messages) != before {
+	if len(m.messages) != before+1 || m.messages[before].kind != blockDivider || m.messages[before].content != "loop · bootstrap" {
+		t.Fatalf("Loop phase marker = %#v", m.messages[before:])
+	}
+	if strings.Contains(m.messages[before].content, "Read the Working Note") {
 		t.Fatalf("internal Loop prompt was rendered: %#v", m.messages[before:])
 	}
 
@@ -127,56 +171,112 @@ func TestTUIHidesLoopDriverPrompt(t *testing.T) {
 			TurnID: "user-run", Text: "visible correction", Sources: []string{"user.local"},
 		})
 	m.handleActorEvent(userEvt)
-	if len(m.messages) != before+1 || m.messages[before].content != "visible correction" {
+	if len(m.messages) != before+2 || m.messages[before+1].content != "visible correction" {
 		t.Fatalf("user input was not rendered: %#v", m.messages[before:])
 	}
 }
 
-func TestTUIHidesIntermediateLoopOutputAndRevealsFinalSummary(t *testing.T) {
+func TestTUIShowsIntermediateLoopReasoningToolsAndOutput(t *testing.T) {
 	m, _, _ := newTestModel(t)
 	before := len(m.messages)
 	m.handleActorEvent(events.NewEvent(events.KindRunStarted, "phase-run"))
 	m.handleActorEvent(events.NewEvent(events.KindCustom, "phase-run").
 		WithName(events.CustomInputAccepted).
 		WithPayload(events.InputAcceptedBody{TurnID: "phase-run", Text: coderloop.SelectPrompt, Sources: []string{"loop"}}))
+	m.handleActorEvent(events.NewEvent(events.KindCustom, "phase-run").
+		WithName(events.CustomReasoningDelta).
+		WithPayload(events.ReasoningDeltaBody{Content: "inspect the repository"}))
+	m.handleActorEvent(events.NewEvent(events.KindToolCallStart, "phase-run").
+		WithPayload(events.ToolCallStartData{ToolCallID: "read-call", ToolName: "read_file"}))
+	m.handleActorEvent(events.NewEvent(events.KindToolCallArgs, "phase-run").
+		WithPayload(events.ToolCallArgsData{ToolCallID: "read-call", PartialJSON: `{"path":"main.go"}`}))
+	m.handleActorEvent(events.NewEvent(events.KindToolCallResult, "phase-run").
+		WithPayload(events.ToolCallResultData{ToolCallID: "read-call", Success: true, Output: "package main"}))
 	m.handleActorEvent(events.NewEvent(events.KindTextMessageStart, "phase-run"))
 	m.handleActorEvent(events.NewEvent(events.KindTextMessageContent, "phase-run").
 		WithPayload(events.TextMessageContentData{Content: "internal progress"}))
 	m.handleActorEvent(events.NewEvent(events.KindTextMessageEnd, "phase-run"))
 	m.handleActorEvent(events.NewEvent(events.KindRunFinished, "phase-run").
 		WithPayload(events.RunFinishedData{StopReason: "end_turn"}))
-	if len(m.messages) != before {
-		t.Fatalf("intermediate Loop output was rendered: %#v", m.messages[before:])
+	got := m.messages[before:]
+	if len(got) != 5 {
+		t.Fatalf("intermediate Loop output = %#v", got)
 	}
+	if got[0].kind != blockDivider || got[0].content != "loop · select" {
+		t.Fatalf("phase marker = %#v", got[0])
+	}
+	if got[1].kind != blockReasoning || got[1].content != "inspect the repository" {
+		t.Fatalf("reasoning = %#v", got[1])
+	}
+	if got[2].kind != blockToolCall || got[2].toolName != "read_file" || !strings.Contains(got[2].content, "main.go") || !strings.Contains(got[2].content, "package main") {
+		t.Fatalf("tool call = %#v", got[2])
+	}
+	if got[3].kind != blockAssistant || got[3].content != "internal progress" {
+		t.Fatalf("assistant output = %#v", got[3])
+	}
+	if got[4].kind != blockDivider || !strings.Contains(got[4].content, "completed") {
+		t.Fatalf("completion marker = %#v", got[4])
+	}
+}
 
-	m.handleActorEvent(events.NewEvent(events.KindRunStarted, "final-run"))
-	m.handleActorEvent(events.NewEvent(events.KindCustom, "final-run").
-		WithName(events.CustomInputAccepted).
-		WithPayload(events.InputAcceptedBody{TurnID: "final-run", Text: coderloop.UpdatePrompt, Sources: []string{"loop"}}))
-	m.handleActorEvent(events.NewEvent(events.KindToolCallStart, "final-run").
-		WithPayload(events.ToolCallStartData{ToolCallID: "finish-call", ToolName: "finish_loop"}))
-	m.handleActorEvent(events.NewEvent(events.KindToolCallResult, "final-run").
-		WithPayload(events.ToolCallResultData{ToolCallID: "finish-call", Success: true}))
-	m.handleActorEvent(events.NewEvent(events.KindToolCallStart, "final-run").
-		WithPayload(events.ToolCallStartData{ToolCallID: "note-call", ToolName: "working_note_replace"}))
-	m.handleActorEvent(events.NewEvent(events.KindToolCallArgs, "final-run").
-		WithPayload(events.ToolCallArgsData{ToolCallID: "note-call", PartialJSON: `{"content":"done"}`}))
-	m.handleActorEvent(events.NewEvent(events.KindToolCallResult, "final-run").
-		WithPayload(events.ToolCallResultData{ToolCallID: "note-call", Success: true, Output: "updated"}))
-	m.handleActorEvent(events.NewEvent(events.KindTextMessageStart, "final-run"))
-	m.handleActorEvent(events.NewEvent(events.KindTextMessageContent, "final-run").
-		WithPayload(events.TextMessageContentData{Content: "final result"}))
-	m.handleActorEvent(events.NewEvent(events.KindTextMessageEnd, "final-run"))
-	m.handleActorEvent(events.NewEvent(events.KindRunFinished, "final-run").
-		WithPayload(events.RunFinishedData{StopReason: "end_turn"}))
-	if len(m.messages) != before+2 {
-		t.Fatalf("final Loop output = %#v", m.messages[before:])
+func TestLoopPhaseLabels(t *testing.T) {
+	for _, tt := range []struct {
+		prompt string
+		want   string
+	}{
+		{coderloop.BootstrapPrompt, "bootstrap"},
+		{coderloop.SelectPrompt, "select"},
+		{coderloop.DevelopPrompt, "develop"},
+		{coderloop.ReviewPrompt, "review"},
+		{coderloop.UpdatePrompt, "update"},
+		{coderloop.RecoveryPrompt, "recover"},
+		{coderloop.FinalizePrompt, "finalize"},
+		{"unknown controller prompt", "turn"},
+	} {
+		if got := loopPhase(tt.prompt); got != tt.want {
+			t.Errorf("loopPhase(%q) = %q, want %q", firstLine(tt.prompt), got, tt.want)
+		}
 	}
-	if m.messages[before].kind != blockAssistant || m.messages[before].content != "final result" {
-		t.Fatalf("final summary = %#v", m.messages[before])
+}
+
+func TestEventLogRestoresVisibleLoopActivity(t *testing.T) {
+	m, _, store := newTestModel(t)
+	sink, err := store.OpenEventSink(context.Background(), m.sessionID)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if m.messages[before+1].kind != blockDivider || !strings.Contains(m.messages[before+1].content, "completed") {
-		t.Fatalf("completion marker = %#v", m.messages[before+1])
+	eventsToWrite := []events.Event{
+		events.NewEvent(events.KindRunStarted, "loop-replay"),
+		events.NewEvent(events.KindCustom, "loop-replay").WithName(events.CustomInputAccepted).
+			WithPayload(events.InputAcceptedBody{TurnID: "loop-replay", Text: coderloop.DevelopPrompt, Sources: []string{"loop"}}),
+		events.NewEvent(events.KindCustom, "loop-replay").WithName(events.CustomReasoningDelta).
+			WithPayload(events.ReasoningDeltaBody{Content: "replayed reasoning"}),
+		events.NewEvent(events.KindToolCallStart, "loop-replay").
+			WithPayload(events.ToolCallStartData{ToolCallID: "replay-tool", ToolName: "edit_file"}),
+		events.NewEvent(events.KindToolCallArgs, "loop-replay").
+			WithPayload(events.ToolCallArgsData{ToolCallID: "replay-tool", PartialJSON: `{"path":"main.go"}`}),
+		events.NewEvent(events.KindToolCallResult, "loop-replay").
+			WithPayload(events.ToolCallResultData{ToolCallID: "replay-tool", Success: true, Output: "updated"}),
+		events.NewEvent(events.KindRunFinished, "loop-replay").
+			WithPayload(events.RunFinishedData{StopReason: "end_turn"}),
+	}
+	for _, evt := range eventsToWrite {
+		if err := sink.Append(context.Background(), evt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := sink.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.loadTranscript(m.sessionID); err != nil {
+		t.Fatal(err)
+	}
+	if len(m.messages) != 4 {
+		t.Fatalf("restored Loop activity = %#v", m.messages)
+	}
+	if m.messages[0].content != "loop · develop" || m.messages[1].kind != blockReasoning ||
+		m.messages[2].kind != blockToolCall || m.messages[3].kind != blockDivider {
+		t.Fatalf("restored Loop activity = %#v", m.messages)
 	}
 }
 

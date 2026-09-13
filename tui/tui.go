@@ -173,9 +173,6 @@ type model struct {
 	reasonBuf       strings.Builder
 	toolCalls       map[string]*toolCallBlock
 	toolOrder       []string
-	loopRuns        map[string]bool
-	loopFinalRuns   map[string]bool
-	finishLoopCalls map[string]string
 	queued          []pendingInput
 	promptHistory   []string
 	historyIndex    int
@@ -242,8 +239,7 @@ func baseModelAt(sessMgr *sessions.Manager, registry *actor.Registry, cmdRegistr
 		sessionID: sessionID, textarea: ta, viewport: viewport.New(viewport.WithWidth(80), viewport.WithHeight(20)),
 		spinner:   spinner.New(spinner.WithSpinner(spinner.Dot), spinner.WithStyle(accentStyle)),
 		toolCalls: make(map[string]*toolCallBlock), seenInputs: make(map[string]bool),
-		cards: make(map[string]*cardState), loopRuns: make(map[string]bool),
-		loopFinalRuns: make(map[string]bool), finishLoopCalls: make(map[string]string),
+		cards:        make(map[string]*cardState),
 		historyIndex: -1, darkBackground: true,
 		now: time.Now,
 	}
@@ -800,12 +796,9 @@ func (m *model) handleActorEvent(evt events.Event) tea.Cmd {
 		var d events.RunFinishedData
 		_ = events.DecodePayload(evt, &d)
 		m.flushStreaming(d.StopReason == "cancelled")
-		hiddenLoopRun := m.isHiddenLoopRun(evt.RunID)
 		finishedCurrent := evt.RunID != m.lastFinishedRun && (evt.RunID == m.currentRunID || m.currentRunID == "")
 		if finishedCurrent {
-			if !hiddenLoopRun {
-				m.appendRunFinished(d, evt.Timestamp)
-			}
+			m.appendRunFinished(d, evt.Timestamp)
 			m.lastFinishedRun = evt.RunID
 			m.running = false
 			m.currentRunID = ""
@@ -827,9 +820,6 @@ func (m *model) handleActorEvent(evt events.Event) tea.Cmd {
 			m.appendBlock(chatBlock{kind: blockError, content: d.Message})
 		}
 	case events.KindTextMessageStart:
-		if m.isHiddenLoopRun(evt.RunID) {
-			return nil
-		}
 		m.runActivity = "responding"
 		if m.reasonBuf.Len() > 0 {
 			m.appendBlock(chatBlock{kind: blockReasoning, content: m.reasonBuf.String()})
@@ -837,17 +827,11 @@ func (m *model) handleActorEvent(evt events.Event) tea.Cmd {
 		}
 		m.textBuf.Reset()
 	case events.KindTextMessageContent:
-		if m.isHiddenLoopRun(evt.RunID) {
-			return nil
-		}
 		var d events.TextMessageContentData
 		if events.DecodePayload(evt, &d) == nil {
 			m.textBuf.WriteString(d.Content)
 		}
 	case events.KindTextMessageEnd:
-		if m.isHiddenLoopRun(evt.RunID) {
-			return nil
-		}
 		if m.textBuf.Len() > 0 {
 			m.appendBlock(chatBlock{kind: blockAssistant, content: m.textBuf.String()})
 		}
@@ -856,19 +840,16 @@ func (m *model) handleActorEvent(evt events.Event) tea.Cmd {
 		var d events.ToolCallStartData
 		if events.DecodePayload(evt, &d) == nil {
 			m.runActivity = "running " + d.ToolName
-			if m.isLoopRun(evt.RunID) {
-				if d.ToolName == "finish_loop" {
-					m.finishLoopCalls[d.ToolCallID] = evt.RunID
-				}
-				return nil
+			// Reasoning is streamed before a tool call. Commit it now so the
+			// transcript preserves the order the user observed it in.
+			if m.reasonBuf.Len() > 0 {
+				m.appendBlock(chatBlock{kind: blockReasoning, content: m.reasonBuf.String()})
+				m.reasonBuf.Reset()
 			}
 			m.toolCalls[d.ToolCallID] = &toolCallBlock{name: d.ToolName, id: d.ToolCallID}
 			m.toolOrder = append(m.toolOrder, d.ToolCallID)
 		}
 	case events.KindToolCallArgs:
-		if m.isLoopRun(evt.RunID) {
-			return nil
-		}
 		var d events.ToolCallArgsData
 		if events.DecodePayload(evt, &d) == nil {
 			if tc := m.toolCalls[d.ToolCallID]; tc != nil {
@@ -879,16 +860,6 @@ func (m *model) handleActorEvent(evt events.Event) tea.Cmd {
 		var d events.ToolCallResultData
 		if events.DecodePayload(evt, &d) == nil {
 			m.runActivity = "working"
-			if runID, ok := m.finishLoopCalls[d.ToolCallID]; ok {
-				if d.Success {
-					m.loopFinalRuns[runID] = true
-				}
-				delete(m.finishLoopCalls, d.ToolCallID)
-				return nil
-			}
-			if m.isLoopRun(evt.RunID) {
-				return nil
-			}
 			if tc := m.toolCalls[d.ToolCallID]; tc != nil {
 				m.appendBlock(chatBlock{kind: blockToolCall, id: tc.id, toolName: tc.name,
 					content: joinToolContent(tc.input, d.Output), success: d.Success})
@@ -928,8 +899,10 @@ func (m *model) handleCustomEvent(evt events.Event) tea.Cmd {
 			break
 		}
 		if slices.Contains(d.Sources, "loop") {
-			m.ensureLoopRunMaps()
-			m.loopRuns[evt.RunID] = true
+			// The controller prompt is implementation detail, but naming the
+			// phase makes every autonomous turn explicit while all agent output,
+			// reasoning and tool activity remains visible below it.
+			m.appendBlock(chatBlock{kind: blockDivider, content: "loop · " + loopPhase(d.Text)})
 			return nil
 		}
 		if !m.seenInputs[d.TurnID] {
@@ -938,9 +911,6 @@ func (m *model) handleCustomEvent(evt events.Event) tea.Cmd {
 			m.rememberPrompt(d.Text)
 		}
 	case events.CustomReasoningDelta:
-		if m.isLoopRun(evt.RunID) {
-			return nil
-		}
 		var d events.ReasoningDeltaBody
 		if events.DecodePayload(evt, &d) == nil {
 			m.reasonBuf.WriteString(d.Content)
@@ -1019,24 +989,25 @@ func (m *model) handleCustomEvent(evt events.Event) tea.Cmd {
 	return nil
 }
 
-func (m *model) ensureLoopRunMaps() {
-	if m.loopRuns == nil {
-		m.loopRuns = make(map[string]bool)
+func loopPhase(text string) string {
+	text = strings.TrimSpace(text)
+	for _, candidate := range []struct {
+		prompt string
+		label  string
+	}{
+		{coderloop.BootstrapPrompt, "bootstrap"},
+		{coderloop.SelectPrompt, "select"},
+		{coderloop.DevelopPrompt, "develop"},
+		{coderloop.ReviewPrompt, "review"},
+		{coderloop.UpdatePrompt, "update"},
+		{coderloop.RecoveryPrompt, "recover"},
+		{coderloop.FinalizePrompt, "finalize"},
+	} {
+		if strings.HasPrefix(text, firstLine(candidate.prompt)) {
+			return candidate.label
+		}
 	}
-	if m.loopFinalRuns == nil {
-		m.loopFinalRuns = make(map[string]bool)
-	}
-	if m.finishLoopCalls == nil {
-		m.finishLoopCalls = make(map[string]string)
-	}
-}
-
-func (m *model) isLoopRun(runID string) bool {
-	return runID != "" && m.loopRuns[runID]
-}
-
-func (m *model) isHiddenLoopRun(runID string) bool {
-	return m.isLoopRun(runID) && !m.loopFinalRuns[runID]
+	return "turn"
 }
 
 func (m *model) nowTime() time.Time {
