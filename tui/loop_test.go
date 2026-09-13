@@ -211,7 +211,7 @@ func TestTUIShowsIntermediateLoopReasoningToolsAndOutput(t *testing.T) {
 	if got[1].kind != blockReasoning || got[1].content != "inspect the repository" {
 		t.Fatalf("reasoning = %#v", got[1])
 	}
-	if got[2].kind != blockToolCall || got[2].toolName != "read_file" || !strings.Contains(got[2].content, "main.go") || !strings.Contains(got[2].content, "package main") {
+	if got[2].kind != blockToolCall || got[2].toolName != "read_file" || !strings.Contains(got[2].toolArgs, "main.go") || !strings.Contains(got[2].toolOutput, "package main") {
 		t.Fatalf("tool call = %#v", got[2])
 	}
 	if got[3].kind != blockAssistant || got[3].content != "internal progress" {

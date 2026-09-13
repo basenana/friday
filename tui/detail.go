@@ -57,7 +57,7 @@ func (m *model) handleShowCommand(args []string) (tea.Model, tea.Cmd) {
 		m.appendBlock(chatBlock{kind: blockError, content: "tool call not found: " + args[0]})
 		return m, nil
 	}
-	m.detail = newDetailState(fmt.Sprintf("%s · %s", found.toolName, shortID(found.id)), found.content, m.width, m.height)
+	m.detail = newDetailState(fmt.Sprintf("%s · %s", found.toolName, shortID(found.id)), toolDetailContent(found), m.width, m.height)
 	m.layout()
 	return m, nil
 }

@@ -16,6 +16,7 @@ type transcriptProjection struct {
 	messages      []chatBlock
 	seenInputs    map[string]bool
 	cards         map[string]*cardState
+	todos         []todoItem
 	promptHistory []string
 	tokenCount    int
 	iteration     int
@@ -73,7 +74,7 @@ func buildTranscriptProjection(sessMgr sessionRuntime, cfg *config.Config, workd
 
 	return transcriptProjection{
 		messages: p.messages, seenInputs: p.seenInputs, cards: p.cards,
-		promptHistory: p.promptHistory, tokenCount: p.tokenCount, iteration: p.iteration,
+		todos: p.todos, promptHistory: p.promptHistory, tokenCount: p.tokenCount, iteration: p.iteration,
 	}, replayErr
 }
 
@@ -81,6 +82,7 @@ func (m *model) applyProjection(p transcriptProjection) {
 	m.messages = p.messages
 	m.seenInputs = p.seenInputs
 	m.cards = p.cards
+	m.todos = append([]todoItem(nil), p.todos...)
 	m.promptHistory = p.promptHistory
 	m.tokenCount = p.tokenCount
 	m.iteration = p.iteration
@@ -112,21 +114,22 @@ func (m *model) projectMessage(msg types.Message) {
 			m.appendBlock(chatBlock{kind: blockAssistant, content: msg.Content})
 		}
 		for _, tc := range msg.ToolCalls {
-			m.appendBlock(chatBlock{kind: blockToolCall, id: tc.ID, toolName: tc.Name, content: tc.Arguments, pending: true})
+			m.appendBlock(chatBlock{kind: blockToolCall, id: tc.ID, toolName: tc.Name, toolArgs: tc.Arguments, toolArgsComplete: true, pending: true})
 			m.toolCalls[tc.ID] = len(m.messages) - 1
 		}
 	case types.RoleTool:
 		if msg.ToolResult != nil {
 			if index, ok := m.toolCalls[msg.ToolResult.CallID]; ok && index >= 0 && index < len(m.messages) {
 				block := &m.messages[index]
-				block.content = joinToolContent(block.content, msg.ToolResult.Content)
+				block.toolOutput = msg.ToolResult.Content
+				block.toolArgsComplete = true
 				block.success = msg.ToolResult.Success
 				block.pending = false
 				block.rendered = ""
 				delete(m.toolCalls, msg.ToolResult.CallID)
 			} else {
 				m.appendBlock(chatBlock{kind: blockToolCall, id: msg.ToolResult.CallID, toolName: "tool",
-					content: msg.ToolResult.Content, success: msg.ToolResult.Success})
+					toolOutput: msg.ToolResult.Content, toolArgsComplete: true, success: msg.ToolResult.Success})
 			}
 		}
 	}

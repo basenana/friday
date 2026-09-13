@@ -561,8 +561,8 @@ func TestTimelinePreservesReceivedTextAndToolOrder(t *testing.T) {
 		m.messages[2].kind != blockAssistant || m.messages[2].content != "after" {
 		t.Fatalf("timeline order/state = %#v", m.messages)
 	}
-	if !strings.Contains(m.messages[1].content, `{"cmd":"pwd"}`) || !strings.Contains(m.messages[1].content, "/tmp") {
-		t.Fatalf("tool content = %q", m.messages[1].content)
+	if !strings.Contains(m.messages[1].toolArgs, `{"cmd":"pwd"}`) || !strings.Contains(m.messages[1].toolOutput, "/tmp") {
+		t.Fatalf("tool args/output = %q / %q", m.messages[1].toolArgs, m.messages[1].toolOutput)
 	}
 }
 
@@ -581,7 +581,7 @@ func TestParallelToolResultsUpdateOriginalStartPositions(t *testing.T) {
 	if len(m.messages) != 2 || m.messages[0].id != "first" || m.messages[1].id != "second" {
 		t.Fatalf("tool start order changed after results: %#v", m.messages)
 	}
-	if m.messages[0].content != "first result" || m.messages[1].content != "second result" {
+	if m.messages[0].toolOutput != "first result" || m.messages[1].toolOutput != "second result" {
 		t.Fatalf("tool results not updated in place: %#v", m.messages)
 	}
 }
@@ -803,7 +803,7 @@ func TestUntrustedPopupAndStreamingTextIsTerminalSafe(t *testing.T) {
 	m, _, _ := newTestModel(t)
 	osc := "\x1b]52;c;UE9XTkVE\x07"
 	m.appendStreamContent(blockReasoning, "reason"+osc)
-	m.appendBlock(chatBlock{kind: blockToolCall, id: "tool", toolName: "name" + osc, content: "args" + osc, pending: true})
+	m.appendBlock(chatBlock{kind: blockToolCall, id: "tool", toolName: "name" + osc, toolArgs: "args" + osc, toolArgsComplete: true, pending: true})
 	got := joinConversationBlocks([]string{m.renderBlock(&m.messages[0]), m.renderBlock(&m.messages[1])})
 	if strings.Contains(got, "UE9XTkVE") || strings.ContainsRune(got, '\a') {
 		t.Fatalf("unsafe streaming output = %q", got)

@@ -27,15 +27,18 @@ const (
 )
 
 type chatBlock struct {
-	id          string
-	kind        blockKind
-	content     string
-	rendered    string
-	toolName    string
-	success     bool
-	pending     bool
-	interrupted bool
-	card        *cardState
+	id               string
+	kind             blockKind
+	content          string
+	rendered         string
+	toolName         string
+	toolArgs         string
+	toolOutput       string
+	toolArgsComplete bool
+	success          bool
+	pending          bool
+	interrupted      bool
+	card             *cardState
 }
 
 var (
@@ -57,7 +60,6 @@ var (
 			BorderLeft(true).BorderStyle(lipgloss.NormalBorder()).BorderForeground(themeBorder).PaddingLeft(1)
 	toolBoxStyle = lipgloss.NewStyle().Foreground(themeText).
 			BorderLeft(true).BorderStyle(lipgloss.NormalBorder()).BorderForeground(themeBorder).PaddingLeft(1)
-	toolFailStyle = toolBoxStyle.Copy().BorderForeground(themeError)
 	inputBoxStyle = lipgloss.NewStyle().UnsetBackground().Border(lipgloss.RoundedBorder()).BorderForeground(themeBorder).Padding(0, 1)
 	menuStyle     = lipgloss.NewStyle().Foreground(themeText).Border(lipgloss.RoundedBorder()).BorderForeground(themeBorder).Padding(0, 1)
 	statusStyle   = lipgloss.NewStyle().Foreground(themeMuted)
@@ -82,7 +84,6 @@ func configureTheme(dark bool) {
 		BorderLeft(true).BorderStyle(lipgloss.NormalBorder()).BorderForeground(themeBorder).PaddingLeft(1)
 	toolBoxStyle = lipgloss.NewStyle().Foreground(themeText).
 		BorderLeft(true).BorderStyle(lipgloss.NormalBorder()).BorderForeground(themeBorder).PaddingLeft(1)
-	toolFailStyle = toolBoxStyle.Copy().BorderForeground(themeError)
 	inputBoxStyle = lipgloss.NewStyle().UnsetBackground().Border(lipgloss.RoundedBorder()).BorderForeground(themeBorder).Padding(0, 1)
 	menuStyle = lipgloss.NewStyle().Foreground(themeText).Border(lipgloss.RoundedBorder()).BorderForeground(themeBorder).Padding(0, 1)
 	statusStyle = lipgloss.NewStyle().Foreground(themeMuted)
@@ -145,17 +146,7 @@ func (m *model) renderBlock(b *chatBlock) string {
 	case blockReasoning:
 		b.rendered = mutedStyle.Render("thinking") + "\n" + reasoningStyle.Render(truncateLines(terminalSafe(b.content), 12)) + suffix
 	case blockToolCall:
-		style, icon := toolBoxStyle, "…"
-		if !b.pending && b.success {
-			icon = "✓"
-		} else if !b.pending {
-			style, icon = toolFailStyle, "✗"
-		}
-		body := truncateLines(terminalSafe(b.content), 10)
-		if len(strings.Split(strings.TrimRight(b.content, "\n"), "\n")) > 10 && b.id != "" {
-			body += "\n" + mutedStyle.Render("/show "+shortID(b.id)+" · full output")
-		}
-		b.rendered = style.Render(fmt.Sprintf("%s %s\n%s", icon, terminalSafe(b.toolName), body)) + suffix
+		b.rendered = m.renderToolCard(b)
 	case blockError:
 		b.rendered = errorStyle.Render("✗ " + terminalSafe(b.content))
 	case blockCard:
@@ -231,6 +222,9 @@ func (m *model) View() tea.View {
 	if len(m.queued) > 0 {
 		parts = append(parts, m.renderQueue())
 	}
+	if todo := m.renderTodoPanel(m.width); todo != "" {
+		parts = append(parts, todo)
+	}
 	if m.form != nil {
 		parts = append(parts, m.form.View(m.width))
 	} else if m.planHandoff != nil {
@@ -268,6 +262,9 @@ func (m *model) layout() {
 	extra := composerLines + 2 + statusLines // input border + wrapped status
 	if len(m.queued) > 0 {
 		extra += min(len(m.queued), 3) + 3
+	}
+	if todo := m.renderTodoPanel(width); todo != "" {
+		extra += lipgloss.Height(todo)
 	}
 	if m.menu.mode != menuNone {
 		extra += min(len(m.menu.items), 8) + 2

@@ -144,6 +144,7 @@ type model struct {
 	messages          []chatBlock
 	seenInputs        map[string]bool
 	cards             map[string]*cardState
+	todos             []todoItem
 
 	textarea         textarea.Model
 	viewport         viewport.Model
@@ -876,7 +877,15 @@ func (m *model) handleActorEvent(evt events.Event) tea.Cmd {
 		var d events.ToolCallArgsData
 		if events.DecodePayload(evt, &d) == nil {
 			if index, ok := m.toolCalls[d.ToolCallID]; ok && index >= 0 && index < len(m.messages) {
-				m.messages[index].content += d.PartialJSON
+				m.messages[index].toolArgs += d.PartialJSON
+				m.messages[index].rendered = ""
+			}
+		}
+	case events.KindToolCallEnd:
+		var d events.ToolCallEndData
+		if events.DecodePayload(evt, &d) == nil {
+			if index, ok := m.toolCalls[d.ToolCallID]; ok && index >= 0 && index < len(m.messages) {
+				m.messages[index].toolArgsComplete = true
 				m.messages[index].rendered = ""
 			}
 		}
@@ -886,13 +895,14 @@ func (m *model) handleActorEvent(evt events.Event) tea.Cmd {
 			m.runActivity = "working"
 			if index, ok := m.toolCalls[d.ToolCallID]; ok && index >= 0 && index < len(m.messages) {
 				block := &m.messages[index]
-				block.content = joinToolContent(block.content, d.Output)
+				block.toolOutput = d.Output
+				block.toolArgsComplete = true
 				block.success = d.Success
 				block.pending = false
 				block.rendered = ""
 				delete(m.toolCalls, d.ToolCallID)
 			} else {
-				m.appendBlock(chatBlock{kind: blockToolCall, id: d.ToolCallID, toolName: "tool", content: d.Output, success: d.Success})
+				m.appendBlock(chatBlock{kind: blockToolCall, id: d.ToolCallID, toolName: "tool", toolOutput: d.Output, toolArgsComplete: true, success: d.Success})
 			}
 		}
 	case events.KindStepStarted:
@@ -954,6 +964,8 @@ func (m *model) handleCustomEvent(evt events.Event) tea.Cmd {
 		m.runActivity = customActivity(evt, "working with subagent")
 	case events.CustomSubagentFinish:
 		m.runActivity = "working"
+	case events.CustomTodoUpdate:
+		m.handleTodoUpdate(evt)
 	case events.CustomModelTimeout:
 		m.runActivity = "retrying model"
 		m.appendBlock(chatBlock{kind: blockDivider, content: "model timed out · retrying"})
@@ -1167,16 +1179,6 @@ func (m *model) flushStreaming(interrupted bool) {
 		}
 	}
 	m.resetStreaming()
-}
-
-func joinToolContent(input, output string) string {
-	if input == "" {
-		return output
-	}
-	if output == "" {
-		return input
-	}
-	return input + "\n" + output
 }
 
 func (m *model) breakStreamSegments() {
