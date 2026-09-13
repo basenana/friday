@@ -113,6 +113,37 @@ func TestExecuteWorkdir(t *testing.T) {
 	}
 }
 
+type unavailableTestSandbox struct {
+	called bool
+}
+
+func (s *unavailableTestSandbox) WrapCommand(string, ExecOptions) (string, func(), error) {
+	s.called = true
+	return "exit 99", func() {}, nil
+}
+
+func (*unavailableTestSandbox) IsAvailable() bool { return false }
+func (*unavailableTestSandbox) Name() string      { return "test-unavailable" }
+
+func TestUnavailableSandboxFallsBackToDirectExecution(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Sandbox.Enabled = true
+	exec := NewExecutor(cfg)
+	backend := &unavailableTestSandbox{}
+	exec.sandbox = backend
+
+	result, err := exec.Run(context.Background(), "echo fallback-ok", ExecOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if backend.called {
+		t.Fatal("unavailable sandbox backend was still used")
+	}
+	if result.ExitCode != 0 || !strings.Contains(result.Stdout, "fallback-ok") {
+		t.Fatalf("fallback result = %+v", result)
+	}
+}
+
 func TestTruncateOutputBytes(t *testing.T) {
 	longOutput := strings.Repeat("a", MaxOutputBytes+1000)
 	truncated := truncateOutput(longOutput)

@@ -77,14 +77,19 @@ func (e *Executor) Run(ctx context.Context, cmd string, opts ExecOptions) (*Resu
 	defer cancel()
 
 	// 4. Wrap command with sandbox
+	runner := e.sandbox
 	if e.config.Sandbox.Enabled && !e.sandbox.IsAvailable() {
 		e.warnUnsandboxedOnce.Do(func() {
 			fmt.Fprintf(os.Stderr,
 				"[friday] WARNING: sandboxing is enabled but the %q sandbox is unavailable on this system; "+
 					"commands will run WITHOUT sandbox isolation\n", e.sandbox.Name())
 		})
+		// Match the documented fallback above. Wrapping with an unavailable
+		// backend would only defer the failure until command execution and can
+		// make an agent retry an impossible command indefinitely.
+		runner = &NoSandbox{}
 	}
-	wrappedCmd, cleanup, err := e.sandbox.WrapCommand(cmd, opts)
+	wrappedCmd, cleanup, err := runner.WrapCommand(cmd, opts)
 	if cleanup != nil {
 		defer cleanup()
 	}

@@ -67,6 +67,8 @@ func routeCustom(sid string, evt events.Event, _ *ToolCallTracker) (string, bool
 		return bus.TopicForm(sid, "submitted"), true
 	case events.CustomFormCancelled:
 		return bus.TopicForm(sid, "cancelled"), true
+	case events.CustomInputCancelled:
+		return bus.TopicStatus(sid, bus.StatusInboxCancelled), true
 	case events.CustomCompactStart, events.CustomCompactFinish, events.CustomCompactSkip,
 		events.CustomSubagentStart, events.CustomSubagentFinish,
 		events.CustomTodoUpdate, events.CustomModelTimeout, events.CustomLoopStart,

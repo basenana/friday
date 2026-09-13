@@ -9,7 +9,10 @@ import (
 type LifecycleHook func()
 
 var (
-	terminalSignalCh = make(chan os.Signal)
+	// signal.Notify must not depend on a receiver being ready: the runtime
+	// delivers signals non-blockingly and may otherwise drop a shutdown while
+	// the lifecycle goroutine is busy running a hook.
+	terminalSignalCh = make(chan os.Signal, 1)
 	sigusr1Hooks     = make([]LifecycleHook, 0)
 	sigusr2Hooks     = make([]LifecycleHook, 0)
 )

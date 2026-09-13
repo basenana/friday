@@ -25,7 +25,7 @@ func TestCoder_CommandRegistry(t *testing.T) {
 	reg := codercmds.NewRegistry()
 	codercmds.RegisterAll(reg)
 
-	expected := []string{"advisor", "archive", "clear", "compact", "context", "copy", "delete", "diff", "help", "model", "open", "plan", "quit", "rename", "resume", "review", "show", "status", "stop", "tasks"}
+	expected := []string{"advisor", "archive", "clear", "compact", "context", "copy", "delete", "diff", "help", "loop", "model", "open", "plan", "quit", "rename", "resume", "review", "show", "status", "stop", "tasks"}
 	for _, name := range expected {
 		if _, ok := reg.Lookup(name); !ok {
 			t.Errorf("expected command %q to be registered", name)

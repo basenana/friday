@@ -34,7 +34,7 @@ func (m *model) handleSlash(text string) (tea.Model, tea.Cmd) {
 	}
 	result, err := cmd.Execute(&codercmds.Context{
 		Ctx: context.Background(), SessionID: m.sessionID, Args: parts, RawArgs: rawArgs,
-		Session: lifecycle, SessMgr: legacyManager, Config: m.cfg,
+		Session: lifecycle, SessMgr: legacyManager, Config: m.cfg, Mode: m.mode,
 	})
 	if err != nil {
 		m.appendBlock(chatBlock{kind: blockError, content: err.Error()})
@@ -100,6 +100,7 @@ func (m *model) applyLifecycleAction(action codercmds.Action) (bool, tea.Cmd) {
 		return true, nil
 	case codercmds.QuitAction:
 		m.quitting = true
+		m.loopManager.Close()
 		m.closeFeed()
 		m.registry.Shutdown(m.sessionID)
 		return true, tea.Quit
@@ -264,6 +265,22 @@ func (m *model) applyCollaborationAction(action codercmds.Action) (bool, tea.Cmd
 			return true, cmd
 		}
 		return true, nil
+	case codercmds.StartLoopAction:
+		if m.mode == collaboration.ModePlan {
+			m.appendBlock(chatBlock{kind: blockError, content: "/loop is unavailable in Plan Mode; run /plan off first"})
+			return true, nil
+		}
+		lifecycle, ok := m.registry.Lifecycle(m.sessionID)
+		if !ok || lifecycle.Current() == nil {
+			m.appendBlock(chatBlock{kind: blockError, content: "loop: active session unavailable"})
+			return true, nil
+		}
+		if err := m.loopManager.Start(context.Background(), lifecycle.Current(), action.Task); err != nil {
+			m.appendBlock(chatBlock{kind: blockError, content: "loop: " + err.Error()})
+			return true, nil
+		}
+		m.appendBlock(chatBlock{kind: blockDivider, content: "loop · started"})
+		return true, m.spinner.Tick
 	}
 	return false, nil
 }
@@ -352,6 +369,7 @@ func (m *model) switchSession(newID string) (tea.Cmd, error) {
 	}
 
 	oldID, oldFeed := m.sessionID, m.feed
+	m.loopManager.Detach(oldID)
 	m.sessionID, m.feed = newID, newFeed
 	m.mode = m.runtime.CollaborationMode(newID)
 	m.latestPlan = latestPlan
@@ -367,6 +385,11 @@ func (m *model) switchSession(newID string) (tea.Cmd, error) {
 	m.resetStreaming()
 	m.applyProjection(projection)
 	m.restorePlanHandoff()
+	if lifecycle, ok := m.registry.Lifecycle(newID); ok && lifecycle.Current() != nil {
+		if err := m.loopManager.Attach(context.Background(), lifecycle.Current()); err != nil {
+			m.appendBlock(chatBlock{kind: blockError, content: "restore loop: " + err.Error()})
+		}
+	}
 	if oldFeed != nil {
 		oldFeed.Close()
 	}

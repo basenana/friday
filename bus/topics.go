@@ -11,9 +11,10 @@ import (
 
 // Input message kinds carried on the inbox topic.
 const (
-	InboxUserText   = "user.text"
-	InboxFormSubmit = "form.submit"
-	InboxFormCancel = "form.cancel"
+	InboxUserText    = "user.text"
+	InboxFormSubmit  = "form.submit"
+	InboxFormCancel  = "form.cancel"
+	InboxCancelInput = "input.cancel"
 )
 
 // InputDelivery controls how user text is scheduled. Empty/normal preserves
@@ -28,10 +29,12 @@ const (
 
 // Status events carried on the status topic.
 const (
-	StatusCreated      = "created"
-	StatusEvicted      = "evicted"
-	StatusStopped      = "stopped"
-	StatusInboxDropped = "inbox_dropped"
+	StatusCreated        = "created"
+	StatusEvicted        = "evicted"
+	StatusStopped        = "stopped"
+	StatusInboxAccepted  = "inbox_accepted"
+	StatusInboxCancelled = "inbox_cancelled"
+	StatusInboxDropped   = "inbox_dropped"
 )
 
 func agentTopic(sid, rest string) string {
@@ -168,6 +171,13 @@ type FormCancelInput struct {
 	FormID string `json:"form_id"`
 }
 
+// CancelInput requests cancellation of one previously published input event.
+// It is transport-level control and never contributes text to a model turn.
+type CancelInput struct {
+	EventID string `json:"event_id"`
+	Reason  string `json:"reason,omitempty"`
+}
+
 // PreemptInput is the payload schema of preempt envelopes.
 type PreemptInput struct {
 	Reason string `json:"reason,omitempty"`
@@ -218,6 +228,10 @@ func NewFormSubmit(session, from string, in FormSubmitInput) Envelope {
 // NewFormCancel builds an inbox envelope carrying FormCancelInput.
 func NewFormCancel(session, from string, in FormCancelInput) Envelope {
 	return inputEnvelope(InboxFormCancel, session, from, in)
+}
+
+func NewCancelInput(session, from string, in CancelInput) Envelope {
+	return inputEnvelope(InboxCancelInput, session, from, in)
 }
 
 // NewPreempt builds a preempt envelope carrying PreemptInput.

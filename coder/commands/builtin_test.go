@@ -3,6 +3,8 @@ package commands
 import (
 	"strings"
 	"testing"
+
+	"github.com/basenana/friday/core/collaboration"
 )
 
 func actionAt[T Action](t *testing.T, result *Result, index int) T {
@@ -118,5 +120,23 @@ func TestAdvisorCmd_WithArgsDelegates(t *testing.T) {
 	}
 	if action := actionAt[RunAgentAction](t, r, 0); action.Agent != "advisor" {
 		t.Errorf("advisor agent = %q, want %q", action.Agent, "advisor")
+	}
+}
+
+func TestLoopCmdCreatesDedicatedActionAndRejectsPlanMode(t *testing.T) {
+	r, err := (loopCmd{}).Execute(&Context{RawArgs: "implement the feature"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if action := actionAt[StartLoopAction](t, r, 0); action.Task != "implement the feature" {
+		t.Fatalf("loop task = %q", action.Task)
+	}
+
+	r, err = (loopCmd{}).Execute(&Context{RawArgs: "implement", Mode: collaboration.ModePlan})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if message := actionAt[AppendMessageAction](t, r, 0).Content; !strings.Contains(message, "/plan off") {
+		t.Fatalf("plan-mode response = %q", message)
 	}
 }

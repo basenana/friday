@@ -43,9 +43,16 @@ const (
 // embedding runtimes may use it to thread request-scoped data
 // (attachment ids, trace ids, etc.) to lifecycle hooks.
 type UserTextMessage struct {
-	Text     string
-	Priority Priority
-	TurnID   string
+	Text string
+	// Source identifies the producer of the transport input (for example
+	// "user.local" or "loop"). It is persisted on input.accepted so transcript
+	// consumers can distinguish user-authored messages from internal drivers.
+	Source string
+	// SourceEventID identifies the transport event that produced this input.
+	// It is used only to correlate actor output and is not exposed to the model.
+	SourceEventID string
+	Priority      Priority
+	TurnID        string
 	// Delivery identifies how this input reached the actor. Empty means a
 	// normal turn; "steer" means the input interrupted an active turn.
 	Delivery string

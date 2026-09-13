@@ -10,6 +10,7 @@ import (
 	"github.com/basenana/friday/bus"
 	coreactor "github.com/basenana/friday/core/actor"
 	"github.com/basenana/friday/core/actor/events"
+	"github.com/basenana/friday/core/types"
 )
 
 // InBridge feeds the actor from the bus: inbox envelopes become actor
@@ -118,6 +119,9 @@ func (ib *InBridge) dispatchInbox(env bus.Envelope) {
 	if ib.closed.Load() {
 		return
 	}
+	if env.ID == "" {
+		env.ID = types.NewID()
+	}
 
 	var msg coreactor.Message
 	switch env.Name {
@@ -132,15 +136,19 @@ func (ib *InBridge) dispatchInbox(env bus.Envelope) {
 			return
 		}
 		user := coreactor.UserTextMessage{
-			Text:     in.Text,
-			TurnID:   in.TurnID,
-			Delivery: string(in.Delivery),
-			Metadata: in.Metadata,
+			Text:          in.Text,
+			Source:        env.From,
+			SourceEventID: env.ID,
+			TurnID:        in.TurnID,
+			Delivery:      string(in.Delivery),
+			Metadata:      in.Metadata,
 		}
 		if in.Delivery == bus.DeliverySteer {
 			if err := ib.actor.SendSteer(ib.ctx, user); err != nil {
 				ib.reportDrop(env, err.Error())
+				return
 			}
+			ib.reportAccepted(env)
 			return
 		}
 		msg = user
@@ -152,7 +160,9 @@ func (ib *InBridge) dispatchInbox(env bus.Envelope) {
 		}
 		if err := ib.actor.SubmitForm(in.FormID, in.Values); err != nil {
 			ib.reportDrop(env, err.Error())
+			return
 		}
+		ib.reportAccepted(env)
 		return
 	case bus.InboxFormCancel:
 		var in bus.FormCancelInput
@@ -162,7 +172,21 @@ func (ib *InBridge) dispatchInbox(env bus.Envelope) {
 		}
 		if err := ib.actor.CancelForm(in.FormID); err != nil {
 			ib.reportDrop(env, err.Error())
+			return
 		}
+		ib.reportAccepted(env)
+		return
+	case bus.InboxCancelInput:
+		var in bus.CancelInput
+		if err := events.DecodePayload(env.Event, &in); err != nil {
+			ib.reportDrop(env, "bad payload: "+err.Error())
+			return
+		}
+		if err := ib.actor.CancelInput(in.EventID); err != nil {
+			ib.reportDrop(env, err.Error())
+			return
+		}
+		ib.reportAccepted(env)
 		return
 	default:
 		ib.reportDrop(env, "unknown inbox kind: "+env.Name)
@@ -170,11 +194,23 @@ func (ib *InBridge) dispatchInbox(env bus.Envelope) {
 	}
 	if !ib.actor.TrySend(msg) {
 		ib.reportDrop(env, "actor inbox full or stopped")
+		return
 	}
+	ib.reportAccepted(env)
+}
+
+func (ib *InBridge) reportAccepted(env bus.Envelope) {
+	accepted := events.NewEvent(events.KindCustom, "").WithName("status." + bus.StatusInboxAccepted)
+	accepted.CausedBy = []string{env.ID}
+	ib.bus.Publish(bus.TopicStatus(ib.session, bus.StatusInboxAccepted), bus.Envelope{
+		Event: accepted, Topic: bus.TopicStatus(ib.session, bus.StatusInboxAccepted),
+		Session: ib.session, From: "actor", TS: bus.NextTS(),
+	})
 }
 
 func (ib *InBridge) reportDrop(env bus.Envelope, reason string) {
 	drop := events.NewEvent(events.KindCustom, "").WithName("status." + bus.StatusInboxDropped)
+	drop.CausedBy = []string{env.ID}
 	drop = drop.WithPayload(bus.InboxDropped{
 		From:   env.From,
 		TurnID: turnIDOf(env),

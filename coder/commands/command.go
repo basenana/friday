@@ -38,6 +38,7 @@ type OpenModelAction struct{}
 type SetModelAction struct{ Target string }
 type ShowStatusAction struct{}
 type CompactSessionAction struct{}
+type StartLoopAction struct{ Task string }
 type SetModeAction struct {
 	Mode   collaboration.Mode
 	Prompt string
@@ -62,6 +63,7 @@ func (OpenModelAction) commandAction()      {}
 func (SetModelAction) commandAction()       {}
 func (ShowStatusAction) commandAction()     {}
 func (CompactSessionAction) commandAction() {}
+func (StartLoopAction) commandAction()      {}
 func (SetModeAction) commandAction()        {}
 
 func ResultOf(actions ...Action) *Result { return &Result{Actions: actions} }
@@ -83,6 +85,7 @@ type Context struct {
 	// to the root-bound Session capability above.
 	SessMgr *sessions.Manager
 	Config  *config.Config
+	Mode    collaboration.Mode
 }
 
 type RunPolicy string

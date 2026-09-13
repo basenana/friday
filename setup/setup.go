@@ -8,6 +8,7 @@ import (
 
 	coderagents "github.com/basenana/friday/coder/agents"
 	"github.com/basenana/friday/coder/filetools"
+	coderloop "github.com/basenana/friday/coder/loop"
 	"github.com/basenana/friday/config"
 	"github.com/basenana/friday/core/agents"
 	"github.com/basenana/friday/core/api"
@@ -215,6 +216,7 @@ func NewAgent(sessionMgr SessionManager, cfg *config.Config, opts ...Option) (*A
 	teamHook := teams.NewHook(teamRegistry, cfg.TeamsPath())
 
 	approvedPlanHook := planning.NewApprovedPlanContextHook(planRepositoryFromManager(sessionMgr))
+	loopHook := coderloop.NewHook()
 	contextHook := contextmgr.New(client, contextmgr.Config{
 		ContextWindow:      cfg.Model.ContextWindow,
 		SessionMemoryStore: sessionMemoryStoreFromManager(sessionMgr),
@@ -330,6 +332,9 @@ func NewAgent(sessionMgr SessionManager, cfg *config.Config, opts ...Option) (*A
 		client, allTools, sharedHooks, lifecycle, teamRegistry, cfg, loaded,
 	)
 	sess.RegisterHook(proposals.NewHook(proposalLoader, proposalRunnerFactory))
+	// Loop is last so its stable autonomous-work contract has the final
+	// system-prompt position while active. It is otherwise a no-op.
+	sess.RegisterHook(loopHook)
 
 	return &AgentContext{
 		Client:      client,

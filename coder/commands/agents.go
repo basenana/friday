@@ -97,7 +97,28 @@ func (a advisorCmd) Execute(ctx *Context) (*Result, error) {
 	return ResultOf(RunAgentAction{Agent: a.agent, Input: a.buildInput(ctx.Args)}), nil
 }
 
-// RegisterAgentCommands registers /plan, /review, /advisor.
+// --- /loop ---
+
+type loopCmd struct{}
+
+func (loopCmd) Name() string        { return "loop" }
+func (loopCmd) Aliases() []string   { return nil }
+func (loopCmd) Description() string { return "Run an autonomous Ralph Loop for a development task" }
+func (loopCmd) Metadata() Metadata {
+	return Metadata{Usage: "/loop <task>", Category: "Collaborate", Policy: PolicyDeferred}
+}
+func (loopCmd) Execute(ctx *Context) (*Result, error) {
+	task := strings.TrimSpace(ctx.RawArgs)
+	if task == "" {
+		return MessageResult("usage: /loop <task>"), nil
+	}
+	if ctx.Mode == collaboration.ModePlan {
+		return MessageResult("/loop is unavailable in Plan Mode; run /plan off first"), nil
+	}
+	return ResultOf(StartLoopAction{Task: task}), nil
+}
+
+// RegisterAgentCommands registers the agent and autonomous collaboration commands.
 func RegisterAgentCommands(reg *Registry) {
 	if reg == nil {
 		return
@@ -105,4 +126,5 @@ func RegisterAgentCommands(reg *Registry) {
 	reg.Register(newPlanCmd())
 	reg.Register(newReviewCmd())
 	reg.Register(newAdvisorCmd())
+	reg.Register(loopCmd{})
 }

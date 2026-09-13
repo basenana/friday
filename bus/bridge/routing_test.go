@@ -47,6 +47,7 @@ func TestRouteEvent(t *testing.T) {
 		{"model timeout", events.NewEvent(events.KindCustom, "r").WithName(events.CustomModelTimeout), bus.TopicObs(sid, "model.timeout")},
 		{"loop start", events.NewEvent(events.KindCustom, "r").WithName(events.CustomLoopStart), bus.TopicObs(sid, "loop.start")},
 		{"input accepted", events.NewEvent(events.KindCustom, "r").WithName(events.CustomInputAccepted), bus.TopicObs(sid, "input.accepted")},
+		{"input cancelled", events.NewEvent(events.KindCustom, "").WithName(events.CustomInputCancelled), bus.TopicStatus(sid, bus.StatusInboxCancelled)},
 		{"plan proposed", events.NewEvent(events.KindCustom, "r").WithName(events.CustomPlanProposed), bus.TopicObs(sid, "plan.proposed")},
 		{"mode changed", events.NewEvent(events.KindCustom, "r").WithName(events.CustomModeChanged), bus.TopicObs(sid, "mode.changed")},
 		{"step started", events.NewEvent(events.KindStepStarted, "r"), bus.TopicObs(sid, "step")},

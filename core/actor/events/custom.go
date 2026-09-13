@@ -65,6 +65,9 @@ type InputAcceptedBody struct {
 	TurnID   string `json:"turn_id"`
 	Text     string `json:"text"`
 	Delivery string `json:"delivery,omitempty"`
+	// Sources are the transport producers whose inputs were coalesced into the
+	// turn. They describe provenance only and are never exposed to the model.
+	Sources []string `json:"sources,omitempty"`
 }
 
 type PlanProposedBody struct {

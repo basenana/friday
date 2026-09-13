@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -17,6 +18,7 @@ import (
 	"github.com/basenana/friday/actor"
 	"github.com/basenana/friday/bus"
 	codercmds "github.com/basenana/friday/coder/commands"
+	coderloop "github.com/basenana/friday/coder/loop"
 	projectpkg "github.com/basenana/friday/coder/project"
 	"github.com/basenana/friday/config"
 	"github.com/basenana/friday/core/actor/events"
@@ -37,6 +39,7 @@ func Run(sessMgr *sessions.Manager, cfg *config.Config, sessionID string) error 
 	codercmds.RegisterAll(cmdRegistry)
 
 	m := loadingModel(sessMgr, registry, cmdRegistry, cfg, sessionID)
+	defer m.loopManager.Close()
 	m.alternateScreen = useAlternateScreen(cfg.TUI.AlternateScreen)
 	// Do not enable terminal mouse reporting: leaving it disabled preserves the
 	// terminal's native click-and-drag text selection behavior.
@@ -62,6 +65,7 @@ func RunProject(projectMgr *projectpkg.Manager, cfg *config.Config, sessionID st
 	cmdRegistry := codercmds.NewRegistry()
 	codercmds.RegisterAll(cmdRegistry)
 	m := loadingModelAt(projectMgr.Base(), registry, cmdRegistry, cfg, sessionID, projectMgr.Project().Root())
+	defer m.loopManager.Close()
 	m.projectMgr = projectMgr
 	m.runtime = projectMgr
 	m.alternateScreen = useAlternateScreen(cfg.TUI.AlternateScreen)
@@ -124,13 +128,14 @@ type sessionRuntime interface {
 }
 
 type model struct {
-	sessMgr    *sessions.Manager
-	runtime    sessionRuntime
-	projectMgr *projectpkg.Manager
-	registry   *actor.Registry
-	sessionID  string
-	feed       *bus.Feed
-	workdir    string
+	sessMgr     *sessions.Manager
+	runtime     sessionRuntime
+	projectMgr  *projectpkg.Manager
+	registry    *actor.Registry
+	sessionID   string
+	feed        *bus.Feed
+	loopManager *coderloop.Manager
+	workdir     string
 
 	cmdRegistry *codercmds.Registry
 	cfg         *config.Config
@@ -168,6 +173,9 @@ type model struct {
 	reasonBuf       strings.Builder
 	toolCalls       map[string]*toolCallBlock
 	toolOrder       []string
+	loopRuns        map[string]bool
+	loopFinalRuns   map[string]bool
+	finishLoopCalls map[string]string
 	queued          []pendingInput
 	promptHistory   []string
 	historyIndex    int
@@ -234,9 +242,12 @@ func baseModelAt(sessMgr *sessions.Manager, registry *actor.Registry, cmdRegistr
 		sessionID: sessionID, textarea: ta, viewport: viewport.New(viewport.WithWidth(80), viewport.WithHeight(20)),
 		spinner:   spinner.New(spinner.WithSpinner(spinner.Dot), spinner.WithStyle(accentStyle)),
 		toolCalls: make(map[string]*toolCallBlock), seenInputs: make(map[string]bool),
-		cards: make(map[string]*cardState), historyIndex: -1, darkBackground: true,
+		cards: make(map[string]*cardState), loopRuns: make(map[string]bool),
+		loopFinalRuns: make(map[string]bool), finishLoopCalls: make(map[string]string),
+		historyIndex: -1, darkBackground: true,
 		now: time.Now,
 	}
+	m.loopManager = coderloop.NewManager(registry.Bus())
 	m.mode = m.runtime.CollaborationMode(sessionID)
 	m.activeModel, _ = configuredSessionModel(m.runtime, cfg, sessionID)
 	// Focus after the textarea has reached its final storage location. The
@@ -317,6 +328,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.mode = m.runtime.CollaborationMode(msg.sessionID)
 		m.activeModel, _ = configuredSessionModel(m.runtime, m.cfg, msg.sessionID)
 		m.feed = msg.feed
+		if lifecycle, ok := m.registry.Lifecycle(msg.sessionID); ok && lifecycle.Current() != nil {
+			if err := m.loopManager.Attach(context.Background(), lifecycle.Current()); err != nil {
+				m.appendBlock(chatBlock{kind: blockError, content: "restore loop: " + err.Error()})
+			}
+		}
 		m.subscriptionToken++
 		m.applyProjection(msg.projection)
 		if plan, err := m.runtime.LoadLatestPlan(msg.sessionID); err != nil {
@@ -336,6 +352,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyPressMsg:
 		if msg.String() == "ctrl+c" {
 			m.quitting = true
+			m.loopManager.Close()
 			m.closeFeed()
 			return m, tea.Quit
 		}
@@ -604,6 +621,9 @@ func (m *model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if m.running {
 			return m.cancelRun()
 		}
+		if m.cancelActiveLoop() {
+			return m, nil
+		}
 		m.textarea.Reset()
 		m.menu = menuState{}
 		return m, nil
@@ -669,6 +689,24 @@ func (m *model) queueComposer() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.rememberPrompt(text)
+	if lifecycle, ok := m.registry.Lifecycle(m.sessionID); ok && lifecycle.Current() != nil {
+		active, err := m.loopManager.IsActive(context.Background(), lifecycle.Current())
+		if err != nil {
+			m.appendBlock(chatBlock{kind: blockError, content: "queue input: " + err.Error()})
+		} else if active {
+			turnID := types.NewID()
+			m.appendBlock(chatBlock{kind: blockUser, id: turnID, content: text})
+			m.seenInputs[turnID] = true
+			m.textarea.Reset()
+			m.menu = menuState{}
+			if err := m.sendUserText(text, bus.DeliveryNormal, turnID); err != nil {
+				m.appendBlock(chatBlock{kind: blockError, content: err.Error()})
+				return m, nil
+			}
+			m.layout()
+			return m, m.spinner.Tick
+		}
+	}
 	m.queued = append(m.queued, pendingInput{text: text})
 	m.textarea.Reset()
 	m.menu = menuState{}
@@ -711,10 +749,26 @@ func (m *model) startUserTurn(text string, delivery bus.InputDelivery) (tea.Mode
 }
 
 func (m *model) cancelRun() (tea.Model, tea.Cmd) {
+	m.cancelActiveLoop()
 	m.registry.Bus().Publish(bus.TopicPreempt(m.sessionID),
 		bus.NewScopedPreempt(m.sessionID, "user.local", "user cancelled", bus.PreemptCurrent))
 	m.cancelling = true
 	return m, nil
+}
+
+func (m *model) cancelActiveLoop() bool {
+	if m.loopManager == nil {
+		return false
+	}
+	if lifecycle, ok := m.registry.Lifecycle(m.sessionID); ok && lifecycle.Current() != nil {
+		if cancelled, err := m.loopManager.Cancel(context.Background(), lifecycle.Current()); err != nil {
+			m.appendBlock(chatBlock{kind: blockError, content: "cancel loop: " + err.Error()})
+		} else if cancelled {
+			m.appendBlock(chatBlock{kind: blockDivider, content: "loop · cancelled"})
+			return true
+		}
+	}
+	return false
 }
 
 func (m *model) sendUserText(text string, delivery bus.InputDelivery, turnID string) error {
@@ -746,9 +800,12 @@ func (m *model) handleActorEvent(evt events.Event) tea.Cmd {
 		var d events.RunFinishedData
 		_ = events.DecodePayload(evt, &d)
 		m.flushStreaming(d.StopReason == "cancelled")
+		hiddenLoopRun := m.isHiddenLoopRun(evt.RunID)
 		finishedCurrent := evt.RunID != m.lastFinishedRun && (evt.RunID == m.currentRunID || m.currentRunID == "")
 		if finishedCurrent {
-			m.appendRunFinished(d, evt.Timestamp)
+			if !hiddenLoopRun {
+				m.appendRunFinished(d, evt.Timestamp)
+			}
 			m.lastFinishedRun = evt.RunID
 			m.running = false
 			m.currentRunID = ""
@@ -770,6 +827,9 @@ func (m *model) handleActorEvent(evt events.Event) tea.Cmd {
 			m.appendBlock(chatBlock{kind: blockError, content: d.Message})
 		}
 	case events.KindTextMessageStart:
+		if m.isHiddenLoopRun(evt.RunID) {
+			return nil
+		}
 		m.runActivity = "responding"
 		if m.reasonBuf.Len() > 0 {
 			m.appendBlock(chatBlock{kind: blockReasoning, content: m.reasonBuf.String()})
@@ -777,11 +837,17 @@ func (m *model) handleActorEvent(evt events.Event) tea.Cmd {
 		}
 		m.textBuf.Reset()
 	case events.KindTextMessageContent:
+		if m.isHiddenLoopRun(evt.RunID) {
+			return nil
+		}
 		var d events.TextMessageContentData
 		if events.DecodePayload(evt, &d) == nil {
 			m.textBuf.WriteString(d.Content)
 		}
 	case events.KindTextMessageEnd:
+		if m.isHiddenLoopRun(evt.RunID) {
+			return nil
+		}
 		if m.textBuf.Len() > 0 {
 			m.appendBlock(chatBlock{kind: blockAssistant, content: m.textBuf.String()})
 		}
@@ -790,10 +856,19 @@ func (m *model) handleActorEvent(evt events.Event) tea.Cmd {
 		var d events.ToolCallStartData
 		if events.DecodePayload(evt, &d) == nil {
 			m.runActivity = "running " + d.ToolName
+			if m.isLoopRun(evt.RunID) {
+				if d.ToolName == "finish_loop" {
+					m.finishLoopCalls[d.ToolCallID] = evt.RunID
+				}
+				return nil
+			}
 			m.toolCalls[d.ToolCallID] = &toolCallBlock{name: d.ToolName, id: d.ToolCallID}
 			m.toolOrder = append(m.toolOrder, d.ToolCallID)
 		}
 	case events.KindToolCallArgs:
+		if m.isLoopRun(evt.RunID) {
+			return nil
+		}
 		var d events.ToolCallArgsData
 		if events.DecodePayload(evt, &d) == nil {
 			if tc := m.toolCalls[d.ToolCallID]; tc != nil {
@@ -804,6 +879,16 @@ func (m *model) handleActorEvent(evt events.Event) tea.Cmd {
 		var d events.ToolCallResultData
 		if events.DecodePayload(evt, &d) == nil {
 			m.runActivity = "working"
+			if runID, ok := m.finishLoopCalls[d.ToolCallID]; ok {
+				if d.Success {
+					m.loopFinalRuns[runID] = true
+				}
+				delete(m.finishLoopCalls, d.ToolCallID)
+				return nil
+			}
+			if m.isLoopRun(evt.RunID) {
+				return nil
+			}
 			if tc := m.toolCalls[d.ToolCallID]; tc != nil {
 				m.appendBlock(chatBlock{kind: blockToolCall, id: tc.id, toolName: tc.name,
 					content: joinToolContent(tc.input, d.Output), success: d.Success})
@@ -839,12 +924,23 @@ func (m *model) handleCustomEvent(evt events.Event) tea.Cmd {
 	switch evt.Name {
 	case events.CustomInputAccepted:
 		var d events.InputAcceptedBody
-		if events.DecodePayload(evt, &d) == nil && !m.seenInputs[d.TurnID] {
+		if events.DecodePayload(evt, &d) != nil {
+			break
+		}
+		if slices.Contains(d.Sources, "loop") {
+			m.ensureLoopRunMaps()
+			m.loopRuns[evt.RunID] = true
+			return nil
+		}
+		if !m.seenInputs[d.TurnID] {
 			m.appendBlock(chatBlock{kind: blockUser, id: d.TurnID, content: d.Text})
 			m.seenInputs[d.TurnID] = true
 			m.rememberPrompt(d.Text)
 		}
 	case events.CustomReasoningDelta:
+		if m.isLoopRun(evt.RunID) {
+			return nil
+		}
 		var d events.ReasoningDeltaBody
 		if events.DecodePayload(evt, &d) == nil {
 			m.reasonBuf.WriteString(d.Content)
@@ -921,6 +1017,26 @@ func (m *model) handleCustomEvent(evt events.Event) tea.Cmd {
 		}
 	}
 	return nil
+}
+
+func (m *model) ensureLoopRunMaps() {
+	if m.loopRuns == nil {
+		m.loopRuns = make(map[string]bool)
+	}
+	if m.loopFinalRuns == nil {
+		m.loopFinalRuns = make(map[string]bool)
+	}
+	if m.finishLoopCalls == nil {
+		m.finishLoopCalls = make(map[string]string)
+	}
+}
+
+func (m *model) isLoopRun(runID string) bool {
+	return runID != "" && m.loopRuns[runID]
+}
+
+func (m *model) isHiddenLoopRun(runID string) bool {
+	return m.isLoopRun(runID) && !m.loopFinalRuns[runID]
 }
 
 func (m *model) nowTime() time.Time {

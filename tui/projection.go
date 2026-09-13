@@ -29,7 +29,9 @@ func buildTranscriptProjection(sessMgr sessionRuntime, cfg *config.Config, workd
 	p := &model{
 		runtime: sessMgr, cfg: cfg, workdir: workdir, width: width, height: height,
 		seenInputs: make(map[string]bool), cards: make(map[string]*cardState),
-		toolCalls: make(map[string]*toolCallBlock), historyIndex: -1, replaying: true,
+		toolCalls: make(map[string]*toolCallBlock), loopRuns: make(map[string]bool),
+		loopFinalRuns: make(map[string]bool), finishLoopCalls: make(map[string]string),
+		historyIndex: -1, replaying: true,
 	}
 
 	var persisted []events.Event
@@ -89,6 +91,9 @@ func (m *model) applyProjection(p transcriptProjection) {
 	m.runStartedAt = time.Time{}
 	m.runActivity = ""
 	m.form = nil
+	m.loopRuns = make(map[string]bool)
+	m.loopFinalRuns = make(map[string]bool)
+	m.finishLoopCalls = make(map[string]string)
 	m.resetStreaming()
 }
 

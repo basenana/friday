@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -101,6 +102,106 @@ func TestActor_MultiMessageDrain(t *testing.T) {
 	}
 	if accepted != 1 {
 		t.Fatalf("input.accepted count = %d, want 1", accepted)
+	}
+}
+
+func TestActor_EventsCarryAllCoalescedInputCauses(t *testing.T) {
+	mock := newMockAgent(chatScript{deltas: []types.Delta{{Content: "done"}}})
+	a, _ := newTestActor(mock)
+	sub := a.Subscribe()
+	if err := a.Send(context.Background(), UserTextMessage{Text: "one", SourceEventID: "input-one"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Send(context.Background(), UserTextMessage{Text: "two", SourceEventID: "input-two"}); err != nil {
+		t.Fatal(err)
+	}
+	a.Start(context.Background())
+	defer a.Stop()
+
+	seen := collectEvents(t, sub, hasRunFinished)
+	want := []string{"input-one", "input-two"}
+	for _, evt := range seen {
+		if evt.RunID == "" {
+			continue
+		}
+		if evt.ID == "" {
+			t.Fatalf("event %s has no id", evt.Type)
+		}
+		if !reflect.DeepEqual(evt.CausedBy, want) {
+			t.Fatalf("event %s causes = %v, want %v", evt.Type, evt.CausedBy, want)
+		}
+	}
+}
+
+func TestActor_CancelInputSkipsQueuedSourceEvent(t *testing.T) {
+	mock := newMockAgent(chatScript{})
+	a, _ := newTestActor(mock)
+	sub := a.Subscribe()
+	if err := a.Send(context.Background(), UserTextMessage{Text: "do not run", SourceEventID: "cancel-me"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.CancelInput("cancel-me"); err != nil {
+		t.Fatal(err)
+	}
+	a.Start(context.Background())
+	defer a.Stop()
+	seen := collectEvents(t, sub, func(seen []events.Event) bool {
+		for _, evt := range seen {
+			if evt.Name == events.CustomInputCancelled {
+				return true
+			}
+		}
+		return false
+	})
+	last := seen[len(seen)-1]
+	if !reflect.DeepEqual(last.CausedBy, []string{"cancel-me"}) {
+		t.Fatalf("cancel causes = %v", last.CausedBy)
+	}
+	mock.mu.Lock()
+	calls := mock.calls
+	mock.mu.Unlock()
+	if calls != 0 {
+		t.Fatalf("agent calls = %d, want 0", calls)
+	}
+}
+
+func TestActor_CancelledQueuedInputDoesNotDiscardOtherInput(t *testing.T) {
+	mock := newMockAgent(chatScript{deltas: []types.Delta{{Content: "kept"}}})
+	a, _ := newTestActor(mock)
+	sub := a.Subscribe()
+	if err := a.Send(context.Background(), UserTextMessage{Text: "loop prompt", SourceEventID: "loop-input"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Send(context.Background(), UserTextMessage{Text: "user correction", SourceEventID: "user-input"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.CancelInput("loop-input"); err != nil {
+		t.Fatal(err)
+	}
+	a.Start(context.Background())
+	defer a.Stop()
+
+	seen := collectEvents(t, sub, hasRunFinished)
+	var cancelled, finished bool
+	for _, evt := range seen {
+		if evt.Name == events.CustomInputCancelled && reflect.DeepEqual(evt.CausedBy, []string{"loop-input"}) {
+			cancelled = true
+		}
+		if evt.Type == events.KindRunFinished {
+			finished = true
+			if !reflect.DeepEqual(evt.CausedBy, []string{"user-input"}) {
+				t.Fatalf("finished causes = %v, want only user input", evt.CausedBy)
+			}
+		}
+	}
+	if !cancelled || !finished {
+		t.Fatalf("cancelled=%v finished=%v", cancelled, finished)
+	}
+	mock.mu.Lock()
+	calls := mock.calls
+	mock.mu.Unlock()
+	if calls != 1 {
+		t.Fatalf("agent calls = %d, want 1", calls)
 	}
 }
 

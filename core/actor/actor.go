@@ -79,6 +79,14 @@ type Actor struct {
 	turnMu     sync.Mutex
 	turnCtx    context.Context
 	turnCancel context.CancelFunc
+
+	// runCauses maps an actor run to the input events coalesced into that turn.
+	// publish uses it to attach transport-level causality to every emitted event.
+	runCauses sync.Map // map[string][]string
+
+	cancelledInputs sync.Map // set[string]
+	activeCausesMu  sync.Mutex
+	activeCauses    map[string]struct{}
 }
 
 // New constructs an Actor wrapping the given agent + session.
@@ -157,6 +165,23 @@ func (a *Actor) TrySend(msg Message) bool {
 		return false
 	}
 	return a.inbox.TrySend(msg)
+}
+
+// CancelInput cancels one transport input by source event ID. Queued inputs
+// are skipped before model invocation; if the input is part of the active
+// coalesced turn, that turn is preempted.
+func (a *Actor) CancelInput(eventID string) error {
+	if eventID == "" {
+		return errors.New("actor: input event id is required")
+	}
+	a.cancelledInputs.Store(eventID, struct{}{})
+	a.activeCausesMu.Lock()
+	_, active := a.activeCauses[eventID]
+	a.activeCausesMu.Unlock()
+	if active {
+		a.preemptCapturedTurn(a.snapshotTurnCancel())
+	}
+	return nil
 }
 
 // SendPreempt enqueues a preemption message.
@@ -409,6 +434,7 @@ func (a *Actor) loop(ctx context.Context) {
 		for _, m := range forms {
 			a.routeFormMessage(m)
 		}
+		batch = a.filterCancelledInputs(batch)
 
 		for _, turnBatch := range a.splitTurnBatches(batch) {
 			bctx := a.coalesceBatch(turnBatch)
@@ -426,12 +452,14 @@ func (a *Actor) loop(ctx context.Context) {
 // the externally-provided turn id (if any), and the union of image
 // content across messages.
 type batchContext struct {
-	text          string
-	turnID        string
-	delivery      string
-	steerSequence uint64
-	images        []types.ImageContent
-	metadata      []map[string]any
+	text           string
+	turnID         string
+	delivery       string
+	sources        []string
+	steerSequence  uint64
+	images         []types.ImageContent
+	metadata       []map[string]any
+	sourceEventIDs []string
 }
 
 func (a *Actor) runSteer(ctx context.Context, steer SteerMessage) {
@@ -520,6 +548,10 @@ func (a *Actor) coalesceBatch(batch []Message) batchContext {
 	var metadata []map[string]any
 	var turnID string
 	var delivery string
+	var sourceEventIDs []string
+	seenSourceEvents := make(map[string]struct{})
+	var sources []string
+	seenSources := make(map[string]struct{})
 	for _, m := range batch {
 		switch v := m.(type) {
 		case UserTextMessage:
@@ -532,18 +564,30 @@ func (a *Actor) coalesceBatch(batch []Message) batchContext {
 			if v.Delivery != "" {
 				delivery = v.Delivery
 			}
+			if v.Source != "" {
+				if _, seen := seenSources[v.Source]; !seen {
+					seenSources[v.Source] = struct{}{}
+					sources = append(sources, v.Source)
+				}
+			}
 			if len(v.Images) > 0 {
 				images = append(images, v.Images...)
 			}
 			if len(v.Metadata) > 0 {
 				metadata = append(metadata, cloneMetadata(v.Metadata))
 			}
+			if v.SourceEventID != "" {
+				if _, seen := seenSourceEvents[v.SourceEventID]; !seen {
+					seenSourceEvents[v.SourceEventID] = struct{}{}
+					sourceEventIDs = append(sourceEventIDs, v.SourceEventID)
+				}
+			}
 		case SignalMessage:
 			// Signals do not contribute to the prompt in the MVP.
 		}
 	}
 	text := strings.Join(parts, "\n\n")
-	return batchContext{text: text, turnID: turnID, delivery: delivery, images: images, metadata: metadata}
+	return batchContext{text: text, turnID: turnID, delivery: delivery, sources: sources, images: images, metadata: metadata, sourceEventIDs: sourceEventIDs}
 }
 
 // routeFormMessage dispatches a FormSubmitMessage / FormCancelMessage
@@ -571,6 +615,9 @@ func (a *Actor) routeFormMessageIfNeeded(m Message) bool {
 // the event stream. The lifecycle is invoked around the agent call so
 // the embedding runtime can persist turn state and events.
 func (a *Actor) runTurn(ctx context.Context, bctx batchContext, batchSize int) {
+	if a.consumeCancelledCauses(bctx.sourceEventIDs) {
+		return
+	}
 	turnCtx, cancel := a.deriveTurnCtx(ctx)
 	a.turnMu.Lock()
 	a.turnCtx = turnCtx
@@ -592,6 +639,30 @@ func (a *Actor) runTurn(ctx context.Context, bctx batchContext, batchSize int) {
 		runID = a.generateRunID()
 	}
 	a.currentRunID.Store(runID)
+	a.activeCausesMu.Lock()
+	a.activeCauses = make(map[string]struct{}, len(bctx.sourceEventIDs))
+	for _, id := range bctx.sourceEventIDs {
+		a.activeCauses[id] = struct{}{}
+	}
+	a.activeCausesMu.Unlock()
+	defer func() {
+		a.activeCausesMu.Lock()
+		a.activeCauses = nil
+		a.activeCausesMu.Unlock()
+		for _, id := range bctx.sourceEventIDs {
+			a.cancelledInputs.Delete(id)
+		}
+	}()
+	// Close the dequeue/start race: cancellation may arrive after the inbox
+	// filter but before this turn registers its active causes.
+	if a.consumeCancelledCauses(bctx.sourceEventIDs) {
+		return
+	}
+	if len(bctx.sourceEventIDs) > 0 {
+		causes := append([]string(nil), bctx.sourceEventIDs...)
+		a.runCauses.Store(runID, causes)
+		defer a.runCauses.Delete(runID)
+	}
 	a.planSubmitted.Store(false)
 	startedAt := time.Now()
 
@@ -640,7 +711,7 @@ func (a *Actor) runTurn(ctx context.Context, bctx batchContext, batchSize int) {
 	a.publish(turnCtx, events.NewEvent(events.KindCustom, runID).
 		WithName(events.CustomInputAccepted).
 		WithPayload(events.InputAcceptedBody{
-			TurnID: runID, Text: bctx.text, Delivery: bctx.delivery,
+			TurnID: runID, Text: bctx.text, Delivery: bctx.delivery, Sources: bctx.sources,
 		}))
 
 	req := &api.Request{
@@ -710,6 +781,39 @@ func (a *Actor) runTurn(ctx context.Context, bctx batchContext, batchSize int) {
 		}))
 
 	_ = a.turnLifecycle.OnTurnComplete(turnCtx, runID, outcome)
+}
+
+func (a *Actor) consumeCancelledCauses(ids []string) bool {
+	cancelledAny := false
+	for _, id := range ids {
+		if _, cancelled := a.cancelledInputs.LoadAndDelete(id); !cancelled {
+			continue
+		}
+		cancelledAny = true
+		evt := events.NewEvent(events.KindCustom, "").WithName(events.CustomInputCancelled)
+		evt.CausedBy = []string{id}
+		a.publish(context.Background(), evt)
+	}
+	return cancelledAny
+}
+
+func (a *Actor) filterCancelledInputs(batch []Message) []Message {
+	kept := batch[:0]
+	for _, msg := range batch {
+		user, ok := msg.(UserTextMessage)
+		if !ok || user.SourceEventID == "" {
+			kept = append(kept, msg)
+			continue
+		}
+		if _, cancelled := a.cancelledInputs.LoadAndDelete(user.SourceEventID); !cancelled {
+			kept = append(kept, msg)
+			continue
+		}
+		evt := events.NewEvent(events.KindCustom, "").WithName(events.CustomInputCancelled)
+		evt.CausedBy = []string{user.SourceEventID}
+		a.publish(context.Background(), evt)
+	}
+	return kept
 }
 
 // deriveTurnCtx wraps the loop context with a per-turn cancel. When
@@ -824,6 +928,14 @@ func (a *Actor) publish(ctx context.Context, evt events.Event) {
 		ctx = context.Background()
 	}
 	evt.ActorID = a.id
+	if evt.ID == "" {
+		evt.ID = types.NewID()
+	}
+	if len(evt.CausedBy) == 0 && evt.RunID != "" {
+		if causes, ok := a.runCauses.Load(evt.RunID); ok {
+			evt.CausedBy = append([]string(nil), causes.([]string)...)
+		}
+	}
 	a.stream.Publish(evt)
 	// Append to sink best-effort; sink errors are not surfaced to the
 	// actor's callers in the MVP.

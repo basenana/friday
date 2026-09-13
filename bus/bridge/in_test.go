@@ -94,6 +94,73 @@ func TestInBridgeRejectsUnknownInputDelivery(t *testing.T) {
 	a.Stop()
 }
 
+func TestInBridgeReportsAcceptedWithInputCausality(t *testing.T) {
+	b := eventbus.NewBus()
+	a := coreactor.New(nil, nil, coreactor.WithInboxBuffer(1))
+	ib := NewInBridge(b, "s1", a)
+	defer func() {
+		ib.Close()
+		a.Stop()
+	}()
+	accepted := make(chan events.Event, 1)
+	id := b.SubscribeSerial([]string{bus.TopicStatus("s1", bus.StatusInboxAccepted)}, func(env bus.Envelope) {
+		accepted <- env.Event
+	}, eventbus.SerialConfig{Overflow: eventbus.OverflowBlock})
+	defer b.Unsubscribe(id)
+
+	input := bus.NewUserInput("s1", "test", bus.UserTextInput{Text: "hello"})
+	b.Publish(bus.TopicInbox("s1"), input)
+	select {
+	case evt := <-accepted:
+		if len(evt.CausedBy) != 1 || evt.CausedBy[0] != input.ID {
+			t.Fatalf("accepted causes = %v, want %q", evt.CausedBy, input.ID)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for accepted status")
+	}
+}
+
+func TestInBridgePreservesInputProducerOnAcceptedEvent(t *testing.T) {
+	b := eventbus.NewBus()
+	a := coreactor.New(&captureInputAgent{}, coresession.New("s1", nil))
+	sub := a.Subscribe()
+	a.Start(context.Background())
+	ib := NewInBridge(b, "s1", a)
+	defer func() {
+		ib.Close()
+		a.Stop()
+	}()
+
+	b.Publish(bus.TopicInbox("s1"), bus.NewUserInput("s1", "loop", bus.UserTextInput{Text: "internal"}))
+	deadline := time.After(time.Second)
+	for {
+		select {
+		case evt := <-sub.Events():
+			if evt.Name != events.CustomInputAccepted {
+				continue
+			}
+			var body events.InputAcceptedBody
+			if err := events.DecodePayload(evt, &body); err != nil {
+				t.Fatal(err)
+			}
+			if len(body.Sources) != 1 || body.Sources[0] != "loop" {
+				t.Fatalf("accepted sources = %v", body.Sources)
+			}
+			return
+		case <-deadline:
+			t.Fatal("timed out waiting for input.accepted")
+		}
+	}
+}
+
+type captureInputAgent struct{}
+
+func (*captureInputAgent) Chat(_ context.Context, _ *api.Request) *api.Response {
+	resp := api.NewResponse()
+	resp.Close()
+	return resp
+}
+
 func TestInBridgeSubmitsFormWhileTurnIsRunning(t *testing.T) {
 	b := eventbus.NewBus()
 	results := make(chan *tools.Result, 1)

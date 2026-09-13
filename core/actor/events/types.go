@@ -8,6 +8,8 @@ package events
 import (
 	"encoding/json"
 	"time"
+
+	"github.com/basenana/friday/core/types"
 )
 
 // EventKind is the AG-UI event type discriminator.
@@ -72,6 +74,7 @@ const (
 	CustomModelTimeout   = "model.timeout"
 	CustomLoopStart      = "loop.start"
 	CustomInputAccepted  = "input.accepted"
+	CustomInputCancelled = "input.cancelled"
 	CustomPlanProposed   = "plan.proposed"
 	CustomModeChanged    = "mode.changed"
 )
@@ -80,6 +83,11 @@ const (
 // (camelCase JSON tags). Internal tracking fields (ActorID, Seq) are
 // not serialized.
 type Event struct {
+	// ID uniquely identifies this event. CausedBy contains the input event IDs
+	// consumed by the actor turn that emitted it. These are transport-level
+	// correlation fields and are never added to the model request.
+	ID          string          `json:"id,omitempty"`
+	CausedBy    []string        `json:"causedBy,omitempty"`
 	Type        EventKind       `json:"type"`
 	RunID       string          `json:"runId,omitempty"`
 	MessageID   string          `json:"messageId,omitempty"`
@@ -96,6 +104,7 @@ type Event struct {
 // NewEvent constructs an Event with the given kind and current timestamp.
 func NewEvent(kind EventKind, runID string) Event {
 	return Event{
+		ID:        types.NewID(),
 		Type:      kind,
 		RunID:     runID,
 		Timestamp: time.Now(),
