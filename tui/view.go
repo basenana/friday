@@ -299,7 +299,7 @@ func (m *model) layout() {
 
 func (m *model) renderQueue() string {
 	start := max(len(m.queued)-3, 0)
-	lines := []string{mutedStyle.Render(fmt.Sprintf("queued (%d) · Tab while running", len(m.queued)))}
+	lines := []string{mutedStyle.Render(fmt.Sprintf("up next (%d) · sent after the current task", len(m.queued)))}
 	for i := start; i < len(m.queued); i++ {
 		lines = append(lines, fmt.Sprintf("  %d. %s", i+1, terminalSafe(firstLine(m.queued[i].text))))
 	}
@@ -342,7 +342,11 @@ func (m *model) renderStatus() string {
 	if modelName == "" {
 		modelName = "model?"
 	}
-	parts := []string{"friday", modelName, string(m.mode), "session:" + shortID(m.sessionID)}
+	mode := string(m.mode)
+	if m.loopActive {
+		mode = "loop"
+	}
+	parts := []string{modelName, mode, "session:" + shortID(m.sessionID)}
 	if m.latestPlan != nil && m.latestPlan.Status == planning.ArtifactProposed {
 		parts = append(parts, "plan ready")
 	}
@@ -357,7 +361,11 @@ func (m *model) renderStatus() string {
 		}
 	}
 	if m.running {
-		parts = append(parts, "● running "+formatElapsed(m.currentElapsed()), "Enter steer", "Tab queue")
+		if m.loopActive {
+			parts = append(parts, "● running", "Enter/Tab send next", "Esc cancel")
+		} else {
+			parts = append(parts, "● running", "Enter interrupt", "Tab send next")
+		}
 	} else if m.planCompacting {
 		parts = append(parts, "● compacting plan context")
 	} else if m.manualCompacting {

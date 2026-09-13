@@ -56,7 +56,7 @@ func toolStatusStyle(block *chatBlock) (style lipgloss.Style, icon string) {
 func (m *model) presentTool(block *chatBlock) toolPresentation {
 	args, valid := decodeToolArguments(block.toolArgs)
 	if presentation, ok := m.presentBuiltinTool(block.toolName, args); ok {
-		if !valid && strings.TrimSpace(block.toolArgs) != "" && block.toolName != "write_todos" {
+		if !valid && strings.TrimSpace(block.toolArgs) != "" && block.toolName != "write_todos" && block.toolName != "request_user_input" {
 			presentation.body = unavailableToolArguments(block)
 		}
 		return presentation
@@ -79,6 +79,8 @@ func (m *model) presentBuiltinTool(name string, args map[string]any) (toolPresen
 	switch name {
 	case "write_todos":
 		return toolPresentation{title: "Update todos", specialized: true}, true
+	case "request_user_input":
+		return toolPresentation{title: "Ask user", specialized: true}, true
 	case "fs_read":
 		return toolPresentation{title: "Read file", body: labeledValue("path", value("path")), specialized: true}, true
 	case "fs_list":

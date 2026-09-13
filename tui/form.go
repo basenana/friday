@@ -10,6 +10,8 @@ import (
 
 	"charm.land/bubbles/v2/textarea"
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/basenana/friday/bus"
 	"github.com/basenana/friday/core/actor/cards"
@@ -105,16 +107,60 @@ func (f *formState) current() *formFieldState {
 	return &f.fields[f.active]
 }
 
+func (f *formState) isQuestionForm() bool {
+	// plan_questions was emitted by an earlier implementation. Keep accepting
+	// it so an in-flight or restored form still gets the focused question UI.
+	return f.variant == "questions" || f.variant == "plan_questions"
+}
+
+func (f *formState) questionFieldIndexes() []int {
+	indexes := make([]int, 0, len(f.fields))
+	for i := range f.fields {
+		if i > 0 && strings.HasSuffix(f.fields[i].schema.Name, "_other") &&
+			strings.TrimSuffix(f.fields[i].schema.Name, "_other") == f.fields[i-1].schema.Name {
+			continue
+		}
+		indexes = append(indexes, i)
+	}
+	return indexes
+}
+
+func (f *formState) questionOtherIndex(index int) int {
+	other := index + 1
+	if index >= 0 && index < len(f.fields) && other < len(f.fields) &&
+		f.fields[other].schema.Name == f.fields[index].schema.Name+"_other" {
+		return other
+	}
+	return -1
+}
+
 func (f *formState) commitEditor() {
+	if f.isQuestionForm() {
+		if index := f.questionEditorIndex(); index >= 0 {
+			f.fields[index].text = f.editor.Value()
+		}
+		return
+	}
 	if field := f.current(); field != nil && isTextField(field.schema.Type) {
 		field.text = f.editor.Value()
 	}
 }
 
 func (f *formState) loadEditor() {
-	field := f.current()
-	if field == nil {
+	index := f.active
+	if f.isQuestionForm() {
+		index = f.questionEditorIndex()
+	}
+	if index < 0 || index >= len(f.fields) {
+		f.editor.SetValue("")
+		f.editor.Placeholder = ""
+		f.editor.SetHeight(1)
 		return
+	}
+	field := &f.fields[index]
+	f.editor.Placeholder = terminalSafe(field.schema.Placeholder)
+	if f.isQuestionForm() && f.editor.Placeholder == "" {
+		f.editor.Placeholder = "Type your answer…"
 	}
 	f.editor.SetValue(terminalSafe(field.text))
 	f.editor.CursorEnd()
@@ -123,6 +169,21 @@ func (f *formState) loadEditor() {
 	} else {
 		f.editor.SetHeight(1)
 	}
+}
+
+func (f *formState) questionEditorIndex() int {
+	field := f.current()
+	if field == nil {
+		return -1
+	}
+	if isTextField(field.schema.Type) {
+		return f.active
+	}
+	if field.schema.Type == cards.FieldSelect && len(field.schema.Options) > field.option &&
+		strings.EqualFold(fmt.Sprint(field.schema.Options[field.option].Value), "Other") {
+		return f.questionOtherIndex(f.active)
+	}
+	return -1
 }
 
 func isTextField(kind cards.FieldType) bool {
@@ -154,13 +215,32 @@ func (f *formState) move(delta int) {
 	f.err = ""
 }
 
+func (f *formState) moveQuestion(delta int) {
+	indexes := f.questionFieldIndexes()
+	if len(indexes) == 0 {
+		return
+	}
+	f.commitEditor()
+	position := 0
+	for i, index := range indexes {
+		if index == f.active || index+1 == f.active && f.questionOtherIndex(index) == f.active {
+			position = i
+			break
+		}
+	}
+	position = max(0, min(position+delta, len(indexes)-1))
+	f.active = indexes[position]
+	f.loadEditor()
+	f.err = ""
+}
+
 // visibleFieldIndexes implements the request_user_input convention where a
-// select named "foo" may be followed by "foo_other". The free-form input is
-// shown only when the user actually chooses Other.
+// select named "foo" may be followed by "foo_other". Generic forms still use
+// this list view; question forms have a dedicated one-question-at-a-time view.
 func (f *formState) visibleFieldIndexes() []int {
 	visible := make([]int, 0, len(f.fields))
 	for i := range f.fields {
-		if f.variant == "plan_questions" && strings.HasSuffix(f.fields[i].schema.Name, "_other") {
+		if f.isQuestionForm() && strings.HasSuffix(f.fields[i].schema.Name, "_other") {
 			base := strings.TrimSuffix(f.fields[i].schema.Name, "_other")
 			if i > 0 && f.fields[i-1].schema.Name == base && f.fields[i-1].schema.Type == cards.FieldSelect {
 				selectField := &f.fields[i-1]
@@ -175,7 +255,7 @@ func (f *formState) visibleFieldIndexes() []int {
 }
 
 func (f *formState) conditionalOtherVisible(index int) bool {
-	if f.variant != "plan_questions" || index <= 0 || index >= len(f.fields) || !strings.HasSuffix(f.fields[index].schema.Name, "_other") {
+	if !f.isQuestionForm() || index <= 0 || index >= len(f.fields) || !strings.HasSuffix(f.fields[index].schema.Name, "_other") {
 		return false
 	}
 	base := strings.TrimSuffix(f.fields[index].schema.Name, "_other")
@@ -210,6 +290,11 @@ func (m *model) updateForm(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.cancelForm()
 	case "ctrl+s":
 		return m.submitForm()
+	}
+	if f.isQuestionForm() {
+		return m.updateQuestionForm(key)
+	}
+	switch key.String() {
 	case "tab":
 		f.move(1)
 		return m, nil
@@ -268,6 +353,83 @@ func (m *model) updateForm(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 }
 
+func (m *model) updateQuestionForm(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	f := m.form
+	field := f.current()
+	if field == nil {
+		return m, nil
+	}
+	switch key.Code {
+	case tea.KeyLeft:
+		f.moveQuestion(-1)
+		return m, nil
+	case tea.KeyRight:
+		f.moveQuestion(1)
+		return m, nil
+	case tea.KeyUp, tea.KeyDown:
+		if field.schema.Type == cards.FieldSelect && len(field.schema.Options) > 0 {
+			f.commitEditor()
+			delta := 1
+			if key.Code == tea.KeyUp {
+				delta = -1
+			}
+			field.option = (field.option + delta + len(field.schema.Options)) % len(field.schema.Options)
+			f.loadEditor()
+			f.dirty = true
+			f.err = ""
+		}
+		return m, nil
+	case tea.KeyEnter:
+		f.dirty = true
+		f.commitEditor()
+		if err := m.validateCurrentQuestion(); err != nil {
+			f.err = err.Error()
+			return m, nil
+		}
+		indexes := f.questionFieldIndexes()
+		if len(indexes) > 0 && f.active == indexes[len(indexes)-1] {
+			return m.submitForm()
+		}
+		f.moveQuestion(1)
+		return m, nil
+	case tea.KeyTab:
+		f.moveQuestion(1)
+		return m, nil
+	}
+	if key.String() == "shift+tab" {
+		f.moveQuestion(-1)
+		return m, nil
+	}
+	if f.questionEditorIndex() < 0 {
+		return m, nil
+	}
+	if key.String() == "ctrl+j" {
+		key = tea.KeyPressMsg{Code: tea.KeyEnter}
+	}
+	var cmd tea.Cmd
+	f.editor, cmd = f.editor.Update(key)
+	f.dirty = true
+	f.err = ""
+	return m, cmd
+}
+
+func (m *model) validateCurrentQuestion() error {
+	f := m.form
+	field := f.current()
+	if field == nil {
+		return nil
+	}
+	if field.schema.Type == cards.FieldSelect && len(field.schema.Options) > field.option &&
+		strings.EqualFold(fmt.Sprint(field.schema.Options[field.option].Value), "Other") {
+		other := f.questionOtherIndex(f.active)
+		if other < 0 || strings.TrimSpace(f.fields[other].text) == "" {
+			return fmt.Errorf("Please write your answer")
+		}
+	}
+	_, err := m.formValue(field)
+	return err
+}
+
 func (m *model) cancelForm() (tea.Model, tea.Cmd) {
 	id := m.form.id
 	m.registry.Bus().Publish(bus.TopicInbox(m.sessionID), bus.NewFormCancel(m.sessionID, "user.local", bus.FormCancelInput{FormID: id}))
@@ -283,13 +445,19 @@ func (m *model) submitForm() (tea.Model, tea.Cmd) {
 	for i := range f.fields {
 		if f.conditionalOtherVisible(i) && strings.TrimSpace(f.fields[i].text) == "" {
 			f.active = i
+			if f.isQuestionForm() {
+				f.active = i - 1
+			}
 			f.loadEditor()
-			f.err = "Please provide the other answer"
+			f.err = "Please write your answer"
 			return m, nil
 		}
 		value, err := m.formValue(&f.fields[i])
 		if err != nil {
 			f.active = i
+			if f.isQuestionForm() && strings.HasSuffix(f.fields[i].schema.Name, "_other") {
+				f.active = i - 1
+			}
 			f.loadEditor()
 			f.err = err.Error()
 			return m, nil
@@ -535,6 +703,9 @@ func (m *model) validateNestedValue(schema cards.Field, value any, path string) 
 }
 
 func (f *formState) Height(width int) int {
+	if f.isQuestionForm() {
+		return lipgloss.Height(f.viewQuestions(width))
+	}
 	height := min(len(f.visibleFieldIndexes()), 8) + 5
 	if field := f.current(); field != nil && isTextField(field.schema.Type) {
 		height += f.editor.Height()
@@ -555,6 +726,9 @@ func (f *formState) Height(width int) int {
 }
 
 func (f *formState) View(width int) string {
+	if f.isQuestionForm() {
+		return f.viewQuestions(width)
+	}
 	title := f.title
 	if title == "" {
 		title = "Input required"
@@ -618,6 +792,79 @@ func (f *formState) View(width int) string {
 		lines = append(lines, mutedStyle.Render("Submitting…"))
 	} else {
 		lines = append(lines, mutedStyle.Render("Tab next · Space/←/→ choose · Ctrl+S submit · Esc cancel"))
+	}
+	return menuStyle.Copy().BorderForeground(themeAccent).Width(max(width-4, 20)).Render(strings.Join(lines, "\n"))
+}
+
+func (f *formState) viewQuestions(width int) string {
+	indexes := f.questionFieldIndexes()
+	if len(indexes) == 0 {
+		return ""
+	}
+	position := 0
+	for i, index := range indexes {
+		if index == f.active {
+			position = i
+			break
+		}
+	}
+	field := &f.fields[indexes[position]]
+	contentWidth := max(width-8, 16)
+	lines := []string{accentStyle.Copy().Bold(true).Render(fmt.Sprintf("? Question %d/%d", position+1, len(indexes)))}
+	question := field.schema.Help
+	if question == "" {
+		question = field.schema.Label
+	}
+	if question == "" {
+		question = field.schema.Name
+	}
+	lines = append(lines, accentStyle.Copy().Bold(true).Render(ansi.Wrap(terminalSafe(question), contentWidth, "")), "")
+
+	switch field.schema.Type {
+	case cards.FieldSelect:
+		for i, option := range field.schema.Options {
+			label := option.Label
+			if strings.EqualFold(fmt.Sprint(option.Value), "Other") {
+				label = "Write your own answer"
+			}
+			if option.Description != "" && !strings.EqualFold(fmt.Sprint(option.Value), "Other") {
+				label += " — " + option.Description
+			}
+			marker := "  ○ "
+			style := mutedStyle
+			if i == field.option {
+				marker = "› ● "
+				style = accentStyle.Copy().Bold(true)
+			}
+			wrapped := strings.Split(ansi.Wrap(terminalSafe(label), max(contentWidth-lipgloss.Width(marker), 8), ""), "\n")
+			for lineIndex, line := range wrapped {
+				prefix := strings.Repeat(" ", lipgloss.Width(marker))
+				if lineIndex == 0 {
+					prefix = marker
+				}
+				lines = append(lines, style.Render(prefix+line))
+			}
+			if i == field.option && strings.EqualFold(fmt.Sprint(option.Value), "Other") && f.questionOtherIndex(f.active) >= 0 {
+				lines = append(lines, f.editor.View())
+			}
+		}
+	default:
+		lines = append(lines, f.editor.View())
+	}
+
+	if f.err != "" {
+		lines = append(lines, errorStyle.Render(terminalSafe(f.err)))
+	}
+	if f.confirmCancel {
+		lines = append(lines, errorStyle.Render("Discard answers? y/n"))
+	} else if f.submitting {
+		lines = append(lines, mutedStyle.Render("Submitting…"))
+	} else {
+		action := "Enter next"
+		if position == len(indexes)-1 {
+			action = "Enter submit"
+		}
+		lines = append(lines, mutedStyle.Render("↑/↓ choose · "+action+" · ←/→ question · Esc cancel"))
 	}
 	return menuStyle.Copy().BorderForeground(themeAccent).Width(max(width-4, 20)).Render(strings.Join(lines, "\n"))
 }

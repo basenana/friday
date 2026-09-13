@@ -75,7 +75,7 @@ Returns answers in the same order as the supplied questions.`),
 					seenOptions[key] = true
 					field.Options = append(field.Options, cards.Option{Label: option, Value: option})
 				}
-				field.Options = append(field.Options, cards.Option{Label: "Other", Value: "Other", Description: "Provide a different answer in the text field that appears below."})
+				field.Options = append(field.Options, cards.Option{Label: "Write your own answer", Value: "Other"})
 				schema.Fields = append(schema.Fields, field, cards.Field{Name: id + "_other", Label: header + " — Other", Type: cards.FieldText})
 			}
 			if questionCount == 0 {

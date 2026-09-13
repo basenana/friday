@@ -279,6 +279,7 @@ func (m *model) applyCollaborationAction(action codercmds.Action) (bool, tea.Cmd
 			m.appendBlock(chatBlock{kind: blockError, content: "loop: " + err.Error()})
 			return true, nil
 		}
+		m.loopActive = true
 		m.appendBlock(chatBlock{kind: blockDivider, content: "loop · started"})
 		return true, m.spinner.Tick
 	}
@@ -377,6 +378,7 @@ func (m *model) switchSession(newID string) (tea.Cmd, error) {
 	m.subscriptionToken++
 	m.tokenCount, m.iteration = 0, 0
 	m.running, m.cancelling, m.steeringPending = false, false, false
+	m.loopActive = false
 	m.runStartedAt = time.Time{}
 	m.runActivity = ""
 	m.lastFinishedRun = ""
@@ -389,6 +391,8 @@ func (m *model) switchSession(newID string) (tea.Cmd, error) {
 	if lifecycle, ok := m.registry.Lifecycle(newID); ok && lifecycle.Current() != nil {
 		if err := m.loopManager.Attach(context.Background(), lifecycle.Current()); err != nil {
 			m.appendBlock(chatBlock{kind: blockError, content: "restore loop: " + err.Error()})
+		} else if err := m.refreshLoopStatus(); err != nil {
+			m.appendBlock(chatBlock{kind: blockError, content: "restore loop status: " + err.Error()})
 		}
 	}
 	if oldFeed != nil {
@@ -430,7 +434,7 @@ func sessionSwitchError(cause, cleanup error) error {
 
 func (m *model) runAgentCmd(agentName, input string) tea.Cmd {
 	if m.running {
-		m.appendBlock(chatBlock{kind: blockError, content: "a task is already running; queue it with Tab"})
+		m.appendBlock(chatBlock{kind: blockError, content: "a task is already running; send it after the current task with Tab"})
 		return nil
 	}
 	wrapped := fmt.Sprintf("[/%s] %s\n\nDelegate this to the %q subagent via the run_task tool. Return the subagent's final report verbatim as your answer.", agentName, input, agentName)

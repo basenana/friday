@@ -180,6 +180,7 @@ type model struct {
 	tokenCount        int
 	iteration         int
 	mode              collaboration.Mode
+	loopActive        bool
 	latestPlan        *planning.Artifact
 	planProposalRunID string
 	activeModel       config.ModelConfig
@@ -332,6 +333,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if lifecycle, ok := m.registry.Lifecycle(msg.sessionID); ok && lifecycle.Current() != nil {
 			if err := m.loopManager.Attach(context.Background(), lifecycle.Current()); err != nil {
 				m.appendBlock(chatBlock{kind: blockError, content: "restore loop: " + err.Error()})
+			} else if err := m.refreshLoopStatus(); err != nil {
+				m.appendBlock(chatBlock{kind: blockError, content: "restore loop status: " + err.Error()})
 			}
 		}
 		m.subscriptionToken++
@@ -679,6 +682,15 @@ func (m *model) submitComposer() (tea.Model, tea.Cmd) {
 		return m.handleSlash(text)
 	}
 	if m.running {
+		activeLoop, err := m.isLoopActive()
+		if err != nil {
+			m.appendBlock(chatBlock{kind: blockError, content: "read loop state: " + err.Error()})
+			activeLoop = m.loopActive
+		}
+		if activeLoop {
+			m.loopActive = true
+			return m.sendLoopInbox(text)
+		}
 		return m.startUserTurn(text, bus.DeliverySteer)
 	}
 	return m.startUserTurn(text, bus.DeliveryNormal)
@@ -690,29 +702,32 @@ func (m *model) queueComposer() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.rememberPrompt(text)
-	if lifecycle, ok := m.registry.Lifecycle(m.sessionID); ok && lifecycle.Current() != nil {
-		active, err := m.loopManager.IsActive(context.Background(), lifecycle.Current())
-		if err != nil {
-			m.appendBlock(chatBlock{kind: blockError, content: "queue input: " + err.Error()})
-		} else if active {
-			turnID := types.NewID()
-			m.appendBlock(chatBlock{kind: blockUser, id: turnID, content: text})
-			m.seenInputs[turnID] = true
-			m.textarea.Reset()
-			m.menu = menuState{}
-			if err := m.sendUserText(text, bus.DeliveryNormal, turnID); err != nil {
-				m.appendBlock(chatBlock{kind: blockError, content: err.Error()})
-				return m, nil
-			}
-			m.layout()
-			return m, m.spinner.Tick
-		}
+	active, err := m.isLoopActive()
+	if err != nil {
+		m.appendBlock(chatBlock{kind: blockError, content: "queue input: " + err.Error()})
+	} else if active {
+		m.textarea.Reset()
+		m.menu = menuState{}
+		m.loopActive = true
+		return m.sendLoopInbox(text)
 	}
 	m.queued = append(m.queued, pendingInput{text: text})
 	m.textarea.Reset()
 	m.menu = menuState{}
 	m.layout()
 	return m, nil
+}
+
+func (m *model) sendLoopInbox(text string) (tea.Model, tea.Cmd) {
+	turnID := types.NewID()
+	m.appendBlock(chatBlock{kind: blockUser, id: turnID, content: text})
+	m.seenInputs[turnID] = true
+	if err := m.sendUserText(text, bus.DeliveryNormal, turnID); err != nil {
+		m.appendBlock(chatBlock{kind: blockError, content: err.Error()})
+		return m, nil
+	}
+	m.layout()
+	return m, m.spinner.Tick
 }
 
 func (m *model) dispatchNextQueued() (tea.Model, tea.Cmd) {
@@ -768,6 +783,7 @@ func (m *model) cancelActiveLoop() bool {
 		if cancelled, err := m.loopManager.Cancel(context.Background(), lifecycle.Current()); err != nil {
 			m.appendBlock(chatBlock{kind: blockError, content: "cancel loop: " + err.Error()})
 		} else if cancelled {
+			m.loopActive = false
 			m.appendBlock(chatBlock{kind: blockDivider, content: "loop · cancelled"})
 			return true
 		}
@@ -782,6 +798,8 @@ func (m *model) recordLoopRunFinished(stopReason string) {
 	if lifecycle, ok := m.registry.Lifecycle(m.sessionID); ok && lifecycle.Current() != nil {
 		if err := m.loopManager.RecordRunFinished(context.Background(), lifecycle.Current(), stopReason); err != nil {
 			m.appendBlock(chatBlock{kind: blockError, content: "record loop state: " + err.Error()})
+		} else if err := m.refreshLoopStatus(); err != nil {
+			m.appendBlock(chatBlock{kind: blockError, content: "read loop state: " + err.Error()})
 		}
 	}
 }
@@ -793,8 +811,30 @@ func (m *model) recordLoopRunError() {
 	if lifecycle, ok := m.registry.Lifecycle(m.sessionID); ok && lifecycle.Current() != nil {
 		if err := m.loopManager.RecordRunError(context.Background(), lifecycle.Current()); err != nil {
 			m.appendBlock(chatBlock{kind: blockError, content: "record loop failure: " + err.Error()})
+		} else if err := m.refreshLoopStatus(); err != nil {
+			m.appendBlock(chatBlock{kind: blockError, content: "read loop state: " + err.Error()})
 		}
 	}
+}
+
+func (m *model) refreshLoopStatus() error {
+	active, err := m.isLoopActive()
+	if err != nil {
+		return err
+	}
+	m.loopActive = active
+	return nil
+}
+
+func (m *model) isLoopActive() (bool, error) {
+	if m.loopManager == nil {
+		return false, nil
+	}
+	lifecycle, ok := m.registry.Lifecycle(m.sessionID)
+	if !ok || lifecycle.Current() == nil {
+		return false, nil
+	}
+	return m.loopManager.IsActive(context.Background(), lifecycle.Current())
 }
 
 func (m *model) sendUserText(text string, delivery bus.InputDelivery, turnID string) error {

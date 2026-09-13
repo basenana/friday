@@ -12,6 +12,7 @@ func TestBuiltinToolCardPresentations(t *testing.T) {
 		name, args, wantTitle, wantBody string
 	}{
 		{"write_todos", `{"todo_list":[]}`, "Update todos", ""},
+		{"request_user_input", `{"question_1":"Which scope?","options_1":["Small","Large"]}`, "Ask user", ""},
 		{"fs_read", `{"path":"main.go"}`, "Read file", "main.go"},
 		{"fs_list", `{}`, "List directory", "."},
 		{"fs_write", `{"path":"out.txt","content":"hello"}`, "Write file", "5 bytes"},
@@ -57,6 +58,16 @@ func TestSpecializedToolCardsHideOutputAndKeepDetails(t *testing.T) {
 	detail := toolDetailContent(block)
 	if !strings.Contains(detail, "SECRET LONG SUBAGENT REPORT") || !strings.Contains(detail, "review this patch") {
 		t.Fatalf("detail = %q", detail)
+	}
+}
+
+func TestRequestUserInputToolCardDefersQuestionsToInteractiveCard(t *testing.T) {
+	configureTheme(true)
+	m := &model{width: 80}
+	block := &chatBlock{toolName: "request_user_input", toolArgs: `{"question_1":"Which scope?","options_1":["Small","Large"]}`, toolArgsComplete: true, pending: true}
+	card := terminalSafe(m.renderToolCard(block))
+	if !strings.Contains(card, "Ask user") || strings.Contains(card, "Which scope?") || strings.Contains(card, "question_1") {
+		t.Fatalf("request_user_input tool card = %q", card)
 	}
 }
 

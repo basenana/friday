@@ -179,8 +179,8 @@ func TestRunElapsedStatusAndCompletionMarker(t *testing.T) {
 	startEvent := events.NewEvent(events.KindRunStarted, "run-time")
 	startEvent.Timestamp = started
 	m.handleActorEvent(startEvent)
-	if status := m.renderStatus(); !strings.Contains(status, "running 1m 08s") {
-		t.Fatalf("running status = %q", status)
+	if status := terminalSafe(m.renderStatus()); !strings.Contains(status, "● running") || strings.Contains(status, "1m 08s") || strings.Contains(status, "friday") {
+		t.Fatalf("running status should be concise and omit elapsed time and branding: %q", status)
 	}
 
 	finishEvent := events.NewEvent(events.KindRunFinished, "run-time").WithPayload(events.RunFinishedData{
@@ -198,6 +198,22 @@ func TestRunElapsedStatusAndCompletionMarker(t *testing.T) {
 	m.handleActorEvent(finishEvent)
 	if len(m.messages) != count {
 		t.Fatal("duplicate RUN_FINISHED produced a second completion marker")
+	}
+}
+
+func TestStatusShowsLoopAsModeAndExplainsRunningKeys(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	m.width = 120
+	m.loopActive = true
+	m.running = true
+	status := terminalSafe(m.renderStatus())
+	for _, want := range []string{"loop", "Enter/Tab send next", "Esc cancel"} {
+		if !strings.Contains(status, want) {
+			t.Fatalf("status missing %q: %q", want, status)
+		}
+	}
+	if strings.Contains(status, "default") || strings.Contains(status, "Tab queue") {
+		t.Fatalf("status exposed the underlying mode or old queue wording: %q", status)
 	}
 }
 
@@ -476,8 +492,48 @@ func TestSelectorFilteringAndConditionalOtherField(t *testing.T) {
 	m, _, _ := newTestModel(t)
 	m.form = f
 	m.submitForm()
-	if m.form.err == "" || m.form.active != 1 {
+	if m.form.err == "" || m.form.active != 0 {
 		t.Fatalf("blank Other answer was accepted: active=%d err=%q", m.form.active, m.form.err)
+	}
+}
+
+func TestQuestionFormUsesOnePageArrowNavigationAndEnterSubmission(t *testing.T) {
+	f, err := newFormState("questions", map[string]any{"variant": "questions", "fields": []any{
+		map[string]any{"name": "question_1", "label": "Question 1", "help": "Which scope?", "type": "select", "required": true, "options": []any{
+			map[string]any{"label": "Small", "value": "Small"},
+			map[string]any{"label": "Large", "value": "Large"},
+			map[string]any{"label": "Write your own answer", "value": "Other"},
+		}},
+		map[string]any{"name": "question_1_other", "type": "text"},
+		map[string]any{"name": "question_2", "label": "Question 2", "help": "Any constraints?", "type": "text", "required": true},
+	}}, 80)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, _, _ := newTestModel(t)
+	m.form = f
+	view := terminalSafe(f.View(80))
+	if !strings.Contains(view, "Question 1/2") || !strings.Contains(view, "Which scope?") || strings.Contains(view, "Any constraints?") {
+		t.Fatalf("question page = %q", view)
+	}
+
+	_, _ = m.updateForm(tea.KeyPressMsg{Code: tea.KeyDown})
+	_, _ = m.updateForm(tea.KeyPressMsg{Code: tea.KeyDown})
+	f.editor.SetValue("Medium")
+	_, _ = m.updateForm(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if f.active != 2 || f.fields[1].text != "Medium" {
+		t.Fatalf("custom answer did not advance: active=%d other=%q", f.active, f.fields[1].text)
+	}
+
+	_, _ = m.updateForm(tea.KeyPressMsg{Code: tea.KeyLeft})
+	if f.active != 0 || f.fields[1].text != "Medium" {
+		t.Fatalf("left did not restore the first answer: active=%d other=%q", f.active, f.fields[1].text)
+	}
+	_, _ = m.updateForm(tea.KeyPressMsg{Code: tea.KeyRight})
+	f.editor.SetValue("Keep compatibility")
+	_, _ = m.updateForm(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if !f.submitting || f.err != "" {
+		t.Fatalf("last Enter did not submit: submitting=%v err=%q", f.submitting, f.err)
 	}
 }
 

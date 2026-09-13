@@ -39,6 +39,9 @@ func TestTUILoopCommandSeedsRecordsAndIdleEscCancels(t *testing.T) {
 	if state != string(coderloop.StateActive) {
 		t.Fatalf("loop state = %q", state)
 	}
+	if !m.loopActive || !strings.Contains(terminalSafe(m.renderStatus()), "loop") {
+		t.Fatalf("status did not enter Loop mode: active=%v status=%q", m.loopActive, terminalSafe(m.renderStatus()))
+	}
 
 	// There is a small interval before RUN_STARTED reaches the TUI. Esc must
 	// still cancel an active Loop during that interval.
@@ -47,6 +50,9 @@ func TestTUILoopCommandSeedsRecordsAndIdleEscCancels(t *testing.T) {
 	m = got.(*model)
 	if state := readLoopState(t, sess); state != string(coderloop.StateCancelled) {
 		t.Fatalf("state after Esc = %q", state)
+	}
+	if m.loopActive {
+		t.Fatal("status remained in Loop mode after cancellation")
 	}
 }
 
@@ -108,7 +114,7 @@ func TestTUITabDuringLoopPublishesNormalActorInput(t *testing.T) {
 		bus.NewScopedPreempt(m.sessionID, "test", "cleanup", bus.PreemptCurrent))
 }
 
-func TestTUIEnterDuringLoopPublishesSteeringInput(t *testing.T) {
+func TestTUIEnterDuringLoopAddsNormalInboxInputWithoutCancelling(t *testing.T) {
 	m, _, _ := newTestModel(t)
 	lifecycle, _ := m.registry.Lifecycle(m.sessionID)
 	sess := lifecycle.Current()
@@ -127,14 +133,24 @@ func TestTUIEnterDuringLoopPublishesSteeringInput(t *testing.T) {
 	defer m.registry.Bus().Unsubscribe(id)
 
 	m.running = true
+	m.loopActive = true
+	before := len(m.messages)
 	m.textarea.SetValue("stop changing the API; preserve compatibility")
 	got, _ := m.updateKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = got.(*model)
-	if !m.steeringPending {
-		t.Fatal("Enter did not mark immediate steering as pending")
+	if m.steeringPending {
+		t.Fatal("Enter incorrectly marked Loop input as steering")
 	}
-	if state := readLoopState(t, sess); state != string(coderloop.StateCancelled) {
-		t.Fatalf("loop state after steer = %q", state)
+	if state := readLoopState(t, sess); state != string(coderloop.StateActive) {
+		t.Fatalf("Loop state after user input = %q", state)
+	}
+	if !m.loopActive {
+		t.Fatal("Loop status was cleared by normal user input")
+	}
+	for _, message := range m.messages[before:] {
+		if message.kind == blockDivider && message.content == "loop · cancelled" {
+			t.Fatal("normal user input rendered a Loop cancellation marker")
+		}
 	}
 	select {
 	case env := <-inbox:
@@ -142,11 +158,11 @@ func TestTUIEnterDuringLoopPublishesSteeringInput(t *testing.T) {
 		if err := events.DecodePayload(env.Event, &body); err != nil {
 			t.Fatal(err)
 		}
-		if body.Text != "stop changing the API; preserve compatibility" || body.Delivery != bus.DeliverySteer {
-			t.Fatalf("steering input = %+v", body)
+		if body.Text != "stop changing the API; preserve compatibility" || body.Delivery != bus.DeliveryNormal {
+			t.Fatalf("Loop inbox input = %+v", body)
 		}
 	case <-time.After(time.Second):
-		t.Fatal("Enter input was not published to the Actor inbox")
+		t.Fatal("Enter input was not added to the Actor inbox")
 	}
 
 	_, _ = m.loopManager.Cancel(context.Background(), sess)

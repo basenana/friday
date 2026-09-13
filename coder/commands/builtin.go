@@ -80,8 +80,8 @@ func buildHelpText(reg *Registry) string {
 		b.WriteString(fmt.Sprintf("- `%s` — %s · `%s`\n", name, cmd.Description(), meta.Usage))
 	}
 	b.WriteString("\n## Keys\n\n")
-	b.WriteString("- `Enter` — Send; while running, steer the active task\n")
-	b.WriteString("- `Tab` — Complete a command; while running, queue input\n")
+	b.WriteString("- `Enter` — Send; during Loop, send after the current task; otherwise steer the active task\n")
+	b.WriteString("- `Tab` — Complete a command; while running, send input after the current task\n")
 	b.WriteString("- `Ctrl+J` — Insert a newline\n")
 	b.WriteString("- `Ctrl+G` — Edit the prompt with `VISUAL`/`EDITOR`\n")
 	b.WriteString("- `Ctrl+R` — Search prompt history\n")
