@@ -820,6 +820,8 @@ func TestReactFiresAfterModelCallOnError(t *testing.T) {
 	llm := &erroringFakeLLM{}
 	rec := &modelCallRecorder{}
 	sess := session.New("sess-model-call-error", llm, session.WithHooks(rec))
+	eventCh, unsubscribe := sess.SubscribeEvents()
+	defer unsubscribe()
 	resp := New(llm, Option{MaxLoopTimes: 1}).Chat(context.Background(), &api.Request{
 		Session:     sess,
 		UserMessage: "Hello world.",
@@ -838,6 +840,21 @@ func TestReactFiresAfterModelCallOnError(t *testing.T) {
 	}
 	if st.Tokens.PromptTokens != 0 {
 		t.Fatalf("expected zero tokens on error, got %#v", st.Tokens)
+	}
+	var modelEvents []types.EventType
+	draining := true
+	for draining {
+		select {
+		case event := <-eventCh:
+			if event.Type == types.EventModelRetry || event.Type == types.EventModelError {
+				modelEvents = append(modelEvents, event.Type)
+			}
+		default:
+			draining = false
+		}
+	}
+	if len(modelEvents) != 2 || modelEvents[0] != types.EventModelRetry || modelEvents[1] != types.EventModelError {
+		t.Fatalf("model failure events = %v", modelEvents)
 	}
 }
 
@@ -863,7 +880,11 @@ func TestReactSwallowsAfterModelCallHookError(t *testing.T) {
 
 type erroringFakeLLM struct{}
 
-func (f *erroringFakeLLM) Completion(_ context.Context, _ providers.Request) providers.Response {
+func (f *erroringFakeLLM) Completion(ctx context.Context, _ providers.Request) providers.Response {
+	providers.NotifyRetry(ctx, providers.RetryEvent{
+		Provider: "fake", Model: "fake-model", Attempt: 2, MaxAttempts: 3,
+		Error: errors.New("temporary"), Backoff: time.Millisecond,
+	})
 	resp := providers.NewCommonResponse()
 	go func() {
 		defer close(resp.Stream)

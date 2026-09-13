@@ -86,8 +86,15 @@ func (m *Manager) Attach(ctx context.Context, sess *session.Session) error {
 	switch state {
 	case StateActive:
 		return m.launch(sess, phaseRecovery)
-	case StateFinishing:
-		return m.launch(sess, phaseFinalize)
+	case StateSuspended:
+		changed, transitionErr := transitionState(ctx, sess, []State{StateSuspended}, StateActive)
+		if transitionErr != nil {
+			return transitionErr
+		}
+		if changed {
+			return m.launch(sess, phaseRecovery)
+		}
+		return nil
 	default:
 		return nil
 	}
@@ -126,6 +133,7 @@ func (m *Manager) run(ctx context.Context, c *controller) {
 	for {
 		stopReason, err := m.dispatch(ctx, c, promptFor(c.phase))
 		if err != nil {
+			_, _ = transitionState(context.Background(), c.session, []State{StateActive}, StateFailed)
 			return
 		}
 		state, err := readState(ctx, c.session)
@@ -133,19 +141,19 @@ func (m *Manager) run(ctx context.Context, c *controller) {
 			return
 		}
 		switch state {
-		case StateCancelled, StateCompleted, "":
-			return
-		case StateFinishing:
-			if stopReason == "end_turn" {
-				_, _ = transitionState(context.Background(), c.session, []State{StateFinishing}, StateCompleted)
-			}
+		case StateCancelled, StateCompleted, StateFailed, StateFinishing, StateSuspended, "":
 			return
 		case StateActive:
-			if stopReason != "end_turn" {
-				c.phase = phaseRecovery
-				continue
+			switch stopReason {
+			case "end_turn":
+				c.phase = nextPhase(c.phase)
+			case "cancelled":
+				_, _ = transitionState(context.Background(), c.session, []State{StateActive}, StateCancelled)
+				return
+			default:
+				_, _ = transitionState(context.Background(), c.session, []State{StateActive}, StateFailed)
+				return
 			}
-			c.phase = nextPhase(c.phase)
 		}
 	}
 }
@@ -179,22 +187,6 @@ func (m *Manager) dispatch(ctx context.Context, c *controller, prompt string) (s
 				if slices.Contains(evt.CausedBy, env.ID) {
 					return body.StopReason, nil
 				}
-				// A user or another producer may finish the Loop while this
-				// controller prompt is queued behind that turn. Once that turn has
-				// ended normally, it already delivered the final response. Cancel
-				// our stale prompt and complete without running an extra recovery or
-				// phase turn.
-				if body.StopReason == "end_turn" {
-					state, stateErr := readState(ctx, c.session)
-					if stateErr != nil {
-						return "", stateErr
-					}
-					if state == StateFinishing {
-						m.cancelInput(c.session.ID, env.ID, "loop finished by another input")
-						_, transitionErr := transitionState(context.Background(), c.session, []State{StateFinishing}, StateCompleted)
-						return body.StopReason, transitionErr
-					}
-				}
 				continue
 			}
 			if !slices.Contains(evt.CausedBy, env.ID) {
@@ -221,7 +213,7 @@ func (m *Manager) Cancel(ctx context.Context, sess *session.Session) (bool, erro
 	if !loopEnabled(state) {
 		return false, nil
 	}
-	cancelled, err := transitionState(ctx, sess, []State{StateActive, StateFinishing}, StateCancelled)
+	cancelled, err := transitionState(ctx, sess, []State{StateActive, StateSuspended}, StateCancelled)
 	if err != nil {
 		return false, err
 	}
@@ -261,6 +253,7 @@ func (m *Manager) Detach(sessionID string) {
 	}
 	m.mu.Unlock()
 	if c != nil {
+		_, _ = transitionState(context.Background(), c.session, []State{StateActive}, StateSuspended)
 		c.cancel()
 	}
 }
@@ -274,8 +267,37 @@ func (m *Manager) Close() {
 	m.controllers = make(map[string]*controller)
 	m.mu.Unlock()
 	for _, c := range controllers {
+		_, _ = transitionState(context.Background(), c.session, []State{StateActive}, StateSuspended)
 		c.cancel()
 	}
+}
+
+// RecordRunFinished makes terminal actor outcomes durable even when they were
+// produced by user input rather than by the controller's current prompt.
+func (m *Manager) RecordRunFinished(ctx context.Context, sess *session.Session, stopReason string) error {
+	if sess == nil {
+		return nil
+	}
+	var terminal State
+	switch stopReason {
+	case "cancelled":
+		terminal = StateCancelled
+	case "error":
+		terminal = StateFailed
+	default:
+		return nil
+	}
+	_, err := transitionState(ctx, sess, []State{StateActive}, terminal)
+	return err
+}
+
+// RecordRunError records a model/actor error before RUN_FINISHED arrives.
+func (m *Manager) RecordRunError(ctx context.Context, sess *session.Session) error {
+	if sess == nil {
+		return nil
+	}
+	_, err := transitionState(ctx, sess, []State{StateActive}, StateFailed)
+	return err
 }
 
 func promptFor(p phase) string {

@@ -1,8 +1,12 @@
 package openai
 
 import (
+	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/basenana/friday/core/providers"
@@ -10,6 +14,36 @@ import (
 
 	"github.com/basenana/friday/core/types"
 )
+
+func TestCompletionNonStreamingRetriesAtMostThreePhysicalRequests(t *testing.T) {
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		attempt := calls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Retry-After", "0")
+		if attempt < 3 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(`{"error":{"message":"temporary","type":"server_error"}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"id":"chatcmpl-1","object":"chat.completion","created":1,"model":"gpt-test","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`))
+	}))
+	defer server.Close()
+
+	client := newClient(server.URL, "key", Model{Name: "gpt-test"})
+	var retries []providers.RetryEvent
+	ctx := providers.WithRetryObserver(context.Background(), func(event providers.RetryEvent) { retries = append(retries, event) })
+	out, err := client.CompletionNonStreaming(ctx, providers.NewRequest("hello"))
+	if err != nil || out != "ok" {
+		t.Fatalf("completion = %q, %v", out, err)
+	}
+	if got := calls.Load(); got != 3 {
+		t.Fatalf("physical requests = %d, want 3", got)
+	}
+	if len(retries) != 2 || retries[0].Attempt != 2 || retries[1].Attempt != 3 {
+		t.Fatalf("retry events = %#v", retries)
+	}
+}
 
 func TestNewClientInsecureSkipVerify(t *testing.T) {
 	secure := newClient("https://api.openai.com", "key", Model{Name: "gpt-test", InsecureSkipVerify: false})

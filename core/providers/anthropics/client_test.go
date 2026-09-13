@@ -1,14 +1,50 @@
 package anthropics
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/basenana/friday/core/providers"
 	"github.com/basenana/friday/core/types"
 )
+
+func TestCompletionNonStreamingRetriesAtMostThreePhysicalRequests(t *testing.T) {
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		attempt := calls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Retry-After", "0")
+		if attempt < 3 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(`{"type":"error","error":{"type":"overloaded_error","message":"temporary"}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"id":"msg-1","type":"message","role":"assistant","model":"claude-test","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":1,"output_tokens":1}}`))
+	}))
+	defer server.Close()
+
+	maxTokens := int64(1024)
+	client := newClient(server.URL, "key", Model{Name: "claude-test", MaxTokens: &maxTokens})
+	var retries []providers.RetryEvent
+	ctx := providers.WithRetryObserver(context.Background(), func(event providers.RetryEvent) { retries = append(retries, event) })
+	out, err := client.CompletionNonStreaming(ctx, providers.NewRequest("hello"))
+	if err != nil || out != "ok" {
+		t.Fatalf("completion = %q, %v", out, err)
+	}
+	if got := calls.Load(); got != 3 {
+		t.Fatalf("physical requests = %d, want 3", got)
+	}
+	if len(retries) != 2 || retries[0].Attempt != 2 || retries[1].Attempt != 3 {
+		t.Fatalf("retry events = %#v", retries)
+	}
+}
 
 func TestNewClientInsecureSkipVerify(t *testing.T) {
 	secure := newClient("https://api.anthropic.com", "key", Model{Name: "claude-test", InsecureSkipVerify: false})
@@ -726,6 +762,22 @@ func TestResponseRetryStateResetClearsBufferedAttemptState(t *testing.T) {
 	}
 	if tokens := resp.Tokens(); tokens != (providers.Tokens{}) {
 		t.Fatalf("expected token usage to be reset, got %#v", tokens)
+	}
+}
+
+func TestFailedResponseDoesNotFlushBufferedPartialDeltas(t *testing.T) {
+	resp := newResponse(nil)
+	resp.incompleteTool.ID = "call-partial"
+	resp.incompleteTool.Name = "read_file"
+	resp.incompleteTool.Arguments = `{"path":"unfinished`
+	resp.currentThinking = true
+	resp.currentSignature = "partial-signature"
+	resp.currentRedacted = "partial-redacted"
+	resp.fail(errors.New("stream failed"))
+	resp.close()
+
+	for delta := range resp.Message() {
+		t.Fatalf("failed response flushed partial delta: %#v", delta)
 	}
 }
 

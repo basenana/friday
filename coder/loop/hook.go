@@ -134,8 +134,8 @@ func replaceWorkingNote(ctx context.Context, req *tools.Request) (*tools.Result,
 func finishLoop(ctx context.Context, req *tools.Request) (*tools.Result, error) {
 	err := req.SessionRecords.UpdateRecord(ctx, StateNamespace, func(current []byte) ([]byte, error) {
 		switch State(strings.TrimSpace(string(current))) {
-		case StateActive, StateFinishing:
-			return []byte(StateFinishing), nil
+		case StateActive:
+			return []byte(StateCompleted), nil
 		case StateCancelled:
 			return nil, errors.New("the loop was cancelled by the user")
 		default:
@@ -145,7 +145,7 @@ func finishLoop(ctx context.Context, req *tools.Request) (*tools.Result, error) 
 	if err != nil {
 		return tools.NewToolResultError("finish loop: " + err.Error()), nil
 	}
-	return tools.NewToolResultText("Loop will finish after this turn. Update the Working Note if needed and provide the final user-facing summary now."), nil
+	return tools.NewToolResultText("Loop is complete. Update the Working Note if needed and provide the final user-facing summary now."), nil
 }
 
 func mutationResult(action string, err error) (*tools.Result, error) {

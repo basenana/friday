@@ -54,8 +54,11 @@ func TestWorkingNoteToolsAndRootPermission(t *testing.T) {
 	if finish.IsError {
 		t.Fatalf("finish_loop = %s", tools.Res2Str(finish))
 	}
-	if state, err := readState(ctx, root); err != nil || state != StateFinishing {
+	if state, err := readState(ctx, root); err != nil || state != StateCompleted {
 		t.Fatalf("state after finish = %q, err = %v", state, err)
+	}
+	if err := writeState(ctx, root, StateActive); err != nil {
+		t.Fatal(err)
 	}
 
 	child := root.Fork()

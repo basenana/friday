@@ -218,10 +218,13 @@ func TestRunCompletionFallsBackToEventTimestamps(t *testing.T) {
 func TestRestoreProposedPlanReopensHandoff(t *testing.T) {
 	m, _, _ := newTestModel(t)
 	m.mode = collaboration.ModePlan
-	m.latestPlan = &planning.Artifact{ID: "plan-restore", SessionID: m.sessionID, Version: 1, Status: planning.ArtifactProposed}
+	m.latestPlan = &planning.Artifact{ID: "plan-restore", SessionID: m.sessionID, Version: 1, Status: planning.ArtifactProposed, Markdown: "## Summary\n\nrestored plan"}
 	m.restorePlanHandoff()
 	if m.planHandoff == nil {
 		t.Fatal("proposed plan did not restore approval handoff")
+	}
+	if len(m.messages) == 0 || m.messages[len(m.messages)-1].kind != blockPlan {
+		t.Fatal("proposed plan did not restore its complete history card")
 	}
 }
 
@@ -583,7 +586,7 @@ func TestParallelToolResultsUpdateOriginalStartPositions(t *testing.T) {
 	}
 }
 
-func TestPlanHandoffRendersAndScrollsPersistedPlanWithoutTimelineDuplicate(t *testing.T) {
+func TestPlanHandoffRendersCompletePlanCardWithoutInternalScrolling(t *testing.T) {
 	m, _, _ := newTestModel(t)
 	m.width, m.height = 80, 24
 	lines := make([]string, 30)
@@ -596,20 +599,48 @@ func TestPlanHandoffRendersAndScrollsPersistedPlanWithoutTimelineDuplicate(t *te
 	})
 	before := len(m.messages)
 	m.handleActorEvent(evt)
-	if len(m.messages) != before {
-		t.Fatal("proposed plan was duplicated into the conversation timeline")
+	if len(m.messages) != before+1 || m.messages[len(m.messages)-1].kind != blockPlan {
+		t.Fatal("proposed plan was not added to the conversation timeline")
+	}
+	planCard := terminalSafe(m.renderBlock(&m.messages[len(m.messages)-1]))
+	if !strings.Contains(planCard, "Visible plan") || !strings.Contains(planCard, "plan line 30") {
+		t.Fatalf("plan card was truncated: %q", planCard)
+	}
+	m.handleActorEvent(evt)
+	if len(m.messages) != before+1 {
+		t.Fatal("duplicate proposal event inserted a second plan card")
 	}
 	m.planHandoff = &planHandoffState{}
 	view := m.renderPlanHandoff()
-	if !strings.Contains(view, "Visible plan") || !strings.Contains(view, "Summary") || !strings.Contains(view, "Approve") {
-		t.Fatalf("plan handoff missing content: %q", view)
+	if !strings.Contains(view, "Approve") || !strings.Contains(view, "Request changes") {
+		t.Fatalf("plan handoff missing actions: %q", view)
 	}
-	if m.planHandoff.view.YOffset() != 0 {
-		t.Fatalf("plan viewport did not start at top: %d", m.planHandoff.view.YOffset())
+	if strings.Contains(view, "PgUp") || strings.Contains(view, "PgDn") || strings.Contains(view, "Summary") {
+		t.Fatalf("handoff still contains an internal plan viewport: %q", view)
 	}
-	m.updatePlanHandoff(tea.KeyPressMsg{Code: tea.KeyPgDown})
-	if m.planHandoff.view.YOffset() == 0 {
-		t.Fatal("PageDown did not scroll the plan viewport")
+	for _, width := range []int{80, 40, 30, 20} {
+		m.width, m.height = width, 24
+		m.invalidateRendered()
+		output := terminalSafe(m.View().Content)
+		if !strings.Contains(output, "Approve") || !strings.Contains(output, "Request") || !strings.Contains(output, "changes") {
+			t.Fatalf("%d-column layout hid plan actions: %q", width, output)
+		}
+		if lines := len(strings.Split(strings.TrimRight(output, "\n"), "\n")); lines > m.height {
+			t.Fatalf("%d-column layout uses %d lines, terminal has %d", width, lines, m.height)
+		}
+	}
+}
+
+func TestPlanHandoffOpensWhenProposalRunFinishesWithoutSpecialStopReason(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	m.mode = collaboration.ModePlan
+	m.running, m.currentRunID = true, "run-plan"
+	m.handleActorEvent(events.NewEvent(events.KindCustom, "run-plan").WithName(events.CustomPlanProposed).WithPayload(events.PlanProposedBody{
+		PlanID: "plan-run", Version: 1, Title: "Plan", Markdown: "## Summary\n\ncomplete plan",
+	}))
+	m.handleActorEvent(events.NewEvent(events.KindRunFinished, "run-plan").WithPayload(events.RunFinishedData{StopReason: "end_turn"}))
+	if m.planHandoff == nil {
+		t.Fatal("proposal run completion did not open approval actions")
 	}
 }
 

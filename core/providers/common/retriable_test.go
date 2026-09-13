@@ -3,6 +3,7 @@ package common
 import (
 	"errors"
 	"fmt"
+	"net/http"
 	"testing"
 	"time"
 
@@ -18,6 +19,8 @@ func TestIsRetriableErrorTypedStatusCodes(t *testing.T) {
 	}{
 		{"nil", nil, false},
 		{"anthropic 429", &anthropicapi.Error{StatusCode: 429}, true},
+		{"anthropic 408", &anthropicapi.Error{StatusCode: 408}, true},
+		{"anthropic 409", &anthropicapi.Error{StatusCode: 409}, true},
 		{"anthropic 500", &anthropicapi.Error{StatusCode: 500}, true},
 		{"anthropic 503", &anthropicapi.Error{StatusCode: 503}, true},
 		{"anthropic 529", &anthropicapi.Error{StatusCode: 529}, true},
@@ -53,7 +56,7 @@ func TestIsRetriableErrorUntypedMessages(t *testing.T) {
 		{"request id containing digits", `request id "req_1750293503abc" not found`, false},
 		{"model name containing digits", "model gpt-4-turbo-503-preview not found", false},
 		{"unrelated 500 in id", "conversation 500abc failed with invalid request", false},
-		{"plain error", "connection reset by peer", false},
+		{"connection reset", "connection reset by peer", true},
 		{"context canceled", "context canceled", false},
 	}
 	for _, tc := range cases {
@@ -65,11 +68,22 @@ func TestIsRetriableErrorUntypedMessages(t *testing.T) {
 	}
 }
 
-func TestRetryBackoffDelayGrowsLinearly(t *testing.T) {
-	for attempt, want := range map[int]time.Duration{1: 10 * time.Second, 2: 20 * time.Second, 3: 30 * time.Second} {
-		if got := RetryBackoffDelay(attempt); got != want {
-			t.Fatalf("RetryBackoffDelay(%d) = %v, want %v", attempt, got, want)
+func TestRetryBackoffDelayUsesBoundedExponentialJitter(t *testing.T) {
+	for attempt, bounds := range map[int][2]time.Duration{
+		1: {400 * time.Millisecond, 600 * time.Millisecond},
+		2: {800 * time.Millisecond, 1200 * time.Millisecond},
+	} {
+		got := RetryBackoffDelay(attempt)
+		if got < bounds[0] || got > bounds[1] {
+			t.Fatalf("RetryBackoffDelay(%d) = %v, want within %v", attempt, got, bounds)
 		}
+	}
+}
+
+func TestRetryAfterParsesAndCapsServerDelay(t *testing.T) {
+	err := &openaiapi.Error{Response: &http.Response{Header: http.Header{"Retry-After": []string{"60"}}}}
+	if got, ok := RetryAfter(err, time.Now()); !ok || got != 30*time.Second {
+		t.Fatalf("RetryAfter() = %v, %v; want 30s, true", got, ok)
 	}
 }
 

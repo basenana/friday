@@ -150,6 +150,10 @@ func (t *Translator) FromCoreEvent(evt types.Event) []events.Event {
 		return []events.Event{t.customPassthrough(events.CustomTodoUpdate, evt.Data)}
 	case types.EventModelTimeout:
 		return []events.Event{t.customPassthrough(events.CustomModelTimeout, evt.Data)}
+	case types.EventModelRetry:
+		return []events.Event{t.customPassthrough(events.CustomModelRetry, evt.Data)}
+	case types.EventModelError:
+		return []events.Event{t.customPassthrough(events.CustomModelError, evt.Data)}
 	case types.EventLoopStart:
 		return []events.Event{t.customPassthrough(events.CustomLoopStart, evt.Data)}
 	default:

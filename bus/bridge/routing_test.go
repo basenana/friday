@@ -45,6 +45,8 @@ func TestRouteEvent(t *testing.T) {
 		{"subagent finish", events.NewEvent(events.KindCustom, "r").WithName(events.CustomSubagentFinish), bus.TopicObs(sid, "subagent.finish")},
 		{"todo update", events.NewEvent(events.KindCustom, "r").WithName(events.CustomTodoUpdate), bus.TopicObs(sid, "todo.update")},
 		{"model timeout", events.NewEvent(events.KindCustom, "r").WithName(events.CustomModelTimeout), bus.TopicObs(sid, "model.timeout")},
+		{"model retry", events.NewEvent(events.KindCustom, "r").WithName(events.CustomModelRetry), bus.TopicObs(sid, "model.retry")},
+		{"model error", events.NewEvent(events.KindCustom, "r").WithName(events.CustomModelError), bus.TopicObs(sid, "model.error")},
 		{"loop start", events.NewEvent(events.KindCustom, "r").WithName(events.CustomLoopStart), bus.TopicObs(sid, "loop.start")},
 		{"input accepted", events.NewEvent(events.KindCustom, "r").WithName(events.CustomInputAccepted), bus.TopicObs(sid, "input.accepted")},
 		{"input cancelled", events.NewEvent(events.KindCustom, "").WithName(events.CustomInputCancelled), bus.TopicStatus(sid, bus.StatusInboxCancelled)},

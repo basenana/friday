@@ -18,9 +18,13 @@ type State string
 
 const (
 	StateActive    State = "active"
+	StateSuspended State = "suspended"
+	// StateFinishing is accepted for compatibility with sessions written by
+	// older versions. New code never writes it and it is treated as terminal.
 	StateFinishing State = "finishing"
 	StateCompleted State = "completed"
 	StateCancelled State = "cancelled"
+	StateFailed    State = "failed"
 )
 
 func readState(ctx context.Context, records interface {
@@ -35,7 +39,7 @@ func readState(ctx context.Context, records interface {
 	}
 	state := State(strings.TrimSpace(string(raw)))
 	switch state {
-	case "", StateActive, StateFinishing, StateCompleted, StateCancelled:
+	case "", StateActive, StateSuspended, StateFinishing, StateCompleted, StateCancelled, StateFailed:
 		return state, nil
 	default:
 		return "", fmt.Errorf("unknown loop state %q", state)
@@ -68,5 +72,5 @@ func transitionState(ctx context.Context, records interface {
 }
 
 func loopEnabled(state State) bool {
-	return state == StateActive || state == StateFinishing
+	return state == StateActive || state == StateSuspended
 }

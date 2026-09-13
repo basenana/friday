@@ -133,6 +133,9 @@ func TestTUIEnterDuringLoopPublishesSteeringInput(t *testing.T) {
 	if !m.steeringPending {
 		t.Fatal("Enter did not mark immediate steering as pending")
 	}
+	if state := readLoopState(t, sess); state != string(coderloop.StateCancelled) {
+		t.Fatalf("loop state after steer = %q", state)
+	}
 	select {
 	case env := <-inbox:
 		var body bus.UserTextInput

@@ -2,6 +2,7 @@ package common
 
 import (
 	"context"
+	"math/rand/v2"
 	"time"
 )
 
@@ -27,10 +28,27 @@ func WaitBackoff(ctx context.Context, delay time.Duration) error {
 	}
 }
 
-// RetryBackoffDelay returns the backoff delay to wait before retry attempt
-// (1-based), growing linearly: 10s, 20s, 30s...
-func RetryBackoffDelay(attempt int) time.Duration {
-	return time.Second * time.Duration(10*attempt)
+// RetryBackoffDelay returns exponential backoff for the retry number
+// (1-based), with 20 percent jitter: about 500ms, then about 1s.
+func RetryBackoffDelay(retry int) time.Duration {
+	if retry < 1 {
+		retry = 1
+	}
+	base := 500 * time.Millisecond * time.Duration(1<<(retry-1))
+	jitter := 0.8 + rand.Float64()*0.4
+	delay := time.Duration(float64(base) * jitter)
+	if delay > 30*time.Second {
+		return 30 * time.Second
+	}
+	return delay
+}
+
+// RetryDelay honors Retry-After when present, otherwise uses local backoff.
+func RetryDelay(err error, retry int) time.Duration {
+	if delay, ok := RetryAfter(err, time.Now()); ok {
+		return delay
+	}
+	return RetryBackoffDelay(retry)
 }
 
 // Truncate shortens s to at most max bytes for logging, appending an ellipsis

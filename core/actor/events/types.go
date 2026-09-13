@@ -72,6 +72,8 @@ const (
 	CustomSubagentFinish = "subagent.finish"
 	CustomTodoUpdate     = "todo.update"
 	CustomModelTimeout   = "model.timeout"
+	CustomModelRetry     = "model.retry"
+	CustomModelError     = "model.error"
 	CustomLoopStart      = "loop.start"
 	CustomInputAccepted  = "input.accepted"
 	CustomInputCancelled = "input.cancelled"

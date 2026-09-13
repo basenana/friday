@@ -733,8 +733,12 @@ func (a *Actor) runTurn(ctx context.Context, bctx batchContext, batchSize int) {
 		req.Images = bctx.images
 	}
 
+	// Subscribe before Chat: providers can fail or emit retry events
+	// immediately after Chat starts its response goroutine.
+	coreCh, unsubscribeCore := a.session.SubscribeEvents()
 	resp := a.agent.Chat(turnCtx, req)
-	streamErr := a.pumpResponse(turnCtx, runID, resp)
+	streamErr := a.pumpResponse(turnCtx, runID, resp, coreCh)
+	unsubscribeCore()
 	if streamErr != nil || turnCtx.Err() != nil {
 		// Timeout/provider-error paths can end the response pump before a
 		// blocked form handler observes cancellation. Resolve those interrupts
@@ -885,15 +889,9 @@ func (a *Actor) responseError(ctx context.Context, resp *api.Response) error {
 // and the core session event stream, then waits for both to complete.
 // The delta pump is authoritative: when resp closes, it signals the
 // event pump to exit (the session never closes subscriber channels).
-func (a *Actor) pumpResponse(ctx context.Context, runID string, resp *api.Response) error {
+func (a *Actor) pumpResponse(ctx context.Context, runID string, resp *api.Response, coreCh <-chan types.Event) error {
 	translator := NewTranslator(runID)
 	publish := func(evt events.Event) { a.publish(ctx, evt) }
-
-	// Subscribe to core session events BEFORE we begin consuming the
-	// response, so we do not miss tool.start etc. The unsubscribe
-	// function is invoked after the pump finishes.
-	coreCh, unsub := a.session.SubscribeEvents()
-	defer unsub()
 
 	done := make(chan struct{})
 	var wg sync.WaitGroup

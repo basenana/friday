@@ -44,7 +44,7 @@ func TestManagerAdvancesByInputCausalityWithoutLoopMetadata(t *testing.T) {
 		t.Fatalf("next prompt = %q", secondBody.Text)
 	}
 
-	if err := writeState(context.Background(), sess, StateFinishing); err != nil {
+	if err := writeState(context.Background(), sess, StateCompleted); err != nil {
 		t.Fatal(err)
 	}
 	publishFinished(b, sess.ID, second.ID, "end_turn")
@@ -116,7 +116,7 @@ func TestManagerAttachRecoversActiveLoop(t *testing.T) {
 	assertInputPrompt(t, waitInput(t, inputs), RecoveryPrompt)
 }
 
-func TestManagerAttachFinalizesFinishingLoop(t *testing.T) {
+func TestManagerAttachDoesNotResumeLegacyFinishingLoop(t *testing.T) {
 	b := eventbus.NewBus()
 	m := NewManager(b)
 	defer m.Close()
@@ -135,13 +135,38 @@ func TestManagerAttachFinalizesFinishingLoop(t *testing.T) {
 	if err := m.Attach(context.Background(), sess); err != nil {
 		t.Fatal(err)
 	}
-	input := waitInput(t, inputs)
-	assertInputPrompt(t, input, FinalizePrompt)
-	publishFinished(b, sess.ID, input.ID, "end_turn")
-	waitState(t, sess, StateCompleted)
+	assertNoInput(t, inputs)
+	waitState(t, sess, StateFinishing)
 }
 
-func TestManagerInterruptedTurnEntersRecovery(t *testing.T) {
+func TestManagerAttachDoesNotResumeTerminalStates(t *testing.T) {
+	for _, terminal := range []State{StateCompleted, StateCancelled, StateFailed} {
+		t.Run(string(terminal), func(t *testing.T) {
+			b := eventbus.NewBus()
+			m := NewManager(b)
+			defer m.Close()
+			sess := session.New("root", nil)
+			if err := writeState(context.Background(), sess, terminal); err != nil {
+				t.Fatal(err)
+			}
+			inputs := make(chan bus.Envelope, 1)
+			id := b.SubscribeSerial([]string{bus.TopicInbox(sess.ID)}, func(env bus.Envelope) {
+				if env.Name == bus.InboxUserText {
+					inputs <- env
+				}
+			}, eventbus.SerialConfig{Overflow: eventbus.OverflowBlock})
+			defer b.Unsubscribe(id)
+
+			if err := m.Attach(context.Background(), sess); err != nil {
+				t.Fatal(err)
+			}
+			assertNoInput(t, inputs)
+			waitState(t, sess, terminal)
+		})
+	}
+}
+
+func TestManagerCancelledTurnEndsWithoutRecovery(t *testing.T) {
 	b := eventbus.NewBus()
 	m := NewManager(b)
 	defer m.Close()
@@ -159,15 +184,16 @@ func TestManagerInterruptedTurnEntersRecovery(t *testing.T) {
 	}
 	bootstrap := waitInput(t, inputs)
 	publishFinished(b, sess.ID, bootstrap.ID, "cancelled")
-	assertInputPrompt(t, waitInput(t, inputs), RecoveryPrompt)
+	waitState(t, sess, StateCancelled)
+	assertNoInput(t, inputs)
 }
 
-func TestManagerCancelsPendingPromptWhenAnotherInputFinishesLoop(t *testing.T) {
+func TestManagerErrorTurnEndsWithoutRecovery(t *testing.T) {
 	b := eventbus.NewBus()
 	m := NewManager(b)
 	defer m.Close()
 	sess := session.New("root", nil)
-	inputs := make(chan bus.Envelope, 4)
+	inputs := make(chan bus.Envelope, 2)
 	id := b.SubscribeSerial([]string{bus.TopicInbox(sess.ID)}, func(env bus.Envelope) {
 		inputs <- env
 	}, eventbus.SerialConfig{Overflow: eventbus.OverflowBlock})
@@ -177,26 +203,44 @@ func TestManagerCancelsPendingPromptWhenAnotherInputFinishesLoop(t *testing.T) {
 		t.Fatal(err)
 	}
 	bootstrap := waitInput(t, inputs)
-	publishFinished(b, sess.ID, bootstrap.ID, "cancelled")
-	recovery := waitInput(t, inputs)
-	assertInputPrompt(t, recovery, RecoveryPrompt)
-	if err := writeState(context.Background(), sess, StateFinishing); err != nil {
-		t.Fatal(err)
-	}
-	publishFinished(b, sess.ID, "user-correction", "end_turn")
+	publishFinished(b, sess.ID, bootstrap.ID, "error")
+	waitState(t, sess, StateFailed)
+	assertNoInput(t, inputs)
+}
 
-	cancel := waitInput(t, inputs)
-	if cancel.Name != bus.InboxCancelInput {
-		t.Fatalf("input = %q, want cancellation", cancel.Name)
-	}
-	var body bus.CancelInput
-	if err := events.DecodePayload(cancel.Event, &body); err != nil {
+func TestManagerAttachResumesSuspendedLoop(t *testing.T) {
+	b := eventbus.NewBus()
+	m := NewManager(b)
+	defer m.Close()
+	sess := session.New("root", nil)
+	if err := writeState(context.Background(), sess, StateSuspended); err != nil {
 		t.Fatal(err)
 	}
-	if body.EventID != recovery.ID {
-		t.Fatalf("cancel target = %q, want %q", body.EventID, recovery.ID)
+	inputs := make(chan bus.Envelope, 1)
+	id := b.SubscribeSerial([]string{bus.TopicInbox(sess.ID)}, func(env bus.Envelope) {
+		if env.Name == bus.InboxUserText {
+			inputs <- env
+		}
+	}, eventbus.SerialConfig{Overflow: eventbus.OverflowBlock})
+	defer b.Unsubscribe(id)
+
+	if err := m.Attach(context.Background(), sess); err != nil {
+		t.Fatal(err)
 	}
-	waitState(t, sess, StateCompleted)
+	assertInputPrompt(t, waitInput(t, inputs), RecoveryPrompt)
+	waitState(t, sess, StateActive)
+}
+
+func TestManagerDetachSuspendsActiveLoop(t *testing.T) {
+	b := eventbus.NewBus()
+	m := NewManager(b)
+	defer m.Close()
+	sess := session.New("root", nil)
+	if err := m.Start(context.Background(), sess, "implement it"); err != nil {
+		t.Fatal(err)
+	}
+	m.Detach(sess.ID)
+	waitState(t, sess, StateSuspended)
 }
 
 func assertInputPrompt(t *testing.T, env bus.Envelope, want string) {
@@ -238,6 +282,15 @@ func waitInput(t *testing.T, ch <-chan bus.Envelope) bus.Envelope {
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for loop input")
 		return bus.Envelope{}
+	}
+}
+
+func assertNoInput(t *testing.T, ch <-chan bus.Envelope) {
+	t.Helper()
+	select {
+	case env := <-ch:
+		t.Fatalf("unexpected loop input %q", env.Name)
+	case <-time.After(50 * time.Millisecond):
 	}
 }
 

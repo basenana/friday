@@ -14,7 +14,6 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
@@ -690,25 +689,9 @@ func writeClipboard(value string) error {
 
 type planHandoffState struct {
 	selected int
-	view     viewport.Model
-}
-
-func (m *model) syncPlanHandoff() {
-	if m.planHandoff == nil || m.latestPlan == nil {
-		return
-	}
-	content := m.markdown(m.latestPlan.Markdown)
-	width := max(m.width-8, 20)
-	panelHeight := max(m.height/2, 8)
-	bodyHeight := min(max(lipgloss.Height(content), 1), max(panelHeight-6, 1))
-	p := m.planHandoff
-	p.view.SetWidth(width)
-	p.view.SetHeight(bodyHeight)
-	p.view.SetContent(content)
 }
 
 func (m *model) renderPlanHandoff() string {
-	m.syncPlanHandoff()
 	p := m.planHandoff
 	if p == nil || m.latestPlan == nil {
 		return ""
@@ -722,7 +705,7 @@ func (m *model) renderPlanHandoff() string {
 	if m.latestPlan.Version > 0 {
 		header += fmt.Sprintf(" · v%d", m.latestPlan.Version)
 	}
-	lines := []string{accentStyle.Copy().Bold(true).Render(header), p.view.View()}
+	lines := []string{accentStyle.Copy().Bold(true).Render(header)}
 	for i, option := range options {
 		prefix := "  "
 		if i == p.selected {
@@ -731,17 +714,15 @@ func (m *model) renderPlanHandoff() string {
 		}
 		lines = append(lines, prefix+option)
 	}
-	lines = append(lines, mutedStyle.Render("PgUp/PgDn scroll plan · ↑/↓ select · Enter confirm"))
+	lines = append(lines, mutedStyle.Render("↑/↓ select · Enter confirm · Esc close"))
 	return menuStyle.Width(max(m.width-4, 20)).Render(strings.Join(lines, "\n"))
 }
 
 func (m *model) planHandoffHeight() int {
-	m.syncPlanHandoff()
 	if m.planHandoff == nil {
 		return 0
 	}
-	// Header, two actions, help, and the card's vertical border.
-	return m.planHandoff.view.Height() + 6
+	return lipgloss.Height(m.renderPlanHandoff())
 }
 
 func (m *model) updatePlanHandoff(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -750,10 +731,6 @@ func (m *model) updatePlanHandoff(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.dispatchIfIdle()
 	}
 	switch key.Code {
-	case tea.KeyPgUp, tea.KeyPgDown:
-		var cmd tea.Cmd
-		m.planHandoff.view, cmd = m.planHandoff.view.Update(key)
-		return m, cmd
 	case tea.KeyUp:
 		m.planHandoff.selected = (m.planHandoff.selected + 1) % 2
 	case tea.KeyDown:
@@ -777,11 +754,6 @@ func (m *model) updatePlanHandoff(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.planCompacting = true
 		m.layout()
 		return m, compactForPlanApproval(m.sessionID, m.latestPlan.ID, lifecycle.Current())
-	}
-	if key.String() == "ctrl+u" || key.String() == "ctrl+d" {
-		var cmd tea.Cmd
-		m.planHandoff.view, cmd = m.planHandoff.view.Update(key)
-		return m, cmd
 	}
 	return m, nil
 }

@@ -22,6 +22,7 @@ const (
 	blockToolCall
 	blockError
 	blockCard
+	blockPlan
 	blockDivider
 )
 
@@ -159,6 +160,9 @@ func (m *model) renderBlock(b *chatBlock) string {
 		b.rendered = errorStyle.Render("✗ " + terminalSafe(b.content))
 	case blockCard:
 		b.rendered = m.renderCard(b.card)
+	case blockPlan:
+		header := accentStyle.Copy().Bold(true).Render(b.toolName)
+		b.rendered = menuStyle.Width(max(m.width-4, 20)).Render(header + "\n" + m.markdown(b.content))
 	case blockDivider:
 		lineWidth := max(m.width-lipgloss.Width(b.content)-5, 3)
 		b.rendered = mutedStyle.Render("── " + terminalSafe(b.content) + " " + strings.Repeat("─", lineWidth))
@@ -260,9 +264,10 @@ func (m *model) layout() {
 	width := max(m.width, 20)
 	m.textarea.SetWidth(max(width-6, 10))
 	composerLines := max(m.textarea.Height(), 1)
-	extra := composerLines + 3 // input border + status
+	statusLines := max(lipgloss.Height(m.renderStatus()), 1)
+	extra := composerLines + 2 + statusLines // input border + wrapped status
 	if len(m.queued) > 0 {
-		extra += min(len(m.queued), 3) + 2
+		extra += min(len(m.queued), 3) + 3
 	}
 	if m.menu.mode != menuNone {
 		extra += min(len(m.menu.items), 8) + 2

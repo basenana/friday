@@ -13,6 +13,8 @@ const (
 	EventModelStart     EventType = "model.start"
 	EventModelFinish    EventType = "model.finish"
 	EventModelTimeout   EventType = "model.timeout"
+	EventModelRetry     EventType = "model.retry"
+	EventModelError     EventType = "model.error"
 	EventToolStart      EventType = "tool.start"
 	EventToolFinish     EventType = "tool.finish"
 	EventCompactStart   EventType = "compact.start"

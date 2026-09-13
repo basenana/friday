@@ -86,22 +86,28 @@ func (f *fakeClient) ContextWindow() int64 { return f.contextWindow }
 func collect(t *testing.T, ctx context.Context, resp providers.Response) (string, error) {
 	t.Helper()
 	var content string
-	for {
+	messageCh, errorCh := resp.Message(), resp.Error()
+	for messageCh != nil || errorCh != nil {
 		select {
 		case <-ctx.Done():
 			return content, ctx.Err()
-		case err, ok := <-resp.Error():
+		case err, ok := <-errorCh:
 			if !ok {
-				return content, nil
+				errorCh = nil
+				continue
 			}
-			return content, err
-		case delta, ok := <-resp.Message():
+			if err != nil {
+				return content, err
+			}
+		case delta, ok := <-messageCh:
 			if !ok {
-				return content, nil
+				messageCh = nil
+				continue
 			}
 			content += delta.Content
 		}
 	}
+	return content, nil
 }
 
 func TestFallback_FirstModelSucceeds(t *testing.T) {
@@ -144,17 +150,22 @@ func TestStripImagesPreservesReasoningEffort(t *testing.T) {
 func TestFallback_FallsToSecondModel(t *testing.T) {
 	broken := &fakeClient{name: "broken", completionErrs: []error{errors.New("connection refused")}}
 	ok := &fakeClient{name: "ok", streamContent: []string{"recovered"}, contextWindow: 50_000}
-	// Reduce backoff: use WithMaxTotalRetries so we don't iterate too many times.
+	// The compatibility limit must not cause a model to be revisited.
 	fc := NewFallbackClient([]ModelEntry{{Client: broken, Name: "broken"}, {Client: ok, Name: "ok"}}, WithMaxTotalRetries(3))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+	var retries []providers.RetryEvent
+	ctx = providers.WithRetryObserver(ctx, func(event providers.RetryEvent) { retries = append(retries, event) })
 	content, err := collect(t, ctx, fc.Completion(ctx, providers.NewRequest("sys")))
 	if err != nil {
 		t.Fatalf("expected fallback success, got error: %v", err)
 	}
 	if content != "recovered" {
 		t.Fatalf("expected content from second model, got %q", content)
+	}
+	if len(retries) != 1 || retries[0].Provider != "fallback" || retries[0].Model != "ok" {
+		t.Fatalf("fallback retry events = %#v", retries)
 	}
 }
 
@@ -171,6 +182,9 @@ func TestFallback_AllExhausted(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "fallback exhausted") {
 		t.Fatalf("expected exhaustion message, got: %v", err)
+	}
+	if b1.callCount() != 1 || b2.callCount() != 1 {
+		t.Fatalf("fallback cycled models: b1=%d b2=%d", b1.callCount(), b2.callCount())
 	}
 }
 

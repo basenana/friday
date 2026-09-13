@@ -71,7 +71,7 @@ func routeCustom(sid string, evt events.Event, _ *ToolCallTracker) (string, bool
 		return bus.TopicStatus(sid, bus.StatusInboxCancelled), true
 	case events.CustomCompactStart, events.CustomCompactFinish, events.CustomCompactSkip,
 		events.CustomSubagentStart, events.CustomSubagentFinish,
-		events.CustomTodoUpdate, events.CustomModelTimeout, events.CustomLoopStart,
+		events.CustomTodoUpdate, events.CustomModelTimeout, events.CustomModelRetry, events.CustomModelError, events.CustomLoopStart,
 		events.CustomInputAccepted, events.CustomPlanProposed, events.CustomModeChanged:
 		return bus.TopicObs(sid, evt.Name), true
 	}

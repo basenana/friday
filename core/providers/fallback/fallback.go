@@ -4,11 +4,9 @@ import (
 	"context"
 	"fmt"
 	"sync/atomic"
-	"time"
 
 	"github.com/basenana/friday/core/logger"
 	"github.com/basenana/friday/core/providers"
-	"github.com/basenana/friday/core/providers/common"
 	"github.com/basenana/friday/core/tracing"
 )
 
@@ -24,9 +22,8 @@ type ModelEntry struct {
 	Name         string
 }
 
-// FallbackClient implements providers.Client. On retriable error from model N,
-// it advances to model N+1 (circular wrap-around). It retries up to
-// maxTotalRetries across all models before giving up.
+// FallbackClient tries each eligible model at most once. Each leaf provider is
+// responsible for its own bounded physical-request retries.
 type FallbackClient struct {
 	models          []ModelEntry
 	maxTotalRetries int
@@ -46,7 +43,7 @@ func NewFallbackClient(entries []ModelEntry, opts ...FallbackOption) *FallbackCl
 	}
 
 	if cfg.maxTotalRetries <= 0 {
-		cfg.maxTotalRetries = len(entries) * 3
+		cfg.maxTotalRetries = len(entries)
 	}
 
 	fc := &FallbackClient{
@@ -63,11 +60,11 @@ func NewFallbackClient(entries []ModelEntry, opts ...FallbackOption) *FallbackCl
 		}
 		names[i] = fmt.Sprintf("%s(%s)", e.Name, imgFlag)
 	}
-	fc.logger.Infow("fallback client created", "models", names, "max_retries", fc.maxTotalRetries)
+	fc.logger.Infow("fallback client created", "models", names, "max_candidates", fc.maxTotalRetries)
 	return fc
 }
 
-// Completion tries each model in order with circular retry on retriable errors.
+// Completion tries each candidate once in order, without cycling back.
 func (fc *FallbackClient) Completion(ctx context.Context, req providers.Request) providers.Response {
 	ctx, span := tracing.Start(ctx, "llm.fallback.completion")
 	resp := providers.NewCommonResponse()
@@ -85,24 +82,16 @@ func (fc *FallbackClient) Completion(ctx context.Context, req providers.Request)
 
 		var (
 			attempt        int
-			modelIndex     int
 			lastErr        error
 			promptTok      int64
 			complTok       int64
 			cachedTok      int64
 			cacheCreateTok int64
 		)
-		// Start from the caller-selected primary model (see Fallback()),
-		// resolved within the candidate list.
-		modelIndex = fc.startModelIndex(req, models)
-
-		for {
-			if attempt >= fc.maxTotalRetries {
-				resp.Err <- fallbackExhaustedError(attempt, lastErr)
-				return
-			}
-
+		start := fc.startModelIndex(req, models)
+		for modelIndex := start; modelIndex < len(models) && attempt < fc.maxTotalRetries; modelIndex++ {
 			entry := models[modelIndex]
+			attempt++
 			modelReq := fc.prepareRequest(req, entry)
 
 			span.SetAttributes(
@@ -112,60 +101,51 @@ func (fc *FallbackClient) Completion(ctx context.Context, req providers.Request)
 
 			modelResp := entry.Client.Completion(ctx, modelReq)
 
-			// Pipe response, watching for errors.
+			// Pipe response, watching both channels through closure. Providers
+			// may close their error channel before their delta channel.
 			emitted := false
 			fallbackRequested := false
+			messageCh, errorCh := modelResp.Message(), modelResp.Error()
 		PipeLoop:
-			for {
+			for messageCh != nil || errorCh != nil {
 				select {
 				case <-ctx.Done():
 					resp.Err <- ctx.Err()
 					return
 
-				case err, ok := <-modelResp.Error():
+				case err, ok := <-errorCh:
 					if !ok {
-						// Stream completed successfully (error channel closed with nil).
-						// Accumulate tokens.
-						t := modelResp.Tokens()
-						promptTok += t.PromptTokens
-						complTok += t.CompletionTokens
-						cachedTok += t.CachedPromptTokens
-						cacheCreateTok += t.CacheCreationTokens
-						break PipeLoop
+						errorCh = nil
+						continue
 					}
 
 					if shouldFallbackOnError(err) && !emitted {
 						lastErr = err
 						fc.logger.Warnw("model error, falling back",
 							"model", entry.Name, "attempt", attempt, "error", err)
-						attempt++
-						modelIndex = (modelIndex + 1) % len(models)
 						fallbackRequested = true
-						backoff := time.Second * time.Duration(attempt)
-						if waitErr := common.WaitBackoff(ctx, backoff); waitErr != nil {
-							resp.Err <- waitErr
-							return
-						}
-						break PipeLoop // retry outer loop
+						break PipeLoop
 					}
 
 					// Non-retriable error or already emitted deltas.
 					resp.Err <- err
 					return
 
-				case delta, ok := <-modelResp.Message():
+				case delta, ok := <-messageCh:
 					if !ok {
-						// Stream finished normally.
-						t := modelResp.Tokens()
-						promptTok += t.PromptTokens
-						complTok += t.CompletionTokens
-						cachedTok += t.CachedPromptTokens
-						cacheCreateTok += t.CacheCreationTokens
-						break PipeLoop
+						messageCh = nil
+						continue
 					}
 					emitted = true
 					resp.Stream <- delta
 				}
+			}
+			if !fallbackRequested {
+				t := modelResp.Tokens()
+				promptTok += t.PromptTokens
+				complTok += t.CompletionTokens
+				cachedTok += t.CachedPromptTokens
+				cacheCreateTok += t.CacheCreationTokens
 			}
 
 			// If we got here with no error and emitted deltas, we're done.
@@ -185,41 +165,33 @@ func (fc *FallbackClient) Completion(ctx context.Context, req providers.Request)
 			promptTok, complTok, cachedTok, cacheCreateTok = 0, 0, 0, 0
 
 			if fallbackRequested {
+				fc.notifyFallback(ctx, models, modelIndex, attempt, lastErr)
 				continue
 			}
 
 			// If lastErr is nil and no deltas, model returned empty — try next.
-			lastErr = nil
-			attempt++
-			modelIndex = (modelIndex + 1) % len(models)
+			lastErr = fmt.Errorf("model %s returned an empty response", entry.Name)
+			fc.notifyFallback(ctx, models, modelIndex, attempt, lastErr)
 		}
+		resp.Err <- fallbackExhaustedError(attempt, lastErr)
 	}()
 
 	return resp
 }
 
-// CompletionNonStreaming tries each model with circular retry for non-streaming completion.
+// CompletionNonStreaming tries each candidate once without cycling.
 func (fc *FallbackClient) CompletionNonStreaming(ctx context.Context, req providers.Request) (string, error) {
 	models := fc.candidateModels(req)
 	if len(models) == 0 {
 		return "", fmt.Errorf("fallback has no models configured")
 	}
 
-	var (
-		attempt    int
-		modelIndex int
-		lastErr    error
-	)
-	// Start from the caller-selected primary model (see Fallback()),
-	// resolved within the candidate list.
-	modelIndex = fc.startModelIndex(req, models)
-
-	for {
-		if attempt >= fc.maxTotalRetries {
-			return "", fallbackExhaustedError(attempt, lastErr)
-		}
-
+	var attempt int
+	var lastErr error
+	start := fc.startModelIndex(req, models)
+	for modelIndex := start; modelIndex < len(models) && attempt < fc.maxTotalRetries; modelIndex++ {
 		entry := models[modelIndex]
+		attempt++
 		modelReq := fc.prepareRequest(req, entry)
 
 		result, err := entry.Client.CompletionNonStreaming(ctx, modelReq)
@@ -228,12 +200,7 @@ func (fc *FallbackClient) CompletionNonStreaming(ctx context.Context, req provid
 				lastErr = err
 				fc.logger.Warnw("non-streaming model error, falling back",
 					"model", entry.Name, "attempt", attempt, "error", err)
-				attempt++
-				modelIndex = (modelIndex + 1) % len(models)
-				backoff := time.Second * time.Duration(attempt)
-				if waitErr := common.WaitBackoff(ctx, backoff); waitErr != nil {
-					return "", waitErr
-				}
+				fc.notifyFallback(ctx, models, modelIndex, attempt, lastErr)
 				continue
 			}
 			return "", err
@@ -241,6 +208,7 @@ func (fc *FallbackClient) CompletionNonStreaming(ctx context.Context, req provid
 
 		return result, nil
 	}
+	return "", fallbackExhaustedError(attempt, lastErr)
 }
 
 // StructuredPredict tries each model with circular retry for structured prediction.
@@ -250,21 +218,12 @@ func (fc *FallbackClient) StructuredPredict(ctx context.Context, req providers.R
 		return fmt.Errorf("fallback has no models configured")
 	}
 
-	var (
-		attempt    int
-		modelIndex int
-		lastErr    error
-	)
-	// Start from the caller-selected primary model (see Fallback()),
-	// resolved within the candidate list.
-	modelIndex = fc.startModelIndex(req, models)
-
-	for {
-		if attempt >= fc.maxTotalRetries {
-			return fallbackExhaustedError(attempt, lastErr)
-		}
-
+	var attempt int
+	var lastErr error
+	start := fc.startModelIndex(req, models)
+	for modelIndex := start; modelIndex < len(models) && attempt < fc.maxTotalRetries; modelIndex++ {
 		entry := models[modelIndex]
+		attempt++
 		modelReq := fc.prepareRequest(req, entry)
 
 		err := entry.Client.StructuredPredict(ctx, modelReq, model)
@@ -273,12 +232,7 @@ func (fc *FallbackClient) StructuredPredict(ctx context.Context, req providers.R
 				lastErr = err
 				fc.logger.Warnw("structured predict model error, falling back",
 					"model", entry.Name, "attempt", attempt, "error", err)
-				attempt++
-				modelIndex = (modelIndex + 1) % len(models)
-				backoff := time.Second * time.Duration(attempt)
-				if waitErr := common.WaitBackoff(ctx, backoff); waitErr != nil {
-					return waitErr
-				}
+				fc.notifyFallback(ctx, models, modelIndex, attempt, lastErr)
 				continue
 			}
 			return err
@@ -286,6 +240,18 @@ func (fc *FallbackClient) StructuredPredict(ctx context.Context, req providers.R
 
 		return nil
 	}
+	return fallbackExhaustedError(attempt, lastErr)
+}
+
+func (fc *FallbackClient) notifyFallback(ctx context.Context, models []ModelEntry, currentIndex, attempts int, cause error) {
+	next := currentIndex + 1
+	if next >= len(models) || attempts >= fc.maxTotalRetries {
+		return
+	}
+	providers.NotifyRetry(ctx, providers.RetryEvent{
+		Provider: "fallback", Model: models[next].Name, Attempt: attempts + 1,
+		MaxAttempts: min(len(models), fc.maxTotalRetries), Error: cause,
+	})
 }
 
 // ContextWindow returns the minimum context window across all models.

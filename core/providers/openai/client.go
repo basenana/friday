@@ -120,7 +120,7 @@ func (c *client) Completion(ctx context.Context, request providers.Request) prov
 			c.logger.Infow("completion-with-streaming finish", "elapsed", time.Since(startAt).String(), "tps", fmt.Sprintf("%.2f", tps))
 		}()
 
-		var retries int
+		attempts := 1
 
 	Retry:
 		if err = c.apiLimiter.Wait(ctx); err != nil {
@@ -147,11 +147,12 @@ func (c *client) Completion(ctx context.Context, request providers.Request) prov
 		}
 
 		if err = stream.Err(); err != nil {
-			if common.IsRetriableError(err) && retries < common.MaxRetriableAttempts && resp.canRetry() {
-				retries++
+			if common.IsRetriableError(err) && attempts < common.MaxAttempts && resp.canRetry() {
+				attempts++
 				resp.resetForRetry()
-				backoff := common.RetryBackoffDelay(retries)
-				c.logger.Warnw("retriable LLM error, retrying", "attempt", retries, "backoff", backoff, "err", err)
+				backoff := common.RetryDelay(err, attempts-1)
+				providers.NotifyRetry(ctx, providers.RetryEvent{Provider: "openai", Model: string(c.model.Name), Attempt: attempts, MaxAttempts: common.MaxAttempts, Error: err, Backoff: backoff})
+				c.logger.Warnw("retriable LLM error, retrying", "attempt", attempts, "backoff", backoff, "err", err)
 				if err = common.WaitBackoff(ctx, backoff); err != nil {
 					resp.fail(err)
 					return
@@ -164,7 +165,7 @@ func (c *client) Completion(ctx context.Context, request providers.Request) prov
 			case !resp.canRetry():
 				c.logger.Warnw("retriable LLM stream error, not retrying after partial output", "err", err)
 			default:
-				c.logger.Warnw("retriable LLM stream error, retry budget exhausted", "attempts", retries, "err", err)
+				c.logger.Warnw("retriable LLM stream error, retry budget exhausted", "attempts", attempts, "err", err)
 			}
 			c.logger.Errorw("completion stream error", "err", err)
 			resp.fail(err)
@@ -195,7 +196,7 @@ func (c *client) CompletionNonStreaming(ctx context.Context, request providers.R
 		c.logger.Infow("completion-non-streaming finish", "elapsed", time.Since(startAt).String())
 	}()
 
-	var retries int
+	attempts := 1
 
 Retry:
 	if err = c.apiLimiter.Wait(ctx); err != nil {
@@ -211,10 +212,11 @@ Retry:
 	)
 	response, err := c.openai.Chat.Completions.New(ctx, *p, opts...)
 	if err != nil {
-		if common.IsRetriableError(err) && retries < common.MaxRetriableAttempts {
-			retries++
-			backoff := common.RetryBackoffDelay(retries)
-			c.logger.Warnw("retriable LLM error, retrying", "attempt", retries, "backoff", backoff, "err", err)
+		if common.IsRetriableError(err) && attempts < common.MaxAttempts {
+			attempts++
+			backoff := common.RetryDelay(err, attempts-1)
+			providers.NotifyRetry(ctx, providers.RetryEvent{Provider: "openai", Model: string(c.model.Name), Attempt: attempts, MaxAttempts: common.MaxAttempts, Error: err, Backoff: backoff})
+			c.logger.Warnw("retriable LLM error, retrying", "attempt", attempts, "backoff", backoff, "err", err)
 			if err = common.WaitBackoff(ctx, backoff); err != nil {
 				return "", err
 			}
@@ -395,6 +397,7 @@ func newClient(host, apiKey string, model Model) *client {
 		option.WithBaseURL(host),
 		option.WithAPIKey(apiKey),
 		option.WithHTTPClient(cli),
+		option.WithMaxRetries(0),
 	)
 
 	if model.QPM == 0 {

@@ -2,15 +2,21 @@ package common
 
 import (
 	"errors"
+	"io"
+	"net"
+	"net/http"
+	"strconv"
 	"strings"
+	"syscall"
+	"time"
 
 	anthropicapi "github.com/anthropics/anthropic-sdk-go"
 	openaiapi "github.com/openai/openai-go"
 )
 
-// MaxRetriableAttempts is the number of times a provider client retries a
-// retriable LLM error before giving up.
-const MaxRetriableAttempts = 3
+// MaxAttempts is the total number of physical requests a provider may make,
+// including the initial request.
+const MaxAttempts = 3
 
 // IsRetriableError reports whether err is worth retrying: rate limiting and
 // transient server-side failures. It prefers typed SDK errors (exchanging the
@@ -31,13 +37,57 @@ func IsRetriableError(err error) bool {
 		return IsRetriableStatus(openaiErr.StatusCode)
 	}
 
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return true
+	}
+	if errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, syscall.ECONNRESET) ||
+		errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, syscall.EPIPE) {
+		return true
+	}
+
 	return isRetriableMessage(err.Error())
 }
 
 // IsRetriableStatus reports whether an HTTP status code is retriable:
-// 429 (rate limit) and 500-529 (server errors, incl. 529 overloaded).
+// 408/409, 429, and 5xx server errors.
 func IsRetriableStatus(statusCode int) bool {
-	return statusCode == 429 || (statusCode >= 500 && statusCode <= 529)
+	return statusCode == 408 || statusCode == 409 || statusCode == 429 || (statusCode >= 500 && statusCode <= 599)
+}
+
+// RetryAfter returns a server-requested delay, capped at 30 seconds.
+func RetryAfter(err error, now time.Time) (time.Duration, bool) {
+	var response *http.Response
+	var anthropicErr *anthropicapi.Error
+	if errors.As(err, &anthropicErr) {
+		response = anthropicErr.Response
+	}
+	var openaiErr *openaiapi.Error
+	if response == nil && errors.As(err, &openaiErr) {
+		response = openaiErr.Response
+	}
+	if response == nil {
+		return 0, false
+	}
+	raw := strings.TrimSpace(response.Header.Get("Retry-After"))
+	if raw == "" {
+		return 0, false
+	}
+	var delay time.Duration
+	if seconds, parseErr := strconv.Atoi(raw); parseErr == nil {
+		delay = time.Duration(seconds) * time.Second
+	} else if retryAt, parseErr := http.ParseTime(raw); parseErr == nil {
+		delay = retryAt.Sub(now)
+	} else {
+		return 0, false
+	}
+	if delay < 0 {
+		delay = 0
+	}
+	if delay > 30*time.Second {
+		delay = 30 * time.Second
+	}
+	return delay, true
 }
 
 // retriableMessages are specific phrases matched against untyped error
@@ -53,6 +103,10 @@ var retriableMessages = []string{
 	"bad gateway",
 	"gateway timeout",
 	"internal server error",
+	"request timeout",
+	"connection reset",
+	"connection refused",
+	"unexpected eof",
 	"status 429",
 	"status 500",
 	"status 502",

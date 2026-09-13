@@ -7,14 +7,15 @@ type fallbackConfig struct {
 
 func defaultConfig() fallbackConfig {
 	return fallbackConfig{
-		maxTotalRetries: 0, // 0 means auto-calculate as len(models) * 3
+		maxTotalRetries: 0, // 0 means try every candidate once
 	}
 }
 
 // FallbackOption configures a FallbackClient.
 type FallbackOption func(*fallbackConfig)
 
-// WithMaxTotalRetries sets the maximum number of total attempts across all models.
+// WithMaxTotalRetries limits how many distinct candidates are tried. It is
+// retained for compatibility; candidates are never revisited.
 func WithMaxTotalRetries(n int) FallbackOption {
 	return func(cfg *fallbackConfig) {
 		cfg.maxTotalRetries = n

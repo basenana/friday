@@ -100,6 +100,18 @@ func (a *react) reactLoop(ctx context.Context, sess *session.Session, resp *api.
 		keepRun   bool
 		err       error
 	)
+	publishModelError := func(modelErr error) {
+		if modelErr == nil {
+			return
+		}
+		errorText := logger.FirstLine(modelErr.Error())
+		if len(errorText) > 240 {
+			errorText = errorText[:240] + "..."
+		}
+		sess.PublishEvent(types.Event{Type: types.EventModelError, Data: map[string]string{
+			"model": modelNameOf(a.llm), "error": errorText,
+		}})
+	}
 
 	defer func() {
 		elapsed := time.Since(startAt).String()
@@ -131,6 +143,7 @@ func (a *react) reactLoop(ctx context.Context, sess *session.Session, resp *api.
 				})
 				loopTimes++
 				if loopTimes > a.option.MaxLoopTimes {
+					publishModelError(err)
 					resp.Fail(err)
 					return
 				}
@@ -143,6 +156,7 @@ func (a *react) reactLoop(ctx context.Context, sess *session.Session, resp *api.
 					if loopTimes > a.option.MaxLoopTimes {
 						// Compaction cannot free more context; fail instead of
 						// retrying forever (mirrors the idle-timeout bound above).
+						publishModelError(err)
 						resp.Fail(err)
 						return
 					}
@@ -150,6 +164,7 @@ func (a *react) reactLoop(ctx context.Context, sess *session.Session, resp *api.
 				}
 				a.logger.Warnw("failed to compact history", "error", compactErr.Error())
 			}
+			publishModelError(err)
 			resp.Fail(err)
 			return
 		}
@@ -205,6 +220,23 @@ func (a *react) doAct(ctx context.Context, sess *session.Session, resp *api.Resp
 	sess.PublishEvent(types.Event{Type: types.EventModelStart})
 	streamCtx, cancelStream := context.WithCancel(ctx)
 	defer cancelStream()
+	streamCtx = providers.WithRetryObserver(streamCtx, func(event providers.RetryEvent) {
+		errorText := ""
+		if event.Error != nil {
+			errorText = logger.FirstLine(event.Error.Error())
+			if len(errorText) > 240 {
+				errorText = errorText[:240] + "..."
+			}
+		}
+		sess.PublishEvent(types.Event{Type: types.EventModelRetry, Data: map[string]string{
+			"provider":     event.Provider,
+			"model":        event.Model,
+			"attempt":      strconv.Itoa(event.Attempt),
+			"max_attempts": strconv.Itoa(event.MaxAttempts),
+			"backoff_ms":   strconv.FormatInt(event.Backoff.Milliseconds(), 10),
+			"error":        errorText,
+		}})
+	})
 	callStart := time.Now()
 	stream := a.llm.Completion(streamCtx, llmReq)
 

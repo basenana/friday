@@ -176,11 +176,12 @@ type model struct {
 	promptHistory   []string
 	historyIndex    int
 
-	tokenCount  int
-	iteration   int
-	mode        collaboration.Mode
-	latestPlan  *planning.Artifact
-	activeModel config.ModelConfig
+	tokenCount        int
+	iteration         int
+	mode              collaboration.Mode
+	latestPlan        *planning.Artifact
+	planProposalRunID string
+	activeModel       config.ModelConfig
 
 	width, height      int
 	quitting           bool
@@ -728,6 +729,9 @@ func (m *model) dispatchNextQueued() (tea.Model, tea.Cmd) {
 func (m *model) startUserTurn(text string, delivery bus.InputDelivery) (tea.Model, tea.Cmd) {
 	turnID := types.NewID()
 	if delivery == bus.DeliverySteer {
+		// Steering is an explicit interruption of an autonomous Loop. Persist
+		// cancellation before publishing the preempting input.
+		m.cancelActiveLoop()
 		m.flushStreaming(true)
 	}
 	m.appendBlock(chatBlock{kind: blockUser, id: turnID, content: text})
@@ -770,6 +774,28 @@ func (m *model) cancelActiveLoop() bool {
 	return false
 }
 
+func (m *model) recordLoopRunFinished(stopReason string) {
+	if m.loopManager == nil {
+		return
+	}
+	if lifecycle, ok := m.registry.Lifecycle(m.sessionID); ok && lifecycle.Current() != nil {
+		if err := m.loopManager.RecordRunFinished(context.Background(), lifecycle.Current(), stopReason); err != nil {
+			m.appendBlock(chatBlock{kind: blockError, content: "record loop state: " + err.Error()})
+		}
+	}
+}
+
+func (m *model) recordLoopRunError() {
+	if m.loopManager == nil {
+		return
+	}
+	if lifecycle, ok := m.registry.Lifecycle(m.sessionID); ok && lifecycle.Current() != nil {
+		if err := m.loopManager.RecordRunError(context.Background(), lifecycle.Current()); err != nil {
+			m.appendBlock(chatBlock{kind: blockError, content: "record loop failure: " + err.Error()})
+		}
+	}
+}
+
 func (m *model) sendUserText(text string, delivery bus.InputDelivery, turnID string) error {
 	if _, err := m.registry.GetOrCreate(m.sessionID); err != nil {
 		return err
@@ -798,6 +824,9 @@ func (m *model) handleActorEvent(evt events.Event) tea.Cmd {
 	case events.KindRunFinished:
 		var d events.RunFinishedData
 		_ = events.DecodePayload(evt, &d)
+		if !m.replaying {
+			m.recordLoopRunFinished(d.StopReason)
+		}
 		m.flushStreaming(d.StopReason == "cancelled")
 		finishedCurrent := evt.RunID != m.lastFinishedRun && (evt.RunID == m.currentRunID || m.currentRunID == "")
 		if finishedCurrent {
@@ -813,11 +842,15 @@ func (m *model) handleActorEvent(evt events.Event) tea.Cmd {
 			}
 		}
 		m.cancelling = false
-		if finishedCurrent && !m.replaying && d.StopReason == "plan_completed" && m.mode == collaboration.ModePlan && m.latestPlan != nil && m.latestPlan.Status == planning.ArtifactProposed {
+		proposalRunFinished := m.planProposalRunID == evt.RunID || (m.planProposalRunID == "" && d.StopReason == "plan_completed")
+		if finishedCurrent && !m.replaying && proposalRunFinished && m.mode == collaboration.ModePlan && m.latestPlan != nil && m.latestPlan.Status == planning.ArtifactProposed {
 			m.planHandoff = &planHandoffState{}
 		}
 	case events.KindRunError:
 		var d events.RunErrorData
+		if !m.replaying {
+			m.recordLoopRunError()
+		}
 		if events.DecodePayload(evt, &d) == nil && d.Message != "" &&
 			!strings.Contains(strings.ToLower(d.Message), "context canceled") {
 			m.appendBlock(chatBlock{kind: blockError, content: d.Message})
@@ -924,6 +957,24 @@ func (m *model) handleCustomEvent(evt events.Event) tea.Cmd {
 	case events.CustomModelTimeout:
 		m.runActivity = "retrying model"
 		m.appendBlock(chatBlock{kind: blockDivider, content: "model timed out · retrying"})
+	case events.CustomModelRetry:
+		var d events.CustomData
+		if events.DecodePayload(evt, &d) == nil {
+			attempt, _ := d.Body["attempt"].(string)
+			maxAttempts, _ := d.Body["max_attempts"].(string)
+			model, _ := d.Body["model"].(string)
+			m.runActivity = "retrying model"
+			label := "model request failed · retrying"
+			if model != "" {
+				label += " · " + terminalSafe(model)
+			}
+			if attempt != "" && maxAttempts != "" {
+				label += " · attempt " + attempt + "/" + maxAttempts
+			}
+			m.appendBlock(chatBlock{kind: blockDivider, content: label})
+		}
+	case events.CustomModelError:
+		m.runActivity = "model failed"
 	case events.CustomCardEmitted, events.CustomCardUpdated, events.CustomCardDismissed:
 		return m.handleCardEvent(evt)
 	case events.CustomFormRequested:
@@ -955,6 +1006,8 @@ func (m *model) handleCustomEvent(evt events.Event) tea.Cmd {
 		var d events.PlanProposedBody
 		if events.DecodePayload(evt, &d) == nil {
 			m.latestPlan = &planning.Artifact{ID: d.PlanID, SessionID: m.sessionID, Version: d.Version, Title: d.Title, Markdown: d.Markdown, Status: planning.ArtifactProposed, CreatedAt: evt.Timestamp}
+			m.planProposalRunID = evt.RunID
+			m.ensurePlanCard(m.latestPlan)
 		}
 	case events.CustomModeChanged:
 		var d events.ModeChangedBody
@@ -1068,8 +1121,29 @@ func customActivity(evt events.Event, fallback string) string {
 
 func (m *model) restorePlanHandoff() {
 	if m.mode == collaboration.ModePlan && m.latestPlan != nil && m.latestPlan.Status == planning.ArtifactProposed && !m.running {
+		m.ensurePlanCard(m.latestPlan)
 		m.planHandoff = &planHandoffState{}
 	}
+}
+
+func (m *model) ensurePlanCard(plan *planning.Artifact) {
+	if plan == nil || strings.TrimSpace(plan.Markdown) == "" {
+		return
+	}
+	id := fmt.Sprintf("plan:%s:v%d", plan.ID, plan.Version)
+	for i := range m.messages {
+		if m.messages[i].kind == blockPlan && m.messages[i].id == id {
+			return
+		}
+	}
+	header := "Plan ready"
+	if title := strings.TrimSpace(plan.Title); title != "" {
+		header += " · " + terminalSafe(title)
+	}
+	if plan.Version > 0 {
+		header += fmt.Sprintf(" · v%d", plan.Version)
+	}
+	m.appendBlock(chatBlock{kind: blockPlan, id: id, toolName: header, content: plan.Markdown})
 }
 
 func (m *model) resetStreaming() {

@@ -381,6 +381,7 @@ func (m *model) switchSession(newID string) (tea.Cmd, error) {
 	m.runActivity = ""
 	m.lastFinishedRun = ""
 	m.planHandoff = nil
+	m.planProposalRunID = ""
 	m.queued = nil
 	m.resetStreaming()
 	m.applyProjection(projection)
