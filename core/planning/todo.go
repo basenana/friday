@@ -41,7 +41,7 @@ func (a *Todo) BeforeModel(ctx context.Context, sess *session.Session, req provi
 	todo := a.todoMaps[key]
 	a.mu.RUnlock()
 
-	if todo == nil || len(todo.Todos) == 0 {
+	if todo == nil || len(todo.Todos) == 0 || todo.AllFinish() {
 		return nil
 	}
 

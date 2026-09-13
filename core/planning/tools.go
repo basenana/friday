@@ -84,6 +84,15 @@ type TodoList struct {
 	Todos []*TodoItem `json:"todos"`
 }
 
+func (t *TodoList) AllFinish() bool {
+	for _, item := range t.Todos {
+		if item.Status != "completed" {
+			return false
+		}
+	}
+	return true
+}
+
 type TodoItem struct {
 	Description string `json:"description"`
 	Status      string `json:"status"`
