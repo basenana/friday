@@ -95,11 +95,12 @@ func TestHookInjectsStablePromptOnlyForRoot(t *testing.T) {
 	if err := hook.BeforeModel(ctx, root, req); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(req.SystemPrompt(), "call working_note_read immediately") {
-		t.Fatalf("missing working note fallback: %q", req.SystemPrompt())
+	if !strings.Contains(req.SystemPrompt(), "When visible context contains the complete note") ||
+		!strings.Contains(req.SystemPrompt(), "absent, incomplete, possibly stale") {
+		t.Fatalf("missing context-aware working note guidance: %q", req.SystemPrompt())
 	}
-	if !strings.Contains(req.SystemPrompt(), "finish_loop is phase restricted") ||
-		!strings.Contains(req.SystemPrompt(), "No useful or actionable work remains") {
+	if !strings.Contains(req.SystemPrompt(), "Only update can call finish_loop") ||
+		!strings.Contains(req.SystemPrompt(), "no actionable in-scope work remains") {
 		t.Fatalf("missing complete-plan finish constraint: %q", req.SystemPrompt())
 	}
 	childReq := providers.NewRequest("hello")
@@ -112,7 +113,7 @@ func TestHookInjectsStablePromptOnlyForRoot(t *testing.T) {
 	}
 }
 
-func TestFinishLoopDescriptionRequiresAllWorkingNotePlans(t *testing.T) {
+func TestFinishLoopDescriptionRequiresAllInScopeWork(t *testing.T) {
 	ctx := context.Background()
 	root := session.New("root", nil)
 	if err := writeState(ctx, root, StateActive); err != nil {
@@ -127,9 +128,9 @@ func TestFinishLoopDescriptionRequiresAllWorkingNotePlans(t *testing.T) {
 			continue
 		}
 		description := tool.GetDescription()
-		if !strings.Contains(description, "only during the final update phase") ||
-			!strings.Contains(description, "Completing only the current selected task") ||
-			!strings.Contains(description, "no unfinished, uncertain, unverified, useful, or actionable work remaining") {
+		if !strings.Contains(description, "only during update") ||
+			!strings.Contains(description, "Completing only the current work item") ||
+			!strings.Contains(description, "no actionable in-scope work may remain") {
 			t.Fatalf("finish_loop description = %q", description)
 		}
 		return
@@ -164,7 +165,6 @@ func TestFinishLoopGuidesWithoutFailureOutsideUpdatePhase(t *testing.T) {
 		raw   string
 	}{
 		{name: "bootstrap", phase: phaseBootstrap},
-		{name: "select", phase: phaseSelect},
 		{name: "develop", phase: phaseDevelop},
 		{name: "review", phase: phaseReview},
 		{name: "recovery", phase: phaseRecovery},

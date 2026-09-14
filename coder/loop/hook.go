@@ -55,32 +55,30 @@ func workingNoteTools(isRoot bool) []*tools.Tool {
 
 	return []*tools.Tool{
 		tools.NewTool("working_note_read",
-			tools.WithDescription("Read the complete current Working Note. Use this whenever you need to understand the original request, current progress, decisions, test results, open problems, or what to do next."),
+			tools.WithDescription("Return the complete current Working Note. Use this to refresh Loop state when the visible shared context is missing, incomplete, uncertain, or may be stale. When context already establishes the current complete note and subsequent changes, continue from that context."),
 			tools.WithToolHandler(rootOnly(readWorkingNote))),
 		tools.NewTool("working_note_append",
-			tools.WithDescription("Append useful Markdown to the Working Note without replacing existing content. Use it for newly discovered facts that do not invalidate existing text."),
+			tools.WithDescription("Append durable Markdown that does not overlap or invalidate existing Working Note content. Keep the note concise; prefer a consolidated phase handoff over logging each action."),
 			tools.WithString("content", tools.Required(), tools.Description("Markdown text to append to the Working Note.")),
 			tools.WithToolHandler(rootOnly(appendWorkingNote))),
 		tools.NewTool("working_note_edit",
-			tools.WithDescription("Edit the Working Note using an exact text replacement. Prefer this when a decision, status, next step, or other existing information has changed."),
+			tools.WithDescription("Edit the Working Note using an exact text replacement. Use this when an existing decision, task, status, or next step changed, so stale text is replaced rather than duplicated."),
 			tools.WithString("old_text", tools.Required(), tools.Description("Exact text currently present in the Working Note.")),
 			tools.WithString("new_text", tools.Required(), tools.Description("Replacement text. May be empty to delete old text.")),
 			tools.WithBoolean("replace_all", tools.Description("Replace every exact occurrence instead of only the first.")),
 			tools.WithToolHandler(rootOnly(editWorkingNote))),
 		tools.NewTool("working_note_replace",
-			tools.WithDescription("Replace the entire Working Note. Use this to reorganize it, remove stale information, and leave a concise, accurate handoff for the next turn."),
+			tools.WithDescription("Replace the entire Working Note with a concise, accurate checkpoint. Use this when consolidation or substantial reorganization is clearer than several small edits."),
 			tools.WithString("content", tools.Required(), tools.Description("The complete new Markdown content.")),
 			tools.WithToolHandler(rootOnly(replaceWorkingNote))),
 		tools.NewTool("finish_loop",
 			tools.WithDescription(`Complete the autonomous Loop.
 
-Call this tool only during the final update phase, after rereading the complete Working Note and auditing it against the actual repository state and current verification results.
+Call this tool only during update, after establishing the current complete Loop state from shared context or the Working Note and checking it against repository state and verification evidence.
 
-Before calling, confirm that the complete original request and every task, plan, selected task, checklist item, follow-up, next step, and unresolved problem recorded in the Working Note have all been completed and verified. There must be no unfinished, uncertain, unverified, useful, or actionable work remaining.
+The original request and acceptance criteria must be satisfied, every in-scope task must be complete, relevant verification evidence must exist, blockers must be resolved, and no actionable in-scope work may remain. Observations explicitly classified as optional or out of scope do not become completion requirements.
 
-Completing only the current selected task, one checklist item, or one planned slice is never sufficient. Do not call this tool during bootstrap, task selection, development, review, or recovery. If work was completed during one of those phases, update the Working Note with its completion status and verification evidence, then end the turn normally.
-
-If anything remains to be done, do not call this tool. Keep the remaining work explicit in the Working Note so the Loop can continue.`),
+Completing only the current work item or one planned slice is insufficient. Bootstrap, develop, review, and recovery hand off by updating durable state as needed and ending normally.`),
 			tools.WithToolHandler(rootOnly(finishLoop))),
 	}
 }
@@ -175,7 +173,7 @@ Do not retry finish_loop in this turn. If you completed any work, update the Wor
 	if err != nil {
 		return tools.NewToolResultError("finish loop: " + err.Error()), nil
 	}
-	return tools.NewToolResultText("The Loop is complete. The complete original request and every task, plan, checklist item, follow-up, next step, and unresolved problem recorded in the Working Note have been completed and verified, and no actionable work remains. Provide the final user-facing summary now."), nil
+	return tools.NewToolResultText("The Loop is complete. The original request and acceptance criteria are satisfied, all in-scope work is complete with relevant verification, blockers are resolved, and no actionable in-scope work remains. Provide the final user-facing summary now."), nil
 }
 
 func mutationResult(action string, err error) (*tools.Result, error) {

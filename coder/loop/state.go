@@ -33,7 +33,9 @@ func parsePhase(raw []byte) (phase, bool) {
 	case "bootstrap":
 		return phaseBootstrap, true
 	case "select":
-		return phaseSelect, true
+		// Select used to be a standalone phase. Resume persisted Loops at the
+		// merged develop phase, which now performs selection before editing.
+		return phaseDevelop, true
 	case "develop":
 		return phaseDevelop, true
 	case "review":

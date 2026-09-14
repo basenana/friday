@@ -20,7 +20,6 @@ type phase int
 const (
 	phaseUnknown phase = iota
 	phaseBootstrap
-	phaseSelect
 	phaseDevelop
 	phaseReview
 	phaseUpdate
@@ -31,8 +30,6 @@ func (p phase) String() string {
 	switch p {
 	case phaseBootstrap:
 		return "bootstrap"
-	case phaseSelect:
-		return "select"
 	case phaseDevelop:
 		return "develop"
 	case phaseReview:
@@ -457,8 +454,6 @@ func promptFor(p phase) string {
 	switch p {
 	case phaseBootstrap:
 		return BootstrapPrompt
-	case phaseSelect:
-		return SelectPrompt
 	case phaseDevelop:
 		return DevelopPrompt
 	case phaseReview:
@@ -475,16 +470,14 @@ func promptFor(p phase) string {
 func nextPhase(p phase) phase {
 	switch p {
 	case phaseBootstrap, phaseRecovery:
-		return phaseSelect
-	case phaseSelect:
 		return phaseDevelop
 	case phaseDevelop:
 		return phaseReview
 	case phaseReview:
 		return phaseUpdate
 	case phaseUpdate:
-		return phaseSelect
+		return phaseDevelop
 	default:
-		return phaseSelect
+		return phaseDevelop
 	}
 }

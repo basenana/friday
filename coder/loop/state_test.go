@@ -112,13 +112,21 @@ func TestPhaseRecordRoundTripAndUnknownValuesFailClosed(t *testing.T) {
 	if got, err := readPhase(ctx, sess); err != nil || got != phaseUnknown {
 		t.Fatalf("missing phase = %q, %v; want unknown", got, err)
 	}
-	for _, want := range []phase{phaseBootstrap, phaseSelect, phaseDevelop, phaseReview, phaseUpdate, phaseRecovery} {
+	for _, want := range []phase{phaseBootstrap, phaseDevelop, phaseReview, phaseUpdate, phaseRecovery} {
 		if err := writePhase(ctx, sess, want); err != nil {
 			t.Fatal(err)
 		}
 		if got, err := readPhase(ctx, sess); err != nil || got != want {
 			t.Fatalf("phase = %q, %v; want %q", got, err, want)
 		}
+	}
+	if err := sess.UpdateRecord(ctx, phaseNamespace, func([]byte) ([]byte, error) {
+		return []byte("select"), nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := readPhase(ctx, sess); err != nil || got != phaseDevelop {
+		t.Fatalf("legacy select phase = %q, %v; want develop", got, err)
 	}
 	if err := sess.UpdateRecord(ctx, phaseNamespace, func([]byte) ([]byte, error) {
 		return []byte("future-phase"), nil

@@ -1238,11 +1238,12 @@ func loopPhase(text string) string {
 		label  string
 	}{
 		{coderloop.BootstrapPrompt, "bootstrap"},
-		{coderloop.SelectPrompt, "select"},
 		{coderloop.DevelopPrompt, "develop"},
 		{coderloop.ReviewPrompt, "review"},
 		{coderloop.UpdatePrompt, "update"},
 		{coderloop.RecoveryPrompt, "recover"},
+		// Historical event logs can contain the removed standalone phase.
+		{"Select the next piece of work.", "develop"},
 	} {
 		if strings.HasPrefix(text, firstLine(candidate.prompt)) {
 			return candidate.label

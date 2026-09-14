@@ -303,7 +303,7 @@ func TestTUIShowsIntermediateLoopReasoningToolsAndOutput(t *testing.T) {
 	m.handleActorEvent(events.NewEvent(events.KindRunStarted, "phase-run"))
 	m.handleActorEvent(events.NewEvent(events.KindCustom, "phase-run").
 		WithName(events.CustomInputAccepted).
-		WithPayload(events.InputAcceptedBody{TurnID: "phase-run", Text: coderloop.SelectPrompt, Sources: []string{"loop"}}))
+		WithPayload(events.InputAcceptedBody{TurnID: "phase-run", Text: coderloop.DevelopPrompt, Sources: []string{"loop"}}))
 	m.handleActorEvent(events.NewEvent(events.KindCustom, "phase-run").
 		WithName(events.CustomReasoningDelta).
 		WithPayload(events.ReasoningDeltaBody{Content: "inspect the repository"}))
@@ -323,7 +323,7 @@ func TestTUIShowsIntermediateLoopReasoningToolsAndOutput(t *testing.T) {
 	if len(got) != 5 {
 		t.Fatalf("intermediate Loop output = %#v", got)
 	}
-	if got[0].kind != blockDivider || got[0].content != "loop · select" {
+	if got[0].kind != blockDivider || got[0].content != "loop · develop" {
 		t.Fatalf("phase marker = %#v", got[0])
 	}
 	if got[1].kind != blockReasoning || got[1].content != "inspect the repository" {
@@ -346,11 +346,11 @@ func TestLoopPhaseLabels(t *testing.T) {
 		want   string
 	}{
 		{coderloop.BootstrapPrompt, "bootstrap"},
-		{coderloop.SelectPrompt, "select"},
 		{coderloop.DevelopPrompt, "develop"},
 		{coderloop.ReviewPrompt, "review"},
 		{coderloop.UpdatePrompt, "update"},
 		{coderloop.RecoveryPrompt, "recover"},
+		{"Select the next piece of work.", "develop"},
 		{"unknown controller prompt", "turn"},
 	} {
 		if got := loopPhase(tt.prompt); got != tt.want {

@@ -43,10 +43,10 @@ func TestManagerAdvancesByInputCausalityWithoutLoopMetadata(t *testing.T) {
 	second := waitInput(t, inputs)
 	var secondBody bus.UserTextInput
 	_ = events.DecodePayload(second.Event, &secondBody)
-	if secondBody.Text != SelectPrompt {
+	if secondBody.Text != DevelopPrompt {
 		t.Fatalf("next prompt = %q", secondBody.Text)
 	}
-	assertPhase(t, sess, phaseSelect)
+	assertPhase(t, sess, phaseDevelop)
 
 	if err := writeState(context.Background(), sess, StateCompleted); err != nil {
 		t.Fatal(err)
@@ -142,10 +142,10 @@ func TestManagerPersistsEveryPhaseBeforeDispatch(t *testing.T) {
 		prompt string
 	}{
 		{phaseBootstrap, BootstrapPrompt},
-		{phaseSelect, SelectPrompt},
 		{phaseDevelop, DevelopPrompt},
 		{phaseReview, ReviewPrompt},
 		{phaseUpdate, UpdatePrompt},
+		{phaseDevelop, DevelopPrompt},
 	} {
 		env := waitInput(t, inputs)
 		assertInputPrompt(t, env, want.prompt)
