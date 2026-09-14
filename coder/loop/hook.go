@@ -23,8 +23,12 @@ func (h *Hook) BeforeAgent(ctx context.Context, sess *session.Session, req sessi
 	if err != nil || !loopEnabled(state) {
 		return err
 	}
+	currentPhase, err := readPhase(ctx, sess)
+	if err != nil {
+		return err
+	}
 	isRoot := sess.Root != nil && sess.ID == sess.Root.ID
-	req.AppendTools(workingNoteTools(isRoot)...)
+	req.AppendTools(loopTools(isRoot, currentPhase)...)
 	return nil
 }
 
@@ -40,11 +44,11 @@ func (h *Hook) BeforeModel(ctx context.Context, sess *session.Session, req provi
 	return nil
 }
 
-func workingNoteTools(isRoot bool) []*tools.Tool {
+func loopTools(isRoot bool, currentPhase phase) []*tools.Tool {
 	rootOnly := func(next tools.ToolHandlerFunc) tools.ToolHandlerFunc {
 		return func(ctx context.Context, req *tools.Request) (*tools.Result, error) {
 			if !isRoot {
-				return tools.NewToolResultError("working note tools are only available in the root loop session"), nil
+				return tools.NewToolResultError("loop tools are only available in the root loop session"), nil
 			}
 			if req.SessionRecords == nil {
 				return tools.NewToolResultError("session records are unavailable"), nil
@@ -53,7 +57,7 @@ func workingNoteTools(isRoot bool) []*tools.Tool {
 		}
 	}
 
-	return []*tools.Tool{
+	result := []*tools.Tool{
 		tools.NewTool("working_note_read",
 			tools.WithDescription("Return the complete current Working Note. Use this to refresh Loop state when the visible shared context is missing, incomplete, uncertain, or may be stale. When context already establishes the current complete note and subsequent changes, continue from that context."),
 			tools.WithToolHandler(rootOnly(readWorkingNote))),
@@ -71,16 +75,26 @@ func workingNoteTools(isRoot bool) []*tools.Tool {
 			tools.WithDescription("Replace the entire Working Note with a concise, accurate checkpoint. Use this when consolidation or substantial reorganization is clearer than several small edits."),
 			tools.WithString("content", tools.Required(), tools.Description("The complete new Markdown content.")),
 			tools.WithToolHandler(rootOnly(replaceWorkingNote))),
-		tools.NewTool("finish_loop",
-			tools.WithDescription(`Complete the autonomous Loop.
-
-Call this tool only during update, after establishing the current complete Loop state from shared context or the Working Note and checking it against repository state and verification evidence.
-
-The original request and acceptance criteria must be satisfied, every in-scope task must be complete, relevant verification evidence must exist, blockers must be resolved, and no actionable in-scope work may remain. Observations explicitly classified as optional or out of scope do not become completion requirements.
-
-Completing only the current work item or one planned slice is insufficient. Bootstrap, develop, review, and recovery hand off by updating durable state as needed and ending normally.`),
-			tools.WithToolHandler(rootOnly(finishLoop))),
 	}
+	switch currentPhase {
+	case phaseUpdate:
+		result = append(result, tools.NewTool("finish_devloop",
+			tools.WithDescription(`Hand the completed development candidate to final review without completing the user's Loop.
+
+Call this tool only during update, after consolidating the Working Note. Every planned in-scope behavior must be implemented, focused verification evidence must exist, and no known development work may remain.
+
+This changes the next phase to review while the Loop stays active. It is not final approval: do not provide the final user-facing summary or continue work after calling it.`),
+			tools.WithToolHandler(rootOnly(finishDevLoop))))
+	case phaseReview:
+		result = append(result, tools.NewTool("finish_reviewloop",
+			tools.WithDescription(`Complete the autonomous Loop after independent final review.
+
+Call this tool only during review, after recording the review result and final verification evidence in the Working Note. The whole delivery must satisfy the original request and acceptance criteria, all blockers must be resolved, and no actionable in-scope defect may remain.
+
+Optional observations do not block completion unless the user explicitly adopts them. Never call this tool while Blocking Findings is non-empty.`),
+			tools.WithToolHandler(rootOnly(finishReviewLoop))))
+	}
+	return result
 }
 
 func readWorkingNote(ctx context.Context, req *tools.Request) (*tools.Result, error) {
@@ -137,15 +151,47 @@ func replaceWorkingNote(ctx context.Context, req *tools.Request) (*tools.Result,
 	return mutationResult("replace working note", err)
 }
 
-func finishLoop(ctx context.Context, req *tools.Request) (*tools.Result, error) {
+func finishDevLoop(ctx context.Context, req *tools.Request) (*tools.Result, error) {
 	currentPhase, err := readPhase(ctx, req.SessionRecords)
 	if err != nil {
-		return tools.NewToolResultError("finish loop: read current loop phase: " + err.Error()), nil
+		return tools.NewToolResultError("finish development loop: read current loop phase: " + err.Error()), nil
 	}
 	if currentPhase != phaseUpdate {
-		return tools.NewToolResultText(fmt.Sprintf(`The Loop cannot finish during the current %s phase. finish_loop may only complete the Loop during the final update phase.
+		return tools.NewToolResultText(fmt.Sprintf(`Development cannot be handed to review during the current %s phase. finish_devloop is only available during update.
 
-Do not retry finish_loop in this turn. If you completed any work, update the Working Note now with its completion status and verification evidence, then end the turn normally. The Loop will continue through the remaining work and eventually reach the update phase.`, currentPhase)), nil
+Do not retry finish_devloop in this turn. Complete the current phase's Working Note handoff and end normally.`, currentPhase)), nil
+	}
+
+	state, err := readState(ctx, req.SessionRecords)
+	if err == nil && state != StateActive && state != StateSuspended {
+		if state == StateCancelled {
+			err = errors.New("the loop was cancelled by the user")
+		} else {
+			err = errors.New("there is no active loop to hand to review")
+		}
+	}
+	if err == nil {
+		var changed bool
+		changed, err = transitionPhase(ctx, req.SessionRecords, phaseUpdate, phaseReview)
+		if err == nil && !changed {
+			err = errors.New("the development phase changed before it could be handed to review")
+		}
+	}
+	if err != nil {
+		return tools.NewToolResultError("finish development loop: " + err.Error()), nil
+	}
+	return tools.NewToolResultText("Development is complete and the Loop remains active. Final review is next. Do not continue working or provide the final user-facing summary in this turn; end the turn normally."), nil
+}
+
+func finishReviewLoop(ctx context.Context, req *tools.Request) (*tools.Result, error) {
+	currentPhase, err := readPhase(ctx, req.SessionRecords)
+	if err != nil {
+		return tools.NewToolResultError("finish review loop: read current loop phase: " + err.Error()), nil
+	}
+	if currentPhase != phaseReview {
+		return tools.NewToolResultText(fmt.Sprintf(`Final review cannot complete the Loop during the current %s phase. finish_reviewloop is only available during review.
+
+Do not retry finish_reviewloop in this turn. Complete the current phase's Working Note handoff and end normally.`, currentPhase)), nil
 	}
 
 	state, err := readState(ctx, req.SessionRecords)
@@ -171,9 +217,9 @@ Do not retry finish_loop in this turn. If you completed any work, update the Wor
 		}
 	}
 	if err != nil {
-		return tools.NewToolResultError("finish loop: " + err.Error()), nil
+		return tools.NewToolResultError("finish review loop: " + err.Error()), nil
 	}
-	return tools.NewToolResultText("The Loop is complete. The original request and acceptance criteria are satisfied, all in-scope work is complete with relevant verification, blockers are resolved, and no actionable in-scope work remains. Provide the final user-facing summary now."), nil
+	return tools.NewToolResultText("The Loop is complete. Final review passed: the original request and acceptance criteria are satisfied, relevant verification exists, blockers are resolved, and no actionable in-scope defect remains. Provide the final user-facing summary now."), nil
 }
 
 func mutationResult(action string, err error) (*tools.Result, error) {

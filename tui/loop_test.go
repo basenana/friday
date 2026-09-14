@@ -347,9 +347,11 @@ func TestLoopPhaseLabels(t *testing.T) {
 	}{
 		{coderloop.BootstrapPrompt, "bootstrap"},
 		{coderloop.DevelopPrompt, "develop"},
-		{coderloop.ReviewPrompt, "review"},
 		{coderloop.UpdatePrompt, "update"},
+		{coderloop.ReviewPrompt, "review"},
+		{coderloop.RevisePrompt, "revise"},
 		{coderloop.RecoveryPrompt, "recover"},
+		{coderloop.ReviewRecoveryPrompt, "recover"},
 		{"Select the next piece of work.", "develop"},
 		{"unknown controller prompt", "turn"},
 	} {

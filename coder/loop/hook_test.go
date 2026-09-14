@@ -13,99 +13,97 @@ import (
 	"github.com/basenana/friday/core/tools"
 )
 
-func TestWorkingNoteToolsAndRootPermission(t *testing.T) {
+func TestLoopToolsArePhaseSpecificAndRootOnly(t *testing.T) {
 	ctx := context.Background()
-	root := session.New("root", nil)
-	if err := writeState(ctx, root, StateActive); err != nil {
-		t.Fatal(err)
-	}
-	hook := NewHook()
-	req := &api.Request{}
-	if err := hook.BeforeAgent(ctx, root, req); err != nil {
-		t.Fatal(err)
-	}
-	wantNames := []string{"working_note_read", "working_note_append", "working_note_edit", "working_note_replace", "finish_loop"}
-	var gotNames []string
-	for _, tool := range req.Tools {
-		gotNames = append(gotNames, tool.Name)
-	}
-	if !reflect.DeepEqual(gotNames, wantNames) {
-		t.Fatalf("tools = %v, want %v", gotNames, wantNames)
-	}
+	for _, tc := range []struct {
+		name       string
+		phase      phase
+		finishTool string
+	}{
+		{name: "develop", phase: phaseDevelop},
+		{name: "update", phase: phaseUpdate, finishTool: "finish_devloop"},
+		{name: "review", phase: phaseReview, finishTool: "finish_reviewloop"},
+		{name: "revise", phase: phaseRevise},
+		{name: "development recovery", phase: phaseRecoveryDevelop},
+		{name: "review recovery", phase: phaseRecoveryReview},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := session.New("root", nil)
+			if err := writeState(ctx, root, StateActive); err != nil {
+				t.Fatal(err)
+			}
+			if err := writePhase(ctx, root, tc.phase); err != nil {
+				t.Fatal(err)
+			}
 
-	byName := make(map[string]*tools.Tool)
-	for _, tool := range req.Tools {
-		byName[tool.Name] = tool
-	}
-	call := func(name string, args map[string]any) *tools.Result {
-		result, err := byName[name].Handler(ctx, &tools.Request{Arguments: args, SessionID: root.ID, SessionRecords: root})
-		if err != nil {
-			t.Fatal(err)
-		}
-		return result
-	}
-	call("working_note_replace", map[string]any{"content": "alpha alpha"})
-	call("working_note_edit", map[string]any{"old_text": "alpha", "new_text": "beta"})
-	call("working_note_append", map[string]any{"content": "tail"})
-	result := call("working_note_read", nil)
-	if text := tools.Res2Str(result); !strings.Contains(text, "beta alpha") || !strings.Contains(text, "tail") {
-		t.Fatalf("working note = %q", text)
-	}
-	if err := writePhase(ctx, root, phaseUpdate); err != nil {
-		t.Fatal(err)
-	}
-	finish := call("finish_loop", nil)
-	if finish.IsError {
-		t.Fatalf("finish_loop = %s", tools.Res2Str(finish))
-	}
-	if state, err := readState(ctx, root); err != nil || state != StateCompleted {
-		t.Fatalf("state after finish = %q, err = %v", state, err)
-	}
-	if err := writeState(ctx, root, StateActive); err != nil {
-		t.Fatal(err)
-	}
+			rootReq := &api.Request{}
+			if err := NewHook().BeforeAgent(ctx, root, rootReq); err != nil {
+				t.Fatal(err)
+			}
+			wantNames := []string{"working_note_read", "working_note_append", "working_note_edit", "working_note_replace"}
+			if tc.finishTool != "" {
+				wantNames = append(wantNames, tc.finishTool)
+			}
+			if got := toolNames(rootReq.Tools); !reflect.DeepEqual(got, wantNames) {
+				t.Fatalf("tools = %v, want %v", got, wantNames)
+			}
 
-	child := root.Fork()
-	childReq := &api.Request{}
-	if err := hook.BeforeAgent(ctx, child, childReq); err != nil {
-		t.Fatal(err)
-	}
-	if len(childReq.Tools) != len(req.Tools) {
-		t.Fatalf("child tools = %d, root tools = %d", len(childReq.Tools), len(req.Tools))
-	}
-	for i := range req.Tools {
-		if !reflect.DeepEqual(req.Tools[i].JsonSchema(), childReq.Tools[i].JsonSchema()) || req.Tools[i].Name != childReq.Tools[i].Name {
-			t.Fatalf("tool %d differs between root and child", i)
-		}
-	}
-	denied, err := childReq.Tools[0].Handler(ctx, &tools.Request{SessionID: child.ID, SessionRecords: child})
-	if err != nil || !denied.IsError || !strings.Contains(tools.Res2Str(denied), "root loop session") {
-		t.Fatalf("child result = %#v, err = %v", denied, err)
+			childReq := &api.Request{}
+			if err := NewHook().BeforeAgent(ctx, root.Fork(), childReq); err != nil {
+				t.Fatal(err)
+			}
+			if got := toolNames(childReq.Tools); !reflect.DeepEqual(got, wantNames) {
+				t.Fatalf("child tools = %v, want %v", got, wantNames)
+			}
+			denied, err := childReq.Tools[0].Handler(ctx, &tools.Request{SessionID: "child", SessionRecords: root.Fork()})
+			if err != nil || !denied.IsError || !strings.Contains(tools.Res2Str(denied), "root loop session") {
+				t.Fatalf("child result = %#v, err = %v", denied, err)
+			}
+		})
 	}
 }
 
-func TestHookInjectsStablePromptOnlyForRoot(t *testing.T) {
+func TestWorkingNoteTools(t *testing.T) {
 	ctx := context.Background()
 	root := session.New("root", nil)
 	if err := writeState(ctx, root, StateActive); err != nil {
 		t.Fatal(err)
 	}
-	hook := NewHook()
-	req := providers.NewRequest("hello")
-	if err := hook.BeforeModel(ctx, root, req); err != nil {
+	if err := writePhase(ctx, root, phaseDevelop); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(req.SystemPrompt(), "When visible context contains the complete note") ||
-		!strings.Contains(req.SystemPrompt(), "absent, incomplete, possibly stale") {
-		t.Fatalf("missing context-aware working note guidance: %q", req.SystemPrompt())
+	req := &api.Request{}
+	if err := NewHook().BeforeAgent(ctx, root, req); err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(req.SystemPrompt(), "Only update can call finish_loop") ||
-		!strings.Contains(req.SystemPrompt(), "no actionable in-scope work remains") {
-		t.Fatalf("missing complete-plan finish constraint: %q", req.SystemPrompt())
+	byName := toolsByName(req.Tools)
+	callTool(t, byName["working_note_replace"], root, map[string]any{"content": "alpha alpha"})
+	callTool(t, byName["working_note_edit"], root, map[string]any{"old_text": "alpha", "new_text": "beta"})
+	callTool(t, byName["working_note_append"], root, map[string]any{"content": "tail"})
+	result := callTool(t, byName["working_note_read"], root, nil)
+	if text := tools.Res2Str(result); !strings.Contains(text, "beta alpha") || !strings.Contains(text, "tail") {
+		t.Fatalf("working note = %q", text)
+	}
+}
+
+func TestHookInjectsTwoCyclePromptOnlyForRoot(t *testing.T) {
+	ctx := context.Background()
+	root := session.New("root", nil)
+	if err := writeState(ctx, root, StateActive); err != nil {
+		t.Fatal(err)
+	}
+	req := providers.NewRequest("hello")
+	if err := NewHook().BeforeModel(ctx, root, req); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"one continuous Loop", "develop -> update", "review -> revise", "finish_devloop", "Only finish_reviewloop completes"} {
+		if !strings.Contains(req.SystemPrompt(), want) {
+			t.Fatalf("system prompt missing %q: %q", want, req.SystemPrompt())
+		}
 	}
 	childReq := providers.NewRequest("hello")
 	before := childReq.SystemPrompt()
-	if err := hook.BeforeModel(ctx, root.Fork(), childReq); err != nil {
+	if err := NewHook().BeforeModel(ctx, root.Fork(), childReq); err != nil {
 		t.Fatal(err)
 	}
 	if childReq.SystemPrompt() != before {
@@ -113,63 +111,65 @@ func TestHookInjectsStablePromptOnlyForRoot(t *testing.T) {
 	}
 }
 
-func TestFinishLoopDescriptionRequiresAllInScopeWork(t *testing.T) {
-	ctx := context.Background()
-	root := session.New("root", nil)
-	if err := writeState(ctx, root, StateActive); err != nil {
-		t.Fatal(err)
-	}
-	req := &api.Request{}
-	if err := NewHook().BeforeAgent(ctx, root, req); err != nil {
-		t.Fatal(err)
-	}
-	for _, tool := range req.Tools {
-		if tool.Name != "finish_loop" {
-			continue
-		}
-		description := tool.GetDescription()
-		if !strings.Contains(description, "only during update") ||
-			!strings.Contains(description, "Completing only the current work item") ||
-			!strings.Contains(description, "no actionable in-scope work may remain") {
-			t.Fatalf("finish_loop description = %q", description)
-		}
-		return
-	}
-	t.Fatal("finish_loop tool not found")
-}
-
-func TestFinishLoopAcceptsSuspendedState(t *testing.T) {
-	ctx := context.Background()
-	root := session.New("root", nil)
-	if err := writeState(ctx, root, StateSuspended); err != nil {
-		t.Fatal(err)
-	}
-	if err := writePhase(ctx, root, phaseUpdate); err != nil {
-		t.Fatal(err)
-	}
-
-	result, err := finishLoop(ctx, &tools.Request{SessionID: root.ID, SessionRecords: root})
-	if err != nil || result.IsError {
-		t.Fatalf("finishLoop() = %#v, %v", result, err)
-	}
-	state, err := readState(ctx, root)
-	if err != nil || state != StateCompleted {
-		t.Fatalf("state = %q, %v; want completed", state, err)
+func TestFinishDevLoopHandsOffWithoutCompleting(t *testing.T) {
+	for _, state := range []State{StateActive, StateSuspended} {
+		t.Run(string(state), func(t *testing.T) {
+			ctx := context.Background()
+			root := session.New("root", nil)
+			if err := writeState(ctx, root, state); err != nil {
+				t.Fatal(err)
+			}
+			if err := writePhase(ctx, root, phaseUpdate); err != nil {
+				t.Fatal(err)
+			}
+			result, err := finishDevLoop(ctx, &tools.Request{SessionID: root.ID, SessionRecords: root})
+			if err != nil || result.IsError {
+				t.Fatalf("finishDevLoop() = %#v, %v", result, err)
+			}
+			if got, err := readState(ctx, root); err != nil || got != state {
+				t.Fatalf("state = %q, %v; want %q", got, err, state)
+			}
+			if got, err := readPhase(ctx, root); err != nil || got != phaseReview {
+				t.Fatalf("phase = %q, %v; want review", got, err)
+			}
+			if text := tools.Res2Str(result); !strings.Contains(text, "remains active") || !strings.Contains(text, "Final review is next") {
+				t.Fatalf("result = %q", text)
+			}
+		})
 	}
 }
 
-func TestFinishLoopGuidesWithoutFailureOutsideUpdatePhase(t *testing.T) {
+func TestFinishReviewLoopCompletes(t *testing.T) {
+	for _, state := range []State{StateActive, StateSuspended} {
+		t.Run(string(state), func(t *testing.T) {
+			ctx := context.Background()
+			root := session.New("root", nil)
+			if err := writeState(ctx, root, state); err != nil {
+				t.Fatal(err)
+			}
+			if err := writePhase(ctx, root, phaseReview); err != nil {
+				t.Fatal(err)
+			}
+			result, err := finishReviewLoop(ctx, &tools.Request{SessionID: root.ID, SessionRecords: root})
+			if err != nil || result.IsError {
+				t.Fatalf("finishReviewLoop() = %#v, %v", result, err)
+			}
+			if got, err := readState(ctx, root); err != nil || got != StateCompleted {
+				t.Fatalf("state = %q, %v; want completed", got, err)
+			}
+		})
+	}
+}
+
+func TestFinishToolsGuideWithoutMutationOutsideTheirPhases(t *testing.T) {
 	for _, tc := range []struct {
-		name  string
-		phase phase
-		raw   string
+		name string
+		fn   tools.ToolHandlerFunc
+		at   phase
+		want string
 	}{
-		{name: "bootstrap", phase: phaseBootstrap},
-		{name: "develop", phase: phaseDevelop},
-		{name: "review", phase: phaseReview},
-		{name: "recovery", phase: phaseRecovery},
-		{name: "missing"},
-		{name: "unknown", raw: "future-phase"},
+		{name: "development handoff", fn: finishDevLoop, at: phaseDevelop, want: "only available during update"},
+		{name: "review completion", fn: finishReviewLoop, at: phaseRevise, want: "only available during review"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
@@ -177,51 +177,20 @@ func TestFinishLoopGuidesWithoutFailureOutsideUpdatePhase(t *testing.T) {
 			if err := writeState(ctx, root, StateActive); err != nil {
 				t.Fatal(err)
 			}
-			switch {
-			case tc.phase != phaseUnknown:
-				if err := writePhase(ctx, root, tc.phase); err != nil {
-					t.Fatal(err)
-				}
-			case tc.raw != "":
-				if err := root.UpdateRecord(ctx, phaseNamespace, func([]byte) ([]byte, error) {
-					return []byte(tc.raw), nil
-				}); err != nil {
-					t.Fatal(err)
-				}
+			if err := writePhase(ctx, root, tc.at); err != nil {
+				t.Fatal(err)
 			}
-
-			result, err := finishLoop(ctx, &tools.Request{SessionID: root.ID, SessionRecords: root})
-			if err != nil || result.IsError {
-				t.Fatalf("finishLoop() = %#v, %v; want successful guidance", result, err)
+			result, err := tc.fn(ctx, &tools.Request{SessionID: root.ID, SessionRecords: root})
+			if err != nil || result.IsError || !strings.Contains(tools.Res2Str(result), tc.want) {
+				t.Fatalf("result = %#v, %v", result, err)
 			}
-			text := tools.Res2Str(result)
-			if !strings.Contains(text, "may only complete the Loop during the final update phase") ||
-				!strings.Contains(text, "Do not retry finish_loop in this turn") ||
-				!strings.Contains(text, "update the Working Note") {
-				t.Fatalf("guidance = %q", text)
+			if got, _ := readState(ctx, root); got != StateActive {
+				t.Fatalf("state = %q; want active", got)
 			}
-			if state, err := readState(ctx, root); err != nil || state != StateActive {
-				t.Fatalf("state after denied finish = %q, %v; want active", state, err)
+			if got, _ := readPhase(ctx, root); got != tc.at {
+				t.Fatalf("phase = %q; want %q", got, tc.at)
 			}
 		})
-	}
-}
-
-func TestFinishLoopGuidancePreservesSuspendedState(t *testing.T) {
-	ctx := context.Background()
-	root := session.New("root", nil)
-	if err := writeState(ctx, root, StateSuspended); err != nil {
-		t.Fatal(err)
-	}
-	if err := writePhase(ctx, root, phaseRecovery); err != nil {
-		t.Fatal(err)
-	}
-	result, err := finishLoop(ctx, &tools.Request{SessionID: root.ID, SessionRecords: root})
-	if err != nil || result.IsError {
-		t.Fatalf("finishLoop() = %#v, %v; want successful guidance", result, err)
-	}
-	if state, err := readState(ctx, root); err != nil || state != StateSuspended {
-		t.Fatalf("state after denied finish = %q, %v; want suspended", state, err)
 	}
 }
 
@@ -235,36 +204,84 @@ func (phaseReadFailingRecords) UpdateRecord(context.Context, string, func([]byte
 	return nil
 }
 
-func TestFinishLoopReportsPhaseReadFailure(t *testing.T) {
+func TestFinishToolsReportPhaseReadFailure(t *testing.T) {
 	want := errors.New("phase store unavailable")
-	result, err := finishLoop(context.Background(), &tools.Request{
-		SessionID:      "root",
-		SessionRecords: phaseReadFailingRecords{err: want},
-	})
-	if err != nil || !result.IsError || !strings.Contains(tools.Res2Str(result), want.Error()) {
-		t.Fatalf("finishLoop() = %#v, %v", result, err)
+	for _, fn := range []tools.ToolHandlerFunc{finishDevLoop, finishReviewLoop} {
+		result, err := fn(context.Background(), &tools.Request{SessionID: "root", SessionRecords: phaseReadFailingRecords{err: want}})
+		if err != nil || !result.IsError || !strings.Contains(tools.Res2Str(result), want.Error()) {
+			t.Fatalf("finish tool = %#v, %v", result, err)
+		}
+	}
+}
+
+func TestFinishToolDescriptionsDefineDistinctBoundaries(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		phase phase
+		name  string
+		wants []string
+	}{
+		{phase: phaseUpdate, name: "finish_devloop", wants: []string{"without completing", "no known development work", "stays active"}},
+		{phase: phaseReview, name: "finish_reviewloop", wants: []string{"after independent final review", "all blockers", "Blocking Findings"}},
+	} {
+		root := session.New("root", nil)
+		_ = writeState(ctx, root, StateActive)
+		_ = writePhase(ctx, root, tc.phase)
+		req := &api.Request{}
+		if err := NewHook().BeforeAgent(ctx, root, req); err != nil {
+			t.Fatal(err)
+		}
+		description := toolsByName(req.Tools)[tc.name].GetDescription()
+		for _, want := range tc.wants {
+			if !strings.Contains(description, want) {
+				t.Fatalf("%s description missing %q: %q", tc.name, want, description)
+			}
+		}
 	}
 }
 
 func TestHookKeepsLoopCapabilitiesWhileSuspended(t *testing.T) {
 	ctx := context.Background()
 	root := session.New("root", nil)
-	if err := writeState(ctx, root, StateSuspended); err != nil {
-		t.Fatal(err)
-	}
-	hook := NewHook()
+	_ = writeState(ctx, root, StateSuspended)
+	_ = writePhase(ctx, root, phaseUpdate)
 	agentReq := &api.Request{}
-	if err := hook.BeforeAgent(ctx, root, agentReq); err != nil {
+	if err := NewHook().BeforeAgent(ctx, root, agentReq); err != nil {
 		t.Fatal(err)
 	}
-	if len(agentReq.Tools) == 0 {
-		t.Fatal("suspended Loop did not expose Working Note tools")
+	if _, ok := toolsByName(agentReq.Tools)["finish_devloop"]; !ok {
+		t.Fatal("suspended update did not expose finish_devloop")
 	}
 	modelReq := providers.NewRequest("hello")
-	if err := hook.BeforeModel(ctx, root, modelReq); err != nil {
+	if err := NewHook().BeforeModel(ctx, root, modelReq); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(modelReq.SystemPrompt(), "autonomous Ralph Loop") {
 		t.Fatalf("suspended Loop prompt = %q", modelReq.SystemPrompt())
 	}
+}
+
+func toolNames(list []*tools.Tool) []string {
+	names := make([]string, 0, len(list))
+	for _, tool := range list {
+		names = append(names, tool.Name)
+	}
+	return names
+}
+
+func toolsByName(list []*tools.Tool) map[string]*tools.Tool {
+	result := make(map[string]*tools.Tool, len(list))
+	for _, tool := range list {
+		result[tool.Name] = tool
+	}
+	return result
+}
+
+func callTool(t *testing.T, tool *tools.Tool, sess *session.Session, args map[string]any) *tools.Result {
+	t.Helper()
+	result, err := tool.Handler(context.Background(), &tools.Request{Arguments: args, SessionID: sess.ID, SessionRecords: sess})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return result
 }

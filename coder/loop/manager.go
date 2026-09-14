@@ -21,9 +21,11 @@ const (
 	phaseUnknown phase = iota
 	phaseBootstrap
 	phaseDevelop
-	phaseReview
 	phaseUpdate
-	phaseRecovery
+	phaseReview
+	phaseRevise
+	phaseRecoveryDevelop
+	phaseRecoveryReview
 )
 
 func (p phase) String() string {
@@ -32,12 +34,16 @@ func (p phase) String() string {
 		return "bootstrap"
 	case phaseDevelop:
 		return "develop"
-	case phaseReview:
-		return "review"
 	case phaseUpdate:
 		return "update"
-	case phaseRecovery:
-		return "recovery"
+	case phaseReview:
+		return "review"
+	case phaseRevise:
+		return "revise"
+	case phaseRecoveryDevelop:
+		return "recovery_develop"
+	case phaseRecoveryReview:
+		return "recovery_review"
 	default:
 		return "unknown"
 	}
@@ -130,7 +136,11 @@ func (m *Manager) Resume(ctx context.Context, sess *session.Session) error {
 	}
 	switch state {
 	case StateActive:
-		return m.launch(ctx, sess, phaseRecovery)
+		recovery, err := recoveryPhase(ctx, sess)
+		if err != nil {
+			return err
+		}
+		return m.launch(ctx, sess, recovery)
 	case StateSuspended:
 		m.mu.Lock()
 		if c := m.controllers[sess.ID]; c != nil {
@@ -140,7 +150,11 @@ func (m *Manager) Resume(ctx context.Context, sess *session.Session) error {
 		}
 		m.mu.Unlock()
 
-		if err := writePhase(ctx, sess, phaseRecovery); err != nil {
+		recovery, err := recoveryPhase(ctx, sess)
+		if err != nil {
+			return err
+		}
+		if err := writePhase(ctx, sess, recovery); err != nil {
 			return fmt.Errorf("prepare loop recovery phase: %w", err)
 		}
 		changed, transitionErr := transitionState(ctx, sess, []State{StateSuspended}, StateActive)
@@ -148,7 +162,7 @@ func (m *Manager) Resume(ctx context.Context, sess *session.Session) error {
 			return transitionErr
 		}
 		if changed {
-			return m.launch(ctx, sess, phaseRecovery)
+			return m.launch(ctx, sess, recovery)
 		}
 		// A concurrent resume may already have activated the state. Ensure it
 		// also owns a controller; launch is idempotent.
@@ -157,7 +171,7 @@ func (m *Manager) Resume(ctx context.Context, sess *session.Session) error {
 			return err
 		}
 		if state == StateActive {
-			return m.launch(ctx, sess, phaseRecovery)
+			return m.launch(ctx, sess, recovery)
 		}
 	}
 	return nil
@@ -216,7 +230,21 @@ func (m *Manager) run(ctx context.Context, c *controller) {
 		case StateActive:
 			switch stopReason {
 			case "end_turn":
-				c.phase = nextPhase(c.phase)
+				persisted, readErr := readPhase(ctx, c.session)
+				if readErr != nil || persisted == phaseUnknown {
+					_ = m.suspend(context.Background(), c.session, "loop phase could not be read after turn", false)
+					return
+				}
+				switch {
+				case persisted == c.phase:
+					c.phase = nextPhase(c.phase)
+				case c.phase == phaseUpdate && persisted == phaseReview:
+					// finish_devloop owns this explicit cross-cycle handoff.
+					c.phase = persisted
+				default:
+					_ = m.suspend(context.Background(), c.session, "loop phase changed unexpectedly during turn", false)
+					return
+				}
 			case "cancelled":
 				_, _ = transitionState(context.Background(), c.session, []State{StateActive}, StateCancelled)
 				return
@@ -269,12 +297,16 @@ func (m *Manager) finishController(c *controller) {
 	if err != nil || state != StateSuspended {
 		return
 	}
-	if err := writePhase(context.Background(), c.session, phaseRecovery); err != nil {
+	recovery, err := recoveryPhase(context.Background(), c.session)
+	if err != nil {
+		return
+	}
+	if err := writePhase(context.Background(), c.session, recovery); err != nil {
 		return
 	}
 	changed, err := transitionState(context.Background(), c.session, []State{StateSuspended}, StateActive)
 	if err == nil && changed {
-		_ = m.launch(context.Background(), c.session, phaseRecovery)
+		_ = m.launch(context.Background(), c.session, recovery)
 	}
 }
 
@@ -456,28 +488,47 @@ func promptFor(p phase) string {
 		return BootstrapPrompt
 	case phaseDevelop:
 		return DevelopPrompt
-	case phaseReview:
-		return ReviewPrompt
 	case phaseUpdate:
 		return UpdatePrompt
-	case phaseRecovery:
-		return RecoveryPrompt
+	case phaseReview:
+		return ReviewPrompt
+	case phaseRevise:
+		return RevisePrompt
+	case phaseRecoveryDevelop:
+		return DevelopRecoveryPrompt
+	case phaseRecoveryReview:
+		return ReviewRecoveryPrompt
 	default:
-		return RecoveryPrompt
+		return DevelopRecoveryPrompt
 	}
 }
 
 func nextPhase(p phase) phase {
 	switch p {
-	case phaseBootstrap, phaseRecovery:
+	case phaseBootstrap, phaseRecoveryDevelop:
 		return phaseDevelop
 	case phaseDevelop:
-		return phaseReview
-	case phaseReview:
 		return phaseUpdate
 	case phaseUpdate:
 		return phaseDevelop
+	case phaseReview:
+		return phaseRevise
+	case phaseRevise, phaseRecoveryReview:
+		return phaseReview
 	default:
 		return phaseDevelop
+	}
+}
+
+func recoveryPhase(ctx context.Context, records stateRecords) (phase, error) {
+	current, err := readPhase(ctx, records)
+	if err != nil {
+		return phaseUnknown, fmt.Errorf("read loop phase for recovery: %w", err)
+	}
+	switch current {
+	case phaseReview, phaseRevise, phaseRecoveryReview:
+		return phaseRecoveryReview, nil
+	default:
+		return phaseRecoveryDevelop, nil
 	}
 }

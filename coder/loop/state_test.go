@@ -112,7 +112,15 @@ func TestPhaseRecordRoundTripAndUnknownValuesFailClosed(t *testing.T) {
 	if got, err := readPhase(ctx, sess); err != nil || got != phaseUnknown {
 		t.Fatalf("missing phase = %q, %v; want unknown", got, err)
 	}
-	for _, want := range []phase{phaseBootstrap, phaseDevelop, phaseReview, phaseUpdate, phaseRecovery} {
+	for _, want := range []phase{
+		phaseBootstrap,
+		phaseDevelop,
+		phaseUpdate,
+		phaseReview,
+		phaseRevise,
+		phaseRecoveryDevelop,
+		phaseRecoveryReview,
+	} {
 		if err := writePhase(ctx, sess, want); err != nil {
 			t.Fatal(err)
 		}
@@ -129,6 +137,14 @@ func TestPhaseRecordRoundTripAndUnknownValuesFailClosed(t *testing.T) {
 		t.Fatalf("legacy select phase = %q, %v; want develop", got, err)
 	}
 	if err := sess.UpdateRecord(ctx, phaseNamespace, func([]byte) ([]byte, error) {
+		return []byte("recovery"), nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := readPhase(ctx, sess); err != nil || got != phaseRecoveryDevelop {
+		t.Fatalf("legacy recovery phase = %q, %v; want recovery_develop", got, err)
+	}
+	if err := sess.UpdateRecord(ctx, phaseNamespace, func([]byte) ([]byte, error) {
 		return []byte("future-phase"), nil
 	}); err != nil {
 		t.Fatal(err)
@@ -138,5 +154,27 @@ func TestPhaseRecordRoundTripAndUnknownValuesFailClosed(t *testing.T) {
 	}
 	if err := writePhase(ctx, sess, phaseUnknown); err == nil {
 		t.Fatal("writePhase accepted unknown phase")
+	}
+}
+
+func TestTransitionPhaseUsesAtomicCompareAndSwap(t *testing.T) {
+	ctx := context.Background()
+	sess := session.New("root", nil)
+	if err := writePhase(ctx, sess, phaseUpdate); err != nil {
+		t.Fatal(err)
+	}
+	changed, err := transitionPhase(ctx, sess, phaseUpdate, phaseReview)
+	if err != nil || !changed {
+		t.Fatalf("transitionPhase() = %v, %v; want changed", changed, err)
+	}
+	if got, err := readPhase(ctx, sess); err != nil || got != phaseReview {
+		t.Fatalf("phase = %q, %v; want review", got, err)
+	}
+	changed, err = transitionPhase(ctx, sess, phaseUpdate, phaseDevelop)
+	if err != nil || changed {
+		t.Fatalf("stale transitionPhase() = %v, %v; want unchanged", changed, err)
+	}
+	if _, err := transitionPhase(ctx, sess, phaseUnknown, phaseReview); err == nil {
+		t.Fatal("transitionPhase accepted unknown source")
 	}
 }

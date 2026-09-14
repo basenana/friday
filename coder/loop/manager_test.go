@@ -12,6 +12,7 @@ import (
 	"github.com/basenana/friday/bus"
 	"github.com/basenana/friday/core/actor/events"
 	"github.com/basenana/friday/core/session"
+	"github.com/basenana/friday/core/tools"
 )
 
 func TestManagerAdvancesByInputCausalityWithoutLoopMetadata(t *testing.T) {
@@ -117,8 +118,8 @@ func TestManagerAttachRecoversActiveLoop(t *testing.T) {
 	if err := m.Attach(context.Background(), sess); err != nil {
 		t.Fatal(err)
 	}
-	assertInputPrompt(t, waitInput(t, inputs), RecoveryPrompt)
-	assertPhase(t, sess, phaseRecovery)
+	assertInputPrompt(t, waitInput(t, inputs), DevelopRecoveryPrompt)
+	assertPhase(t, sess, phaseRecoveryDevelop)
 }
 
 func TestManagerPersistsEveryPhaseBeforeDispatch(t *testing.T) {
@@ -143,9 +144,9 @@ func TestManagerPersistsEveryPhaseBeforeDispatch(t *testing.T) {
 	}{
 		{phaseBootstrap, BootstrapPrompt},
 		{phaseDevelop, DevelopPrompt},
-		{phaseReview, ReviewPrompt},
 		{phaseUpdate, UpdatePrompt},
 		{phaseDevelop, DevelopPrompt},
+		{phaseUpdate, UpdatePrompt},
 	} {
 		env := waitInput(t, inputs)
 		assertInputPrompt(t, env, want.prompt)
@@ -154,6 +155,125 @@ func TestManagerPersistsEveryPhaseBeforeDispatch(t *testing.T) {
 			publishFinished(b, sess.ID, env.ID, "end_turn")
 		}
 	}
+}
+
+func TestManagerRunsDevelopmentAndReviewCycles(t *testing.T) {
+	b := eventbus.NewBus()
+	m := NewManager(b)
+	defer m.Close()
+	sess := session.New("root", nil)
+	inputs := make(chan bus.Envelope, 8)
+	id := b.SubscribeSerial([]string{bus.TopicInbox(sess.ID)}, func(env bus.Envelope) {
+		if env.Name == bus.InboxUserText {
+			inputs <- env
+		}
+	}, eventbus.SerialConfig{Overflow: eventbus.OverflowBlock})
+	defer b.Unsubscribe(id)
+
+	if err := m.Start(context.Background(), sess, "implement it"); err != nil {
+		t.Fatal(err)
+	}
+	bootstrap := waitInput(t, inputs)
+	publishFinished(b, sess.ID, bootstrap.ID, "end_turn")
+	develop := waitInput(t, inputs)
+	assertInputPrompt(t, develop, DevelopPrompt)
+	publishFinished(b, sess.ID, develop.ID, "end_turn")
+	update := waitInput(t, inputs)
+	assertInputPrompt(t, update, UpdatePrompt)
+
+	result, err := finishDevLoop(context.Background(), &tools.Request{SessionID: sess.ID, SessionRecords: sess})
+	if err != nil || result.IsError {
+		t.Fatalf("finishDevLoop() = %#v, %v", result, err)
+	}
+	if state, _ := readState(context.Background(), sess); state != StateActive {
+		t.Fatalf("state after development handoff = %q; want active", state)
+	}
+	publishFinished(b, sess.ID, update.ID, "end_turn")
+	review := waitInput(t, inputs)
+	assertInputPrompt(t, review, ReviewPrompt)
+	publishFinished(b, sess.ID, review.ID, "end_turn")
+	revise := waitInput(t, inputs)
+	assertInputPrompt(t, revise, RevisePrompt)
+	publishFinished(b, sess.ID, revise.ID, "end_turn")
+	review = waitInput(t, inputs)
+	assertInputPrompt(t, review, ReviewPrompt)
+
+	result, err = finishReviewLoop(context.Background(), &tools.Request{SessionID: sess.ID, SessionRecords: sess})
+	if err != nil || result.IsError {
+		t.Fatalf("finishReviewLoop() = %#v, %v", result, err)
+	}
+	publishFinished(b, sess.ID, review.ID, "end_turn")
+	waitState(t, sess, StateCompleted)
+	assertNoInput(t, inputs)
+}
+
+func TestManagerRecoveryReturnsToInterruptedCycle(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		interrupted    phase
+		recovery       phase
+		recoveryPrompt string
+		nextPrompt     string
+	}{
+		{name: "development", interrupted: phaseUpdate, recovery: phaseRecoveryDevelop, recoveryPrompt: DevelopRecoveryPrompt, nextPrompt: DevelopPrompt},
+		{name: "review", interrupted: phaseReview, recovery: phaseRecoveryReview, recoveryPrompt: ReviewRecoveryPrompt, nextPrompt: ReviewPrompt},
+		{name: "revise", interrupted: phaseRevise, recovery: phaseRecoveryReview, recoveryPrompt: ReviewRecoveryPrompt, nextPrompt: ReviewPrompt},
+		{name: "repeated review recovery", interrupted: phaseRecoveryReview, recovery: phaseRecoveryReview, recoveryPrompt: ReviewRecoveryPrompt, nextPrompt: ReviewPrompt},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := eventbus.NewBus()
+			m := NewManager(b)
+			defer m.Close()
+			sess := session.New("root", nil)
+			if err := writeState(context.Background(), sess, StateSuspended); err != nil {
+				t.Fatal(err)
+			}
+			if err := writePhase(context.Background(), sess, tc.interrupted); err != nil {
+				t.Fatal(err)
+			}
+			inputs := make(chan bus.Envelope, 2)
+			id := b.SubscribeSerial([]string{bus.TopicInbox(sess.ID)}, func(env bus.Envelope) {
+				if env.Name == bus.InboxUserText {
+					inputs <- env
+				}
+			}, eventbus.SerialConfig{Overflow: eventbus.OverflowBlock})
+			defer b.Unsubscribe(id)
+
+			if err := m.Resume(context.Background(), sess); err != nil {
+				t.Fatal(err)
+			}
+			recovery := waitInput(t, inputs)
+			assertInputPrompt(t, recovery, tc.recoveryPrompt)
+			assertPhase(t, sess, tc.recovery)
+			publishFinished(b, sess.ID, recovery.ID, "end_turn")
+			assertInputPrompt(t, waitInput(t, inputs), tc.nextPrompt)
+		})
+	}
+}
+
+func TestManagerSuspendsOnUnexpectedPhaseChange(t *testing.T) {
+	b := eventbus.NewBus()
+	m := NewManager(b)
+	defer m.Close()
+	sess := session.New("root", nil)
+	inputs := make(chan bus.Envelope, 2)
+	id := b.SubscribeSerial([]string{bus.TopicInbox(sess.ID)}, func(env bus.Envelope) {
+		if env.Name == bus.InboxUserText {
+			inputs <- env
+		}
+	}, eventbus.SerialConfig{Overflow: eventbus.OverflowBlock})
+	defer b.Unsubscribe(id)
+
+	if err := m.Start(context.Background(), sess, "implement it"); err != nil {
+		t.Fatal(err)
+	}
+	bootstrap := waitInput(t, inputs)
+	if err := writePhase(context.Background(), sess, phaseReview); err != nil {
+		t.Fatal(err)
+	}
+	publishFinished(b, sess.ID, bootstrap.ID, "end_turn")
+	waitState(t, sess, StateSuspended)
+	assertNoInput(t, inputs)
 }
 
 func TestManagerIdempotentResumeDoesNotOverwriteRunningPhase(t *testing.T) {
@@ -263,8 +383,8 @@ func TestManagerAttachResumesWithoutReplacingWorkingNote(t *testing.T) {
 	if err := m.Attach(ctx, sess); err != nil {
 		t.Fatal(err)
 	}
-	assertInputPrompt(t, waitInput(t, inputs), RecoveryPrompt)
-	assertPhase(t, sess, phaseRecovery)
+	assertInputPrompt(t, waitInput(t, inputs), DevelopRecoveryPrompt)
+	assertPhase(t, sess, phaseRecoveryDevelop)
 	got, err := sess.ReadRecord(ctx, WorkingNoteNamespace)
 	if err != nil || string(got) != wantNote {
 		t.Fatalf("working note after attach = %q, %v; want unchanged", got, err)

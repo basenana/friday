@@ -1239,8 +1239,9 @@ func loopPhase(text string) string {
 	}{
 		{coderloop.BootstrapPrompt, "bootstrap"},
 		{coderloop.DevelopPrompt, "develop"},
-		{coderloop.ReviewPrompt, "review"},
 		{coderloop.UpdatePrompt, "update"},
+		{coderloop.ReviewPrompt, "review"},
+		{coderloop.RevisePrompt, "revise"},
 		{coderloop.RecoveryPrompt, "recover"},
 		// Historical event logs can contain the removed standalone phase.
 		{"Select the next piece of work.", "develop"},

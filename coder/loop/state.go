@@ -38,12 +38,20 @@ func parsePhase(raw []byte) (phase, bool) {
 		return phaseDevelop, true
 	case "develop":
 		return phaseDevelop, true
-	case "review":
-		return phaseReview, true
 	case "update":
 		return phaseUpdate, true
+	case "review":
+		return phaseReview, true
+	case "revise":
+		return phaseRevise, true
 	case "recovery":
-		return phaseRecovery, true
+		// Recovery used to have a single destination. Conservatively return
+		// legacy Loops to the development cycle.
+		return phaseRecoveryDevelop, true
+	case "recovery_develop":
+		return phaseRecoveryDevelop, true
+	case "recovery_review":
+		return phaseRecoveryReview, true
 	default:
 		return phaseUnknown, false
 	}
@@ -68,6 +76,27 @@ func writePhase(ctx context.Context, records stateRecords, current phase) error 
 	return records.UpdateRecord(ctx, phaseNamespace, func([]byte) ([]byte, error) {
 		return []byte(current.String()), nil
 	})
+}
+
+// transitionPhase atomically moves a Loop between phases without overwriting
+// a concurrent phase change. It is used by phase-completion tools whose
+// transition differs from the controller's default nextPhase route.
+func transitionPhase(ctx context.Context, records interface {
+	UpdateRecord(context.Context, string, func([]byte) ([]byte, error)) error
+}, from, to phase) (bool, error) {
+	if from == phaseUnknown || to == phaseUnknown {
+		return false, errors.New("cannot transition unknown loop phase")
+	}
+	changed := false
+	err := records.UpdateRecord(ctx, phaseNamespace, func(current []byte) ([]byte, error) {
+		parsed, valid := parsePhase(current)
+		if valid && parsed == from {
+			changed = true
+			return []byte(to.String()), nil
+		}
+		return current, nil
+	})
+	return changed, err
 }
 
 func parseState(raw []byte) (State, bool) {

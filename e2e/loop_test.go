@@ -122,7 +122,10 @@ func TestCoderLoop_AutonomousFix(t *testing.T) {
 	if !historyHasToolCall(sess, "working_note_read", 1) {
 		t.Fatal("agent did not read the Working Note")
 	}
-	if !historyHasToolCall(sess, "finish_loop", 1) {
-		t.Fatal("agent did not finish the Loop through finish_loop")
+	if !historyHasToolCall(sess, "finish_devloop", 1) {
+		t.Fatal("agent did not hand completed development to review through finish_devloop")
+	}
+	if !historyHasToolCall(sess, "finish_reviewloop", 1) {
+		t.Fatal("agent did not finish final review through finish_reviewloop")
 	}
 }
