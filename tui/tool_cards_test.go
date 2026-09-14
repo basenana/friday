@@ -117,13 +117,84 @@ func TestShowCommandRevealsSpecializedToolDetails(t *testing.T) {
 	}
 }
 
-func TestSpecializedFailureOffersDetails(t *testing.T) {
+func TestSpecializedFailureShowsArgumentsAndErrorWithoutShowHint(t *testing.T) {
 	configureTheme(true)
 	m := &model{width: 80}
 	block := &chatBlock{id: "123456789", toolName: "bash", toolArgs: `{"command":"false"}`, toolArgsComplete: true, toolOutput: "failed output"}
 	card := terminalSafe(m.renderToolCard(block))
-	if strings.Contains(card, "failed output") || !strings.Contains(card, "/show 12345678 · error details") {
+	if !strings.Contains(card, "$ false") || !strings.Contains(card, "Error") || !strings.Contains(card, "failed output") || strings.Contains(card, "/show") {
 		t.Fatalf("card = %q", card)
+	}
+}
+
+func TestFailedReadFileKeepsPathBeforeError(t *testing.T) {
+	configureTheme(true)
+	m := &model{width: 100}
+	block := &chatBlock{
+		toolName: "fs_read", toolArgs: `{"path":"/outside/MEMORY.md"}`, toolArgsComplete: true,
+		toolOutput: "Error: invalid path: path is outside readable roots\nSuggestion: use a readable path inside the allowed workdir",
+	}
+	card := terminalSafe(m.renderToolCard(block))
+	pathIndex := strings.Index(card, "path · /outside/MEMORY.md")
+	errorIndex := strings.Index(card, "Error")
+	if pathIndex < 0 || errorIndex < 0 || pathIndex > errorIndex {
+		t.Fatalf("failed read card should show its path before the error: %q", card)
+	}
+}
+
+func TestFailedExploreKeepsTaskBeforeError(t *testing.T) {
+	configureTheme(true)
+	m := &model{width: 120}
+	block := &chatBlock{
+		toolName: "explore", toolArgs: `{"task":"inspect the TUI tool card rendering"}`, toolArgsComplete: true,
+		toolOutput: "Error: Subagent mode active: nested subagent creation is not supported.\nSuggestion: complete the assigned task directly.",
+	}
+	card := terminalSafe(m.renderToolCard(block))
+	taskIndex := strings.Index(card, "task · inspect the TUI tool card rendering")
+	errorIndex := strings.Index(card, "Error")
+	if taskIndex < 0 || errorIndex < 0 || taskIndex > errorIndex {
+		t.Fatalf("failed explore card should show its task before the error: %q", card)
+	}
+}
+
+func TestToolFailureShowsThreeLinesThenFullDetailsHint(t *testing.T) {
+	configureTheme(true)
+	m := &model{width: 100}
+	block := &chatBlock{id: "123456789", toolName: "bash", toolArgs: `{"command":"false"}`, toolArgsComplete: true,
+		toolOutput: "Error: first\nsecond\nthird\nfourth\nfifth"}
+	card := terminalSafe(m.renderToolCard(block))
+	for _, want := range []string{"$ false", "first", "second", "third", "/show 12345678 · full details"} {
+		if !strings.Contains(card, want) {
+			t.Fatalf("card missing %q: %q", want, card)
+		}
+	}
+	if strings.Contains(card, "fourth") || strings.Contains(card, "error details") {
+		t.Fatalf("card exposed more than three error lines: %q", card)
+	}
+}
+
+func TestGenericToolFailureShowsArgumentsOnceBeforeError(t *testing.T) {
+	configureTheme(true)
+	m := &model{width: 80}
+	block := &chatBlock{
+		toolName: "mcp_search", toolArgs: `{"query":"friday"}`, toolArgsComplete: true,
+		toolOutput: "Error: search unavailable",
+	}
+	card := terminalSafe(m.renderToolCard(block))
+	for _, want := range []string{"Arguments", "query", "friday", "Error", "search unavailable"} {
+		if !strings.Contains(card, want) {
+			t.Fatalf("card missing %q: %q", want, card)
+		}
+	}
+	if strings.Contains(card, "Result") || strings.Count(card, "search unavailable") != 1 {
+		t.Fatalf("failed result should only appear in the error section: %q", card)
+	}
+}
+
+func TestToolErrorTextExtractsStructuredError(t *testing.T) {
+	raw := `Error: {"content":[{"type":"text","text":"bad parameter\nSuggestion: use a string"}],"is_error":true}`
+	if got := toolErrorText(raw); got != "bad parameter\nSuggestion: use a string" {
+		t.Fatalf("toolErrorText() = %q", got)
 	}
 }
 

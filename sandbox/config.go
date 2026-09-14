@@ -61,6 +61,7 @@ type DefaultsConfig struct {
 func LoadConfig(path string) (*Config, error) {
 	cfg := DefaultConfig()
 	if path == "" {
+		cfg.ApplyRuntimeDefaults()
 		return cfg, nil
 	}
 
@@ -70,6 +71,7 @@ func LoadConfig(path string) (*Config, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		if os.IsNotExist(err) {
+			cfg.ApplyRuntimeDefaults()
 			return cfg, nil
 		}
 		return nil, err
@@ -109,8 +111,39 @@ func LoadConfig(path string) (*Config, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
+	cfg.ApplyRuntimeDefaults()
 
 	return cfg, nil
+}
+
+// ApplyRuntimeDefaults adds filesystem roots that every Friday runtime needs.
+// These entries are derived at load time so users do not need to persist
+// machine-specific HOME paths in their configuration files.
+func (c *Config) ApplyRuntimeDefaults() {
+	if c == nil {
+		return
+	}
+	home := strings.TrimSpace(defaultExecutionHome())
+	if home == "" {
+		return
+	}
+
+	for _, name := range []string{"workspace", "memory"} {
+		root := filepath.Clean(filepath.Join(home, ".friday", name))
+		if !containsFilesystemRoot(c.Sandbox.Filesystem.Write, root) {
+			c.Sandbox.Filesystem.Write = append(c.Sandbox.Filesystem.Write, root)
+		}
+	}
+}
+
+func containsFilesystemRoot(roots []string, target string) bool {
+	for _, root := range roots {
+		expanded := filepath.Clean(expandPath(root, "", ""))
+		if expanded == target {
+			return true
+		}
+	}
+	return false
 }
 
 // Validate checks the config for invalid values

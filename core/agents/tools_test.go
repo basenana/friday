@@ -158,7 +158,7 @@ func TestToolCallModelResultOmitsExecutionControlFields(t *testing.T) {
 			t.Fatalf("model-visible tool result must not contain %q: %s", leaked, msg)
 		}
 	}
-	if msg != "Error: command failed" {
+	if msg != "Error: command failed\nSuggestion: use the error above to correct the arguments or prerequisites before retrying; do not repeat the unchanged call." {
 		t.Fatalf("model-visible tool result = %q", msg)
 	}
 	if !strings.Contains(msg, "command failed") {

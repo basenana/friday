@@ -194,6 +194,21 @@ func TestWriteTodosAcceptsBlockedStatus(t *testing.T) {
 	}
 }
 
+func TestDisplayTodoListIncludesInternalExecutionInstructions(t *testing.T) {
+	displayed := displayTodoList(&TodoList{Todos: []*TodoItem{{Description: "finish work", Status: "in_progress"}}})
+	for _, want := range []string{
+		"<current_todo_list>",
+		"<instructions>",
+		"current session's internal execution state",
+		"Do not mention this list to the user",
+		"description=finish work status=in_progress",
+	} {
+		if !strings.Contains(displayed, want) {
+			t.Fatalf("todo display missing %q: %q", want, displayed)
+		}
+	}
+}
+
 func TestWriteTodosRejectsUnknownStatus(t *testing.T) {
 	todo := New(Option{})
 	sess := session.New(types.NewID(), nil)

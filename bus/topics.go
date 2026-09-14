@@ -7,6 +7,7 @@ import (
 	eventbus "github.com/hyponet/eventbus/bus"
 
 	"github.com/basenana/friday/core/actor/events"
+	"github.com/basenana/friday/core/types"
 )
 
 // Input message kinds carried on the inbox topic.
@@ -154,10 +155,11 @@ func UnsubscribeAll(b *eventbus.Bus, ids ...string) {
 
 // UserTextInput is the payload schema of inbox user.text envelopes.
 type UserTextInput struct {
-	Text     string         `json:"text"`
-	TurnID   string         `json:"turn_id,omitempty"`
-	Delivery InputDelivery  `json:"delivery,omitempty"`
-	Metadata map[string]any `json:"metadata,omitempty"`
+	Text     string               `json:"text"`
+	TurnID   string               `json:"turn_id,omitempty"`
+	Delivery InputDelivery        `json:"delivery,omitempty"`
+	Images   []types.ImageContent `json:"images,omitempty"`
+	Metadata map[string]any       `json:"metadata,omitempty"`
 }
 
 // FormSubmitInput is the payload schema of inbox form.submit envelopes.
@@ -195,7 +197,7 @@ const (
 
 // InboxDropped is the payload schema of status.inbox_dropped
 // envelopes, echoing the identity of the rejected input so senders
-// (e.g. the a2a executor matching on TurnID) can react.
+// (e.g. a daemon connection matching on TurnID) can react.
 type InboxDropped struct {
 	From   string `json:"from,omitempty"`
 	TurnID string `json:"turn_id,omitempty"`

@@ -67,7 +67,7 @@ func bashToolHandler(exec *Executor, baseWorkdir string) tools.ToolHandlerFunc {
 		// Extract command (required)
 		command, ok := req.Arguments["command"].(string)
 		if !ok || command == "" {
-			return tools.NewToolResultError("command is required"), nil
+			return tools.NewToolResultActionableError("command is required and must be a non-empty string", "provide the shell command in the command field and retry"), nil
 		}
 
 		// Extract optional timeout
@@ -79,7 +79,7 @@ func bashToolHandler(exec *Executor, baseWorkdir string) tools.ToolHandlerFunc {
 		// Resolve and validate optional workdir
 		workdir, err := resolveToolWorkdir(baseWorkdir, req.Arguments)
 		if err != nil {
-			return tools.NewToolResultError(err.Error()), nil
+			return tools.NewToolResultActionableError(err.Error(), "use an existing directory inside the agent workdir and retry"), nil
 		}
 
 		// Build options
@@ -91,7 +91,7 @@ func bashToolHandler(exec *Executor, baseWorkdir string) tools.ToolHandlerFunc {
 		if timeout != "" {
 			d, err := parseDuration(timeout)
 			if err != nil {
-				return tools.NewToolResultError(fmt.Sprintf("invalid timeout: %v", err)), nil
+				return tools.NewToolResultActionableError(fmt.Sprintf("invalid timeout: %v", err), "use a positive duration such as 30s or 5m and retry"), nil
 			}
 			opts.Timeout = d
 		}
@@ -100,7 +100,11 @@ func bashToolHandler(exec *Executor, baseWorkdir string) tools.ToolHandlerFunc {
 		result, err := exec.Run(ctx, command, opts)
 		if err != nil {
 			if IsDenied(err) {
-				return tools.NewToolResultError(result.Stderr), nil
+				cause := err.Error()
+				if result != nil && strings.TrimSpace(result.Stderr) != "" {
+					cause = result.Stderr
+				}
+				return tools.NewToolResultActionableError(cause, "use an allowed command or request the required permission before retrying"), nil
 			}
 			return nil, err
 		}
@@ -119,11 +123,15 @@ func bashToolHandler(exec *Executor, baseWorkdir string) tools.ToolHandlerFunc {
 		}
 
 		if result.TimedOut {
-			return tools.NewToolResultError(fmt.Sprintf("Command timed out.\n%s", output.String())), nil
+			toolResult := tools.NewToolResultActionableError(fmt.Sprintf("Command timed out.\n%s", output.String()), "increase timeout, reduce the command workload, or use background_task for long-running work")
+			toolResult.ExitCode = &result.ExitCode
+			return toolResult, nil
 		}
 
 		if result.ExitCode != 0 {
-			return tools.NewToolResultError(fmt.Sprintf("Command exited with code %d.\n%s", result.ExitCode, output.String())), nil
+			toolResult := tools.NewToolResultActionableError(fmt.Sprintf("Command exited with code %d.\n%s", result.ExitCode, output.String()), "inspect stdout/stderr, correct the command or its inputs, and retry")
+			toolResult.ExitCode = &result.ExitCode
+			return toolResult, nil
 		}
 
 		if output.Len() == 0 {

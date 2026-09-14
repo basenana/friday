@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -600,7 +601,17 @@ func (a *react) tryToolCall(ctx context.Context, sess *session.Session, use prov
 
 	td := getToolByName(toolList, use.Name)
 	if td == nil {
-		msg := fmt.Sprintf("tool %s not found", use.Name)
+		available := make([]string, 0, len(toolList))
+		for _, tool := range toolList {
+			if tool != nil && tool.Name != "" {
+				available = append(available, tool.Name)
+			}
+		}
+		sort.Strings(available)
+		msg := fmt.Sprintf("tool %s not found. Suggestion: use an available tool", use.Name)
+		if len(available) > 0 {
+			msg += ": " + strings.Join(available, ", ")
+		}
 		span.SetStatus(tracing.StatusError, msg)
 		result = append(result, &types.Message{Role: types.RoleTool, Metadata: cloneMetadata(metadata), ToolResult: &types.ToolResult{CallID: useMark, Content: msg}})
 		a.logger.Warnw(msg, "tool", use.Name, "session", sess.ID)
@@ -637,7 +648,7 @@ func (a *react) tryToolCall(ctx context.Context, sess *session.Session, use prov
 	handleOutcome := func(outcome toolCallOutcome) []*types.Message {
 		if outcome.err != nil {
 			span.RecordError(outcome.err)
-			errMsg := fmt.Sprintf("using tool failed: %s", outcome.err)
+			errMsg := toolExecutionErrorMessage(use.Name, outcome.err)
 			result = append(result, &types.Message{Role: types.RoleTool, Metadata: cloneMetadata(metadata), ToolResult: &types.ToolResult{CallID: toolUse.ID(), Content: errMsg}})
 			a.logger.Warnw("using tool failed", "tool", use.Name, "error", outcome.err, "session", sess.ID)
 			// Intentionally forward the full tool result for audit use cases.
@@ -648,7 +659,11 @@ func (a *react) tryToolCall(ctx context.Context, sess *session.Session, use prov
 			})
 			return result
 		}
-		span.SetStatus(tracing.StatusOK, "")
+		if outcome.success {
+			span.SetStatus(tracing.StatusOK, "")
+		} else {
+			span.SetStatus(tracing.StatusError, "tool returned an error")
+		}
 
 		result = append(result, &types.Message{Role: types.RoleTool, Metadata: cloneMetadata(metadata), ToolResult: &types.ToolResult{CallID: toolUse.ID(), Content: outcome.msg, Success: outcome.success}})
 		// Intentionally forward the full tool result for audit use cases.
@@ -680,6 +695,16 @@ func (a *react) tryToolCall(ctx context.Context, sess *session.Session, use prov
 		Data: map[string]string{"id": use.ID, "tool": use.Name, "success": "false", "output": msg},
 	})
 	return result
+}
+
+func toolExecutionErrorMessage(toolName string, err error) string {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return interruptedToolResultMessage(err)
+	}
+	if strings.Contains(strings.ToLower(err.Error()), "suggestion:") {
+		return err.Error()
+	}
+	return fmt.Sprintf("tool %s failed: %v\nSuggestion: inspect the error, correct the tool arguments or prerequisites, and retry only when it is safe", toolName, err)
 }
 
 func waitForToolCallOutcome(ctx context.Context, done <-chan toolCallOutcome) (toolCallOutcome, bool) {

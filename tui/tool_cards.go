@@ -11,6 +11,7 @@ import (
 )
 
 const toolCardLineLimit = 10
+const toolErrorLineLimit = 3
 
 type toolPresentation struct {
 	title       string
@@ -23,8 +24,21 @@ func (m *model) renderToolCard(block *chatBlock) string {
 	style, icon := toolStatusStyle(block)
 	title := truncateWidth(terminalSafe(presentation.title), max(m.width-8, 12))
 	header := fmt.Sprintf("%s %s", icon, title)
-	wrappedBody := ansi.Wrap(presentation.body, max(m.width-6, 10), "")
+	failed := !block.pending && !block.success && !block.interrupted
+	bodyWidth := max(m.width-6, 10)
+	wrappedBody := ansi.Wrap(presentation.body, bodyWidth, "")
 	body, truncated := truncateToolBody(wrappedBody, toolCardLineLimit)
+	if failed {
+		wrappedError := ansi.Wrap(toolErrorText(block.toolOutput), bodyWidth, "")
+		errorBody, errorTruncated := truncateToolBody(wrappedError, toolErrorLineLimit)
+		errorBody = mutedStyle.Render("Error") + "\n" + errorBody
+		if body == "" {
+			body = errorBody
+		} else {
+			body += "\n" + errorBody
+		}
+		truncated = truncated || errorTruncated
+	}
 
 	lines := []string{header}
 	if body != "" {
@@ -32,12 +46,40 @@ func (m *model) renderToolCard(block *chatBlock) string {
 	}
 	if block.interrupted {
 		lines = append(lines, mutedStyle.Render("↳ interrupted"))
-	} else if block.id != "" && (!block.pending && !block.success && presentation.specialized) {
-		lines = append(lines, mutedStyle.Render("/show "+shortID(block.id)+" · error details"))
 	} else if block.id != "" && truncated {
 		lines = append(lines, mutedStyle.Render("/show "+shortID(block.id)+" · full details"))
 	}
 	return style.Render(strings.Join(lines, "\n"))
+}
+
+func toolErrorText(output string) string {
+	text := strings.TrimSpace(terminalSafe(output))
+	if len(text) >= len("Error:") && strings.EqualFold(text[:len("Error:")], "Error:") {
+		text = strings.TrimSpace(text[len("Error:"):])
+	}
+	var result struct {
+		Content []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		} `json:"content"`
+		IsError    bool `json:"is_error"`
+		MCPIsError bool `json:"isError"`
+	}
+	if json.Unmarshal([]byte(text), &result) == nil && (result.IsError || result.MCPIsError) {
+		var parts []string
+		for _, content := range result.Content {
+			if content.Type == "text" && strings.TrimSpace(content.Text) != "" {
+				parts = append(parts, strings.TrimSpace(content.Text))
+			}
+		}
+		if len(parts) > 0 {
+			return strings.Join(parts, "\n")
+		}
+	}
+	if text == "" {
+		return "Tool failed without an error message."
+	}
+	return text
 }
 
 func toolStatusStyle(block *chatBlock) (style lipgloss.Style, icon string) {
@@ -188,7 +230,8 @@ func genericToolBody(block *chatBlock, args map[string]any, valid bool) string {
 		}
 		sections = append(sections, mutedStyle.Render("Arguments")+"\n"+arguments)
 	}
-	if block.toolOutput != "" {
+	failed := !block.pending && !block.success && !block.interrupted
+	if block.toolOutput != "" && !failed {
 		sections = append(sections, mutedStyle.Render("Result")+"\n"+terminalSafe(block.toolOutput))
 	}
 	return strings.Join(sections, "\n\n")

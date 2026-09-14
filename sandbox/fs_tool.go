@@ -161,25 +161,25 @@ func fsReadFileSystemHandler(fs FileSystem) tools.ToolHandlerFunc {
 	return func(ctx context.Context, req *tools.Request) (*tools.Result, error) {
 		path, ok := req.Arguments["path"].(string)
 		if !ok || path == "" {
-			return tools.NewToolResultError("path is required"), nil
+			return tools.NewToolResultActionableError("path is required and must be a non-empty string", "provide a file path relative to the workdir or an allowed absolute path"), nil
 		}
 
 		absPath, err := fs.Resolve(ctx, path, FileAccessRead)
 		if err != nil {
-			return tools.NewToolResultError(fmt.Sprintf("invalid path: %s", err)), nil
+			return tools.NewToolResultActionableError(fmt.Sprintf("invalid path: %s", err), "use a readable path inside the allowed workdir"), nil
 		}
 
 		info, err := fs.Stat(ctx, absPath)
 		if err != nil {
-			return tools.NewToolResultError(fmt.Sprintf("failed to stat file: %s", err)), nil
+			return tools.NewToolResultActionableError(fmt.Sprintf("failed to inspect file %q: %s", path, err), "use fs_list to verify the path and then retry"), nil
 		}
 		if info.IsDir() {
-			return tools.NewToolResultError(fmt.Sprintf("failed to read file: path is a directory: %s", path)), nil
+			return tools.NewToolResultActionableError(fmt.Sprintf("cannot read %q as a file because it is a directory", path), "use fs_list for directories or provide a file path"), nil
 		}
 
 		content, err := fs.ReadFile(ctx, absPath)
 		if err != nil {
-			return tools.NewToolResultError(fmt.Sprintf("failed to read file: %s", err)), nil
+			return tools.NewToolResultActionableError(fmt.Sprintf("failed to read file %q: %s", path, err), "verify that the file exists and is readable, then retry"), nil
 		}
 
 		return tools.NewToolResultText(truncateOutput(string(content))), nil
@@ -211,20 +211,20 @@ func fsWriteFileSystemHandler(fs FileSystem) tools.ToolHandlerFunc {
 	return func(ctx context.Context, req *tools.Request) (*tools.Result, error) {
 		path, ok := req.Arguments["path"].(string)
 		if !ok || path == "" {
-			return tools.NewToolResultError("path is required"), nil
+			return tools.NewToolResultActionableError("path is required and must be a non-empty string", "provide the destination file path"), nil
 		}
 		content, ok := req.Arguments["content"].(string)
 		if !ok {
-			return tools.NewToolResultError("content is required"), nil
+			return tools.NewToolResultActionableError("content is required and must be a string", "provide content; use an empty string when intentionally writing an empty file"), nil
 		}
 
 		absPath, err := fs.Resolve(ctx, path, FileAccessWrite)
 		if err != nil {
-			return tools.NewToolResultError(fmt.Sprintf("invalid path: %s", err)), nil
+			return tools.NewToolResultActionableError(fmt.Sprintf("invalid path: %s", err), "use a writable path inside the allowed workdir"), nil
 		}
 
 		if err := fs.WriteFile(ctx, absPath, []byte(content)); err != nil {
-			return tools.NewToolResultError(fmt.Sprintf("failed to write file: %s", err)), nil
+			return tools.NewToolResultActionableError(fmt.Sprintf("failed to write file %q: %s", path, err), "verify the parent path and write permission, then retry"), nil
 		}
 
 		return tools.NewToolResultText(fmt.Sprintf("Successfully wrote %d bytes to %s", len(content), path)), nil
@@ -259,12 +259,12 @@ func fsListFileSystemHandler(fs FileSystem) tools.ToolHandlerFunc {
 
 		absPath, err := fs.Resolve(ctx, path, FileAccessRead)
 		if err != nil {
-			return tools.NewToolResultError(fmt.Sprintf("invalid path: %s", err)), nil
+			return tools.NewToolResultActionableError(fmt.Sprintf("invalid path: %s", err), "use a readable directory inside the allowed workdir"), nil
 		}
 
 		entries, err := fs.ReadDir(ctx, absPath)
 		if err != nil {
-			return tools.NewToolResultError(fmt.Sprintf("failed to list directory: %s", err)), nil
+			return tools.NewToolResultActionableError(fmt.Sprintf("failed to list directory %q: %s", path, err), "verify that the path exists and is a readable directory"), nil
 		}
 		if len(entries) == 0 {
 			return tools.NewToolResultText("Directory is empty"), nil
@@ -302,16 +302,16 @@ func fsDeleteFileSystemHandler(fs FileSystem) tools.ToolHandlerFunc {
 	return func(ctx context.Context, req *tools.Request) (*tools.Result, error) {
 		path, ok := req.Arguments["path"].(string)
 		if !ok || path == "" {
-			return tools.NewToolResultError("path is required"), nil
+			return tools.NewToolResultActionableError("path is required and must be a non-empty string", "provide the file or directory path to delete"), nil
 		}
 
 		absPath, err := fs.Resolve(ctx, path, FileAccessWrite)
 		if err != nil {
-			return tools.NewToolResultError(fmt.Sprintf("invalid path: %s", err)), nil
+			return tools.NewToolResultActionableError(fmt.Sprintf("invalid path: %s", err), "use a writable path inside the allowed workdir"), nil
 		}
 
 		if err := fs.Remove(ctx, absPath); err != nil {
-			return tools.NewToolResultError(fmt.Sprintf("failed to delete: %s", err)), nil
+			return tools.NewToolResultActionableError(fmt.Sprintf("failed to delete %q: %s", path, err), "verify the path with fs_list and ensure deletion is permitted"), nil
 		}
 
 		return tools.NewToolResultText(fmt.Sprintf("Successfully deleted %s", path)), nil
@@ -341,16 +341,16 @@ func fsMkdirFileSystemHandler(fs FileSystem) tools.ToolHandlerFunc {
 	return func(ctx context.Context, req *tools.Request) (*tools.Result, error) {
 		path, ok := req.Arguments["path"].(string)
 		if !ok || path == "" {
-			return tools.NewToolResultError("path is required"), nil
+			return tools.NewToolResultActionableError("path is required and must be a non-empty string", "provide the directory path to create"), nil
 		}
 
 		absPath, err := fs.Resolve(ctx, path, FileAccessWrite)
 		if err != nil {
-			return tools.NewToolResultError(fmt.Sprintf("invalid path: %s", err)), nil
+			return tools.NewToolResultActionableError(fmt.Sprintf("invalid path: %s", err), "use a writable path inside the allowed workdir"), nil
 		}
 
 		if err := fs.Mkdir(ctx, absPath); err != nil {
-			return tools.NewToolResultError(fmt.Sprintf("failed to create directory: %s", err)), nil
+			return tools.NewToolResultActionableError(fmt.Sprintf("failed to create directory %q: %s", path, err), "verify the parent path and write permission, then retry"), nil
 		}
 
 		return tools.NewToolResultText(fmt.Sprintf("Successfully created directory %s", path)), nil
@@ -391,17 +391,17 @@ func fsEditFileSystemHandler(fs FileSystem) tools.ToolHandlerFunc {
 	return func(ctx context.Context, req *tools.Request) (*tools.Result, error) {
 		path, ok := req.Arguments["path"].(string)
 		if !ok || path == "" {
-			return tools.NewToolResultError("path is required and must be a string"), nil
+			return tools.NewToolResultActionableError("path is required and must be a non-empty string", "provide the file path to edit"), nil
 		}
 
 		searchString, ok := req.Arguments["search_string"].(string)
 		if !ok || searchString == "" {
-			return tools.NewToolResultError("search_string is required and must be a string"), nil
+			return tools.NewToolResultActionableError("search_string is required and must be a non-empty string", "provide text that exactly matches the current file contents"), nil
 		}
 
 		replaceString, ok := req.Arguments["replace_string"].(string)
 		if !ok {
-			return tools.NewToolResultError("replace_string must be a string"), nil
+			return tools.NewToolResultActionableError("replace_string is required and must be a string", "provide replacement text; use an empty string to delete the match"), nil
 		}
 
 		occurrences, ok := req.Arguments["occurrences"].(string)
@@ -413,29 +413,29 @@ func fsEditFileSystemHandler(fs FileSystem) tools.ToolHandlerFunc {
 
 		absPath, err := fs.Resolve(ctx, path, FileAccessWrite)
 		if err != nil {
-			return tools.NewToolResultError(fmt.Sprintf("invalid path: %s", err)), nil
+			return tools.NewToolResultActionableError(fmt.Sprintf("invalid path: %s", err), "use a writable file path inside the allowed workdir"), nil
 		}
 
 		fileInfo, err := fs.Stat(ctx, absPath)
 		if err != nil {
-			return tools.NewToolResultError(fmt.Sprintf("failed to stat file: %s", err)), nil
+			return tools.NewToolResultActionableError(fmt.Sprintf("failed to inspect file %q: %s", path, err), "use fs_list to verify the path and then retry"), nil
 		}
 		if fileInfo.IsDir() {
-			return tools.NewToolResultError(fmt.Sprintf("failed to read file: path is a directory: %s", path)), nil
+			return tools.NewToolResultActionableError(fmt.Sprintf("cannot edit %q because it is a directory", path), "use fs_list for directories or provide a file path"), nil
 		}
 		if fileInfo.Size() > maxEditFileSize {
-			return tools.NewToolResultError(fmt.Sprintf("file too large (%d bytes), maximum allowed is %d bytes", fileInfo.Size(), maxEditFileSize)), nil
+			return tools.NewToolResultActionableError(fmt.Sprintf("file is too large to edit (%d bytes; maximum %d)", fileInfo.Size(), maxEditFileSize), "use bash with a targeted streaming edit or reduce the file size"), nil
 		}
 
 		content, err := fs.ReadFile(ctx, absPath)
 		if err != nil {
-			return tools.NewToolResultError(fmt.Sprintf("failed to read file: %s", err)), nil
+			return tools.NewToolResultActionableError(fmt.Sprintf("failed to read file %q: %s", path, err), "verify that the file is readable and then retry"), nil
 		}
 
 		contentStr := string(content)
 		count := strings.Count(contentStr, searchString)
 		if count == 0 {
-			return tools.NewToolResultError(fmt.Sprintf("search_string not found in file: %q", truncateForError(searchString))), nil
+			return tools.NewToolResultActionableError(fmt.Sprintf("search_string was not found in %q: %q", path, truncateForError(searchString)), "call fs_read, copy the exact current text including whitespace, and retry"), nil
 		}
 
 		var newContent string
@@ -449,11 +449,11 @@ func fsEditFileSystemHandler(fs FileSystem) tools.ToolHandlerFunc {
 		}
 
 		if len(newContent) > maxEditFileSize {
-			return tools.NewToolResultError(fmt.Sprintf("result file too large (%d bytes), maximum allowed is %d bytes", len(newContent), maxEditFileSize)), nil
+			return tools.NewToolResultActionableError(fmt.Sprintf("edited file would be too large (%d bytes; maximum %d)", len(newContent), maxEditFileSize), "reduce the replacement size or use a different editing approach"), nil
 		}
 
 		if err := fs.WriteFile(ctx, absPath, []byte(newContent)); err != nil {
-			return tools.NewToolResultError(fmt.Sprintf("failed to write file: %s", err)), nil
+			return tools.NewToolResultActionableError(fmt.Sprintf("failed to write edited file %q: %s", path, err), "verify write permission and retry after confirming the file is unchanged"), nil
 		}
 
 		msg := fmt.Sprintf("Successfully replaced %d occurrence(s) in %s", replacedCount, path)

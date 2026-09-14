@@ -3,19 +3,32 @@ package workspace
 import (
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
 type Workspace struct {
-	basePath string
-	memPath  string
-	specs    []FileSpec
+	basePath      string
+	fallbackPaths []string
+	memPath       string
+	specs         []FileSpec
 }
 
-func NewWorkspace(workspacePath, memoryPath string) *Workspace {
+// NewWorkspace creates a writable workspace with optional lower-priority read
+// fallbacks. Reads check workspacePath first and then each fallback in order;
+// writes and deletes always target workspacePath.
+func NewWorkspace(workspacePath, memoryPath string, fallbackPaths ...string) *Workspace {
+	fallbacks := make([]string, 0, len(fallbackPaths))
+	for _, path := range fallbackPaths {
+		path = expandHome(path)
+		if path != "" && filepath.Clean(path) != filepath.Clean(workspacePath) {
+			fallbacks = append(fallbacks, path)
+		}
+	}
 	return &Workspace{
-		basePath: expandHome(workspacePath),
-		memPath:  expandHome(memoryPath),
+		basePath:      expandHome(workspacePath),
+		fallbackPaths: fallbacks,
+		memPath:       expandHome(memoryPath),
 		specs: []FileSpec{
 			{Name: "AGENTS.md", Role: FileRoleSystemPrompt, Required: true},
 			{Name: "SOUL.md", Role: FileRoleSystemPrompt},
@@ -84,28 +97,56 @@ func (w *Workspace) SkillsPath() string {
 	return filepath.Join(w.basePath, "skills")
 }
 
+// SkillsPaths returns skill directories from lowest to highest priority so it
+// can be passed directly to skills.NewLoader (later directories override
+// earlier ones).
+func (w *Workspace) SkillsPaths() []string {
+	paths := make([]string, 0, len(w.fallbackPaths)+1)
+	for i := len(w.fallbackPaths) - 1; i >= 0; i-- {
+		paths = append(paths, filepath.Join(w.fallbackPaths[i], "skills"))
+	}
+	paths = append(paths, w.SkillsPath())
+	return paths
+}
+
 func (w *Workspace) Ls(dirPath string) ([]string, error) {
-	absPath := w.absolutePath(dirPath)
-
-	entries, err := os.ReadDir(absPath)
-	if err != nil {
-		return nil, err
+	names := make(map[string]struct{})
+	found := false
+	for _, root := range w.readPaths() {
+		entries, err := os.ReadDir(w.absolutePathAt(root, dirPath))
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, err
+		}
+		found = true
+		for _, entry := range entries {
+			names[entry.Name()] = struct{}{}
+		}
 	}
-
-	var result []string
-	for _, entry := range entries {
-		result = append(result, entry.Name())
+	if !found {
+		return nil, os.ErrNotExist
 	}
+	result := make([]string, 0, len(names))
+	for name := range names {
+		result = append(result, name)
+	}
+	sort.Strings(result)
 	return result, nil
 }
 
 func (w *Workspace) Read(filePath string) (string, error) {
-	absPath := w.absolutePath(filePath)
-	data, err := os.ReadFile(absPath)
-	if err != nil {
-		return "", err
+	for _, root := range w.readPaths() {
+		data, err := os.ReadFile(w.absolutePathAt(root, filePath))
+		if err == nil {
+			return string(data), nil
+		}
+		if !os.IsNotExist(err) {
+			return "", err
+		}
 	}
-	return string(data), nil
+	return "", os.ErrNotExist
 }
 
 func (w *Workspace) Write(filePath string, data string) error {
@@ -143,8 +184,19 @@ func (w *Workspace) Root() string {
 }
 
 func (w *Workspace) absolutePath(path string) string {
+	return w.absolutePathAt(w.basePath, path)
+}
+
+func (w *Workspace) absolutePathAt(root, path string) string {
 	if filepath.IsAbs(path) {
 		return path
 	}
-	return filepath.Join(w.basePath, path)
+	return filepath.Join(root, path)
+}
+
+func (w *Workspace) readPaths() []string {
+	paths := make([]string, 0, len(w.fallbackPaths)+1)
+	paths = append(paths, w.basePath)
+	paths = append(paths, w.fallbackPaths...)
+	return paths
 }

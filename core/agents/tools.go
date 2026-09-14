@@ -6,6 +6,7 @@ import (
 	"encoding/xml"
 	"fmt"
 	"hash/fnv"
+	"strings"
 
 	"github.com/basenana/friday/core/logger"
 	"github.com/basenana/friday/core/providers"
@@ -71,13 +72,14 @@ func toolCall(ctx context.Context, sess *session.Session, use *ToolUse, td *tool
 	req := &tools.Request{SessionID: sess.ID, SessionRecords: sess}
 	args, ok := common.ParseToolUseArguments(use.Arguments)
 	if !ok {
-		return "", false, fmt.Errorf("tool %s arguments must be a JSON object, got: %s", use.Name, truncateToolArgs(use.Arguments))
+		return "", false, fmt.Errorf("%s", common.FormatToolUseArgumentsError(use.Name, use.Arguments))
 	}
 	req.Arguments = args
 	// Validate the complete advertised schema so handlers only need to enforce
 	// domain rules.
 	if msg := td.ValidateArguments(args); msg != "" {
 		span.RecordError(fmt.Errorf("tool %s %s", use.Name, msg))
+		span.SetStatus(tracing.StatusError, "invalid tool arguments")
 		result := tools.NewToolResultError(fmt.Sprintf("tool %s: %s", use.Name, msg))
 		content, err := marshalToolResultForModel(result)
 		if err != nil {
@@ -86,6 +88,9 @@ func toolCall(ctx context.Context, sess *session.Session, use *ToolUse, td *tool
 		return content, false, nil
 	}
 
+	if td.Handler == nil {
+		return "", false, fmt.Errorf("tool %s has no handler configured", use.Name)
+	}
 	result, err := td.Handler(ctx, req)
 	if err != nil {
 		return "", false, err
@@ -98,6 +103,9 @@ func toolCall(ctx context.Context, sess *session.Session, use *ToolUse, td *tool
 
 	msg := truncateToolResult(sess, content)
 	span.SetAttributes(tracing.TruncateAttr("tool.output", msg))
+	if result.IsError {
+		span.SetStatus(tracing.StatusError, "tool returned an error")
+	}
 	return msg, !result.IsError, nil
 }
 
@@ -120,6 +128,9 @@ func marshalToolResultForModel(result *tools.Result) (string, error) {
 		if content, ok := result.Content[0].(tools.TextContent); ok {
 			text := content.Text
 			if result.IsError {
+				if !strings.Contains(strings.ToLower(text), "suggestion:") {
+					text += "\nSuggestion: inspect the error, correct the tool arguments or prerequisites, and retry only when it is safe."
+				}
 				text = "Error: " + text
 			}
 			if result.FYI != "" {

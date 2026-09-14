@@ -18,6 +18,84 @@ func TestNewWorkspace(t *testing.T) {
 	}
 }
 
+func TestLayeredWorkspaceProjectOverridesAndFallsBack(t *testing.T) {
+	project := t.TempDir()
+	global := t.TempDir()
+	memory := t.TempDir()
+
+	for name, content := range map[string]string{
+		"AGENTS.md": "global agents",
+		"SOUL.md":   "global soul",
+		"MEMORY.md": "global memory",
+	} {
+		if err := os.WriteFile(filepath.Join(global, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(project, "SOUL.md"), []byte("project soul"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(project, "MEMORY.md"), []byte("project memory"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ws := NewWorkspace(project, memory, global)
+	if got, err := ws.Read("AGENTS.md"); err != nil || got != "global agents" {
+		t.Fatalf("Read inherited AGENTS = %q, %v", got, err)
+	}
+	if got, err := ws.LoadFile("SOUL.md"); err != nil || got != "project soul" {
+		t.Fatalf("LoadFile project SOUL = %q, %v", got, err)
+	}
+	loaded, err := ws.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(loaded.SystemPrompts, "\n") != "global agents\nproject soul" {
+		t.Fatalf("layered system prompts = %v", loaded.SystemPrompts)
+	}
+	if len(loaded.MemoryHistory) != 1 || !strings.Contains(loaded.MemoryHistory[0].Content, "project memory") || strings.Contains(loaded.MemoryHistory[0].Content, "global memory") {
+		t.Fatalf("layered memory history = %#v", loaded.MemoryHistory)
+	}
+	if err := ws.Write("AGENTS.md", "project agents"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := ws.Read("AGENTS.md"); got != "project agents" {
+		t.Fatalf("project write did not override global file: %q", got)
+	}
+	if err := ws.Delete("AGENTS.md"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := ws.Read("AGENTS.md"); got != "global agents" {
+		t.Fatalf("deleting project override did not reveal global file: %q", got)
+	}
+
+	wantSkills := []string{filepath.Join(global, "skills"), filepath.Join(project, "skills")}
+	gotSkills := ws.SkillsPaths()
+	if len(gotSkills) != len(wantSkills) || gotSkills[0] != wantSkills[0] || gotSkills[1] != wantSkills[1] {
+		t.Fatalf("SkillsPaths() = %v, want %v", gotSkills, wantSkills)
+	}
+}
+
+func TestLayeredWorkspaceListMergesNames(t *testing.T) {
+	project := t.TempDir()
+	global := t.TempDir()
+	if err := os.WriteFile(filepath.Join(project, "project.md"), []byte("p"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(global, "global.md"), []byte("g"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ws := NewWorkspace(project, t.TempDir(), global)
+	got, err := ws.Ls("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"global.md", "project.md"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("Ls() = %v, want %v", got, want)
+	}
+}
+
 func TestWorkspaceInit(t *testing.T) {
 	// Create temp directories
 	tmpDir, err := os.MkdirTemp("", "workspace-test-*")

@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/basenana/friday/core/logger"
 )
 
 const (
@@ -80,9 +82,9 @@ func (e *Executor) Run(ctx context.Context, cmd string, opts ExecOptions) (*Resu
 	runner := e.sandbox
 	if e.config.Sandbox.Enabled && !e.sandbox.IsAvailable() {
 		e.warnUnsandboxedOnce.Do(func() {
-			fmt.Fprintf(os.Stderr,
-				"[friday] WARNING: sandboxing is enabled but the %q sandbox is unavailable on this system; "+
-					"commands will run WITHOUT sandbox isolation\n", e.sandbox.Name())
+			logger.New("sandbox").Warnw("sandbox is unavailable; commands will run without isolation",
+				"sandbox", e.sandbox.Name(),
+			)
 		})
 		// Match the documented fallback above. Wrapping with an unavailable
 		// backend would only defer the failure until command execution and can

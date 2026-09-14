@@ -47,7 +47,10 @@ func (m *model) handleCardEvent(evt events.Event) tea.Cmd {
 	switch evt.Name {
 	case events.CustomCardEmitted:
 		var d events.CardEmittedBody
-		if events.DecodePayload(evt, &d) != nil || d.CardID == "" {
+		if !m.decodeEventPayload(evt, &d) || d.CardID == "" {
+			if d.CardID == "" {
+				m.logWarn("card event is missing an id", "event_name", evt.Name, "run_id", evt.RunID)
+			}
 			return nil
 		}
 		card := &cardState{id: d.CardID, kind: d.Kind, title: d.Title,
@@ -57,7 +60,7 @@ func (m *model) handleCardEvent(evt events.Event) tea.Cmd {
 		return m.prepareCardSource(card)
 	case events.CustomCardUpdated:
 		var d events.CardUpdatedBody
-		if events.DecodePayload(evt, &d) != nil {
+		if !m.decodeEventPayload(evt, &d) {
 			return nil
 		}
 		card := m.cards[d.CardID]
@@ -76,7 +79,7 @@ func (m *model) handleCardEvent(evt events.Event) tea.Cmd {
 		return m.prepareCardSource(card)
 	case events.CustomCardDismissed:
 		var d events.CardDismissedBody
-		if events.DecodePayload(evt, &d) == nil {
+		if m.decodeEventPayload(evt, &d) {
 			if card := m.cards[d.CardID]; card != nil {
 				card.dismissed = true
 				m.invalidateCard(card)
@@ -665,6 +668,11 @@ func (m *model) applyCardSourceLoaded(msg cardSourceLoadedMsg) {
 	card.sourceDiff = msg.diff
 	if msg.err != nil {
 		card.sourceErr = msg.err.Error()
+		m.logWarn("card source load failed",
+			"card_id", msg.cardID,
+			"card_kind", card.kind,
+			"error", boundedTUILogText(msg.err.Error()),
+		)
 	}
 	m.invalidateCard(card)
 }

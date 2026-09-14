@@ -22,15 +22,21 @@ type SessionRecords interface {
 }
 
 type Tool struct {
-	Name        string                   `json:"name"`
-	Description string                   `json:"description"`
-	Annotations map[string]string        `json:"annotations,omitempty"`
-	InputSchema ToolInputSchema          `json:"inputSchema"`
-	Examples    []map[string]interface{} `json:"-"`
-	Handler     ToolHandlerFunc          `json:"-"`
+	Name        string            `json:"name"`
+	Description string            `json:"description"`
+	Annotations map[string]string `json:"annotations,omitempty"`
+	InputSchema ToolInputSchema   `json:"inputSchema"`
+	// RawInputSchema preserves an externally supplied JSON Schema (for example,
+	// from MCP) without narrowing it to the subset built by this package.
+	RawInputSchema map[string]interface{}   `json:"-"`
+	Examples       []map[string]interface{} `json:"-"`
+	Handler        ToolHandlerFunc          `json:"-"`
 }
 
 func (t *Tool) JsonSchema() map[string]interface{} {
+	if len(t.RawInputSchema) > 0 {
+		return cloneSchemaMap(t.RawInputSchema)
+	}
 	required := t.InputSchema.Required
 	if required == nil {
 		required = []string{}
@@ -41,6 +47,18 @@ func (t *Tool) JsonSchema() map[string]interface{} {
 		"required":             required,
 		"additionalProperties": false,
 	}
+}
+
+func cloneSchemaMap(schema map[string]interface{}) map[string]interface{} {
+	raw, err := json.Marshal(schema)
+	if err != nil {
+		return schema
+	}
+	var cloned map[string]interface{}
+	if err := json.Unmarshal(raw, &cloned); err != nil {
+		return schema
+	}
+	return cloned
 }
 
 func (t *Tool) GetName() string { return t.Name }
@@ -119,6 +137,13 @@ func NewToolResultText(text string) *Result {
 // NewToolResultError creates a new CallToolResult with an error message.
 // Any errors that originate from the tool SHOULD be reported inside the result object.
 func NewToolResultError(text string) *Result {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		text = "Tool failed without an error message."
+	}
+	if !strings.Contains(strings.ToLower(text), "suggestion:") {
+		text += "\nSuggestion: use the error above to correct the arguments or prerequisites before retrying; do not repeat the unchanged call."
+	}
 	return &Result{
 		Content: []Content{
 			TextContent{
@@ -128,6 +153,20 @@ func NewToolResultError(text string) *Result {
 		},
 		IsError: true,
 	}
+}
+
+// NewToolResultActionableError creates a model-visible failure with a concrete
+// next step. Use this for failures the caller can correct and retry.
+func NewToolResultActionableError(cause, suggestion string) *Result {
+	cause = strings.TrimSpace(cause)
+	suggestion = strings.TrimSpace(suggestion)
+	if cause == "" {
+		cause = "Tool failed without an error message."
+	}
+	if suggestion != "" {
+		cause += "\nSuggestion: " + suggestion
+	}
+	return NewToolResultError(cause)
 }
 
 type Content interface {

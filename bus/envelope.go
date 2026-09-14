@@ -1,6 +1,5 @@
 // Package bus defines the topic-based communication layer between
-// actors and their consumers (TUI, a2a server, future agent-to-agent
-// observation).
+// actors and their consumers (TUI, daemon, and future local clients).
 //
 // Topics are keyed by an encoded session ID (stable across actor
 // re-creation), not by actor instance ID. The grammar:
@@ -57,9 +56,6 @@ type Envelope struct {
 	// TS is a hybrid logical timestamp giving a total order across senders
 	// within one process.
 	TS int64 `json:"ts"`
-	// Depth counts agent-to-agent hops; reserved for future
-	// subscribe-observe anti-echo rules. Always 0 in the MVP.
-	Depth int `json:"depth,omitempty"`
 }
 
 const tsLogicalBits = 20

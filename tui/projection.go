@@ -29,6 +29,7 @@ func (m *model) projectTranscript(sessionID string) (transcriptProjection, error
 func buildTranscriptProjection(sessMgr sessionRuntime, cfg *config.Config, workdir string, width, height int, sessionID string) (transcriptProjection, error) {
 	p := &model{
 		runtime: sessMgr, cfg: cfg, workdir: workdir, width: width, height: height,
+		sessionID:  sessionID,
 		seenInputs: make(map[string]bool), cards: make(map[string]*cardState),
 		toolCalls: make(map[string]int), textBlock: -1, reasonBlock: -1,
 		historyIndex: -1, replaying: true,

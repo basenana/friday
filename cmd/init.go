@@ -14,77 +14,134 @@ import (
 
 var initCmd = &cobra.Command{
 	Use:   "init",
-	Short: "Initialize workspace with default files",
-	Long:  `Initialize the Friday workspace directory with default markdown files for agent context.`,
-	Run: func(cmd *cobra.Command, args []string) {
-		// Generate default config file
-		configPath := filepath.Join(cfg.DataDirPath(), "config.json")
-		created, err := config.WriteDefaultConfig(configPath)
+	Short: "Initialize Friday in the current directory",
+	Long:  `Initialize a .friday directory in the current directory. Project initialization inherits missing workspace files and skills from HOME.`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cwd, err := os.Getwd()
 		if err != nil {
-			fmt.Printf("failed to write config: %v\n", err)
-			return
+			return fmt.Errorf("get current directory: %w", err)
+		}
+		return runInit(cwd)
+	},
+}
+
+func runInit(cwd string) error {
+	cwd, err := filepath.Abs(cwd)
+	if err != nil {
+		return fmt.Errorf("resolve current directory: %w", err)
+	}
+	fridayDir := filepath.Join(cwd, ".friday")
+	if err := os.MkdirAll(fridayDir, 0o755); err != nil {
+		return fmt.Errorf("create Friday directory: %w", err)
+	}
+
+	configPath, err := existingConfigPath(fridayDir)
+	if err != nil {
+		return err
+	}
+	if configPath == "" {
+		configPath = filepath.Join(fridayDir, "config.json")
+		seed := config.DefaultConfig()
+		if !isHomeFridayDir(fridayDir) {
+			seed.Workspace = "workspace"
+		}
+		created, writeErr := config.WriteConfig(configPath, seed)
+		if writeErr != nil {
+			return fmt.Errorf("write config: %w", writeErr)
 		}
 		if created {
 			fmt.Println("Config file created:", configPath)
 		}
+	}
 
-		ws := workspace.NewWorkspace(cfg.WorkspacePath(), cfg.MemoryPath())
+	initializedCfg, err := config.LoadForDir(configPath, cwd)
+	if err != nil {
+		return fmt.Errorf("load initialized config: %w", err)
+	}
+	ws := workspace.NewWorkspace(
+		initializedCfg.WorkspacePath(),
+		initializedCfg.MemoryPath(),
+		initializedCfg.WorkspaceFallbackPaths()...,
+	)
 
-		hostname, _ := os.Hostname()
-		params := &workspace.TemplateParams{
-			Paths: &workspace.Paths{
-				DataDir:   cfg.DataDirPath(),
-				Workspace: cfg.WorkspacePath(),
-				Sessions:  cfg.SessionsPath(),
-				Memory:    cfg.MemoryPath(),
-				State:     cfg.StatePath(),
-			},
-			System: &workspace.SystemInfo{
-				OS:       runtime.GOOS,
-				Arch:     runtime.GOARCH,
-				Hostname: hostname,
-			},
+	if !isHomeFridayDir(fridayDir) {
+		if err := ws.EnsureDir(""); err != nil {
+			return fmt.Errorf("create project workspace: %w", err)
 		}
-
-		wsCreated, err := ws.InitWithParams(params)
-		if err != nil {
-			fmt.Printf("failed to init workspace: %v\n", err)
-			return
+		if err := ws.MkdirAll("skills"); err != nil {
+			return fmt.Errorf("create project skills directory: %w", err)
 		}
+		fmt.Println("Project workspace initialized at:", ws.BasePath())
+		fmt.Println("Missing workspace files and skills will be inherited from HOME.")
+		return nil
+	}
 
-		if len(wsCreated) == 0 {
-			fmt.Println("Workspace already initialized at:", cfg.WorkspacePath())
-			fmt.Println("All files already exist.")
-		} else {
-			fmt.Println("Workspace initialized at:", cfg.WorkspacePath())
-			fmt.Println("")
-			fmt.Println("Created files:")
-			for _, filename := range wsCreated {
-				switch filename {
-				case "AGENTS.md":
-					fmt.Println("  AGENTS.md    - Agent guidelines and memory usage rules")
-				case "SOUL.md":
-					fmt.Println("  SOUL.md      - Persona, tone, and boundaries")
-				case "ENVIRONMENT.md":
-					fmt.Println("  ENVIRONMENT.md - Machine and execution environment info")
-				case "IDENTITY.md":
-					fmt.Println("  IDENTITY.md  - Agent name, style, and emoji")
-				case "TOOLS.md":
-					fmt.Println("  TOOLS.md     - Local tools notes (guidance)")
-				case "HEARTBEAT.md":
-					fmt.Println("  HEARTBEAT.md - Optional heartbeat checklist")
-				case "MEMORY.md":
-					fmt.Println("  MEMORY.md    - Long-term memory")
-				default:
-					fmt.Printf("  %s\n", filename)
-				}
+	hostname, _ := os.Hostname()
+	params := &workspace.TemplateParams{
+		Paths: &workspace.Paths{
+			DataDir:   initializedCfg.DataDirPath(),
+			Workspace: initializedCfg.WorkspacePath(),
+			Sessions:  initializedCfg.SessionsPath(),
+			Memory:    initializedCfg.MemoryPath(),
+			State:     initializedCfg.StatePath(),
+		},
+		System: &workspace.SystemInfo{
+			OS:       runtime.GOOS,
+			Arch:     runtime.GOARCH,
+			Hostname: hostname,
+		},
+	}
+
+	created, err := ws.InitWithParams(params)
+	if err != nil {
+		return fmt.Errorf("initialize HOME workspace: %w", err)
+	}
+	if len(created) == 0 {
+		fmt.Println("Workspace already initialized at:", ws.BasePath())
+		fmt.Println("All files already exist.")
+		return nil
+	}
+
+	fmt.Println("Workspace initialized at:", ws.BasePath())
+	fmt.Println("Created files:")
+	for _, filename := range created {
+		fmt.Printf("  %s\n", filename)
+	}
+	fmt.Println("Memory directory:", initializedCfg.MemoryPath())
+	fmt.Println("Edit these files to customize your AI assistant's behavior.")
+	return nil
+}
+
+func existingConfigPath(fridayDir string) (string, error) {
+	for _, name := range []string{"config.json", "friday.yaml"} {
+		path := filepath.Join(fridayDir, name)
+		info, err := os.Stat(path)
+		if err == nil {
+			if info.IsDir() {
+				return "", fmt.Errorf("config path is a directory: %s", path)
 			}
-			fmt.Println("")
-			fmt.Println("Memory directory:", cfg.MemoryPath())
-			fmt.Println("")
-			fmt.Println("Edit these files to customize your AI assistant's behavior.")
+			return path, nil
 		}
-	},
+		if !os.IsNotExist(err) {
+			return "", err
+		}
+	}
+	return "", nil
+}
+
+func isHomeFridayDir(path string) bool {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		home = os.Getenv("HOME")
+	}
+	if home == "" {
+		return false
+	}
+	homeFriday, err := filepath.Abs(filepath.Join(home, ".friday"))
+	if err != nil {
+		return false
+	}
+	return filepath.Clean(path) == filepath.Clean(homeFriday)
 }
 
 func init() {

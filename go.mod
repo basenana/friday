@@ -6,10 +6,10 @@ require (
 	charm.land/bubbles/v2 v2.2.1
 	charm.land/bubbletea/v2 v2.0.9
 	charm.land/lipgloss/v2 v2.0.6
-	github.com/a2aproject/a2a-go v0.3.13
 	github.com/basenana/friday/core v0.0.0-20260910142944-53bc64b6c1f2
 	github.com/charmbracelet/glamour v1.0.0
 	github.com/charmbracelet/x/ansi v0.11.8
+	github.com/coder/websocket v1.8.15
 	github.com/davecgh/go-spew v1.1.1
 	github.com/google/uuid v1.6.0
 	github.com/hyponet/eventbus v1.1.1-0.20260909123412-4a4c10ebb459

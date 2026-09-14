@@ -73,7 +73,7 @@ func imageToolHandler(exec *Executor, workdir string, analyzer ImageAnalyzer) to
 	return func(ctx context.Context, req *tools.Request) (*tools.Result, error) {
 		imageRef, ok := req.Arguments["image"].(string)
 		if !ok || strings.TrimSpace(imageRef) == "" {
-			return tools.NewToolResultError("image is required"), nil
+			return tools.NewToolResultActionableError("image is required and must be a non-empty path or URL", "provide an allowed local image path or an http/https URL"), nil
 		}
 
 		prompt, _ := req.Arguments["prompt"].(string)
@@ -84,17 +84,17 @@ func imageToolHandler(exec *Executor, workdir string, analyzer ImageAnalyzer) to
 		modelOverride, _ := req.Arguments["model"].(string)
 		maxBytes, err := imageMaxBytesFromRequest(req.Arguments["max_bytes_mb"])
 		if err != nil {
-			return tools.NewToolResultError(err.Error()), nil
+			return tools.NewToolResultActionableError(err.Error(), "provide a positive numeric size in megabytes, such as 5"), nil
 		}
 
 		imageContent, err := prepareImageContent(ctx, exec, workdir, imageRef, maxBytes)
 		if err != nil {
-			return tools.NewToolResultError(err.Error()), nil
+			return tools.NewToolResultActionableError(err.Error(), "verify the image path or URL, format, permissions, and size before retrying"), nil
 		}
 
 		result, err := analyzer.Analyze(ctx, prompt, strings.TrimSpace(modelOverride), imageContent)
 		if err != nil {
-			return tools.NewToolResultError(fmt.Sprintf("image analysis failed: %v", err)), nil
+			return tools.NewToolResultActionableError(fmt.Sprintf("image analysis failed: %v", err), "verify the vision model configuration or remove the model override, then retry"), nil
 		}
 		return tools.NewToolResultText(strings.TrimSpace(result)), nil
 	}

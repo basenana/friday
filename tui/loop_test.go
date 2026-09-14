@@ -168,6 +168,108 @@ func TestTUIEnterDuringLoopAddsNormalInboxInputWithoutCancelling(t *testing.T) {
 	_, _ = m.loopManager.Cancel(context.Background(), sess)
 }
 
+func TestTUISuccessfulUserTurnResumesSuspendedLoop(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	defer m.loopManager.Close()
+	lifecycle, _ := m.registry.Lifecycle(m.sessionID)
+	sess := lifecycle.Current()
+	if err := sess.UpdateRecord(context.Background(), coderloop.StateNamespace, func([]byte) ([]byte, error) {
+		return []byte(coderloop.StateSuspended), nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	wantNote := "# Working Note\n\n## Completed\n\n- preserved\n\n## Remaining\n\n- resume this"
+	if err := sess.UpdateRecord(context.Background(), coderloop.WorkingNoteNamespace, func([]byte) ([]byte, error) {
+		return []byte(wantNote), nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	inbox := make(chan bus.Envelope, 1)
+	id := m.registry.Bus().SubscribeSerial([]string{bus.TopicInbox(m.sessionID)}, func(env bus.Envelope) {
+		if env.Name == bus.InboxUserText {
+			inbox <- env
+		}
+	}, eventbus.SerialConfig{Overflow: eventbus.OverflowBlock})
+	defer m.registry.Bus().Unsubscribe(id)
+
+	m.loopActive = true
+	m.running = true
+	m.currentRunID = "user-wake"
+	m.seenInputs["user-wake"] = true
+	m.handleActorEvent(events.NewEvent(events.KindRunFinished, "user-wake").
+		WithPayload(events.RunFinishedData{StopReason: "end_turn"}))
+
+	select {
+	case env := <-inbox:
+		var body bus.UserTextInput
+		if err := events.DecodePayload(env.Event, &body); err != nil {
+			t.Fatal(err)
+		}
+		if body.Text != coderloop.RecoveryPrompt || env.From != "loop" {
+			t.Fatalf("recovery input = %+v, from=%q", body, env.From)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("successful user turn did not resume suspended Loop")
+	}
+	if state := readLoopState(t, sess); state != string(coderloop.StateActive) {
+		t.Fatalf("Loop state after user wake = %q", state)
+	}
+	gotNote, err := sess.ReadRecord(context.Background(), coderloop.WorkingNoteNamespace)
+	if err != nil || string(gotNote) != wantNote {
+		t.Fatalf("Working Note after user wake = %q, %v; want unchanged", gotNote, err)
+	}
+}
+
+func TestTUIFailedUserTurnRemainsSuspended(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	defer m.loopManager.Close()
+	lifecycle, _ := m.registry.Lifecycle(m.sessionID)
+	sess := lifecycle.Current()
+	if err := sess.UpdateRecord(context.Background(), coderloop.StateNamespace, func([]byte) ([]byte, error) {
+		return []byte(coderloop.StateSuspended), nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	inbox := make(chan bus.Envelope, 1)
+	id := m.registry.Bus().SubscribeSerial([]string{bus.TopicInbox(m.sessionID)}, func(env bus.Envelope) {
+		if env.Name == bus.InboxUserText {
+			inbox <- env
+		}
+	}, eventbus.SerialConfig{Overflow: eventbus.OverflowBlock})
+	defer m.registry.Bus().Unsubscribe(id)
+
+	m.loopActive = true
+	m.running = true
+	m.currentRunID = "user-failed"
+	m.seenInputs["user-failed"] = true
+	before := len(m.messages)
+	m.handleActorEvent(events.NewEvent(events.KindRunFinished, "user-failed").
+		WithPayload(events.RunFinishedData{StopReason: "error"}))
+
+	select {
+	case env := <-inbox:
+		t.Fatalf("failed user turn unexpectedly resumed Loop with %q", env.Name)
+	case <-time.After(50 * time.Millisecond):
+	}
+	if state := readLoopState(t, sess); state != string(coderloop.StateSuspended) {
+		t.Fatalf("Loop state after failed user turn = %q", state)
+	}
+	if !m.loopActive {
+		t.Fatal("suspended Loop disappeared from TUI status")
+	}
+	var sawSuspended bool
+	for _, message := range m.messages[before:] {
+		if strings.Contains(message.content, "loop · suspended") {
+			sawSuspended = true
+		}
+	}
+	if !sawSuspended {
+		t.Fatalf("missing suspended marker: %#v", m.messages[before:])
+	}
+}
+
 func TestTUIShowsLoopPhaseButNotDriverPrompt(t *testing.T) {
 	m, _, _ := newTestModel(t)
 	before := len(m.messages)
@@ -249,7 +351,6 @@ func TestLoopPhaseLabels(t *testing.T) {
 		{coderloop.ReviewPrompt, "review"},
 		{coderloop.UpdatePrompt, "update"},
 		{coderloop.RecoveryPrompt, "recover"},
-		{coderloop.FinalizePrompt, "finalize"},
 		{"unknown controller prompt", "turn"},
 	} {
 		if got := loopPhase(tt.prompt); got != tt.want {

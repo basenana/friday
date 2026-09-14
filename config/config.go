@@ -13,29 +13,120 @@ import (
 )
 
 func Load(configPath string) (*Config, error) {
-	cfg := DefaultConfig()
-
 	if configPath == "" {
-		home, err := os.UserHomeDir()
+		homeFriday, err := homeFridayDir()
 		if err != nil {
-			home = os.Getenv("HOME")
+			return nil, err
 		}
-		// Try JSON first, then YAML
-		jsonPath := filepath.Join(home, ".friday", "config.json")
-		yamlPath := filepath.Join(home, ".friday", "friday.yaml")
+		configPath, err = findConfig(homeFriday)
+		if err != nil {
+			return nil, err
+		}
+		if configPath == "" {
+			cfg := DefaultConfig()
+			cfg.applyRuntimeDefaults()
+			return cfg, nil
+		}
+	} else {
+		absPath, err := filepath.Abs(configPath)
+		if err != nil {
+			return nil, fmt.Errorf("resolve config path: %w", err)
+		}
+		configPath = absPath
+	}
+	return loadFile(configPath, true, false)
+}
 
-		if _, err := os.Stat(jsonPath); err == nil {
-			configPath = jsonPath
-		} else if _, err := os.Stat(yamlPath); err == nil {
-			configPath = yamlPath
-		} else {
-			return cfg, nil // use default
+// LoadForDir discovers and loads the effective CLI configuration. An explicit
+// path wins, followed by a config in cwd/.friday, then the HOME config. Only
+// the current directory is inspected; parent directories are not searched.
+// When a project config is active, its workspace falls back to the HOME
+// workspace on a per-file basis.
+func LoadForDir(explicitPath, cwd string) (*Config, error) {
+	if cwd == "" {
+		var err error
+		cwd, err = os.Getwd()
+		if err != nil {
+			return nil, fmt.Errorf("get working directory: %w", err)
 		}
+	}
+	absCWD, err := filepath.Abs(cwd)
+	if err != nil {
+		return nil, fmt.Errorf("resolve working directory: %w", err)
+	}
+
+	homeFriday, err := homeFridayDir()
+	if err != nil {
+		return nil, err
+	}
+	homeConfigPath, err := findConfig(homeFriday)
+	if err != nil {
+		return nil, err
+	}
+
+	configPath := explicitPath
+	if configPath != "" {
+		configPath, err = filepath.Abs(configPath)
+		if err != nil {
+			return nil, fmt.Errorf("resolve config path: %w", err)
+		}
+		if _, statErr := os.Stat(configPath); statErr != nil {
+			return nil, statErr
+		}
+	} else {
+		configPath, err = findConfig(filepath.Join(absCWD, ".friday"))
+		if err != nil {
+			return nil, err
+		}
+		if configPath == "" {
+			configPath = homeConfigPath
+		}
+	}
+
+	activeDir := homeFriday
+	if configPath != "" {
+		activeDir = filepath.Clean(filepath.Dir(configPath))
+	}
+	projectScoped := activeDir != filepath.Clean(homeFriday)
+
+	var cfg *Config
+	if configPath == "" {
+		cfg = DefaultConfig()
+		cfg.applyRuntimeDefaults()
+	} else {
+		cfg, err = loadFile(configPath, false, projectScoped)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	homeFriday = filepath.Clean(homeFriday)
+	if activeDir == homeFriday {
+		return cfg, nil
+	}
+
+	homeCfg := DefaultConfig()
+	if homeConfigPath != "" {
+		homeCfg, err = loadFile(homeConfigPath, false, false)
+		if err != nil {
+			return nil, fmt.Errorf("load HOME config for workspace fallback: %w", err)
+		}
+	}
+	cfg.projectScope = true
+	cfg.workspaceFallbacks = []string{homeCfg.WorkspacePath()}
+	return cfg, nil
+}
+
+func loadFile(configPath string, missingOK, projectDefaults bool) (*Config, error) {
+	cfg := DefaultConfig()
+	if projectDefaults {
+		cfg.Workspace = "workspace"
 	}
 
 	data, err := os.ReadFile(configPath)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if missingOK && os.IsNotExist(err) {
+			cfg.applyRuntimeDefaults()
 			return cfg, nil
 		}
 		return nil, err
@@ -53,12 +144,50 @@ func Load(configPath string) (*Config, error) {
 	}
 
 	cfg.expandEnv()
+	cfg.resolveRelativePaths(filepath.Dir(configPath))
+	cfg.applyRuntimeDefaults()
+	cfg.configPath = configPath
 
 	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
 
 	return cfg, nil
+}
+
+func findConfig(fridayDir string) (string, error) {
+	for _, name := range []string{"config.json", "friday.yaml"} {
+		path := filepath.Join(fridayDir, name)
+		info, err := os.Stat(path)
+		if err == nil {
+			if info.IsDir() {
+				return "", fmt.Errorf("config path is a directory: %s", path)
+			}
+			return path, nil
+		}
+		if !os.IsNotExist(err) {
+			return "", err
+		}
+	}
+	return "", nil
+}
+
+func homeFridayDir() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil || strings.TrimSpace(home) == "" {
+		home = os.Getenv("HOME")
+	}
+	if strings.TrimSpace(home) == "" {
+		if err != nil {
+			return "", fmt.Errorf("resolve home directory: %w", err)
+		}
+		return "", fmt.Errorf("resolve home directory: HOME is empty")
+	}
+	absHome, err := filepath.Abs(home)
+	if err != nil {
+		return "", fmt.Errorf("resolve home directory: %w", err)
+	}
+	return filepath.Join(absHome, ".friday"), nil
 }
 
 func (c *Config) validate() error {
@@ -92,6 +221,30 @@ func (c *Config) expandEnv() {
 	c.DataDir = expandEnvStr(c.DataDir)
 	c.Workspace = expandEnvStr(c.Workspace)
 	expandModelEnv(&c.ImageModel)
+}
+
+func (c *Config) resolveRelativePaths(baseDir string) {
+	c.DataDir = resolvePathFrom(baseDir, c.DataDir)
+	if c.Workspace != "" {
+		c.Workspace = resolvePathFrom(baseDir, c.Workspace)
+	}
+}
+
+func resolvePathFrom(baseDir, path string) string {
+	if path == "" {
+		return path
+	}
+	if strings.HasPrefix(path, "~/") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			home = os.Getenv("HOME")
+		}
+		return filepath.Clean(filepath.Join(home, path[2:]))
+	}
+	if filepath.IsAbs(path) {
+		return filepath.Clean(path)
+	}
+	return filepath.Clean(filepath.Join(baseDir, path))
 }
 
 func expandModelEnv(m *ModelConfig) {
@@ -136,6 +289,19 @@ func (c *Config) WorkspacePath() string {
 	return c.ResolvePath(c.Workspace)
 }
 
+// WorkspaceFallbackPaths returns lower-priority workspace directories used
+// when a file is absent from the active workspace.
+func (c *Config) WorkspaceFallbackPaths() []string {
+	return append([]string(nil), c.workspaceFallbacks...)
+}
+
+// ProjectScoped reports whether a non-HOME configuration is active.
+func (c *Config) ProjectScoped() bool { return c.projectScope }
+
+// ConfigPath returns the loaded configuration path, or an empty string when
+// built-in defaults are active.
+func (c *Config) ConfigPath() string { return c.configPath }
+
 func (c *Config) SessionsPath() string {
 	return filepath.Join(c.DataDirPath(), "sessions")
 }
@@ -165,11 +331,19 @@ func LogPath() string {
 }
 
 func WriteDefaultConfig(path string) (bool, error) {
+	return WriteConfig(path, DefaultConfig())
+}
+
+// WriteConfig writes cfg only when path does not already exist.
+func WriteConfig(path string, cfg *Config) (bool, error) {
 	if _, err := os.Stat(path); err == nil {
 		return false, nil
+	} else if !os.IsNotExist(err) {
+		return false, err
 	}
-
-	cfg := DefaultConfig()
+	if cfg == nil {
+		return false, fmt.Errorf("config is required")
+	}
 	var data []byte
 	var err error
 

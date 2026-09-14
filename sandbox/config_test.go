@@ -8,6 +8,8 @@ import (
 )
 
 func TestLoadConfig_EmptyPathUsesDefaults(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
 	cfg, err := LoadConfig("")
 	if err != nil {
 		t.Fatalf("LoadConfig returned error: %v", err)
@@ -18,9 +20,12 @@ func TestLoadConfig_EmptyPathUsesDefaults(t *testing.T) {
 	if !cfg.Sandbox.Network.Isolation {
 		t.Fatal("expected default isolation to be true")
 	}
+	assertFridayRuntimeWriteRoots(t, cfg, home)
 }
 
 func TestLoadConfig_JSONLoadsFullConfig(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "sandbox.json")
 	data := []byte(`{
@@ -62,9 +67,14 @@ func TestLoadConfig_JSONLoadsFullConfig(t *testing.T) {
 		Sandbox: SandboxConfig{
 			Enabled: false,
 			Filesystem: FilesystemConfig{
-				ReadOnly:  []string{"/etc", "/usr/share"},
-				Deny:      []string{"/secret"},
-				Write:     []string{"/tmp", "/workspace"},
+				ReadOnly: []string{"/etc", "/usr/share"},
+				Deny:     []string{"/secret"},
+				Write: []string{
+					"/tmp",
+					"/workspace",
+					filepath.Join(home, ".friday", "workspace"),
+					filepath.Join(home, ".friday", "memory"),
+				},
 				Protected: []string{"~/.ssh", ".env"},
 			},
 			Network: NetworkConfig{
@@ -82,6 +92,8 @@ func TestLoadConfig_JSONLoadsFullConfig(t *testing.T) {
 }
 
 func TestLoadConfig_YAMLLoadsFullConfig(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "sandbox.yaml")
 	data := []byte(`permissions:
@@ -142,7 +154,12 @@ sandbox:
 	if !reflect.DeepEqual(cfg.Sandbox.Filesystem.Deny, []string{"/secret"}) {
 		t.Fatalf("unexpected deny: %#v", cfg.Sandbox.Filesystem.Deny)
 	}
-	if !reflect.DeepEqual(cfg.Sandbox.Filesystem.Write, []string{"/tmp", "/workspace"}) {
+	if !reflect.DeepEqual(cfg.Sandbox.Filesystem.Write, []string{
+		"/tmp",
+		"/workspace",
+		filepath.Join(home, ".friday", "workspace"),
+		filepath.Join(home, ".friday", "memory"),
+	}) {
 		t.Fatalf("unexpected write: %#v", cfg.Sandbox.Filesystem.Write)
 	}
 	if !reflect.DeepEqual(cfg.Sandbox.Filesystem.Protected, []string{"~/.ssh", ".env"}) {
@@ -234,6 +251,8 @@ func TestLoadConfig_InvalidTimeoutReturnsError(t *testing.T) {
 }
 
 func TestLoadConfig_PreservesTildePaths(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "sandbox.json")
 	if err := os.WriteFile(path, []byte(`{"sandbox":{"filesystem":{"write":["~/sandbox-write"]}}}`), 0644); err != nil {
@@ -245,8 +264,22 @@ func TestLoadConfig_PreservesTildePaths(t *testing.T) {
 		t.Fatalf("LoadConfig returned error: %v", err)
 	}
 
-	if !reflect.DeepEqual(cfg.Sandbox.Filesystem.Write, []string{"~/sandbox-write"}) {
+	if !reflect.DeepEqual(cfg.Sandbox.Filesystem.Write, []string{
+		"~/sandbox-write",
+		filepath.Join(home, ".friday", "workspace"),
+		filepath.Join(home, ".friday", "memory"),
+	}) {
 		t.Fatalf("unexpected write paths: %#v", cfg.Sandbox.Filesystem.Write)
+	}
+}
+
+func assertFridayRuntimeWriteRoots(t *testing.T, cfg *Config, home string) {
+	t.Helper()
+	for _, name := range []string{"workspace", "memory"} {
+		want := filepath.Join(home, ".friday", name)
+		if !containsFilesystemRoot(cfg.Sandbox.Filesystem.Write, want) {
+			t.Fatalf("missing runtime write root %q in %#v", want, cfg.Sandbox.Filesystem.Write)
+		}
 	}
 }
 

@@ -42,9 +42,6 @@ test-e2e-subagent:
 test-e2e-actor:
 	E2E_CONFIG=$(E2E_CONFIG) go test -tags=e2e -timeout=$(E2E_TIMEOUT) -v -run "TestActor" ./e2e/...
 
-test-e2e-a2a:
-	E2E_CONFIG=$(E2E_CONFIG) go test -tags=e2e -timeout=$(E2E_TIMEOUT) -v -run "TestA2A" ./e2e/...
-
 test-e2e-memory:
 	E2E_CONFIG=$(E2E_CONFIG) go test -tags=e2e -timeout=$(E2E_TIMEOUT) -v -run "TestMemory" ./e2e/...
 

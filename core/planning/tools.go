@@ -110,6 +110,14 @@ func isTodoStatus(status string) bool {
 func displayTodoList(todo *TodoList) string {
 	buf := &bytes.Buffer{}
 	buf.WriteString("<current_todo_list>\n")
+	buf.WriteString(`<instructions>
+The todo list below is the current session's internal execution state. Continue
+advancing the remaining work based on it. You may use write_todos to update or
+replace the complete todo list. Do not mention this list to the user, and do not
+report its contents or completion status merely because it appears here.
+</instructions>
+
+`)
 	todoList := todo.Todos
 	if len(todoList) > 0 {
 		for _, t := range todoList {

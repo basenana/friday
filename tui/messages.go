@@ -20,9 +20,10 @@ type actorEventMsg struct {
 }
 
 // feedClosedMsg is emitted when the model's bus feed is closed (session
-// switch or quit). Update ignores it; it only exists to unblock
-// waitForActorEvent commands reading the old feed.
-type feedClosedMsg struct{}
+// switch, quit, or an unexpected teardown). The token lets Update distinguish
+// an obsolete subscription from the active feed while unblocking the pending
+// waitForActorEvent command.
+type feedClosedMsg struct{ token uint64 }
 
 // waitForActorEvent returns a tea.Cmd that reads one event from the feed.
 // Bubble Tea runs the returned func on its own goroutine; blocking here is
@@ -34,7 +35,7 @@ func waitForActorEvent(f *bus.Feed, token uint64) tea.Cmd {
 		case evt := <-f.Events():
 			return actorEventMsg{token: token, event: evt}
 		case <-f.Done():
-			return feedClosedMsg{}
+			return feedClosedMsg{token: token}
 		}
 	}
 }

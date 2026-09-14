@@ -217,6 +217,45 @@ func TestMCP_ToolError(t *testing.T) {
 	}
 }
 
+func TestMCP_ToolBusinessErrorPreservesFailureSemantics(t *testing.T) {
+	errTool := mcpgo.NewTool("validation_error_tool",
+		mcpgo.WithDescription("Rejects invalid arguments"),
+	)
+	url, stop := startMockMCPServer(t, &errTool, func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		return mcpgo.NewToolResultError("query must not be empty"), nil
+	})
+	defer stop()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	srv := &mcp.Server{Name: "test", Describe: "test", SSE: &mcp.MCPSse{Endpoint: url}}
+	if err := srv.Connect(); err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	if _, err := srv.Client().Initialize(ctx, mcpgo.InitializeRequest{
+		Params: mcpgo.InitializeParams{ClientInfo: mcpgo.Implementation{Name: "e2e", Version: "1.0"}},
+	}); err != nil {
+		t.Fatalf("Initialize: %v", err)
+	}
+	toolList, err := srv.InitTools(ctx)
+	if err != nil {
+		t.Fatalf("InitTools: %v", err)
+	}
+	result, err := toolList[0].Handler(ctx, &tools.Request{Arguments: map[string]any{}})
+	if err != nil {
+		t.Fatalf("Handler: %v", err)
+	}
+	if result == nil || !result.IsError {
+		t.Fatalf("business error was not preserved: %#v", result)
+	}
+	encoded := tools.Res2Str(result)
+	for _, want := range []string{"query must not be empty", "Suggestion:", "Full MCP response"} {
+		if !strings.Contains(encoded, want) {
+			t.Fatalf("adapted error missing %q: %s", want, encoded)
+		}
+	}
+}
+
 // TestMCP_ConnectFail verifies that Connect against an unreachable endpoint
 // does not silently succeed in a way that hides the problem.
 func TestMCP_ConnectFail(t *testing.T) {

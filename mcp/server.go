@@ -2,8 +2,10 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/basenana/friday/core/tools"
 	"github.com/mark3labs/mcp-go/client"
@@ -70,14 +72,43 @@ func (s *Server) mcpToolAdaptor(mcpTool *mcp.Tool) tools.ToolHandlerFunc {
 			},
 		})
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("MCP tool %s request failed: %w", mcpTool.Name, err)
 		}
-		return tools.NewToolResultText(tools.Res2Str(result)), nil
+		if result == nil {
+			return nil, fmt.Errorf("MCP tool %s returned no response", mcpTool.Name)
+		}
+		return convertMCPResult(mcpTool.Name, result), nil
 	}
 }
 
+func convertMCPResult(toolName string, result *mcp.CallToolResult) *tools.Result {
+	if !result.IsError {
+		return tools.NewToolResultText(tools.Res2Str(result))
+	}
+	cause := strings.TrimSpace(mcpTextContent(result.Content))
+	if cause == "" {
+		cause = fmt.Sprintf("MCP tool %s failed without a text error message", toolName)
+	} else {
+		cause = fmt.Sprintf("MCP tool %s failed: %s", toolName, cause)
+	}
+	toolResult := tools.NewToolResultActionableError(cause,
+		"follow the MCP server error, correct the arguments or prerequisites, and then retry")
+	toolResult.FYI = "Full MCP response:\n" + tools.Res2Str(result)
+	return toolResult
+}
+
+func mcpTextContent(content []mcp.Content) string {
+	parts := make([]string, 0, len(content))
+	for _, item := range content {
+		if text, ok := item.(mcp.TextContent); ok && strings.TrimSpace(text.Text) != "" {
+			parts = append(parts, strings.TrimSpace(text.Text))
+		}
+	}
+	return strings.Join(parts, "\n")
+}
+
 func covertMCPTool(tool *mcp.Tool) *tools.Tool {
-	return &tools.Tool{
+	converted := &tools.Tool{
 		Name:        tool.Name,
 		Description: tool.Description,
 		Annotations: make(map[string]string),
@@ -87,7 +118,16 @@ func covertMCPTool(tool *mcp.Tool) *tools.Tool {
 			Required:   tool.InputSchema.Required,
 		},
 	}
-
+	var schemaRaw []byte
+	if len(tool.RawInputSchema) > 0 {
+		schemaRaw = tool.RawInputSchema
+	} else {
+		schemaRaw, _ = json.Marshal(tool.InputSchema)
+	}
+	if len(schemaRaw) > 0 {
+		_ = json.Unmarshal(schemaRaw, &converted.RawInputSchema)
+	}
+	return converted
 }
 
 type MCPSse struct {

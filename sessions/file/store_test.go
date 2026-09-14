@@ -316,6 +316,52 @@ func TestEventStoreCompactsLargeLogsAndKeepsLatestRun(t *testing.T) {
 	}
 }
 
+func TestEventStoreLoadsWhileActorSinkAppends(t *testing.T) {
+	store := NewFileSessionStore(t.TempDir())
+	if _, err := store.Create("live-events", nil); err != nil {
+		t.Fatal(err)
+	}
+	sink, err := store.OpenEventSink(context.Background(), "live-events")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sink.Close()
+
+	const count = 200
+	errs := make(chan error, 1)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < count; i++ {
+			if err := sink.Append(context.Background(), events.NewEvent(events.KindTextMessageContent, "run-live").
+				WithPayload(events.TextMessageContentData{Content: fmt.Sprint(i)})); err != nil {
+				errs <- err
+				return
+			}
+		}
+	}()
+
+	for {
+		select {
+		case err := <-errs:
+			t.Fatal(err)
+		case <-done:
+			loaded, err := store.LoadEvents(context.Background(), "live-events")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(loaded) != count {
+				t.Fatalf("loaded %d events, want %d", len(loaded), count)
+			}
+			return
+		default:
+			if _, err := store.LoadEvents(context.Background(), "live-events"); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+}
+
 func TestReplaceMessages(t *testing.T) {
 	// Create temp directory
 	tmpDir, err := os.MkdirTemp("", "session_test")

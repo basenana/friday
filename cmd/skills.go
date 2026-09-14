@@ -17,7 +17,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/basenana/friday/skills"
-	"github.com/basenana/friday/workspace"
 )
 
 const (
@@ -42,8 +41,8 @@ var skillsListCmd = &cobra.Command{
 	Short: "List installed skills",
 	Long:  `List all installed skills with their descriptions.`,
 	Run: func(cmd *cobra.Command, args []string) {
-		ws := workspace.NewWorkspace(cfg.WorkspacePath(), cfg.MemoryPath())
-		loader := skills.NewLoader(ws.SkillsPath())
+		ws := configuredWorkspace(cfg)
+		loader := skills.NewLoader(ws.SkillsPaths()...)
 		if err := loader.Load(); err != nil {
 			fmt.Fprintf(os.Stderr, "failed to load skills: %v\n", err)
 			os.Exit(1)
@@ -75,19 +74,24 @@ var skillsDeleteCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		skillName := args[0]
 
-		ws := workspace.NewWorkspace(cfg.WorkspacePath(), cfg.MemoryPath())
-		loader := skills.NewLoader(ws.SkillsPath())
+		ws := configuredWorkspace(cfg)
+		loader := skills.NewLoader(ws.SkillsPaths()...)
 		if err := loader.Load(); err != nil {
 			fmt.Fprintf(os.Stderr, "failed to load skills: %v\n", err)
 			os.Exit(1)
 		}
 
-		if _, err := loader.Get(skillName); err != nil {
+		registry := skills.NewRegistry(loader)
+		skill, err := loader.Get(skillName)
+		if err != nil {
 			fmt.Printf("Skill not found: %s\n", skillName)
 			os.Exit(1)
 		}
+		if err := ensureSkillDeletionAllowed(cfg.ProjectScoped(), ws.SkillsPath(), skill); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
 
-		registry := skills.NewRegistry(loader)
 		if err := registry.Delete(skillName); err != nil {
 			fmt.Fprintf(os.Stderr, "failed to delete skill: %v\n", err)
 			os.Exit(1)
@@ -95,6 +99,16 @@ var skillsDeleteCmd = &cobra.Command{
 
 		fmt.Printf("Deleted skill: %s\n", skillName)
 	},
+}
+
+func ensureSkillDeletionAllowed(projectScoped bool, writableSkillsPath string, skill *skills.Skill) error {
+	if !projectScoped || skill == nil {
+		return nil
+	}
+	if filepath.Clean(filepath.Dir(skill.BasePath)) == filepath.Clean(writableSkillsPath) {
+		return nil
+	}
+	return fmt.Errorf("cannot delete inherited HOME skill %q from a project; add a project override or run the command outside the project", skill.Name)
 }
 
 var skillsInstallURL string
@@ -114,7 +128,7 @@ var skillsInstallCmd = &cobra.Command{
 			os.Exit(1)
 		}
 
-		ws := workspace.NewWorkspace(cfg.WorkspacePath(), cfg.MemoryPath())
+		ws := configuredWorkspace(cfg)
 		skillsPath := ws.SkillsPath()
 
 		// Ensure skills directory exists

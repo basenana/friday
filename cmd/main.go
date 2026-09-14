@@ -18,6 +18,7 @@ func main() {
 	corelogger.SetRoot(logger.CoreLogger())
 
 	if err := rootCmd.Execute(); err != nil {
+		corelogger.New("cmd").Errorw("command failed", "error", err)
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}

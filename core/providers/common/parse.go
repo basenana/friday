@@ -37,14 +37,33 @@ func NormalizeToolUseArguments(raw, toolName string) (string, string, bool) {
 
 // FormatToolUseArgumentsError builds a human-readable error for invalid tool arguments.
 func FormatToolUseArgumentsError(toolName, raw string) string {
-	const max = 80
-	trimmed := raw
-	if len(trimmed) > max {
-		trimmed = trimmed[:max] + "..."
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return fmt.Sprintf("tool %s: arguments are empty. Suggestion: provide a JSON object such as {} and retry the tool call", toolName)
 	}
-	return fmt.Sprintf("tool %s: arguments must be a JSON object, got: %s", toolName, trimmed)
+	var value any
+	if err := json.Unmarshal([]byte(trimmed), &value); err != nil {
+		return fmt.Sprintf("tool %s: arguments are invalid JSON (%v). Suggestion: send exactly one valid JSON object with quoted field names and retry the tool call", toolName, err)
+	}
+	return fmt.Sprintf("tool %s: arguments must be a JSON object, not %s. Suggestion: wrap the named arguments in an object such as {} and retry the tool call", toolName, jsonValueKind(value))
 }
 
+func jsonValueKind(value any) string {
+	switch value.(type) {
+	case nil:
+		return "null"
+	case []any:
+		return "an array"
+	case string:
+		return "a string"
+	case bool:
+		return "a boolean"
+	case float64:
+		return "a number"
+	default:
+		return fmt.Sprintf("a %T value", value)
+	}
+}
 
 func ExtractJSON(jsonContent string, model any) error {
 	candidates := extractJSONCandidates(jsonContent)

@@ -12,6 +12,7 @@ import (
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/basenana/friday/core/providers"
+	"github.com/basenana/friday/core/providers/common"
 	"github.com/basenana/friday/core/types"
 )
 
@@ -1277,11 +1278,11 @@ func TestFlushToolUseReplacesNonDictArgumentsWithEmptyObjectAndError(t *testing.
 	}{
 		{"dict unchanged", `{"path":"a.go"}`, `{"path":"a.go"}`, ``},
 		{"empty object unchanged", `{}`, `{}`, ``},
-		{"array replaced", `[1,2,3]`, `{}`, `tool read_file: arguments must be a JSON object, got: [1,2,3]`},
-		{"number replaced", `42`, `{}`, `tool read_file: arguments must be a JSON object, got: 42`},
-		{"null replaced", `null`, `{}`, `tool read_file: arguments must be a JSON object, got: null`},
-		{"string replaced", `"foo"`, `{}`, `tool read_file: arguments must be a JSON object, got: "foo"`},
-		{"invalid replaced", `not json`, `{}`, `tool read_file: arguments must be a JSON object, got: not json`},
+		{"array replaced", `[1,2,3]`, `{}`, common.FormatToolUseArgumentsError("read_file", `[1,2,3]`)},
+		{"number replaced", `42`, `{}`, common.FormatToolUseArgumentsError("read_file", `42`)},
+		{"null replaced", `null`, `{}`, common.FormatToolUseArgumentsError("read_file", `null`)},
+		{"string replaced", `"foo"`, `{}`, common.FormatToolUseArgumentsError("read_file", `"foo"`)},
+		{"invalid replaced", `not json`, `{}`, common.FormatToolUseArgumentsError("read_file", `not json`)},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

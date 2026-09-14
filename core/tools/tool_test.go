@@ -29,6 +29,57 @@ func TestValidateArguments(t *testing.T) {
 	}
 }
 
+func TestValidateArgumentsReturnsAllIssuesInStableOrder(t *testing.T) {
+	tool := NewTool("batch",
+		WithString("name", Required(), MinLength(2), Description("Batch name.")),
+		WithNumber("ratio", MultipleOf(0.5), Description("Batch ratio.")),
+		WithObject("labels", AdditionalProperties(map[string]any{"type": "string"}),
+			PropertyNames(map[string]any{"type": "string", "pattern": `^[a-z]+$`}), Description("Labels.")),
+	)
+	args := map[string]any{
+		"extra":  true,
+		"labels": map[string]any{"Bad-Key": 4.0, "good": false},
+		"ratio":  0.3,
+	}
+	first := tool.ValidateArguments(args)
+	second := tool.ValidateArguments(args)
+	if first != second {
+		t.Fatalf("validation order changed:\nfirst: %s\nsecond: %s", first, second)
+	}
+	for _, want := range []string{
+		"arguments.name is required",
+		"arguments.extra is not supported",
+		"arguments.labels.Bad-Key must be a string",
+		`arguments.labels property name "Bad-Key" must match pattern`,
+		"arguments.labels.good must be a string",
+		"arguments.ratio must be a multiple of 0.5",
+		"Suggestion:",
+	} {
+		if !strings.Contains(first, want) {
+			t.Fatalf("validation message missing %q:\n%s", want, first)
+		}
+	}
+}
+
+func TestNewToolResultActionableError(t *testing.T) {
+	result := NewToolResultActionableError("path does not exist", "use fs_list to find the correct path")
+	if !result.IsError {
+		t.Fatal("result must be an error")
+	}
+	text := result.Content[0].(TextContent).Text
+	if !strings.Contains(text, "path does not exist") || !strings.Contains(text, "Suggestion: use fs_list") {
+		t.Fatalf("result text = %q", text)
+	}
+}
+
+func TestNewToolResultErrorAddsFallbackSuggestion(t *testing.T) {
+	result := NewToolResultError("remote operation failed")
+	text := result.Content[0].(TextContent).Text
+	if !strings.Contains(text, "remote operation failed") || !strings.Contains(text, "Suggestion:") {
+		t.Fatalf("result text is not actionable: %q", text)
+	}
+}
+
 func TestValidateDefinitionRequiresDescriptionsExamplesAndShallowSchemas(t *testing.T) {
 	valid := NewTool("batch",
 		WithDescription("Run a batch."),

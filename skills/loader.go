@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/basenana/friday/core/logger"
+
 	"gopkg.in/yaml.v3"
 )
 
@@ -60,7 +62,10 @@ func (l *Loader) loadFromDir(skillsPath string) error {
 		skillPath := filepath.Join(skillsPath, entry.Name())
 		skill, err := l.loadSkill(skillPath)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: failed to load skill %s: %v\n", entry.Name(), err)
+			logger.New("skills").Warnw("failed to load skill",
+				"skill", entry.Name(),
+				"error", err,
+			)
 			continue
 		}
 
@@ -142,7 +147,10 @@ func ParseSkillFile(content []byte) (*Frontmatter, string, error) {
 		if label == "" {
 			label = "(unnamed)"
 		}
-		fmt.Fprintf(os.Stderr, "Warning: skill %s: unknown frontmatter fields: %s\n", label, strings.Join(keys, ", "))
+		logger.New("skills").Warnw("skill has unknown frontmatter fields",
+			"skill", label,
+			"fields", keys,
+		)
 	}
 
 	return &frontmatter, instructions, nil
@@ -158,9 +166,10 @@ func (l *Loader) Get(name string) (*Skill, error) {
 }
 
 // LoadSkillFromDir loads and returns a skill from a subdirectory name
-// Searches through all paths in order, returns first match
+// Searches from highest to lowest priority, matching Load's override order.
 func (l *Loader) LoadSkillFromDir(dirName string) (*Skill, error) {
-	for _, skillsPath := range l.skillsPaths {
+	for i := len(l.skillsPaths) - 1; i >= 0; i-- {
+		skillsPath := l.skillsPaths[i]
 		skillPath := filepath.Join(skillsPath, dirName)
 		skill, err := l.loadSkill(skillPath)
 		if err != nil {

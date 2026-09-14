@@ -12,8 +12,11 @@ import (
 	"sync"
 
 	"github.com/basenana/friday/core/logger"
+	"github.com/basenana/friday/core/promptcontext"
+	"github.com/basenana/friday/core/providers"
 	"github.com/basenana/friday/core/session"
 	"github.com/basenana/friday/core/tools"
+	"github.com/basenana/friday/core/types"
 	"github.com/basenana/friday/sandbox"
 )
 
@@ -22,6 +25,13 @@ const (
 	maxInstructionRunes = 60_000  // approximately 30K tokens at the project estimator's 0.5 tokens/rune
 	maxFYIRunes         = 100_000 // approximately 50K tokens
 )
+
+const projectInstructionsIntro = `As you answer the user's questions, you can use the following context:
+
+# projectInstructions
+Codebase and user instructions are shown below.`
+
+const projectInstructionsOutro = `IMPORTANT: this context may or may not be relevant to the current request. Follow these instructions when they apply.`
 
 var instructionNames = []string{"AGENTS.md", "CLAUDE.md"}
 
@@ -41,10 +51,11 @@ type Hook struct {
 	logger    logger.Logger
 
 	mu     sync.Mutex
-	loaded map[string]map[string]struct{}
+	loaded map[string]instructionRecord
 }
 
 var _ session.BeforeAgentHook = (*Hook)(nil)
+var _ session.BeforeModelHook = (*Hook)(nil)
 
 // New constructs a filesystem tool hook. When WithFileSystem is omitted, the
 // current sandbox-backed local implementation is used.
@@ -70,7 +81,7 @@ func New(exec *sandbox.Executor, root string, opts ...Option) (*Hook, error) {
 		root:      filepath.Clean(absRoot),
 		namespace: fmt.Sprintf("file_instructions.%x", sum[:8]),
 		logger:    logger.New("filetools"),
-		loaded:    make(map[string]map[string]struct{}),
+		loaded:    make(map[string]instructionRecord),
 	}
 	for _, opt := range opts {
 		opt(h)
@@ -93,8 +104,6 @@ func (h *Hook) Tools() []*tools.Tool {
 		switch clone.Name {
 		case sandbox.FsReadToolName, sandbox.FsListToolName:
 			clone.Handler = h.withFYI(clone.Name, tool.Handler)
-		case sandbox.FsWriteToolName, sandbox.FsEditToolName, sandbox.FsDeleteToolName:
-			clone.Handler = h.withInstructionInvalidation(tool.Handler)
 		}
 		wrapped = append(wrapped, &clone)
 	}
@@ -109,6 +118,23 @@ func (h *Hook) BeforeAgent(ctx context.Context, sess *session.Session, _ session
 		h.logger.Warnw("failed to hydrate project instruction record", "session", sess.ID, "error", err)
 	}
 	return nil
+}
+
+// BeforeModel refreshes project-root instructions on every request so edits
+// made by people or external processes are visible without a file-tool call.
+func (h *Hook) BeforeModel(ctx context.Context, _ *session.Session, req providers.Request) error {
+	promptcontext.SetBlock(req, promptcontext.ProjectInstructions, h.projectInstructions(ctx))
+	return nil
+}
+
+// ReservedTokens reports the stable request-local project context injected
+// after context projection.
+func (h *Hook) ReservedTokens(_ *session.Session) int64 {
+	content := h.projectInstructions(context.Background())
+	if content == "" {
+		return 0
+	}
+	return session.EstimateHistoryTokens([]types.Message{{Role: types.RoleAgent, Content: content}})
 }
 
 func (h *Hook) withFYI(toolName string, next tools.ToolHandlerFunc) tools.ToolHandlerFunc {
@@ -131,20 +157,6 @@ func (h *Hook) withFYI(toolName string, next tools.ToolHandlerFunc) tools.ToolHa
 	}
 }
 
-func (h *Hook) withInstructionInvalidation(next tools.ToolHandlerFunc) tools.ToolHandlerFunc {
-	return func(ctx context.Context, req *tools.Request) (*tools.Result, error) {
-		path, _ := req.Arguments["path"].(string)
-		resolved, resolveErr := h.fs.Resolve(ctx, path, sandbox.FileAccessWrite)
-		result, err := next(ctx, req)
-		if err == nil && result != nil && !result.IsError && resolveErr == nil && isInstructionFile(resolved) {
-			if invalidateErr := h.invalidate(ctx, req, filepath.Dir(resolved)); invalidateErr != nil {
-				h.logger.Warnw("failed to invalidate project instructions", "session", req.SessionID, "path", resolved, "error", invalidateErr)
-			}
-		}
-		return result, err
-	}
-}
-
 func (h *Hook) discover(ctx context.Context, req *tools.Request, toolName, path string) (string, error) {
 	if strings.TrimSpace(path) == "" {
 		return "", nil
@@ -162,25 +174,57 @@ func (h *Hook) discover(ctx context.Context, req *tools.Request, toolName, path 
 		return "", nil
 	}
 
-	dirs := directoryChain(dir, h.root)
-	unseen, err := h.claim(ctx, req, dirs)
-	if err != nil {
-		h.logger.Warnw("failed to update project instruction record; using memory fallback", "session", req.SessionID, "error", err)
-		unseen = h.claimInMemory(req.SessionID, dirs)
-		err = nil
-	} else {
-		_ = h.claimInMemory(req.SessionID, dirs)
+	var candidates []instructionCandidate
+	for _, candidateDir := range directoryChain(dir, h.root) {
+		if h.isPersistentInstructionDir(candidateDir) {
+			continue
+		}
+		candidate, scanErr := h.scanInstruction(ctx, candidateDir)
+		if scanErr != nil {
+			h.logger.Warnw("failed to inspect project instructions", "session", req.SessionID, "path", candidateDir, "error", scanErr)
+			continue
+		}
+		candidates = append(candidates, candidate)
 	}
 
-	var sections []string
-	for _, candidateDir := range unseen {
-		section := h.readInstructionSection(ctx, candidateDir)
-		if section != "" {
-			sections = append(sections, section)
+	known, err := h.recordSnapshot(ctx, req)
+	if err != nil {
+		h.logger.Warnw("failed to read project instruction record; using memory fallback", "session", req.SessionID, "error", err)
+		known = h.memorySnapshot(req.SessionID)
+	}
+
+	ready := make([]instructionCandidate, 0, len(candidates))
+	for _, candidate := range candidates {
+		stamp, exists := known[candidate.relativeDir]
+		if exists && stamp == candidate.stamp {
+			continue
+		}
+		if candidate.stamp.SelectedFile != "" {
+			section, readErr := h.readFYISection(ctx, candidate)
+			if readErr != nil {
+				h.logger.Warnw("failed to read project instructions", "session", req.SessionID, "path", candidate.path, "error", readErr)
+				continue
+			}
+			candidate.section = section
+		}
+		ready = append(ready, candidate)
+	}
+
+	claimed, err := h.claim(ctx, req, ready)
+	if err != nil {
+		h.logger.Warnw("failed to update project instruction record; using memory fallback", "session", req.SessionID, "error", err)
+		claimed = h.claimInMemory(req.SessionID, ready)
+	} else {
+		h.syncMemory(req.SessionID, ready)
+	}
+
+	sections := make([]string, 0, len(claimed))
+	for _, candidate := range claimed {
+		if candidate.section != "" {
+			sections = append(sections, candidate.section)
 		}
 	}
-	fyi := strings.Join(sections, "\n\n")
-	return truncateRunes(fyi, maxFYIRunes), err
+	return truncateWithNotice(strings.Join(sections, "\n\n"), maxFYIRunes), nil
 }
 
 func (h *Hook) nearestExistingDirectory(ctx context.Context, dir string) string {
@@ -198,7 +242,22 @@ func (h *Hook) nearestExistingDirectory(ctx context.Context, dir string) string 
 	return ""
 }
 
-func (h *Hook) readInstructionSection(ctx context.Context, dir string) string {
+type instructionStamp struct {
+	SelectedFile    string `json:"selected_file"`
+	ModTimeUnixNano int64  `json:"mod_time_unix_nano"`
+}
+
+type instructionRecord map[string]instructionStamp
+
+type instructionCandidate struct {
+	relativeDir string
+	path        string
+	stamp       instructionStamp
+	section     string
+}
+
+func (h *Hook) scanInstruction(ctx context.Context, dir string) (instructionCandidate, error) {
+	candidate := instructionCandidate{relativeDir: h.relativeDirectory(dir)}
 	for _, name := range instructionNames {
 		path := filepath.Join(dir, name)
 		resolved, err := h.fs.Resolve(ctx, path, sandbox.FileAccessRead)
@@ -209,110 +268,153 @@ func (h *Hook) readInstructionSection(ctx context.Context, dir string) string {
 			continue
 		}
 		info, err := h.fs.Stat(ctx, resolved)
-		if err != nil || info.IsDir() {
+		if os.IsNotExist(err) {
 			continue
 		}
-		content, err := h.fs.ReadFile(ctx, resolved)
 		if err != nil {
-			return ""
+			return candidate, err
 		}
-		rel, err := filepath.Rel(h.root, resolved)
-		if err != nil {
-			return ""
+		if info.IsDir() {
+			continue
 		}
-		body := truncateInstruction(string(content))
-		return "## " + filepath.ToSlash(rel) + "\n\n" + body
+		candidate.path = resolved
+		candidate.stamp = instructionStamp{SelectedFile: name, ModTimeUnixNano: info.ModTime().UnixNano()}
+		return candidate, nil
 	}
-	return ""
+	return candidate, nil
 }
 
-type loadedRecord struct {
-	Version     int      `json:"version"`
-	Directories []string `json:"directories"`
+func (h *Hook) readFYISection(ctx context.Context, candidate instructionCandidate) (string, error) {
+	content, err := h.fs.ReadFile(ctx, candidate.path)
+	if err != nil {
+		return "", err
+	}
+	rel, err := filepath.Rel(h.root, candidate.path)
+	if err != nil {
+		return "", err
+	}
+	return "## " + filepath.ToSlash(rel) + "\n\n" + truncateInstruction(string(content)), nil
 }
 
-func (h *Hook) claim(ctx context.Context, req *tools.Request, dirs []string) ([]string, error) {
+func (h *Hook) recordSnapshot(ctx context.Context, req *tools.Request) (instructionRecord, error) {
 	if req.SessionRecords == nil {
-		return h.claimInMemory(req.SessionID, dirs), nil
+		return h.memorySnapshot(req.SessionID), nil
 	}
-	var unseen []string
+	current, err := req.SessionRecords.ReadRecord(ctx, h.namespace)
+	if errors.Is(err, session.ErrRecordNotFound) {
+		return make(instructionRecord), nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return decodeInstructionRecord(current), nil
+}
+
+func (h *Hook) claim(ctx context.Context, req *tools.Request, candidates []instructionCandidate) ([]instructionCandidate, error) {
+	if len(candidates) == 0 {
+		return nil, nil
+	}
+	if req.SessionRecords == nil {
+		return h.claimInMemory(req.SessionID, candidates), nil
+	}
+	var claimed []instructionCandidate
 	err := req.SessionRecords.UpdateRecord(ctx, h.namespace, func(current []byte) ([]byte, error) {
-		record := loadedRecord{Version: 1}
-		if len(current) > 0 {
-			if err := json.Unmarshal(current, &record); err != nil {
-				return nil, err
-			}
-		}
-		known := make(map[string]struct{}, len(record.Directories)+len(dirs))
-		for _, dir := range record.Directories {
-			known[dir] = struct{}{}
-		}
-		for _, dir := range dirs {
-			rel := h.relativeDirectory(dir)
-			if _, ok := known[rel]; ok {
+		record := decodeInstructionRecord(current)
+		claimed = claimed[:0]
+		for _, candidate := range candidates {
+			if stamp, ok := record[candidate.relativeDir]; ok && stamp == candidate.stamp {
 				continue
 			}
-			known[rel] = struct{}{}
-			record.Directories = append(record.Directories, rel)
-			unseen = append(unseen, dir)
+			record[candidate.relativeDir] = candidate.stamp
+			claimed = append(claimed, candidate)
 		}
-		record.Version = 1
 		return json.Marshal(record)
 	})
-	return unseen, err
+	return claimed, err
 }
 
-func (h *Hook) invalidate(ctx context.Context, req *tools.Request, dir string) error {
-	if !withinRoot(h.root, dir) {
-		return nil
+func decodeInstructionRecord(data []byte) instructionRecord {
+	record := make(instructionRecord)
+	if len(data) == 0 || json.Unmarshal(data, &record) != nil {
+		return make(instructionRecord)
 	}
-	rel := h.relativeDirectory(dir)
-	h.invalidateInMemory(req.SessionID, rel)
-	if req.SessionRecords == nil {
-		return nil
-	}
-	return req.SessionRecords.UpdateRecord(ctx, h.namespace, func(current []byte) ([]byte, error) {
-		record := loadedRecord{Version: 1}
-		if len(current) > 0 {
-			if err := json.Unmarshal(current, &record); err != nil {
-				return nil, err
-			}
-		}
-		kept := record.Directories[:0]
-		for _, existing := range record.Directories {
-			if existing != rel {
-				kept = append(kept, existing)
-			}
-		}
-		record.Directories = kept
-		return json.Marshal(record)
-	})
+	return record
 }
 
-func (h *Hook) claimInMemory(sessionID string, dirs []string) []string {
+func (h *Hook) memorySnapshot(sessionID string) instructionRecord {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	known := h.loaded[sessionID]
-	if known == nil {
-		known = make(map[string]struct{})
-		h.loaded[sessionID] = known
+	return cloneInstructionRecord(h.loaded[sessionID])
+}
+
+func (h *Hook) claimInMemory(sessionID string, candidates []instructionCandidate) []instructionCandidate {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	record := h.loaded[sessionID]
+	if record == nil {
+		record = make(instructionRecord)
+		h.loaded[sessionID] = record
 	}
-	var unseen []string
-	for _, dir := range dirs {
-		rel := h.relativeDirectory(dir)
-		if _, ok := known[rel]; ok {
+	var claimed []instructionCandidate
+	for _, candidate := range candidates {
+		if stamp, ok := record[candidate.relativeDir]; ok && stamp == candidate.stamp {
 			continue
 		}
-		known[rel] = struct{}{}
-		unseen = append(unseen, dir)
+		record[candidate.relativeDir] = candidate.stamp
+		claimed = append(claimed, candidate)
 	}
-	return unseen
+	return claimed
 }
 
-func (h *Hook) invalidateInMemory(sessionID, rel string) {
+func (h *Hook) syncMemory(sessionID string, candidates []instructionCandidate) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	delete(h.loaded[sessionID], rel)
+	record := h.loaded[sessionID]
+	if record == nil {
+		record = make(instructionRecord)
+		h.loaded[sessionID] = record
+	}
+	for _, candidate := range candidates {
+		record[candidate.relativeDir] = candidate.stamp
+	}
+}
+
+func cloneInstructionRecord(record instructionRecord) instructionRecord {
+	cloned := make(instructionRecord, len(record))
+	for dir, stamp := range record {
+		cloned[dir] = stamp
+	}
+	return cloned
+}
+
+func (h *Hook) projectInstructions(ctx context.Context) string {
+	var sections []string
+	for _, dir := range []string{h.root, filepath.Join(h.root, ".friday")} {
+		candidate, err := h.scanInstruction(ctx, dir)
+		if err != nil {
+			h.logger.Warnw("failed to inspect persistent project instructions", "path", dir, "error", err)
+			continue
+		}
+		if candidate.stamp.SelectedFile == "" {
+			continue
+		}
+		content, err := h.fs.ReadFile(ctx, candidate.path)
+		if err != nil {
+			h.logger.Warnw("failed to read persistent project instructions", "path", candidate.path, "error", err)
+			continue
+		}
+		sections = append(sections, "Contents of "+candidate.path+":\n\n"+truncateInstruction(string(content)))
+	}
+	if len(sections) == 0 {
+		return ""
+	}
+	body := truncateWithNotice(strings.Join(sections, "\n\n"), maxFYIRunes)
+	return "<system-reminder>\n" + projectInstructionsIntro + "\n\n" + body + "\n\n" + projectInstructionsOutro + "\n</system-reminder>"
+}
+
+func (h *Hook) isPersistentInstructionDir(dir string) bool {
+	dir = filepath.Clean(dir)
+	return dir == h.root || dir == filepath.Join(h.root, ".friday")
 }
 
 func (h *Hook) relativeDirectory(dir string) string {
@@ -339,23 +441,32 @@ func withinRoot(root, path string) bool {
 	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
-func isInstructionFile(path string) bool {
-	base := filepath.Base(path)
-	return base == instructionNames[0] || base == instructionNames[1]
-}
-
 func truncateInstruction(content string) string {
 	lines := strings.SplitAfter(content, "\n")
 	if len(lines) > maxInstructionLines {
 		content = strings.Join(lines[:maxInstructionLines], "")
+		return appendTruncationNotice(content, maxInstructionRunes)
 	}
-	return truncateRunes(content, maxInstructionRunes)
+	return truncateWithNotice(content, maxInstructionRunes)
 }
 
-func truncateRunes(content string, limit int) string {
+func truncateWithNotice(content string, limit int) string {
 	runes := []rune(content)
 	if len(runes) <= limit {
 		return content
 	}
-	return string(runes[:limit])
+	return appendTruncationNotice(content, limit)
+}
+
+func appendTruncationNotice(content string, limit int) string {
+	notice := []rune("\n\n[Instruction content truncated by Friday.]")
+	bodyLimit := limit - len(notice)
+	if bodyLimit < 0 {
+		bodyLimit = 0
+	}
+	runes := []rune(strings.TrimRight(content, "\n"))
+	if len(runes) > bodyLimit {
+		runes = runes[:bodyLimit]
+	}
+	return string(runes) + string(notice)
 }

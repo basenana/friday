@@ -18,6 +18,7 @@ import (
 	"github.com/basenana/friday/config"
 	coreactor "github.com/basenana/friday/core/actor"
 	"github.com/basenana/friday/core/collaboration"
+	"github.com/basenana/friday/core/logger"
 	"github.com/basenana/friday/core/planning"
 	coresession "github.com/basenana/friday/core/session"
 	"github.com/basenana/friday/sandbox"
@@ -122,7 +123,7 @@ func NewRegistry(sessMgr setup.SessionManager, appCfg *config.Config, cfg Regist
 }
 
 // Bus returns the event bus the registry bridges its actors onto.
-// Consumers (TUI, a2a, tests) subscribe and publish here instead of
+// Consumers (TUI, daemon, tests) subscribe and publish here instead of
 // calling actor methods directly.
 func (r *Registry) Bus() *eventbus.Bus { return r.bus }
 
@@ -130,7 +131,7 @@ func (r *Registry) Bus() *eventbus.Bus { return r.bus }
 // (agent + session via setup.NewAgent) on first use. An actor is built
 // once for its lifetime; its session keeps in-memory history across
 // turns, with persistence handled by the session store.
-func (r *Registry) GetOrCreate(sessionID string) (*coreactor.Actor, error) {
+func (r *Registry) GetOrCreate(sessionID string) (result *coreactor.Actor, resultErr error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if e, ok := r.entries[sessionID]; ok && !e.stopped.Load() {
@@ -141,6 +142,28 @@ func (r *Registry) GetOrCreate(sessionID string) (*coreactor.Actor, error) {
 		delete(r.entries, sessionID)
 		old.close(r.cfg.ShutdownGrace)
 	}
+	started := time.Now()
+	registryLogger := logger.New("actor.registry")
+	registryLogger.Infow("creating session actor",
+		"session_id", sessionID,
+		"project_mode", r.catalog != nil,
+	)
+	defer func() {
+		fields := []interface{}{
+			"session_id", sessionID,
+			"project_mode", r.catalog != nil,
+			"duration_ms", time.Since(started).Milliseconds(),
+		}
+		if resultErr != nil {
+			fields = append(fields, "error", resultErr.Error())
+			registryLogger.Errorw("session actor creation failed", fields...)
+			return
+		}
+		if result != nil {
+			fields = append(fields, "actor_id", result.ID())
+		}
+		registryLogger.Infow("session actor created", fields...)
+	}()
 
 	agentCfg := r.configForSession(sessionID)
 	var agentCtx *setup.AgentContext
@@ -345,11 +368,18 @@ type registryEntry struct {
 
 func (r *Registry) stopEntry(entry registryEntry, evicted bool) {
 	actorID := entry.managed.actor.ID()
+	started := time.Now()
 	if evicted {
 		bus.PublishStatus(r.bus, entry.sessionID, actorID, bus.StatusEvicted)
 	}
 	entry.managed.close(r.cfg.ShutdownGrace)
 	bus.PublishStatus(r.bus, entry.sessionID, actorID, bus.StatusStopped)
+	logger.New("actor.registry").Infow("session actor stopped",
+		"session_id", entry.sessionID,
+		"actor_id", actorID,
+		"evicted", evicted,
+		"duration_ms", time.Since(started).Milliseconds(),
+	)
 }
 
 // Shutdown stops the actor for sessionID (gracefully: an in-flight turn
@@ -375,6 +405,7 @@ func (r *Registry) ShutdownAll() {
 		delete(r.entries, id)
 	}
 	r.mu.Unlock()
+	logger.New("actor.registry").Infow("shutting down all session actors", "actor_count", len(entries))
 	for _, entry := range entries {
 		r.stopEntry(entry, false)
 	}

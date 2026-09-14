@@ -31,6 +31,7 @@ const (
 type FileSessionStore struct {
 	basePath      string
 	metaLocks     sync.Map // session ID -> *sync.Mutex
+	eventLocks    sync.Map // session ID -> *sync.Mutex
 	relationLocks sync.Map // root ID + relation key -> *sync.Mutex
 }
 
@@ -68,6 +69,9 @@ func (s *FileSessionStore) recordPath(id, namespace string) string {
 
 // OpenEventSink opens the append-only actor event log for a session.
 func (s *FileSessionStore) OpenEventSink(_ context.Context, id string) (actorsink.EventSink, error) {
+	eventMu := s.eventLock(id)
+	eventMu.Lock()
+	defer eventMu.Unlock()
 	if err := os.MkdirAll(s.sessionDir(id), 0o755); err != nil {
 		return nil, err
 	}
@@ -85,7 +89,29 @@ func (s *FileSessionStore) OpenEventSink(_ context.Context, id string) (actorsin
 		_ = eventSink.Close()
 		return nil, err
 	}
-	return eventSink, nil
+	return &lockedEventSink{mu: eventMu, inner: eventSink}, nil
+}
+
+type lockedEventSink struct {
+	mu    *sync.Mutex
+	inner actorsink.EventSink
+}
+
+func (s *lockedEventSink) Append(ctx context.Context, evt events.Event) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.inner.Append(ctx, evt)
+}
+
+func (s *lockedEventSink) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.inner.Close()
+}
+
+func (s *FileSessionStore) eventLock(id string) *sync.Mutex {
+	lock, _ := s.eventLocks.LoadOrStore(id, &sync.Mutex{})
+	return lock.(*sync.Mutex)
 }
 
 func repairEventLogTail(path string) error {
@@ -160,6 +186,9 @@ func previousNewline(f *os.File, before int64) (int64, error) {
 // ignored so a process killed mid-write does not make an otherwise valid
 // transcript unusable.
 func (s *FileSessionStore) LoadEvents(ctx context.Context, id string) ([]events.Event, error) {
+	eventMu := s.eventLock(id)
+	eventMu.Lock()
+	defer eventMu.Unlock()
 	if err := repairEventLogTail(s.eventsPath(id)); err != nil {
 		return nil, err
 	}

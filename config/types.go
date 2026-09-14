@@ -15,6 +15,12 @@ type Config struct {
 	Sandbox       *sandbox.Config        `yaml:"sandbox" json:"sandbox"`
 	TUI           TUIConfig              `yaml:"tui" json:"tui"`
 	Collaboration CollaborationConfig    `yaml:"collaboration" json:"collaboration"`
+
+	// Runtime-only workspace layering metadata. These fields are populated by
+	// LoadForDir and intentionally stay out of serialized configuration files.
+	workspaceFallbacks []string
+	projectScope       bool
+	configPath         string
 }
 
 type CollaborationConfig struct {
@@ -37,7 +43,7 @@ type LogConfig struct {
 }
 
 type ModelConfig struct {
-	Provider        string  `yaml:"provider" json:"provider"` // "openai" or "anthropic"
+	Provider        string  `yaml:"provider" json:"provider"` // "openai", "openai-response", or "anthropic"
 	BaseURL         string  `yaml:"base_url" json:"base_url"`
 	Key             string  `yaml:"key" json:"key"`
 	Input           string  `yaml:"input" json:"input"` // "text" "image"
@@ -84,4 +90,11 @@ func DefaultConfig() *Config {
 		Collaboration: CollaborationConfig{Plan: PlanModeConfig{ReasoningEffort: "medium"}},
 		Sandbox:       sandbox.DefaultConfig(),
 	}
+}
+
+func (c *Config) applyRuntimeDefaults() {
+	if c.Sandbox == nil {
+		c.Sandbox = sandbox.DefaultConfig()
+	}
+	c.Sandbox.ApplyRuntimeDefaults()
 }

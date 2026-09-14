@@ -13,6 +13,7 @@ import (
 	"github.com/basenana/friday/sessions"
 	"github.com/basenana/friday/sessions/file"
 	"github.com/basenana/friday/utils/logger"
+	"github.com/basenana/friday/workspace"
 )
 
 var (
@@ -69,13 +70,26 @@ var rootCmd = &cobra.Command{
 
 Text in, text out. Pipe-friendly. No GUI, no cloud dependency.`,
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-		var err error
-		cfg, err = config.Load(cfgFile)
+		if cmd == initCmd {
+			return nil
+		}
+		cwd, err := os.Getwd()
+		if err != nil {
+			return fmt.Errorf("get working directory: %w", err)
+		}
+		cfg, err = config.LoadForDir(cfgFile, cwd)
 		if err != nil {
 			return fmt.Errorf("failed to load config: %w", err)
 		}
 		if workspaceDir != "" {
-			cfg.Workspace = workspaceDir
+			resolved := cfg.ResolvePath(workspaceDir)
+			if !filepath.IsAbs(resolved) {
+				resolved, err = filepath.Abs(resolved)
+				if err != nil {
+					return fmt.Errorf("resolve workspace directory: %w", err)
+				}
+			}
+			cfg.Workspace = resolved
 		}
 
 		// Get TTY name for session isolation
@@ -91,6 +105,10 @@ Text in, text out. Pipe-friendly. No GUI, no cloud dependency.`,
 		logger.Sync()
 		logger.Close()
 	},
+}
+
+func configuredWorkspace(c *config.Config) *workspace.Workspace {
+	return workspace.NewWorkspace(c.WorkspacePath(), c.MemoryPath(), c.WorkspaceFallbackPaths()...)
 }
 
 func init() {

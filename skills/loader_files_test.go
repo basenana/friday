@@ -1,12 +1,40 @@
 package skills
 
 import (
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
-	"strings"
+	"reflect"
 	"testing"
+
+	corelogger "github.com/basenana/friday/core/logger"
 )
+
+type capturedWarning struct {
+	message string
+	fields  []interface{}
+}
+
+type warningCaptureLogger struct {
+	warnings []capturedWarning
+}
+
+func (l *warningCaptureLogger) Named(string) corelogger.Logger { return l }
+func (l *warningCaptureLogger) With(...interface{}) corelogger.Logger {
+	return l
+}
+func (l *warningCaptureLogger) Info(...interface{})           {}
+func (l *warningCaptureLogger) Warn(...interface{})           {}
+func (l *warningCaptureLogger) Error(...interface{})          {}
+func (l *warningCaptureLogger) Infof(string, ...interface{})  {}
+func (l *warningCaptureLogger) Warnf(string, ...interface{})  {}
+func (l *warningCaptureLogger) Errorf(string, ...interface{}) {}
+func (l *warningCaptureLogger) Infow(string, ...interface{})  {}
+func (l *warningCaptureLogger) Errorw(string, ...interface{}) {}
+func (l *warningCaptureLogger) Warnw(message string, fields ...interface{}) {
+	l.warnings = append(l.warnings, capturedWarning{message: message, fields: fields})
+}
 
 func TestLoaderListFilesFilesystemSkill(t *testing.T) {
 	root := t.TempDir()
@@ -231,7 +259,43 @@ func TestLoaderReadFileNestedFileWithinSkill(t *testing.T) {
 	}
 }
 
-func TestParseSkillFileWarnsUnknownFrontmatterFields(t *testing.T) {
+func TestLoaderLaterDirectoryOverridesEarlierEverywhere(t *testing.T) {
+	global := t.TempDir()
+	project := t.TempDir()
+	writeSkill := func(root, dir, name, body string) {
+		t.Helper()
+		path := filepath.Join(root, dir)
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		content := "---\nname: " + name + "\ndescription: test\n---\n" + body
+		if err := os.WriteFile(filepath.Join(path, "SKILL.md"), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeSkill(global, "shared", "shared", "global")
+	writeSkill(project, "shared", "shared", "project")
+
+	loader := NewLoader(global, project)
+	if err := loader.Load(); err != nil {
+		t.Fatal(err)
+	}
+	got, err := loader.Get("shared")
+	if err != nil || got.Instructions != "project" {
+		t.Fatalf("Get() = %#v, %v; want project skill", got, err)
+	}
+	got, err = loader.LoadSkillFromDir("shared")
+	if err != nil || got.Instructions != "project" {
+		t.Fatalf("LoadSkillFromDir() = %#v, %v; want project skill", got, err)
+	}
+}
+
+func TestParseSkillFileLogsUnknownFrontmatterFieldsWithoutWritingStderr(t *testing.T) {
+	origLogger := corelogger.Root()
+	capture := &warningCaptureLogger{}
+	corelogger.SetRoot(capture)
+	defer corelogger.SetRoot(origLogger)
+
 	origStderr := os.Stderr
 	r, w, err := os.Pipe()
 	if err != nil {
@@ -248,11 +312,23 @@ func TestParseSkillFileWarnsUnknownFrontmatterFields(t *testing.T) {
 		t.Fatalf("close() error = %v", closeErr)
 	}
 
-	buf := make([]byte, 512)
-	n, _ := r.Read(buf)
-	warning := string(buf[:n])
-	if !strings.Contains(warning, "unknown frontmatter fields") || !strings.Contains(warning, "descripton") {
-		t.Fatalf("expected unknown-field warning, got %q", warning)
+	stderr, readErr := io.ReadAll(r)
+	if readErr != nil {
+		t.Fatalf("read stderr pipe: %v", readErr)
+	}
+	if len(stderr) != 0 {
+		t.Fatalf("expected no stderr output, got %q", string(stderr))
+	}
+	if len(capture.warnings) != 1 {
+		t.Fatalf("expected one warning log, got %d", len(capture.warnings))
+	}
+	warning := capture.warnings[0]
+	if warning.message != "skill has unknown frontmatter fields" {
+		t.Fatalf("unexpected warning message: %q", warning.message)
+	}
+	wantFields := []interface{}{"skill", "typo-test", "fields", []string{"descripton"}}
+	if !reflect.DeepEqual(warning.fields, wantFields) {
+		t.Fatalf("unexpected warning fields: %#v", warning.fields)
 	}
 }
 

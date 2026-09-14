@@ -1,6 +1,9 @@
 package common
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestExtractJSONParsesMarkdownFencedJSON(t *testing.T) {
 	var out struct {
@@ -118,5 +121,21 @@ func TestFormatToolUseArgumentsError_Truncates(t *testing.T) {
 	msg := FormatToolUseArgumentsError("bigTool", string(long))
 	if len(msg) > 200 {
 		t.Fatalf("error message not truncated: %d chars", len(msg))
+	}
+}
+
+func TestFormatToolUseArgumentsErrorExplainsCorrectionWithoutEchoingInput(t *testing.T) {
+	secret := `{"token":"secret-value"`
+	message := FormatToolUseArgumentsError("remote", secret)
+	if !strings.Contains(message, "invalid JSON") || !strings.Contains(message, "Suggestion:") {
+		t.Fatalf("message is not actionable: %q", message)
+	}
+	if strings.Contains(message, "secret-value") {
+		t.Fatalf("message echoed raw arguments: %q", message)
+	}
+
+	message = FormatToolUseArgumentsError("remote", `[]`)
+	if !strings.Contains(message, "not an array") || !strings.Contains(message, "JSON object") {
+		t.Fatalf("non-object message = %q", message)
 	}
 }

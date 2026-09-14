@@ -104,15 +104,17 @@ func (w *Workspace) LoadFile(name string) (string, error) {
 
 // loadFile reads a single file from the workspace directory
 func (w *Workspace) loadFile(name string) (string, error) {
-	filePath := filepath.Join(w.basePath, name)
-	data, err := os.ReadFile(filePath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return "", nil // File doesn't exist, return empty string
+	for _, root := range w.readPaths() {
+		filePath := filepath.Join(root, name)
+		data, err := os.ReadFile(filePath)
+		if err == nil {
+			return string(data), nil
 		}
-		return "", err
+		if !os.IsNotExist(err) {
+			return "", err
+		}
 	}
-	return string(data), nil
+	return "", nil
 }
 
 // loadRecentMemoryLogs loads memory logs from the last N days,

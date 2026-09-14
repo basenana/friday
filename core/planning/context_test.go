@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/basenana/friday/core/promptcontext"
 	"github.com/basenana/friday/core/providers"
 	"github.com/basenana/friday/core/session"
 	"github.com/basenana/friday/core/types"
@@ -31,7 +32,7 @@ func (r *contextPlanRepository) LoadLatestPlan(string) (*Artifact, error) {
 	return r.latest, r.err
 }
 
-func TestApprovedPlanContextHookInjectsStableMarkdownIntoFirstUserMessage(t *testing.T) {
+func TestApprovedPlanContextHookInjectsStableMarkdownIntoLeadingBuiltinMessage(t *testing.T) {
 	plan := &Artifact{
 		ID: "plan-changing-metadata", SessionID: "root", Version: 42,
 		Status: ArtifactAccepted, Title: "Not injected", Markdown: "## Summary\nImplement the stable plan.",
@@ -47,26 +48,60 @@ func TestApprovedPlanContextHookInjectsStableMarkdownIntoFirstUserMessage(t *tes
 	if err := hook.BeforeModel(context.Background(), sess, req); err != nil {
 		t.Fatal(err)
 	}
-	want := "<approved_plan>\n" + plan.Markdown + "\n</approved_plan>\n\noriginal request"
-	if got := req.History()[1].Content; got != want {
-		t.Fatalf("injected content = %q, want %q", got, want)
+	history := req.History()
+	if len(history) != 4 || history[0].Role != types.RoleAgent {
+		t.Fatalf("injected history = %#v", history)
 	}
-	if got := req.History()[1].Tokens; got != 0 {
-		t.Fatalf("mutated message retained stale token count %d", got)
+	if !strings.HasPrefix(history[0].Content, "<approved-plan>\n"+approvedPlanGuide) || !strings.Contains(history[0].Content, plan.Markdown) {
+		t.Fatalf("injected content = %q", history[0].Content)
 	}
-	if strings.Contains(req.History()[1].Content, plan.ID) || strings.Contains(req.History()[1].Content, plan.Title) || strings.Contains(req.History()[1].Content, "42") {
-		t.Fatalf("injection contains plan metadata: %q", req.History()[1].Content)
+	if strings.Contains(history[0].Content, plan.ID) || strings.Contains(history[0].Content, plan.Title) || strings.Contains(history[0].Content, "42") {
+		t.Fatalf("injection contains plan metadata: %q", history[0].Content)
 	}
 	if got := sess.GetHistory()[1].Content; got != "original request" {
 		t.Fatalf("request-local injection changed session history: %q", got)
 	}
 
-	first := req.History()[1].Content
+	first := req.History()[0].Content
 	if err := hook.BeforeModel(context.Background(), sess, req); err != nil {
 		t.Fatal(err)
 	}
-	if got := req.History()[1].Content; got != first {
+	if got := req.History()[0].Content; got != first {
 		t.Fatalf("second injection was not idempotent: %q", got)
+	}
+}
+
+func TestApprovedPlanContextHookAppendsAfterProjectInstructions(t *testing.T) {
+	hook := NewApprovedPlanContextHook(&contextPlanRepository{latest: &Artifact{Status: ArtifactAccepted, Markdown: "the plan"}})
+	sess := session.New("root", nil)
+	req := providers.NewRequest("")
+	promptcontext.SetBlock(req, promptcontext.ProjectInstructions, "<system-reminder>rules</system-reminder>")
+
+	if err := hook.BeforeModel(context.Background(), sess, req); err != nil {
+		t.Fatal(err)
+	}
+	wantPrefix := "<system-reminder>rules</system-reminder>\n\n<approved-plan>"
+	if got := req.History()[0].Content; !strings.HasPrefix(got, wantPrefix) {
+		t.Fatalf("combined context = %q", got)
+	}
+}
+
+func TestApprovedPlanContextHookRemovesOnlyItsOwnBlock(t *testing.T) {
+	repo := &contextPlanRepository{latest: &Artifact{Status: ArtifactAccepted, Markdown: "the plan"}}
+	hook := NewApprovedPlanContextHook(repo)
+	sess := session.New("root", nil)
+	req := providers.NewRequest("")
+	promptcontext.SetBlock(req, promptcontext.ProjectInstructions, "<system-reminder>rules</system-reminder>")
+	if err := hook.BeforeModel(context.Background(), sess, req); err != nil {
+		t.Fatal(err)
+	}
+
+	repo.latest.Status = ArtifactSuperseded
+	if err := hook.BeforeModel(context.Background(), sess, req); err != nil {
+		t.Fatal(err)
+	}
+	if got := req.History()[0].Content; got != "<system-reminder>rules</system-reminder>" {
+		t.Fatalf("remaining context = %q", got)
 	}
 }
 
@@ -90,7 +125,7 @@ func TestApprovedPlanContextHookFiltersByStatus(t *testing.T) {
 	}
 }
 
-func TestApprovedPlanContextHookCreatesUserMessageWhenMissing(t *testing.T) {
+func TestApprovedPlanContextHookCreatesBuiltinMessageWhenMissing(t *testing.T) {
 	hook := NewApprovedPlanContextHook(&contextPlanRepository{latest: &Artifact{Status: ArtifactAccepted, Markdown: "the plan"}})
 	sess := session.New("root", nil)
 	req := providers.NewRequest("", types.Message{Role: types.RoleAgent, Content: "compacted summary"})
@@ -98,7 +133,7 @@ func TestApprovedPlanContextHookCreatesUserMessageWhenMissing(t *testing.T) {
 		t.Fatal(err)
 	}
 	history := req.History()
-	if len(history) != 2 || history[0].Role != types.RoleUser || history[0].Content != "<approved_plan>\nthe plan\n</approved_plan>" {
+	if len(history) != 2 || history[0].Role != types.RoleAgent || !strings.Contains(history[0].Content, "the plan") || history[1].Content != "compacted summary" {
 		t.Fatalf("fallback history = %#v", history)
 	}
 }

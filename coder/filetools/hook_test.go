@@ -1,16 +1,21 @@
 package filetools
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/basenana/friday/core/api"
+	"github.com/basenana/friday/core/providers"
 	"github.com/basenana/friday/core/session"
 	"github.com/basenana/friday/core/tools"
+	"github.com/basenana/friday/core/types"
 	"github.com/basenana/friday/sandbox"
 	sessionfile "github.com/basenana/friday/sessions/file"
 )
@@ -28,7 +33,7 @@ func TestHookDiscoversNestedInstructionsOnce(t *testing.T) {
 	read := findTool(t, hook.Tools(), sandbox.FsReadToolName)
 	result := callTool(t, read, sess, map[string]any{"path": "pkg/service/main.go"})
 
-	wantOrder := []string{"pkg/service/CLAUDE.md", "pkg/AGENTS.md", "CLAUDE.md"}
+	wantOrder := []string{"pkg/service/CLAUDE.md", "pkg/AGENTS.md"}
 	last := -1
 	for _, part := range wantOrder {
 		index := strings.Index(result.FYI, "## "+part)
@@ -39,6 +44,9 @@ func TestHookDiscoversNestedInstructionsOnce(t *testing.T) {
 	}
 	if strings.Contains(result.FYI, "package claude") {
 		t.Fatalf("CLAUDE.md must not be read when AGENTS.md exists in the same directory: %q", result.FYI)
+	}
+	if strings.Contains(result.FYI, "root rules") {
+		t.Fatalf("project-root instructions must not be returned as FYI: %q", result.FYI)
 	}
 
 	second := callTool(t, read, sess, map[string]any{"path": "pkg/service/main.go"})
@@ -65,7 +73,7 @@ func TestHookOnlyReturnsNewDirectoryInstructions(t *testing.T) {
 	}
 }
 
-func TestInstructionWriteInvalidatesDirectory(t *testing.T) {
+func TestInstructionSelectionChangeIsDetectedWithoutInvalidation(t *testing.T) {
 	root := t.TempDir()
 	mustWrite(t, filepath.Join(root, "pkg", "CLAUDE.md"), "old")
 	mustWrite(t, filepath.Join(root, "pkg", "main.go"), "package pkg")
@@ -88,8 +96,8 @@ func TestInstructionWriteInvalidatesDirectory(t *testing.T) {
 
 func TestConcurrentReadsClaimDirectoryOnce(t *testing.T) {
 	root := t.TempDir()
-	mustWrite(t, filepath.Join(root, "AGENTS.md"), "rules")
-	mustWrite(t, filepath.Join(root, "main.go"), "package main")
+	mustWrite(t, filepath.Join(root, "pkg", "AGENTS.md"), "rules")
+	mustWrite(t, filepath.Join(root, "pkg", "main.go"), "package main")
 	hook := newTestHook(t, root)
 	sess := session.New("session-1", nil)
 	read := findTool(t, hook.Tools(), sandbox.FsReadToolName)
@@ -102,7 +110,7 @@ func TestConcurrentReadsClaimDirectoryOnce(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			<-start
-			results <- callTool(t, read, sess, map[string]any{"path": "main.go"})
+			results <- callTool(t, read, sess, map[string]any{"path": "pkg/main.go"})
 		}()
 	}
 	close(start)
@@ -131,8 +139,113 @@ func TestInstructionAndFYILimits(t *testing.T) {
 	if got := len([]rune(truncateInstruction(strings.Repeat("x", maxInstructionRunes+1)))); got != maxInstructionRunes {
 		t.Fatalf("instruction runes = %d", got)
 	}
-	if got := len([]rune(truncateRunes(strings.Repeat("界", maxFYIRunes+1), maxFYIRunes))); got != maxFYIRunes {
+	if got := len([]rune(truncateWithNotice(strings.Repeat("界", maxFYIRunes+1), maxFYIRunes))); got != maxFYIRunes {
 		t.Fatalf("FYI runes = %d", got)
+	}
+	if !strings.Contains(limited, "truncated by Friday") {
+		t.Fatalf("line truncation notice missing: %q", limited)
+	}
+}
+
+func TestBeforeModelMaintainsPersistentProjectInstructions(t *testing.T) {
+	root := t.TempDir()
+	mustWrite(t, filepath.Join(root, "AGENTS.md"), "root agents")
+	mustWrite(t, filepath.Join(root, "CLAUDE.md"), "root claude")
+	mustWrite(t, filepath.Join(root, ".friday", "CLAUDE.md"), "friday claude")
+	hook := newTestHook(t, root)
+	req := providers.NewRequest("", types.Message{Role: types.RoleAgent, Content: "memory"})
+
+	if err := hook.BeforeModel(context.Background(), session.New("session-1", nil), req); err != nil {
+		t.Fatal(err)
+	}
+	history := req.History()
+	if len(history) != 2 || history[0].Role != types.RoleAgent || history[1].Content != "memory" {
+		t.Fatalf("history = %#v", history)
+	}
+	content := history[0].Content
+	rootIndex := strings.Index(content, "Contents of "+filepath.Join(root, "AGENTS.md"))
+	fridayIndex := strings.Index(content, "Contents of "+filepath.Join(root, ".friday", "CLAUDE.md"))
+	if rootIndex < 0 || fridayIndex <= rootIndex || !strings.Contains(content, "root agents") || !strings.Contains(content, "friday claude") {
+		t.Fatalf("persistent instructions = %q", content)
+	}
+	if strings.Contains(content, "root claude") {
+		t.Fatalf("lower-priority root CLAUDE.md was included: %q", content)
+	}
+}
+
+func TestBeforeModelRefreshesHumanEdits(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "AGENTS.md")
+	mustWrite(t, path, "old rules")
+	hook := newTestHook(t, root)
+	sess := session.New("session-1", nil)
+
+	first := providers.NewRequest("")
+	if err := hook.BeforeModel(context.Background(), sess, first); err != nil {
+		t.Fatal(err)
+	}
+	mustWrite(t, path, "new rules")
+	second := providers.NewRequest("")
+	if err := hook.BeforeModel(context.Background(), sess, second); err != nil {
+		t.Fatal(err)
+	}
+	if got := second.History()[0].Content; !strings.Contains(got, "new rules") || strings.Contains(got, "old rules") {
+		t.Fatalf("refreshed instructions = %q", got)
+	}
+}
+
+func TestNestedInstructionMTimeChangeIsReinjected(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "pkg", "AGENTS.md")
+	mustWrite(t, path, "old rules")
+	mustWrite(t, filepath.Join(root, "pkg", "main.go"), "package pkg")
+	hook := newTestHook(t, root)
+	sess := session.New("session-1", nil)
+	read := findTool(t, hook.Tools(), sandbox.FsReadToolName)
+
+	_ = callTool(t, read, sess, map[string]any{"path": "pkg/main.go"})
+	mustWrite(t, path, "new rules")
+	future := time.Now().Add(time.Second)
+	if err := os.Chtimes(path, future, future); err != nil {
+		t.Fatal(err)
+	}
+	result := callTool(t, read, sess, map[string]any{"path": "pkg/main.go"})
+	if !strings.Contains(result.FYI, "new rules") {
+		t.Fatalf("modified instructions not reinjected: %q", result.FYI)
+	}
+}
+
+func TestNestedInstructionDeletionFallsBackToClaude(t *testing.T) {
+	root := t.TempDir()
+	agentsPath := filepath.Join(root, "pkg", "AGENTS.md")
+	mustWrite(t, agentsPath, "agents rules")
+	mustWrite(t, filepath.Join(root, "pkg", "CLAUDE.md"), "claude rules")
+	mustWrite(t, filepath.Join(root, "pkg", "main.go"), "package pkg")
+	hook := newTestHook(t, root)
+	sess := session.New("session-1", nil)
+	read := findTool(t, hook.Tools(), sandbox.FsReadToolName)
+
+	_ = callTool(t, read, sess, map[string]any{"path": "pkg/main.go"})
+	if err := os.Remove(agentsPath); err != nil {
+		t.Fatal(err)
+	}
+	result := callTool(t, read, sess, map[string]any{"path": "pkg/main.go"})
+	if !strings.Contains(result.FYI, "## pkg/CLAUDE.md") || !strings.Contains(result.FYI, "claude rules") {
+		t.Fatalf("fallback instructions not reinjected: %q", result.FYI)
+	}
+}
+
+func TestFridayDirectoryInstructionsAreExcludedFromFYI(t *testing.T) {
+	root := t.TempDir()
+	mustWrite(t, filepath.Join(root, ".friday", "AGENTS.md"), "persistent rules")
+	mustWrite(t, filepath.Join(root, ".friday", "nested", "CLAUDE.md"), "nested rules")
+	mustWrite(t, filepath.Join(root, ".friday", "nested", "main.go"), "package nested")
+	hook := newTestHook(t, root)
+	read := findTool(t, hook.Tools(), sandbox.FsReadToolName)
+	result := callTool(t, read, session.New("session-1", nil), map[string]any{"path": ".friday/nested/main.go"})
+
+	if !strings.Contains(result.FYI, "## .friday/nested/CLAUDE.md") || strings.Contains(result.FYI, "persistent rules") {
+		t.Fatalf("unexpected .friday FYI: %q", result.FYI)
 	}
 }
 
@@ -152,10 +265,12 @@ func TestInstructionSymlinkCannotEscapeProjectRoot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	read := findTool(t, hook.Tools(), sandbox.FsReadToolName)
-	result := callTool(t, read, session.New("session-1", nil), map[string]any{"path": "main.go"})
-	if result.FYI != "" {
-		t.Fatalf("outside instruction was loaded: %q", result.FYI)
+	req := providers.NewRequest("")
+	if err := hook.BeforeModel(context.Background(), session.New("session-1", nil), req); err != nil {
+		t.Fatal(err)
+	}
+	if len(req.History()) != 0 {
+		t.Fatalf("outside instruction was loaded: %#v", req.History())
 	}
 }
 
@@ -171,7 +286,8 @@ func (f *countingFileSystem) ReadFile(ctx context.Context, path string) ([]byte,
 
 func TestHookUsesInjectedFileSystem(t *testing.T) {
 	root := t.TempDir()
-	mustWrite(t, filepath.Join(root, "main.go"), "package main")
+	mustWrite(t, filepath.Join(root, "pkg", "AGENTS.md"), "rules")
+	mustWrite(t, filepath.Join(root, "pkg", "main.go"), "package main")
 	cfg := sandbox.DefaultConfig()
 	cfg.Sandbox.Enabled = false
 	exec := sandbox.NewExecutor(cfg)
@@ -181,7 +297,7 @@ func TestHookUsesInjectedFileSystem(t *testing.T) {
 		t.Fatal(err)
 	}
 	read := findTool(t, hook.Tools(), sandbox.FsReadToolName)
-	_ = callTool(t, read, session.New("session-1", nil), map[string]any{"path": "main.go"})
+	_ = callTool(t, read, session.New("session-1", nil), map[string]any{"path": "pkg/main.go"})
 	if custom.reads == 0 {
 		t.Fatal("injected filesystem was not used")
 	}
@@ -189,8 +305,8 @@ func TestHookUsesInjectedFileSystem(t *testing.T) {
 
 func TestPersistedRecordHydratesBeforeFork(t *testing.T) {
 	root := t.TempDir()
-	mustWrite(t, filepath.Join(root, "AGENTS.md"), "rules")
-	mustWrite(t, filepath.Join(root, "main.go"), "package main")
+	mustWrite(t, filepath.Join(root, "pkg", "AGENTS.md"), "rules")
+	mustWrite(t, filepath.Join(root, "pkg", "main.go"), "package main")
 	store := sessionfile.NewFileSessionStore(t.TempDir())
 	first, err := store.Create("session-1", nil)
 	if err != nil {
@@ -198,7 +314,7 @@ func TestPersistedRecordHydratesBeforeFork(t *testing.T) {
 	}
 	firstHook := newTestHook(t, root)
 	read := findTool(t, firstHook.Tools(), sandbox.FsReadToolName)
-	if result := callTool(t, read, first, map[string]any{"path": "main.go"}); result.FYI == "" {
+	if result := callTool(t, read, first, map[string]any{"path": "pkg/main.go"}); result.FYI == "" {
 		t.Fatal("initial read did not return FYI")
 	}
 
@@ -212,8 +328,42 @@ func TestPersistedRecordHydratesBeforeFork(t *testing.T) {
 	}
 	fork := reloaded.Fork()
 	forkRead := findTool(t, secondHook.Tools(), sandbox.FsReadToolName)
-	if result := callTool(t, forkRead, fork, map[string]any{"path": "main.go"}); result.FYI != "" {
+	if result := callTool(t, forkRead, fork, map[string]any{"path": "pkg/main.go"}); result.FYI != "" {
 		t.Fatalf("fork repeated persisted FYI: %q", result.FYI)
+	}
+}
+
+func TestLegacyAndMalformedRecordsAreOverwrittenByNewStampShape(t *testing.T) {
+	for name, old := range map[string][]byte{
+		"legacy":    []byte(`{"version":1,"directories":["pkg"]}`),
+		"malformed": []byte(`not-json`),
+	} {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			mustWrite(t, filepath.Join(root, "pkg", "AGENTS.md"), "rules")
+			mustWrite(t, filepath.Join(root, "pkg", "main.go"), "package pkg")
+			hook := newTestHook(t, root)
+			sess := session.New("session-1", nil)
+			if err := sess.UpdateRecord(context.Background(), hook.namespace, func([]byte) ([]byte, error) { return old, nil }); err != nil {
+				t.Fatal(err)
+			}
+
+			read := findTool(t, hook.Tools(), sandbox.FsReadToolName)
+			if result := callTool(t, read, sess, map[string]any{"path": "pkg/main.go"}); result.FYI == "" {
+				t.Fatal("old record suppressed FYI")
+			}
+			stored, err := sess.ReadRecord(context.Background(), hook.namespace)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if bytes.Contains(stored, []byte("version")) || bytes.Contains(stored, []byte("directories")) {
+				t.Fatalf("old shape retained: %s", stored)
+			}
+			var record instructionRecord
+			if err := json.Unmarshal(stored, &record); err != nil || record["pkg"].SelectedFile != "AGENTS.md" {
+				t.Fatalf("new stamp record = %s, err=%v", stored, err)
+			}
+		})
 	}
 }
 

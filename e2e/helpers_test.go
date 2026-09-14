@@ -5,15 +5,10 @@ package e2e
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
-	"fmt"
 	"image"
 	"image/color"
 	"image/png"
-	"io"
-	"net"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -23,10 +18,9 @@ import (
 	"testing"
 	"time"
 
-	a2apkg "github.com/basenana/friday/a2a"
 	"github.com/basenana/friday/config"
-	"github.com/basenana/friday/core/agents"
 	"github.com/basenana/friday/core/actor/events"
+	"github.com/basenana/friday/core/agents"
 	"github.com/basenana/friday/core/api"
 	"github.com/basenana/friday/core/providers"
 	"github.com/basenana/friday/core/session"
@@ -230,7 +224,7 @@ func newAgentWithTools(t *testing.T, cfg *E2EConfig, modelName string) (agents.A
 	return agent, sess, workdir
 }
 
-// newAgentCtxWithTools builds a full setup.AgentContext (used by actor/a2a).
+// newAgentCtxWithTools builds a full setup.AgentContext used by actor tests.
 // Returns (agentCtx, workdir, cleanup).
 func newAgentCtxWithTools(t *testing.T, cfg *E2EConfig, modelName string) (*setup.AgentContext, string, func()) {
 	t.Helper()
@@ -478,124 +472,6 @@ func getEvents(ptr *[]types.Event, mu *sync.Mutex) []types.Event {
 }
 
 // ---------------------------------------------------------------------------
-// A2A server helpers
-// ---------------------------------------------------------------------------
-
-// startA2AServer starts an A2A server on a random port using the given
-// friday config and auth token. Returns (serverURL, shutdown).
-func startA2AServer(t *testing.T, fc *config.Config, sessMgr setup.SessionManager, authToken string) (string, func()) {
-	t.Helper()
-	registry := a2apkg.NewRegistry(fc, sessMgr)
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen: %v", err)
-	}
-	addr := ln.Addr().String()
-	ln.Close()
-
-	cfg := a2apkg.Config{
-		BaseURL: "http://" + addr + "/",
-		Listen:  addr,
-	}
-	server, err := a2apkg.NewServer(cfg, registry, authToken)
-	if err != nil {
-		t.Fatalf("new a2a server: %v", err)
-	}
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		_ = server.Start()
-	}()
-	// Wait until the port is reachable.
-	url := "http://" + addr + "/"
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		c, err := net.DialTimeout("tcp", addr, 200*time.Millisecond)
-		if err == nil {
-			c.Close()
-			break
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	cleanup := func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = server.Shutdown(ctx)
-		<-done
-	}
-	_ = url
-	return "http://" + addr + "/", cleanup
-}
-
-// a2aMessageSend sends a message/send JSON-RPC request.
-// Returns (statusCode, parsedResponseBody).
-func a2aMessageSend(t *testing.T, serverURL, authToken, taskID, text string) (int, map[string]any) {
-	t.Helper()
-	body := fmt.Sprintf(`{
-		"jsonrpc": "2.0",
-		"method": "message/send",
-		"id": 1,
-		"params": {
-			"message": {
-				"messageId": "%s",
-				"role": "user",
-				"parts": [{"kind": "text", "text": %s}]
-			}
-		}
-	}`, taskID, jsonStr(text))
-	return a2aPost(t, serverURL, authToken, body)
-}
-
-// a2aTaskCancel sends a tasks/cancel JSON-RPC request.
-func a2aTaskCancel(t *testing.T, serverURL, authToken, taskID string) (int, map[string]any) {
-	t.Helper()
-	body := fmt.Sprintf(`{
-		"jsonrpc": "2.0",
-		"method": "tasks/cancel",
-		"id": 2,
-		"params": {"taskId": "%s"}
-	}`, taskID)
-	return a2aPost(t, serverURL, authToken, body)
-}
-
-func a2aPost(t *testing.T, serverURL, authToken, body string) (int, map[string]any) {
-	t.Helper()
-	req, err := http.NewRequest("POST", serverURL, strings.NewReader(body))
-	if err != nil {
-		t.Fatalf("new request: %v", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	if authToken != "" {
-		req.Header.Set("Authorization", "Bearer "+authToken)
-	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("http do: %v", err)
-	}
-	defer resp.Body.Close()
-	raw, _ := io.ReadAll(resp.Body)
-	var parsed map[string]any
-	_ = json.Unmarshal(raw, &parsed)
-	return resp.StatusCode, parsed
-}
-
-// a2aGetAgentCard fetches the agent card JSON.
-func a2aGetAgentCard(t *testing.T, serverURL string) map[string]any {
-	t.Helper()
-	resp, err := http.Get(serverURL + ".well-known/agent-card.json")
-	if err != nil {
-		t.Fatalf("get agent card: %v", err)
-	}
-	defer resp.Body.Close()
-	raw, _ := io.ReadAll(resp.Body)
-	var parsed map[string]any
-	if err := json.Unmarshal(raw, &parsed); err != nil {
-		t.Fatalf("parse agent card: %v\nbody: %s", err, string(raw))
-	}
-	return parsed
-}
-
-// ---------------------------------------------------------------------------
 // Image generation
 // ---------------------------------------------------------------------------
 
@@ -652,11 +528,6 @@ func truncate(s string, n int) string {
 	return s[:n] + "..."
 }
 
-func jsonStr(s string) string {
-	b, _ := json.Marshal(s)
-	return string(b)
-}
-
 // ---------------------------------------------------------------------------
 // Event waiting helpers
 // ---------------------------------------------------------------------------
@@ -710,7 +581,7 @@ type alwaysFailClient struct {
 	delay time.Duration
 }
 
-func newAlwaysFailClient() *alwaysFailClient  { return &alwaysFailClient{} }
+func newAlwaysFailClient() *alwaysFailClient { return &alwaysFailClient{} }
 func newDelayedFailClient(d time.Duration) *alwaysFailClient {
 	return &alwaysFailClient{delay: d}
 }

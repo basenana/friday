@@ -141,6 +141,7 @@ func (ib *InBridge) dispatchInbox(env bus.Envelope) {
 			SourceEventID: env.ID,
 			TurnID:        in.TurnID,
 			Delivery:      string(in.Delivery),
+			Images:        in.Images,
 			Metadata:      in.Metadata,
 		}
 		if in.Delivery == bus.DeliverySteer {

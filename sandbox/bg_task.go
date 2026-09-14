@@ -379,7 +379,7 @@ func backgroundTaskHandler(tm *TaskManager, defaultWorkdir string) tools.ToolHan
 	return func(ctx context.Context, req *tools.Request) (*tools.Result, error) {
 		command, ok := req.Arguments["command"].(string)
 		if !ok || command == "" {
-			return tools.NewToolResultError("command is required"), nil
+			return tools.NewToolResultActionableError("command is required and must be a non-empty string", "provide the background command and retry"), nil
 		}
 
 		workdir := defaultWorkdir
@@ -389,7 +389,7 @@ func backgroundTaskHandler(tm *TaskManager, defaultWorkdir string) tools.ToolHan
 
 		task, err := tm.Start(command, workdir)
 		if err != nil {
-			return tools.NewToolResultError(err.Error()), nil
+			return tools.NewToolResultActionableError(err.Error(), "use an allowed command and an existing workdir, then retry"), nil
 		}
 
 		return tools.NewToolResultText(fmt.Sprintf(
@@ -451,11 +451,11 @@ func killTaskHandler(tm *TaskManager) tools.ToolHandlerFunc {
 	return func(ctx context.Context, req *tools.Request) (*tools.Result, error) {
 		taskID, ok := req.Arguments["task_id"].(string)
 		if !ok || taskID == "" {
-			return tools.NewToolResultError("task_id is required"), nil
+			return tools.NewToolResultActionableError("task_id is required and must be a non-empty string", "call list_tasks, then provide one returned task ID"), nil
 		}
 
 		if err := tm.Kill(taskID); err != nil {
-			return tools.NewToolResultError(err.Error()), nil
+			return tools.NewToolResultActionableError(err.Error(), "call list_tasks to verify the task ID and status before retrying"), nil
 		}
 
 		return tools.NewToolResultText(fmt.Sprintf("Task %s killed", taskID)), nil
@@ -477,21 +477,21 @@ func waitTaskHandler(tm *TaskManager) tools.ToolHandlerFunc {
 	return func(ctx context.Context, req *tools.Request) (*tools.Result, error) {
 		taskID, ok := req.Arguments["task_id"].(string)
 		if !ok || taskID == "" {
-			return tools.NewToolResultError("task_id is required"), nil
+			return tools.NewToolResultActionableError("task_id is required and must be a non-empty string", "call list_tasks, then provide one returned task ID"), nil
 		}
 
 		timeout := 60 * time.Second
 		if t, ok := req.Arguments["timeout"].(string); ok && t != "" {
 			d, err := parseDuration(t)
 			if err != nil {
-				return tools.NewToolResultError(fmt.Sprintf("invalid timeout: %v", err)), nil
+				return tools.NewToolResultActionableError(fmt.Sprintf("invalid timeout: %v", err), "use a positive duration such as 30s or 5m and retry"), nil
 			}
 			timeout = d
 		}
 
 		task, err := tm.Wait(taskID, timeout)
 		if err != nil {
-			return tools.NewToolResultError(err.Error()), nil
+			return tools.NewToolResultActionableError(err.Error(), "call list_tasks to verify the task ID; increase timeout if the task is still running"), nil
 		}
 
 		var sb strings.Builder

@@ -69,27 +69,27 @@ func newPollWaitToolHandler(runner execRunner, baseWorkdir string, defaultAttemp
 	return func(ctx context.Context, req *tools.Request) (*tools.Result, error) {
 		command, ok := req.Arguments["command"].(string)
 		if !ok || strings.TrimSpace(command) == "" {
-			return tools.NewToolResultError("command is required"), nil
+			return tools.NewToolResultActionableError("command is required and must be a non-empty string", "provide the shell command to poll and retry"), nil
 		}
 
 		interval, err := parseOptionalPositiveDuration(req.Arguments, "interval", pollWaitDefaultInterval)
 		if err != nil {
-			return tools.NewToolResultError(err.Error()), nil
+			return tools.NewToolResultActionableError(err.Error(), "use a positive duration such as 5s or 1m and retry"), nil
 		}
 
 		attemptTimeout, err := parseOptionalPositiveDuration(req.Arguments, "attempt_timeout", defaultAttemptTimeout)
 		if err != nil {
-			return tools.NewToolResultError(err.Error()), nil
+			return tools.NewToolResultActionableError(err.Error(), "use a positive duration such as 30s or 1m and retry"), nil
 		}
 
 		maxTimeout, err := parseOptionalPositiveDuration(req.Arguments, "max_timeout", defaultMaxTimeout)
 		if err != nil {
-			return tools.NewToolResultError(err.Error()), nil
+			return tools.NewToolResultActionableError(err.Error(), "use a positive duration long enough for all polling attempts and retry"), nil
 		}
 
 		workdir, err := resolveToolWorkdir(baseWorkdir, req.Arguments)
 		if err != nil {
-			return tools.NewToolResultError(err.Error()), nil
+			return tools.NewToolResultActionableError(err.Error(), "use an existing directory inside the agent workdir and retry"), nil
 		}
 
 		overallCtx, cancel := context.WithTimeout(ctx, maxTimeout)
@@ -113,14 +113,14 @@ func newPollWaitToolHandler(runner execRunner, baseWorkdir string, defaultAttemp
 			if err != nil {
 				if IsDenied(err) {
 					if result != nil && strings.TrimSpace(result.Stderr) != "" {
-						return tools.NewToolResultError(result.Stderr), nil
+						return tools.NewToolResultActionableError(result.Stderr, "use an allowed command or request the required permission before retrying"), nil
 					}
-					return tools.NewToolResultError("Permission denied"), nil
+					return tools.NewToolResultActionableError("permission denied", "use an allowed command or request the required permission before retrying"), nil
 				}
-				return tools.NewToolResultError(fmt.Sprintf("command execution failed: %v", err)), nil
+				return tools.NewToolResultActionableError(fmt.Sprintf("command execution failed: %v", err), "inspect the execution error and correct the command or environment before retrying"), nil
 			}
 			if result == nil {
-				return tools.NewToolResultError("command execution failed: empty result"), nil
+				return tools.NewToolResultActionableError("command execution failed: the runner returned no result", "do not retry blindly; verify the executor configuration first"), nil
 			}
 
 			lastResult = result
@@ -137,7 +137,7 @@ func newPollWaitToolHandler(runner execRunner, baseWorkdir string, defaultAttemp
 			return nil, ctx.Err()
 		}
 
-		return tools.NewToolResultError(newPollWaitTimeoutMessage(maxTimeout, attempts, lastResult)), nil
+		return tools.NewToolResultActionableError(newPollWaitTimeoutMessage(maxTimeout, attempts, lastResult), "increase max_timeout, correct the polled command, or verify the external dependency before retrying"), nil
 	}
 }
 

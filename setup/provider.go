@@ -12,6 +12,7 @@ import (
 	"github.com/basenana/friday/core/providers/anthropics"
 	"github.com/basenana/friday/core/providers/fallback"
 	"github.com/basenana/friday/core/providers/openai"
+	"github.com/basenana/friday/core/providers/openairesponse"
 	"github.com/basenana/friday/core/types"
 )
 
@@ -134,6 +135,21 @@ func CreateProviderClientFromModel(modelCfg config.ModelConfig) (providers.Clien
 			MaxTokens:       int64(modelCfg.MaxTokens),
 			ReasoningEffort: modelCfg.ReasoningEffort,
 			ReasoningSplit:  modelCfg.ReasoningSplit,
+			QPM:             modelCfg.QPM,
+			Proxy:           modelCfg.Proxy,
+			ContextWindow:   modelCfg.ContextWindow,
+		}), nil
+	case "openai-response", "openai-responses":
+		host := modelCfg.BaseURL
+		if host == "" {
+			host = "https://api.openai.com/v1"
+		}
+		temp := modelCfg.Temperature
+		return openairesponse.New(host, modelCfg.Key, openairesponse.Model{
+			Name:            modelCfg.Model,
+			Temperature:     &temp,
+			MaxTokens:       int64(modelCfg.MaxTokens),
+			ReasoningEffort: modelCfg.ReasoningEffort,
 			QPM:             modelCfg.QPM,
 			Proxy:           modelCfg.Proxy,
 			ContextWindow:   modelCfg.ContextWindow,

@@ -40,6 +40,11 @@ func (m *model) handleSlash(text string) (tea.Model, tea.Cmd) {
 		m.appendBlock(chatBlock{kind: blockError, content: err.Error()})
 		return m.dispatchIfIdle()
 	}
+	actionCount := 0
+	if result != nil {
+		actionCount = len(result.Actions)
+	}
+	m.logInfo("slash command completed", "command", name, "arg_count", len(parts), "action_count", actionCount)
 	return m.applyResult(result)
 }
 
@@ -298,12 +303,26 @@ func (m *model) canDispatchQueued() bool {
 		m.commandConfirm == nil && m.selector == nil && m.detail == nil && m.confirm == nil
 }
 
-func (m *model) switchSession(newID string) (tea.Cmd, error) {
+func (m *model) switchSession(newID string) (cmd tea.Cmd, err error) {
 	if newID == m.sessionID {
 		return nil, nil
 	}
+	oldID := m.sessionID
+	started := time.Now()
+	m.logInfo("session switch started", "from_session_id", oldID, "to_session_id", newID)
+	defer func() {
+		fields := []interface{}{
+			"from_session_id", oldID,
+			"to_session_id", newID,
+			"duration_ms", elapsedMilliseconds(started),
+		}
+		if err != nil {
+			m.logError("session switch failed", err, fields...)
+			return
+		}
+		m.logInfo("session switch completed", fields...)
+	}()
 	created := false
-	var err error
 	if m.projectMgr != nil {
 		has, containsErr := m.projectMgr.Contains(newID)
 		if containsErr != nil {
@@ -369,7 +388,7 @@ func (m *model) switchSession(newID string) (tea.Cmd, error) {
 		return nil, sessionSwitchError(fmt.Errorf("activate session %s: %w", shortID(newID), err), rollbackCreated())
 	}
 
-	oldID, oldFeed := m.sessionID, m.feed
+	oldFeed := m.feed
 	m.loopManager.Detach(oldID)
 	m.sessionID, m.feed = newID, newFeed
 	m.mode = m.runtime.CollaborationMode(newID)

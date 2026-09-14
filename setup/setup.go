@@ -136,7 +136,7 @@ func NewAgent(sessionMgr SessionManager, cfg *config.Config, opts ...Option) (*A
 		sessionMgr.SetLLM(client)
 	}
 
-	ws := workspace.NewWorkspace(cfg.WorkspacePath(), cfg.MemoryPath())
+	ws := workspace.NewWorkspace(cfg.WorkspacePath(), cfg.MemoryPath(), cfg.WorkspaceFallbackPaths()...)
 	var err error
 	if err = ws.EnsureDir(""); err != nil {
 		return nil, fmt.Errorf("create workspace: %w", err)
@@ -187,7 +187,7 @@ func NewAgent(sessionMgr SessionManager, cfg *config.Config, opts ...Option) (*A
 
 	memSys := memory.NewMemorySystem(cfg.MemoryPath(), cfg.Memory.Days)
 	if err = memSys.EnsureTodayMemory(); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: failed to ensure memory log: %v\n", err)
+		logger.New("setup").Warnw("failed to ensure memory log", "error", err)
 	}
 
 	loaded, err := ws.Load(workspace.WithMemoryDays(cfg.Memory.Days))
@@ -197,9 +197,9 @@ func NewAgent(sessionMgr SessionManager, cfg *config.Config, opts ...Option) (*A
 
 	planningHook := planning.New(planning.Option{ModeProvider: collaborationProvider(sessionMgr)})
 	collaborationHook := collaboration.NewHook(collaborationProvider(sessionMgr), cfg.Collaboration.Plan.ReasoningEffort)
-	skillLoader := skills.NewLoader(ws.SkillsPath())
+	skillLoader := skills.NewLoader(ws.SkillsPaths()...)
 	if err := skillLoader.Load(); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: failed to load skills: %v\n", err)
+		logger.New("setup").Warnw("failed to load skills", "error", err)
 	}
 	skillRegistry := skills.NewRegistry(skillLoader)
 	skillHook := skills.NewHook(skillRegistry)
@@ -209,7 +209,7 @@ func NewAgent(sessionMgr SessionManager, cfg *config.Config, opts ...Option) (*A
 	// strategy so proposal_run can pick the active team.
 	teamLoader := teams.NewLoader(cfg.TeamsPath())
 	if err := teamLoader.Load(); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: failed to load teams: %v\n", err)
+		logger.New("setup").Warnw("failed to load teams", "error", err)
 	}
 	teamRegistry := teams.NewRegistry(teamLoader)
 	teamRegistry.Refresh()
@@ -217,11 +217,6 @@ func NewAgent(sessionMgr SessionManager, cfg *config.Config, opts ...Option) (*A
 
 	approvedPlanHook := planning.NewApprovedPlanContextHook(planRepositoryFromManager(sessionMgr))
 	loopHook := coderloop.NewHook()
-	contextHook := contextmgr.New(client, contextmgr.Config{
-		ContextWindow:      cfg.Model.ContextWindow,
-		SessionMemoryStore: sessionMemoryStoreFromManager(sessionMgr),
-		ReservedTokens:     approvedPlanHook.ReservedTokens,
-	})
 	refocusHook := contextmgr.NewRefocusHook()
 
 	workdir := options.workdir
@@ -239,6 +234,13 @@ func NewAgent(sessionMgr SessionManager, cfg *config.Config, opts ...Option) (*A
 	if err != nil {
 		return nil, fmt.Errorf("create file tools: %w", err)
 	}
+	contextHook := contextmgr.New(client, contextmgr.Config{
+		ContextWindow:      cfg.Model.ContextWindow,
+		SessionMemoryStore: sessionMemoryStoreFromManager(sessionMgr),
+		ReservedTokens: func(sess *coreSession.Session) int64 {
+			return fileHook.ReservedTokens(sess) + approvedPlanHook.ReservedTokens(sess)
+		},
+	})
 	_ = fileHook.BeforeAgent(context.Background(), sess, nil)
 	allTools = append(allTools, fileHook.Tools()...)
 	imageTool := sandbox.NewImageTool(sandboxExec, workdir, newImageAnalyzer(cfg))
@@ -308,12 +310,14 @@ func NewAgent(sessionMgr SessionManager, cfg *config.Config, opts ...Option) (*A
 		planningHook,
 		skillHook,
 		teamHook,
-		fileHook,
 		// Memory must be injected before the context manager runs so its
 		// projection accounts for the extra per-request messages.
 		newMemoryHook(ws),
 		contextHook,
 		refocusHook,
+		// Stable project context is rebuilt after projection so compaction
+		// cannot discard it. The accepted plan is appended after it.
+		fileHook,
 		approvedPlanHook,
 		subagentHook,
 		// Keep collaboration instructions last so Plan Mode remains the

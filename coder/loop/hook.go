@@ -72,7 +72,15 @@ func workingNoteTools(isRoot bool) []*tools.Tool {
 			tools.WithString("content", tools.Required(), tools.Description("The complete new Markdown content.")),
 			tools.WithToolHandler(rootOnly(replaceWorkingNote))),
 		tools.NewTool("finish_loop",
-			tools.WithDescription("Finish the autonomous Loop after the complete original request has been satisfied, there is genuinely no useful work left, or continuing would be unsafe or inappropriate. This does not end the current turn; update the Working Note if needed and provide the final user-facing summary afterward."),
+			tools.WithDescription(`Complete the autonomous Loop.
+
+Call this tool only during the final update phase, after rereading the complete Working Note and auditing it against the actual repository state and current verification results.
+
+Before calling, confirm that the complete original request and every task, plan, selected task, checklist item, follow-up, next step, and unresolved problem recorded in the Working Note have all been completed and verified. There must be no unfinished, uncertain, unverified, useful, or actionable work remaining.
+
+Completing only the current selected task, one checklist item, or one planned slice is never sufficient. Do not call this tool during bootstrap, task selection, development, review, or recovery. If work was completed during one of those phases, update the Working Note with its completion status and verification evidence, then end the turn normally.
+
+If anything remains to be done, do not call this tool. Keep the remaining work explicit in the Working Note so the Loop can continue.`),
 			tools.WithToolHandler(rootOnly(finishLoop))),
 	}
 }
@@ -132,20 +140,42 @@ func replaceWorkingNote(ctx context.Context, req *tools.Request) (*tools.Result,
 }
 
 func finishLoop(ctx context.Context, req *tools.Request) (*tools.Result, error) {
-	err := req.SessionRecords.UpdateRecord(ctx, StateNamespace, func(current []byte) ([]byte, error) {
-		switch State(strings.TrimSpace(string(current))) {
-		case StateActive:
-			return []byte(StateCompleted), nil
+	currentPhase, err := readPhase(ctx, req.SessionRecords)
+	if err != nil {
+		return tools.NewToolResultError("finish loop: read current loop phase: " + err.Error()), nil
+	}
+	if currentPhase != phaseUpdate {
+		return tools.NewToolResultText(fmt.Sprintf(`The Loop cannot finish during the current %s phase. finish_loop may only complete the Loop during the final update phase.
+
+Do not retry finish_loop in this turn. If you completed any work, update the Working Note now with its completion status and verification evidence, then end the turn normally. The Loop will continue through the remaining work and eventually reach the update phase.`, currentPhase)), nil
+	}
+
+	state, err := readState(ctx, req.SessionRecords)
+	if err == nil {
+		switch state {
+		case StateActive, StateSuspended:
+			var changed bool
+			changed, err = transitionState(ctx, req.SessionRecords, []State{StateActive, StateSuspended}, StateCompleted)
+			if err == nil && !changed {
+				state, err = readState(ctx, req.SessionRecords)
+				if err == nil && state != StateCompleted {
+					if state == StateCancelled {
+						err = errors.New("the loop was cancelled by the user")
+					} else {
+						err = errors.New("there is no active loop to finish")
+					}
+				}
+			}
 		case StateCancelled:
-			return nil, errors.New("the loop was cancelled by the user")
+			err = errors.New("the loop was cancelled by the user")
 		default:
-			return nil, errors.New("there is no active loop to finish")
+			err = errors.New("there is no active loop to finish")
 		}
-	})
+	}
 	if err != nil {
 		return tools.NewToolResultError("finish loop: " + err.Error()), nil
 	}
-	return tools.NewToolResultText("Loop is complete. Update the Working Note if needed and provide the final user-facing summary now."), nil
+	return tools.NewToolResultText("The Loop is complete. The complete original request and every task, plan, checklist item, follow-up, next step, and unresolved problem recorded in the Working Note have been completed and verified, and no actionable work remains. Provide the final user-facing summary now."), nil
 }
 
 func mutationResult(action string, err error) (*tools.Result, error) {

@@ -13,7 +13,7 @@ Text in, text out. Pipe-friendly. No GUI, no cloud dependency, no account requir
 
 - **Pipeline-first design** — `cat log.txt | friday chat "summarize errors" | mail -s "Report" team@company.com`
 - **Multiple input modes** — Arguments, stdin, or combine both
-- **Local data** — Everything stored in `~/.friday/`, portable and private
+- **Project-aware configuration** — Use a local `.friday/` with HOME fallback
 - **Session management** — Persistent conversations with history and memory
 - **Multi-provider support** — OpenAI, Anthropic, Ollama, Google Gemini
 
@@ -39,7 +39,16 @@ The binary will be placed in the `bin/` directory.
 friday init
 ```
 
-This creates `~/.friday/` with default configuration and workspace files.
+This creates `.friday/` in the current directory. In a project it creates a
+configuration plus empty `workspace/` and `workspace/skills/` directories;
+missing workspace files and skills are inherited from `~/.friday/`. Running
+the command from your HOME directory initializes the global workspace with all
+default files.
+
+Configuration lookup is `--config`, current-directory `.friday/config.json`,
+current-directory `.friday/friday.yaml`, then the equivalent files under HOME.
+Friday checks only the current directory, not its parents. JSON wins over YAML
+within the same directory.
 
 ### 2. Configure
 
@@ -266,78 +275,19 @@ Run periodic tasks defined in `HEARTBEAT.md`:
 friday heartbeat
 ```
 
-### A2A Channel
+### Local daemon
 
-Expose Friday as an A2A (Agent-to-Agent) protocol server for inter-agent communication:
-
-```bash
-# Start with defaults (127.0.0.1:8999)
-friday channel
-
-# Custom address
-friday channel --listen 0.0.0.0:9000 --public-url http://myhost:9000/
-```
-
-The A2A server provides:
-
-| Endpoint                           | Description           |
-|------------------------------------|-----------------------|
-| `GET /.well-known/agent-card.json` | Agent Card discovery  |
-| `POST /`                           | JSON-RPC 2.0 endpoint |
-
-Supported A2A methods:
-
-| Method           | Description                         |
-|------------------|-------------------------------------|
-| `message/send`   | Send a chat message (sync)          |
-| `message/stream` | Send a chat message (streaming SSE) |
-| `tasks/get`      | Query task status                   |
-| `tasks/cancel`   | Cancel a running task               |
-
-Example requests:
+Run Friday as a local daemon for UI and TUI clients:
 
 ```bash
-# Get Agent Card
-curl http://127.0.0.1:8999/.well-known/agent-card.json
-
-# Send a message (JSON-RPC)
-curl -X POST http://127.0.0.1:8999/ -H 'Content-Type: application/json' -d '{
-  "jsonrpc": "2.0",
-  "method": "message/send",
-  "id": 1,
-  "params": {
-    "message": {
-      "messageId": "msg-001",
-      "role": "user",
-      "parts": [{"kind": "text", "text": "Hello!"}]
-    }
-  }
-}'
-
-# Stream a message
-curl -X POST http://127.0.0.1:8999/ -H 'Content-Type: application/json' -d '{
-  "jsonrpc": "2.0",
-  "method": "message/stream",
-  "id": 2,
-  "params": {
-    "message": {
-      "messageId": "msg-002",
-      "role": "user",
-      "parts": [{"kind": "text", "text": "Write a haiku about Go"}]
-    }
-  }
-}'
-
-# Cancel a task
-curl -X POST http://127.0.0.1:8999/ -H 'Content-Type: application/json' -d '{
-  "jsonrpc": "2.0",
-  "method": "tasks/cancel",
-  "id": 3,
-  "params": {"id": "<task-id>"}
-}'
+friday daemon                 # ws://127.0.0.1:8999/ws
+friday daemon --port 9000
 ```
 
----
+The daemon binds only to `127.0.0.1`, has no authentication in v1, and exposes
+only the `/ws` WebSocket endpoint. JSON frames use a Friday routing envelope;
+`run` payloads and streamed actor events retain AG-UI semantics. A single
+connection can subscribe to multiple persisted sessions.
 
 ## Data Structure
 
@@ -356,9 +306,24 @@ curl -X POST http://127.0.0.1:8999/ -H 'Content-Type: application/json' -d '{
     ├── TOOLS.md         # Tool usage guidance
     ├── HEARTBEAT.md     # Periodic checklist
     └── MEMORY.md        # Long-term memory
+
+<project>/.friday/
+├── config.json          # Independent project configuration
+└── workspace/           # Project overrides for HOME workspace files
+    └── skills/          # Project skills; same-name skills override HOME
 ```
 
-**Portability**: Copy `~/.friday/` to another machine to transfer your agent.
+Workspace files are resolved one by one: a project file overrides the
+same-named HOME file, while a missing project file falls back to HOME. Skills
+are merged similarly. In project scope, skill installation and deletion only
+modify project skills; inherited HOME skills cannot be deleted there.
+
+Sessions, daily memory, state, teams, projects, and proposals remain under the
+configured data directory (`~/.friday` by default), even when a project config
+is active.
+
+**Portability**: Copy `~/.friday/` to another machine to transfer the global
+agent data, and copy a project's `.friday/` with the project for its overrides.
 
 ---
 
