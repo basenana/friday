@@ -142,7 +142,7 @@ func NewToolResultError(text string) *Result {
 		text = "Tool failed without an error message."
 	}
 	if !strings.Contains(strings.ToLower(text), "suggestion:") {
-		text += "\nSuggestion: use the error above to correct the arguments or prerequisites before retrying; do not repeat the unchanged call."
+		text += "\nSuggestion: use the error above to correct the arguments or prerequisites before retrying; resubmit after fixing."
 	}
 	return &Result{
 		Content: []Content{
