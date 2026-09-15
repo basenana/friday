@@ -447,6 +447,7 @@ func (a *Actor) loop(ctx context.Context) {
 // content across messages.
 type batchContext struct {
 	text           string
+	displayText    string
 	turnID         string
 	delivery       string
 	sources        []string
@@ -538,6 +539,8 @@ func (a *Actor) splitTurnBatches(batch []Message) [][]Message {
 // composition.
 func (a *Actor) coalesceBatch(batch []Message) batchContext {
 	var parts []string
+	var displayParts []string
+	var hasDisplayText bool
 	var images []types.ImageContent
 	var metadata []map[string]any
 	var turnID string
@@ -551,6 +554,14 @@ func (a *Actor) coalesceBatch(batch []Message) batchContext {
 		case UserTextMessage:
 			if v.Text != "" {
 				parts = append(parts, v.Text)
+			}
+			display := v.Text
+			if v.DisplayText != "" {
+				display = v.DisplayText
+				hasDisplayText = true
+			}
+			if display != "" {
+				displayParts = append(displayParts, display)
 			}
 			if v.TurnID != "" && turnID == "" {
 				turnID = v.TurnID
@@ -581,7 +592,11 @@ func (a *Actor) coalesceBatch(batch []Message) batchContext {
 		}
 	}
 	text := strings.Join(parts, "\n\n")
-	return batchContext{text: text, turnID: turnID, delivery: delivery, sources: sources, images: images, metadata: metadata, sourceEventIDs: sourceEventIDs}
+	displayText := ""
+	if hasDisplayText {
+		displayText = strings.Join(displayParts, "\n\n")
+	}
+	return batchContext{text: text, displayText: displayText, turnID: turnID, delivery: delivery, sources: sources, images: images, metadata: metadata, sourceEventIDs: sourceEventIDs}
 }
 
 // routeFormMessage dispatches a FormSubmitMessage / FormCancelMessage
@@ -674,10 +689,14 @@ func (a *Actor) runTurn(ctx context.Context, bctx batchContext, batchSize int) {
 	)
 	defer turnSpan.End()
 
+	previewText := bctx.text
+	if bctx.displayText != "" {
+		previewText = bctx.displayText
+	}
 	startInfo := TurnStartInfo{
 		RunID:     runID,
 		BatchSize: batchSize,
-		Preview:   firstLine(bctx.text),
+		Preview:   firstLine(previewText),
 		Metadata:  bctx.metadata,
 	}
 	if err := a.turnLifecycle.OnTurnStart(turnCtx, startInfo); err != nil {
@@ -705,7 +724,8 @@ func (a *Actor) runTurn(ctx context.Context, bctx batchContext, batchSize int) {
 	a.publish(turnCtx, events.NewEvent(events.KindCustom, runID).
 		WithName(events.CustomInputAccepted).
 		WithPayload(events.InputAcceptedBody{
-			TurnID: runID, Text: bctx.text, Delivery: bctx.delivery, Sources: bctx.sources,
+			TurnID: runID, Text: bctx.text, DisplayText: bctx.displayText,
+			Delivery: bctx.delivery, Sources: bctx.sources,
 		}))
 
 	req := &api.Request{

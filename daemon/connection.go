@@ -372,6 +372,10 @@ func (c *connection) runAgent(frame ClientFrame) {
 		c.sendError(frame.RequestID, frame.ThreadID, "invalid_run_input", err.Error())
 		return
 	}
+	if _, err := c.server.registry.GetOrCreate(frame.ThreadID); err != nil {
+		c.sendError(frame.RequestID, frame.ThreadID, "actor_start_failed", err.Error())
+		return
+	}
 	tail, err := c.server.reserveUnseenTail(frame.ThreadID, input.Messages)
 	if err != nil {
 		c.sendError(frame.RequestID, frame.ThreadID, "invalid_run_input", err.Error())
@@ -400,13 +404,21 @@ func (c *connection) runAgent(frame ClientFrame) {
 		}
 		prepared = append(prepared, preparedInput{message: message, text: text, images: images})
 	}
-	for _, item := range prepared {
+	for i, item := range prepared {
 		env := bus.NewUserInput(frame.ThreadID, "user.ws", bus.UserTextInput{
 			Text: item.text, TurnID: input.RunID, Delivery: bus.InputDelivery(delivery), Images: item.images,
 			Metadata: map[string]any{"parentRunId": input.ParentRunID},
 		})
 		env.ID = item.message.ID
-		c.server.registry.Bus().Publish(bus.TopicInbox(frame.ThreadID), env)
+		if err := c.server.registry.DispatchInput(env); err != nil {
+			undelivered := make([]string, 0, len(prepared)-i)
+			for _, pending := range prepared[i:] {
+				undelivered = append(undelivered, pending.message.ID)
+			}
+			c.server.forgetSeen(frame.ThreadID, undelivered...)
+			c.sendError(frame.RequestID, frame.ThreadID, "actor_dispatch_failed", err.Error())
+			return
+		}
 	}
 	c.sendResult(frame.RequestID, frame.ThreadID, map[string]any{"accepted": len(tail), "runId": input.RunID})
 }
@@ -431,8 +443,10 @@ func (c *connection) publishPreempt(frame ClientFrame) {
 	if reason == "" {
 		reason = "cancelled by websocket client"
 	}
-	c.server.registry.Bus().Publish(bus.TopicPreempt(frame.ThreadID),
-		bus.NewScopedPreempt(frame.ThreadID, "user.ws", reason, bus.PreemptCurrent))
+	if err := c.server.registry.DispatchPreempt(bus.NewScopedPreempt(frame.ThreadID, "user.ws", reason, bus.PreemptCurrent)); err != nil {
+		c.sendError(frame.RequestID, frame.ThreadID, "run_not_active", err.Error())
+		return
+	}
 	c.sendResult(frame.RequestID, frame.ThreadID, map[string]any{"runId": payload.RunID})
 }
 
@@ -448,7 +462,10 @@ func (c *connection) cancelInput(frame ClientFrame) {
 		c.sendError(frame.RequestID, frame.ThreadID, "invalid_request", "eventId is required")
 		return
 	}
-	c.server.registry.Bus().Publish(bus.TopicInbox(frame.ThreadID), bus.NewCancelInput(frame.ThreadID, "user.ws", bus.CancelInput{EventID: payload.EventID, Reason: payload.Reason}))
+	if err := c.server.registry.DispatchInput(bus.NewCancelInput(frame.ThreadID, "user.ws", bus.CancelInput{EventID: payload.EventID, Reason: payload.Reason})); err != nil {
+		c.sendError(frame.RequestID, frame.ThreadID, "interaction_not_active", err.Error())
+		return
+	}
 	c.sendResult(frame.RequestID, frame.ThreadID, map[string]any{"eventId": payload.EventID})
 }
 
@@ -464,7 +481,10 @@ func (c *connection) submitForm(frame ClientFrame) {
 		c.sendError(frame.RequestID, frame.ThreadID, "invalid_request", "formId is required")
 		return
 	}
-	c.server.registry.Bus().Publish(bus.TopicInbox(frame.ThreadID), bus.NewFormSubmit(frame.ThreadID, "user.ws", bus.FormSubmitInput{FormID: payload.FormID, Values: payload.Values}))
+	if err := c.server.registry.DispatchInput(bus.NewFormSubmit(frame.ThreadID, "user.ws", bus.FormSubmitInput{FormID: payload.FormID, Values: payload.Values})); err != nil {
+		c.sendError(frame.RequestID, frame.ThreadID, "interaction_not_active", err.Error())
+		return
+	}
 	c.sendResult(frame.RequestID, frame.ThreadID, map[string]any{"formId": payload.FormID})
 }
 
@@ -479,7 +499,10 @@ func (c *connection) cancelForm(frame ClientFrame) {
 		c.sendError(frame.RequestID, frame.ThreadID, "invalid_request", "formId is required")
 		return
 	}
-	c.server.registry.Bus().Publish(bus.TopicInbox(frame.ThreadID), bus.NewFormCancel(frame.ThreadID, "user.ws", bus.FormCancelInput{FormID: payload.FormID}))
+	if err := c.server.registry.DispatchInput(bus.NewFormCancel(frame.ThreadID, "user.ws", bus.FormCancelInput{FormID: payload.FormID})); err != nil {
+		c.sendError(frame.RequestID, frame.ThreadID, "interaction_not_active", err.Error())
+		return
+	}
 	c.sendResult(frame.RequestID, frame.ThreadID, map[string]any{"formId": payload.FormID})
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	coderagents "github.com/basenana/friday/coder/agents"
@@ -20,6 +21,7 @@ import (
 	coreSession "github.com/basenana/friday/core/session"
 	"github.com/basenana/friday/core/subagents"
 	"github.com/basenana/friday/core/tools"
+	fridaymcp "github.com/basenana/friday/mcp"
 	"github.com/basenana/friday/memory"
 	"github.com/basenana/friday/proposals"
 	"github.com/basenana/friday/sandbox"
@@ -37,6 +39,8 @@ type AgentContext struct {
 	Agent       agents.Agent
 	Memory      *memory.MemorySystem
 	TaskManager *sandbox.TaskManager
+	mcpManager  *fridaymcp.Manager
+	ownsMCP     bool
 }
 
 type Option func(*options)
@@ -48,6 +52,8 @@ type options struct {
 	verbose        bool
 	extraTools     []*tools.Tool
 	providerClient providers.Client
+	skillRegistry  *skills.Registry
+	mcpManager     *fridaymcp.Manager
 	lifecycle      sessions.SessionLifecycle
 	workdir        string
 }
@@ -101,6 +107,21 @@ func WithProviderClient(c providers.Client) Option {
 	}
 }
 
+// WithSkillRegistry supplies a shared skills registry. Interactive runtimes
+// use this so skill discovery, slash expansion, and agent hooks observe the
+// same refreshable snapshot.
+func WithSkillRegistry(registry *skills.Registry) Option {
+	return func(o *options) {
+		o.skillRegistry = registry
+	}
+}
+
+// WithMCPManager supplies a process-shared MCP manager. Its lifecycle remains
+// owned by the caller (normally actor.Registry).
+func WithMCPManager(manager *fridaymcp.Manager) Option {
+	return func(o *options) { o.mcpManager = manager }
+}
+
 // WithWorkdir pins all filesystem and process tools to one canonical runtime
 // root. Interactive project callers should always set it explicitly.
 func WithWorkdir(workdir string) Option {
@@ -136,7 +157,7 @@ func NewAgent(sessionMgr SessionManager, cfg *config.Config, opts ...Option) (*A
 		sessionMgr.SetLLM(client)
 	}
 
-	ws := workspace.NewWorkspace(cfg.WorkspacePath(), cfg.MemoryPath(), cfg.WorkspaceFallbackPaths()...)
+	ws := workspace.NewFromConfig(cfg)
 	var err error
 	if err = ws.EnsureDir(""); err != nil {
 		return nil, fmt.Errorf("create workspace: %w", err)
@@ -195,13 +216,43 @@ func NewAgent(sessionMgr SessionManager, cfg *config.Config, opts ...Option) (*A
 		return nil, fmt.Errorf("load workspace content: %w", err)
 	}
 
+	workdir := options.workdir
+	if workdir == "" {
+		workdir, _ = os.Getwd()
+	}
+	mcpManager := options.mcpManager
+	ownsMCP := false
+	if mcpManager == nil {
+		mcpManager, err = fridaymcp.NewManager(fridaymcp.ManagerConfig{
+			ConfigRoots: ws.MCPRoots(),
+			ProjectRoot: workdir, CacheRoot: cfg.CachesPath(),
+			TrustPath: filepath.Join(cfg.StatePath(), "mcp_trust.json"),
+		})
+		if err != nil {
+			logger.New("setup").Warnw("failed to load MCP configuration", "error", err)
+			mcpManager = nil
+		} else {
+			ownsMCP = true
+			mcpManager.Warmup(context.Background())
+		}
+	}
+	mcpHandedOff := false
+	defer func() {
+		if ownsMCP && !mcpHandedOff && mcpManager != nil {
+			_ = mcpManager.Close()
+		}
+	}()
+
 	planningHook := planning.New(planning.Option{ModeProvider: collaborationProvider(sessionMgr)})
 	collaborationHook := collaboration.NewHook(collaborationProvider(sessionMgr), cfg.Collaboration.Plan.ReasoningEffort)
-	skillLoader := skills.NewLoader(ws.SkillsPaths()...)
-	if err := skillLoader.Load(); err != nil {
-		logger.New("setup").Warnw("failed to load skills", "error", err)
+	skillRegistry := options.skillRegistry
+	if skillRegistry == nil {
+		skillLoader := skills.NewLoader(ws.SkillsPaths()...)
+		if err := skillLoader.Load(); err != nil {
+			logger.New("setup").Warnw("failed to load skills", "error", err)
+		}
+		skillRegistry = skills.NewRegistry(skillLoader)
 	}
-	skillRegistry := skills.NewRegistry(skillLoader)
 	skillHook := skills.NewHook(skillRegistry)
 
 	// Team system: provides team_load/team_list/team_comment tools and the
@@ -218,11 +269,6 @@ func NewAgent(sessionMgr SessionManager, cfg *config.Config, opts ...Option) (*A
 	approvedPlanHook := planning.NewApprovedPlanContextHook(planRepositoryFromManager(sessionMgr))
 	loopHook := coderloop.NewHook()
 	refocusHook := contextmgr.NewRefocusHook()
-
-	workdir := options.workdir
-	if workdir == "" {
-		workdir, _ = os.Getwd()
-	}
 
 	var allTools []*tools.Tool
 	sandboxCfg := cfg.Sandbox
@@ -249,7 +295,10 @@ func NewAgent(sessionMgr SessionManager, cfg *config.Config, opts ...Option) (*A
 	allTools = append(allTools, bashTool)
 	pollWaitTool := sandbox.NewPollWaitTool(sandboxExec, workdir)
 	allTools = append(allTools, pollWaitTool)
-	taskManager := sandbox.NewTaskManager(sandboxExec)
+	taskManager, err := sandbox.NewPersistentTaskManager(sandboxExec, sandbox.NewSessionTaskStore(sess))
+	if err != nil {
+		return nil, fmt.Errorf("restore background tasks: %w", err)
+	}
 	bgTools := sandbox.NewBackgroundTaskTools(taskManager, workdir)
 	allTools = append(allTools, bgTools...)
 
@@ -271,10 +320,8 @@ func NewAgent(sessionMgr SessionManager, cfg *config.Config, opts ...Option) (*A
 		Tools:        allTools,
 	})
 
-	// Build subagents via coder/agents factory: each agent gets its own
-	// (possibly overridden) provider client and a tool set filtered by the
-	// spec's ToolPolicy. The explorer reuses the main system prompt so forked
-	// sessions share the same cache prefix.
+	// Build the explorer with a filtered tool set. It reuses the main system
+	// prompt so forked sessions share the same cache prefix.
 	factory := coderagents.NewClientFactory(client, cfg.PrimaryModel(), CreateProviderClientFromModel)
 	exploreSpec := coderagents.ExplorerSpec(cfg.AgentModel(coderagents.NameExplorer))
 	exploreSpec.SystemPrompt = workspace.ComposeSystemPrompt(loaded)
@@ -283,31 +330,17 @@ func NewAgent(sessionMgr SessionManager, cfg *config.Config, opts ...Option) (*A
 		return nil, fmt.Errorf("build explore agent: %w", err)
 	}
 
-	// Build the named expert agents (planner, reviewer, advisor) for run_task.
-	expertSpecs := []*coderagents.AgentSpec{
-		coderagents.PlannerSpec(cfg.AgentModel(coderagents.NamePlanner)),
-		coderagents.ReviewerSpec(cfg.AgentModel(coderagents.NameReviewer)),
-		coderagents.AdvisorSpec(cfg.AgentModel(coderagents.NameAdvisor)),
-	}
-	expertAgents, err := factory.BuildExpertAgents(expertSpecs, allTools)
-	if err != nil {
-		return nil, fmt.Errorf("build expert agents: %w", err)
-	}
-
 	subagentHook := subagents.NewHook(client, subagents.Option{
 		SelfAgent: &subagents.ExpertAgent{
 			Name:  coderagents.NameExplorer,
 			Agent: exploreAgent,
 		},
-		// Do not pass request-level tool overrides into forked subagents.
-		// Their filtered agent-level tool set is the authority; otherwise
-		// request tools would re-expand privileges at runtime.
-		ExpertAgents:  expertAgents,
 		SessionForker: lifecycle,
 	})
 
 	sharedHooks := []coreSession.Hook{
 		planningHook,
+		fridaymcp.NewHook(mcpManager),
 		skillHook,
 		teamHook,
 		// Memory must be injected before the context manager runs so its
@@ -340,6 +373,7 @@ func NewAgent(sessionMgr SessionManager, cfg *config.Config, opts ...Option) (*A
 	// system-prompt position while active. It is otherwise a no-op.
 	sess.RegisterHook(loopHook)
 
+	mcpHandedOff = true
 	return &AgentContext{
 		Client:      client,
 		Workspace:   ws,
@@ -348,6 +382,8 @@ func NewAgent(sessionMgr SessionManager, cfg *config.Config, opts ...Option) (*A
 		Agent:       agent,
 		Memory:      memSys,
 		TaskManager: taskManager,
+		mcpManager:  mcpManager,
+		ownsMCP:     ownsMCP,
 	}, nil
 }
 
@@ -364,6 +400,9 @@ func (ac *AgentContext) Close() {
 		_ = ac.Lifecycle.Close()
 	} else {
 		ac.Session.Close()
+	}
+	if ac.ownsMCP && ac.mcpManager != nil {
+		_ = ac.mcpManager.Close()
 	}
 }
 

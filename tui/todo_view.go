@@ -74,6 +74,9 @@ func (m *model) renderTodoPanel(width int) string {
 			completed++
 		}
 	}
+	if completed == len(m.todos) {
+		return ""
+	}
 
 	lines := []string{accentStyle.Copy().Bold(true).Render(fmt.Sprintf("Todos · %d/%d", completed, len(m.todos)))}
 	contentWidth := max(width-8, 8)

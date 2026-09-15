@@ -1,12 +1,25 @@
 package workspace
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 )
+
+type workspaceConfigStub struct {
+	workspace string
+	fallbacks []string
+	project   bool
+	memory    string
+}
+
+func (c workspaceConfigStub) WorkspacePath() string            { return c.workspace }
+func (c workspaceConfigStub) WorkspaceFallbackPaths() []string { return c.fallbacks }
+func (c workspaceConfigStub) ProjectScoped() bool              { return c.project }
+func (c workspaceConfigStub) MemoryPath() string               { return c.memory }
 
 func TestNewWorkspace(t *testing.T) {
 	ws := NewWorkspace("/tmp/workspace", "/tmp/memory")
@@ -73,6 +86,94 @@ func TestLayeredWorkspaceProjectOverridesAndFallsBack(t *testing.T) {
 	gotSkills := ws.SkillsPaths()
 	if len(gotSkills) != len(wantSkills) || gotSkills[0] != wantSkills[0] || gotSkills[1] != wantSkills[1] {
 		t.Fatalf("SkillsPaths() = %v, want %v", gotSkills, wantSkills)
+	}
+	wantMCP := []string{filepath.Join(global, "mcp"), filepath.Join(project, "mcp")}
+	gotMCP := ws.MCPPaths()
+	if len(gotMCP) != len(wantMCP) || gotMCP[0] != wantMCP[0] || gotMCP[1] != wantMCP[1] {
+		t.Fatalf("MCPPaths() = %v, want %v", gotMCP, wantMCP)
+	}
+}
+
+func TestNewFromConfigBuildsScopedLowToHighLayers(t *testing.T) {
+	home := t.TempDir()
+	project := t.TempDir()
+	ws := NewFromConfig(workspaceConfigStub{
+		workspace: project,
+		fallbacks: []string{home},
+		project:   true,
+		memory:    t.TempDir(),
+	})
+
+	layers := ws.Layers()
+	if len(layers) != 2 {
+		t.Fatalf("Layers() = %#v", layers)
+	}
+	if layers[0].Root != home || layers[0].Scope != ScopeHome || layers[0].Writable {
+		t.Fatalf("HOME layer = %#v", layers[0])
+	}
+	if layers[1].Root != project || layers[1].Scope != ScopeProject || !layers[1].Writable {
+		t.Fatalf("project layer = %#v", layers[1])
+	}
+	roots := ws.ResourceRoots("skills")
+	if roots[0].Path != filepath.Join(home, "skills") || roots[1].Path != filepath.Join(project, "skills") {
+		t.Fatalf("ResourceRoots(skills) = %#v", roots)
+	}
+}
+
+func TestNewFromConfigSharedHomeWorkspaceIsReadOnly(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, "AGENTS.md"), []byte("home agents"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ws := NewFromConfig(workspaceConfigStub{
+		workspace: home,
+		fallbacks: []string{home},
+		project:   true,
+		memory:    t.TempDir(),
+	})
+
+	layers := ws.Layers()
+	if len(layers) != 1 || layers[0].Scope != ScopeHome || layers[0].Writable {
+		t.Fatalf("shared layers = %#v", layers)
+	}
+	if got, err := ws.Read("AGENTS.md"); err != nil || got != "home agents" {
+		t.Fatalf("Read(AGENTS.md) = %q, %v", got, err)
+	}
+	if err := ws.EnsureDir(""); err != nil {
+		t.Fatalf("EnsureDir should accept an existing read-only root: %v", err)
+	}
+	if err := ws.Write("AGENTS.md", "project agents"); !errors.Is(err, ErrReadOnlyWorkspace) {
+		t.Fatalf("Write() error = %v, want ErrReadOnlyWorkspace", err)
+	}
+	data, err := os.ReadFile(filepath.Join(home, "AGENTS.md"))
+	if err != nil || string(data) != "home agents" {
+		t.Fatalf("HOME file changed: %q, %v", data, err)
+	}
+	if roots := ws.MCPRoots(); len(roots) != 1 || roots[0].Scope != ScopeHome {
+		t.Fatalf("MCPRoots() = %#v", roots)
+	}
+	if ws.SkillsPath() != "" || ws.MCPPath() != "" {
+		t.Fatalf("read-only workspace exposed a writable resource path")
+	}
+}
+
+func TestNewFromConfigProjectSymlinkKeepsProjectScope(t *testing.T) {
+	home := t.TempDir()
+	project := t.TempDir()
+	linkedWorkspace := filepath.Join(project, "workspace-link")
+	if err := os.Symlink(home, linkedWorkspace); err != nil {
+		t.Fatal(err)
+	}
+	ws := NewFromConfig(workspaceConfigStub{
+		workspace: linkedWorkspace,
+		fallbacks: []string{home},
+		project:   true,
+		memory:    t.TempDir(),
+	})
+
+	layers := ws.Layers()
+	if len(layers) != 2 || layers[1].Scope != ScopeProject || layers[1].Root != linkedWorkspace {
+		t.Fatalf("symlink layers = %#v", layers)
 	}
 }
 

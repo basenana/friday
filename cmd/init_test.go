@@ -26,6 +26,9 @@ func TestRunInitCreatesMinimalProjectWorkspace(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(fridayDir, "workspace", "skills")); err != nil {
 		t.Fatalf("project skills directory missing: %v", err)
 	}
+	if _, err := os.Stat(filepath.Join(fridayDir, "workspace", "mcp")); err != nil {
+		t.Fatalf("project MCP directory missing: %v", err)
+	}
 	for name := range workspace.DefaultContents {
 		if _, err := os.Stat(filepath.Join(fridayDir, "workspace", name)); !os.IsNotExist(err) {
 			t.Fatalf("project init unexpectedly generated %s", name)
@@ -63,6 +66,9 @@ func TestRunInitAtHomeCreatesDefaultWorkspaceFiles(t *testing.T) {
 		t.Fatalf("runInit(HOME) error = %v", err)
 	}
 	workspaceDir := filepath.Join(home, ".friday", "workspace")
+	if _, err := os.Stat(filepath.Join(workspaceDir, "mcp")); err != nil {
+		t.Fatalf("HOME MCP directory missing: %v", err)
+	}
 	for name := range workspace.DefaultContents {
 		if _, err := os.Stat(filepath.Join(workspaceDir, name)); err != nil {
 			t.Fatalf("HOME init did not create %s: %v", name, err)

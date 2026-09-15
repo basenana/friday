@@ -79,6 +79,11 @@ func (l *Loader) loadFromDir(skillsPath string) error {
 
 // loadSkill loads a single skill from its directory
 func (l *Loader) loadSkill(skillPath string) (*Skill, error) {
+	absoluteSkillPath, err := filepath.Abs(skillPath)
+	if err != nil {
+		return nil, fmt.Errorf("resolve skill directory: %w", err)
+	}
+	skillPath = filepath.Clean(absoluteSkillPath)
 	skillFile := filepath.Join(skillPath, "SKILL.md")
 
 	content, err := os.ReadFile(skillFile)

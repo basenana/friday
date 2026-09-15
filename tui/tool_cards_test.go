@@ -27,7 +27,7 @@ func TestBuiltinToolCardPresentations(t *testing.T) {
 		{"wait_task", `{"task_id":"abc"}`, "Wait for task", "timeout · 60s"},
 		{"kill_task", `{"task_id":"abc"}`, "Stop task", "task · abc"},
 		{"explore", `{"task":"inspect the TUI"}`, "Explore", "inspect the TUI"},
-		{"run_task", `{"agent_name":"reviewer","task":"review changes"}`, "Delegate to reviewer", "review changes"},
+		{"run_task", `{"agent_name":"analyst","task":"analyze changes"}`, "Delegate to analyst", "analyze changes"},
 		{"run_blocking_subagents", `{"tasks":["inspect UI","inspect events"]}`, "Run 2 subagents", "2. inspect events"},
 	}
 	for _, test := range tests {
@@ -46,19 +46,55 @@ func TestSpecializedToolCardsHideOutputAndKeepDetails(t *testing.T) {
 	m := &model{width: 80}
 	block := &chatBlock{
 		id: "call-specialized", kind: blockToolCall, toolName: "run_task",
-		toolArgs: `{"agent_name":"reviewer","task":"review this patch"}`, toolArgsComplete: true,
+		toolArgs: `{"agent_name":"analyst","task":"analyze this patch"}`, toolArgsComplete: true,
 		toolOutput: "SECRET LONG SUBAGENT REPORT", success: true,
 	}
 	card := terminalSafe(m.renderToolCard(block))
-	if !strings.Contains(card, "Delegate to reviewer") || !strings.Contains(card, "review this patch") {
+	if !strings.Contains(card, "Delegate to analyst") || !strings.Contains(card, "analyze this patch") {
 		t.Fatalf("card = %q", card)
 	}
 	if strings.Contains(card, "SECRET") {
 		t.Fatalf("specialized card exposed output: %q", card)
 	}
 	detail := toolDetailContent(block)
-	if !strings.Contains(detail, "SECRET LONG SUBAGENT REPORT") || !strings.Contains(detail, "review this patch") {
+	if !strings.Contains(detail, "SECRET LONG SUBAGENT REPORT") || !strings.Contains(detail, "analyze this patch") {
 		t.Fatalf("detail = %q", detail)
+	}
+}
+
+func TestLoadSkillCardOnlyShowsNameAndDescription(t *testing.T) {
+	configureTheme(true)
+	m := &model{width: 100}
+	block := &chatBlock{
+		id: "call-load-skill", kind: blockToolCall, toolName: "load_skill",
+		toolArgs: `{"name":"writer"}`, toolArgsComplete: true,
+		toolOutput: `{"name":"writer","description":"Draft release notes","dir_path":"/skills/writer","instructions":"SECRET WORKFLOW","allowed_tools":"fs_read"}`,
+		success:    true,
+	}
+	card := terminalSafe(m.renderToolCard(block))
+	for _, want := range []string{"Load skill", "name · writer", "description · Draft release notes"} {
+		if !strings.Contains(card, want) {
+			t.Fatalf("load_skill card missing %q: %q", want, card)
+		}
+	}
+	for _, hidden := range []string{"Arguments", "Result", "SECRET WORKFLOW", "/skills/writer", "allowed_tools", "fs_read"} {
+		if strings.Contains(card, hidden) {
+			t.Fatalf("load_skill card exposed %q: %q", hidden, card)
+		}
+	}
+	detail := toolDetailContent(block)
+	if !strings.Contains(detail, "SECRET WORKFLOW") || !strings.Contains(detail, "/skills/writer") {
+		t.Fatalf("load_skill details lost full result: %q", detail)
+	}
+}
+
+func TestLoadSkillCardNeverShowsIncompleteArguments(t *testing.T) {
+	configureTheme(true)
+	m := &model{width: 80}
+	block := &chatBlock{toolName: "load_skill", toolArgs: `{"name":"secret`, pending: true}
+	card := terminalSafe(m.renderToolCard(block))
+	if !strings.Contains(card, "Load skill") || strings.Contains(card, "secret") || strings.Contains(card, "receiving arguments") {
+		t.Fatalf("partial load_skill card = %q", card)
 	}
 }
 

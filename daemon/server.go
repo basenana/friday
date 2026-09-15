@@ -25,6 +25,8 @@ var safeThreadID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$`)
 
 type ActorRegistry interface {
 	GetOrCreate(string) (*coreactor.Actor, error)
+	DispatchInput(bus.Envelope) error
+	DispatchPreempt(bus.Envelope) error
 	Bus() *eventbus.Bus
 	ShutdownAll()
 }

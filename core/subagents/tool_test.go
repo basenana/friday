@@ -37,7 +37,7 @@ func (s *recordingSpan) attrValue(key string) (string, bool) {
 
 func TestRunTaskContractUsesTaskAndAgentEnum(t *testing.T) {
 	hook := &Subagents{
-		option:                 Option{ExpertAgents: []ExpertAgent{{Name: "reviewer"}, {Name: "writer"}}},
+		option:                 Option{ExpertAgents: []ExpertAgent{{Name: "analyst"}, {Name: "writer"}}},
 		runTaskToolDescription: "Delegate to an expert.",
 	}
 	tool := hook.buildRunTaskTool(session.New("session", nil))
@@ -48,7 +48,7 @@ func TestRunTaskContractUsesTaskAndAgentEnum(t *testing.T) {
 		t.Fatal("task field missing")
 	}
 	enum := tool.InputSchema.Properties["agent_name"].(map[string]any)["enum"].([]string)
-	if len(enum) != 2 || enum[0] != "reviewer" || enum[1] != "writer" {
+	if len(enum) != 2 || enum[0] != "analyst" || enum[1] != "writer" {
 		t.Fatalf("agent enum = %v", enum)
 	}
 }

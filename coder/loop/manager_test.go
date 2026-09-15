@@ -3,6 +3,7 @@ package loop
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -11,8 +12,10 @@ import (
 
 	"github.com/basenana/friday/bus"
 	"github.com/basenana/friday/core/actor/events"
+	"github.com/basenana/friday/core/providers"
 	"github.com/basenana/friday/core/session"
 	"github.com/basenana/friday/core/tools"
+	"github.com/basenana/friday/core/types"
 )
 
 func TestManagerAdvancesByInputCausalityWithoutLoopMetadata(t *testing.T) {
@@ -155,6 +158,172 @@ func TestManagerPersistsEveryPhaseBeforeDispatch(t *testing.T) {
 			publishFinished(b, sess.ID, env.ID, "end_turn")
 		}
 	}
+}
+
+func TestShouldCompactAfterUpdateThreshold(t *testing.T) {
+	for _, tc := range []struct {
+		tokens int64
+		want   bool
+	}{
+		{tokens: loopCompactThreshold - 1, want: false},
+		{tokens: loopCompactThreshold, want: true},
+		{tokens: loopCompactThreshold + 1, want: true},
+	} {
+		if got := shouldCompactAfterUpdate(tc.tokens); got != tc.want {
+			t.Errorf("shouldCompactAfterUpdate(%d) = %v, want %v", tc.tokens, got, tc.want)
+		}
+	}
+}
+
+func TestManagerCompactsLargeHistoryAfterUpdate(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		handoff    bool
+		wantPhase  phase
+		wantPrompt string
+	}{
+		{name: "continue development", wantPhase: phaseDevelop, wantPrompt: DevelopPrompt},
+		{name: "handoff to review", handoff: true, wantPhase: phaseReview, wantPrompt: ReviewPrompt},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := eventbus.NewBus()
+			m := NewManager(b)
+			defer m.Close()
+			sess := session.New("root", nil)
+			appendLargeLoopHistory(sess)
+			if tokens := sess.Tokens(); tokens < loopCompactThreshold {
+				t.Fatalf("test history has %d tokens, want at least %d", tokens, loopCompactThreshold)
+			}
+
+			inputs := make(chan bus.Envelope, 4)
+			id := b.SubscribeSerial([]string{bus.TopicInbox(sess.ID)}, func(env bus.Envelope) {
+				if env.Name == bus.InboxUserText {
+					inputs <- env
+				}
+			}, eventbus.SerialConfig{Overflow: eventbus.OverflowBlock})
+			defer b.Unsubscribe(id)
+
+			if err := m.Start(context.Background(), sess, "implement it"); err != nil {
+				t.Fatal(err)
+			}
+			bootstrap := waitInput(t, inputs)
+			publishFinished(b, sess.ID, bootstrap.ID, "end_turn")
+			develop := waitInput(t, inputs)
+			publishFinished(b, sess.ID, develop.ID, "end_turn")
+			update := waitInput(t, inputs)
+			if tc.handoff {
+				result, err := finishDevLoop(context.Background(), &tools.Request{SessionID: sess.ID, SessionRecords: sess})
+				if err != nil || result.IsError {
+					t.Fatalf("finishDevLoop() = %#v, %v", result, err)
+				}
+			}
+
+			publishFinished(b, sess.ID, update.ID, "end_turn")
+			assertInputPrompt(t, waitInput(t, inputs), tc.wantPrompt)
+			assertPhase(t, sess, tc.wantPhase)
+			if got := sess.HistoryLen(); got != session.CompactFallbackKeepMessages() {
+				t.Fatalf("history length after update compact = %d, want %d", got, session.CompactFallbackKeepMessages())
+			}
+		})
+	}
+}
+
+func TestManagerSkipsCompactBelowUpdateThreshold(t *testing.T) {
+	b := eventbus.NewBus()
+	m := NewManager(b)
+	defer m.Close()
+	sess := session.New("root", nil)
+	for range session.CompactFallbackKeepMessages() + 1 {
+		sess.AppendMessage(&types.Message{Role: types.RoleUser, Content: "small history entry"})
+	}
+	wantHistoryLen := sess.HistoryLen()
+
+	inputs := make(chan bus.Envelope, 4)
+	id := b.SubscribeSerial([]string{bus.TopicInbox(sess.ID)}, func(env bus.Envelope) {
+		if env.Name == bus.InboxUserText {
+			inputs <- env
+		}
+	}, eventbus.SerialConfig{Overflow: eventbus.OverflowBlock})
+	defer b.Unsubscribe(id)
+
+	if err := m.Start(context.Background(), sess, "implement it"); err != nil {
+		t.Fatal(err)
+	}
+	bootstrap := waitInput(t, inputs)
+	publishFinished(b, sess.ID, bootstrap.ID, "end_turn")
+	develop := waitInput(t, inputs)
+	publishFinished(b, sess.ID, develop.ID, "end_turn")
+	update := waitInput(t, inputs)
+	publishFinished(b, sess.ID, update.ID, "end_turn")
+	assertInputPrompt(t, waitInput(t, inputs), DevelopPrompt)
+	if got := sess.HistoryLen(); got != wantHistoryLen {
+		t.Fatalf("history length below compact threshold = %d, want unchanged %d", got, wantHistoryLen)
+	}
+}
+
+func TestManagerContinuesWhenUpdateCompactFails(t *testing.T) {
+	wantErr := errors.New("compact provider unavailable")
+	b := eventbus.NewBus()
+	m := NewManager(b)
+	defer m.Close()
+	sess := session.New("root", failingLoopCompactClient{err: wantErr})
+	appendLargeLoopHistory(sess)
+
+	inputs := make(chan bus.Envelope, 4)
+	id := b.SubscribeSerial([]string{bus.TopicInbox(sess.ID)}, func(env bus.Envelope) {
+		if env.Name == bus.InboxUserText {
+			inputs <- env
+		}
+	}, eventbus.SerialConfig{Overflow: eventbus.OverflowBlock})
+	defer b.Unsubscribe(id)
+
+	if err := m.Start(context.Background(), sess, "implement it"); err != nil {
+		t.Fatal(err)
+	}
+	bootstrap := waitInput(t, inputs)
+	publishFinished(b, sess.ID, bootstrap.ID, "end_turn")
+	develop := waitInput(t, inputs)
+	publishFinished(b, sess.ID, develop.ID, "end_turn")
+	update := waitInput(t, inputs)
+	publishFinished(b, sess.ID, update.ID, "end_turn")
+	assertInputPrompt(t, waitInput(t, inputs), DevelopPrompt)
+	assertPhase(t, sess, phaseDevelop)
+}
+
+func TestManagerDetachDuringUpdateCompactDoesNotDispatch(t *testing.T) {
+	client := &blockingLoopCompactClient{started: make(chan struct{})}
+	b := eventbus.NewBus()
+	m := NewManager(b)
+	defer m.Close()
+	sess := session.New("root", client)
+	appendLargeLoopHistory(sess)
+
+	inputs := make(chan bus.Envelope, 4)
+	id := b.SubscribeSerial([]string{bus.TopicInbox(sess.ID)}, func(env bus.Envelope) {
+		if env.Name == bus.InboxUserText {
+			inputs <- env
+		}
+	}, eventbus.SerialConfig{Overflow: eventbus.OverflowBlock})
+	defer b.Unsubscribe(id)
+
+	if err := m.Start(context.Background(), sess, "implement it"); err != nil {
+		t.Fatal(err)
+	}
+	bootstrap := waitInput(t, inputs)
+	publishFinished(b, sess.ID, bootstrap.ID, "end_turn")
+	develop := waitInput(t, inputs)
+	publishFinished(b, sess.ID, develop.ID, "end_turn")
+	update := waitInput(t, inputs)
+	publishFinished(b, sess.ID, update.ID, "end_turn")
+	select {
+	case <-client.started:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for update compaction")
+	}
+
+	m.Detach(sess.ID)
+	waitState(t, sess, StateSuspended)
+	assertNoInput(t, inputs)
 }
 
 func TestManagerRunsDevelopmentAndReviewCycles(t *testing.T) {
@@ -743,6 +912,65 @@ func TestManagerDetachSuspendsActiveLoop(t *testing.T) {
 	waitState(t, sess, StateSuspended)
 }
 
+func TestManagerHoldsActorLeaseForControllerLifetime(t *testing.T) {
+	b := eventbus.NewBus()
+	acquired := make(chan struct{}, 1)
+	released := make(chan struct{}, 1)
+	m := NewManager(b, WithActorLease(func(string) (func(), error) {
+		acquired <- struct{}{}
+		var once sync.Once
+		return func() { once.Do(func() { released <- struct{}{} }) }, nil
+	}))
+	defer m.Close()
+	sess := session.New("root", nil)
+	inputs := make(chan bus.Envelope, 1)
+	id := b.SubscribeSerial([]string{bus.TopicInbox(sess.ID)}, func(env bus.Envelope) {
+		if env.Name == bus.InboxUserText {
+			inputs <- env
+		}
+	}, eventbus.SerialConfig{Overflow: eventbus.OverflowBlock})
+	defer b.Unsubscribe(id)
+
+	if err := m.Start(context.Background(), sess, "implement it"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-acquired:
+	case <-time.After(time.Second):
+		t.Fatal("controller did not acquire actor lease")
+	}
+	prompt := waitInput(t, inputs)
+	select {
+	case <-released:
+		t.Fatal("controller released actor lease while its turn was active")
+	default:
+	}
+	if err := writeState(context.Background(), sess, StateCompleted); err != nil {
+		t.Fatal(err)
+	}
+	publishFinished(b, sess.ID, prompt.ID, "end_turn")
+	select {
+	case <-released:
+	case <-time.After(time.Second):
+		t.Fatal("controller did not release actor lease after completion")
+	}
+}
+
+func TestManagerLeaseFailureSuspendsLoop(t *testing.T) {
+	wantErr := errors.New("actor unavailable")
+	m := NewManager(eventbus.NewBus(), WithActorLease(func(string) (func(), error) {
+		return nil, wantErr
+	}))
+	defer m.Close()
+	sess := session.New("root", nil)
+
+	err := m.Start(context.Background(), sess, "implement it")
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("Start() error = %v, want %v", err, wantErr)
+	}
+	waitState(t, sess, StateSuspended)
+}
+
 func assertInputPrompt(t *testing.T, env bus.Envelope, want string) {
 	t.Helper()
 	var body bus.UserTextInput
@@ -806,4 +1034,51 @@ func publishFinished(b *eventbus.Bus, sessionID, cause, reason string) {
 	evt := events.NewEvent(events.KindRunFinished, "actor-run").WithPayload(events.RunFinishedData{StopReason: reason})
 	evt.CausedBy = []string{cause}
 	b.Publish(bus.TopicRun(sessionID, "finished"), bus.Envelope{Event: evt, Session: sessionID, Topic: bus.TopicRun(sessionID, "finished")})
+}
+
+func appendLargeLoopHistory(sess *session.Session) {
+	for range session.CompactFallbackKeepMessages() + 5 {
+		sess.AppendMessage(&types.Message{Role: types.RoleUser, Content: strings.Repeat("x", 8_000)})
+	}
+}
+
+type failingLoopCompactClient struct {
+	err error
+}
+
+func (c failingLoopCompactClient) Completion(context.Context, providers.Request) providers.Response {
+	resp := providers.NewCommonResponse()
+	resp.Err <- c.err
+	return resp
+}
+
+func (failingLoopCompactClient) CompletionNonStreaming(context.Context, providers.Request) (string, error) {
+	return "", errors.New("unexpected CompletionNonStreaming call")
+}
+
+func (failingLoopCompactClient) StructuredPredict(context.Context, providers.Request, any) error {
+	return errors.New("unexpected StructuredPredict call")
+}
+
+type blockingLoopCompactClient struct {
+	started chan struct{}
+	once    sync.Once
+}
+
+func (c *blockingLoopCompactClient) Completion(ctx context.Context, _ providers.Request) providers.Response {
+	c.once.Do(func() { close(c.started) })
+	resp := providers.NewCommonResponse()
+	go func() {
+		<-ctx.Done()
+		resp.Err <- ctx.Err()
+	}()
+	return resp
+}
+
+func (*blockingLoopCompactClient) CompletionNonStreaming(context.Context, providers.Request) (string, error) {
+	return "", errors.New("unexpected CompletionNonStreaming call")
+}
+
+func (*blockingLoopCompactClient) StructuredPredict(context.Context, providers.Request, any) error {
+	return errors.New("unexpected StructuredPredict call")
 }

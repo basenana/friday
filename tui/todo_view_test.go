@@ -65,6 +65,45 @@ func TestTodoPanelShowsAllStatusesInInputOrder(t *testing.T) {
 	}
 }
 
+func TestTodoPanelHidesOnlyWhenAllItemsAreCompleted(t *testing.T) {
+	m := &model{todos: []todoItem{
+		{Description: "first", Status: "completed"},
+		{Description: "second", Status: "completed"},
+	}}
+	if panel := m.renderTodoPanel(80); panel != "" {
+		t.Fatalf("completed todo panel remained visible: %q", terminalSafe(panel))
+	}
+	if len(m.todos) != 2 {
+		t.Fatalf("rendering cleared todo state: %#v", m.todos)
+	}
+
+	m.todos[1].Status = "pending"
+	panel := terminalSafe(m.renderTodoPanel(80))
+	if !strings.Contains(panel, "Todos · 1/2") || !strings.Contains(panel, "second") {
+		t.Fatalf("mixed todo panel did not reappear: %q", panel)
+	}
+}
+
+func TestCompletedTodoPanelReleasesLayoutHeight(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	m.width, m.height = 80, 12
+	fillHistory(m, 20)
+	m.todos = []todoItem{{Description: "active", Status: "in_progress"}}
+	_ = m.View()
+	if !m.viewport.AtBottom() {
+		t.Fatal("viewport should follow the bottom with an active todo panel")
+	}
+	withPanel := m.viewport.Height()
+	m.todos[0].Status = "completed"
+	_ = m.View()
+	if m.viewport.Height() <= withPanel {
+		t.Fatalf("completed panel did not release layout height: before=%d after=%d", withPanel, m.viewport.Height())
+	}
+	if !m.viewport.AtBottom() {
+		t.Fatal("hiding completed todos lost bottom-follow state")
+	}
+}
+
 func TestTodoPanelWrapsWithoutTruncating(t *testing.T) {
 	configureTheme(true)
 	description := "a todo description that must remain completely visible"

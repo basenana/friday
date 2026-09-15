@@ -93,9 +93,8 @@ func buildHelpText(reg *Registry) string {
 	return b.String()
 }
 
-// RegisterBuiltins registers the simple builtin commands into reg.
-// Agent-backed commands (/plan, /review, /advisor) are registered separately
-// via RegisterAgentCommands.
+// RegisterBuiltins registers the simple builtin commands into reg. Collaboration
+// commands such as /plan are registered separately via RegisterAgentCommands.
 func RegisterBuiltins(reg *Registry) {
 	if reg == nil {
 		return

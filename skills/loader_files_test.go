@@ -102,6 +102,50 @@ func TestLoaderReadFileFilesystemSkill(t *testing.T) {
 	}
 }
 
+func TestLoaderStoresAbsoluteSkillPathFromRelativeRoot(t *testing.T) {
+	root := t.TempDir()
+	skillDir := filepath.Join(root, "disk-skill")
+	referencesDir := filepath.Join(skillDir, "references")
+	if err := os.MkdirAll(referencesDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("---\nname: disk-skill\ndescription: test\n---\nRead references/guide.md."), 0o644); err != nil {
+		t.Fatalf("write SKILL.md: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(referencesDir, "guide.md"), []byte("guide"), 0o644); err != nil {
+		t.Fatalf("write guide: %v", err)
+	}
+
+	workdir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error: %v", err)
+	}
+	relativeRoot, err := filepath.Rel(workdir, root)
+	if err != nil {
+		t.Fatalf("Rel() error: %v", err)
+	}
+	loader := NewLoader(relativeRoot)
+	if err := loader.Load(); err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	skill, err := loader.Get("disk-skill")
+	if err != nil {
+		t.Fatalf("Get() error: %v", err)
+	}
+	wantBasePath, err := filepath.Abs(skillDir)
+	if err != nil {
+		t.Fatalf("Abs() error: %v", err)
+	}
+	if skill.BasePath != filepath.Clean(wantBasePath) || !filepath.IsAbs(skill.BasePath) {
+		t.Fatalf("BasePath = %q, want absolute %q", skill.BasePath, wantBasePath)
+	}
+	content, err := loader.ReadFile("disk-skill", "references/guide.md")
+	if err != nil || string(content) != "guide" {
+		t.Fatalf("ReadFile() = %q, %v; want guide", content, err)
+	}
+}
+
 func TestLoaderListFilesRejectsPathTraversal(t *testing.T) {
 	root := t.TempDir()
 	skillDir := filepath.Join(root, "disk-skill")

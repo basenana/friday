@@ -155,11 +155,12 @@ func UnsubscribeAll(b *eventbus.Bus, ids ...string) {
 
 // UserTextInput is the payload schema of inbox user.text envelopes.
 type UserTextInput struct {
-	Text     string               `json:"text"`
-	TurnID   string               `json:"turn_id,omitempty"`
-	Delivery InputDelivery        `json:"delivery,omitempty"`
-	Images   []types.ImageContent `json:"images,omitempty"`
-	Metadata map[string]any       `json:"metadata,omitempty"`
+	Text        string               `json:"text"`
+	DisplayText string               `json:"display_text,omitempty"`
+	TurnID      string               `json:"turn_id,omitempty"`
+	Delivery    InputDelivery        `json:"delivery,omitempty"`
+	Images      []types.ImageContent `json:"images,omitempty"`
+	Metadata    map[string]any       `json:"metadata,omitempty"`
 }
 
 // FormSubmitInput is the payload schema of inbox form.submit envelopes.

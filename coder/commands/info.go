@@ -3,8 +3,6 @@ package commands
 import (
 	"fmt"
 	"strings"
-
-	"github.com/basenana/friday/core/session"
 )
 
 // --- /context ---
@@ -17,19 +15,7 @@ func (contextCmd) Description() string { return "Show context window occupancy" 
 func (contextCmd) Metadata() Metadata {
 	return Metadata{Usage: "/context", Category: "Info", Policy: PolicyImmediate}
 }
-func (contextCmd) Execute(ctx *Context) (*Result, error) {
-	sess := currentSession(ctx)
-	if sess == nil {
-		return MessageResult("no active session"), nil
-	}
-	window := sess.Context.PromptBudget.ContextWindow
-	tokens := sess.Context.TokenCheckpoint.PromptTokens
-	if window <= 0 {
-		return MessageResult(fmt.Sprintf("Prompt tokens: %d (context window unknown)", tokens)), nil
-	}
-	pct := float64(tokens) / float64(window) * 100
-	return MessageResult(fmt.Sprintf("Context: %d / %d tokens (%.1f%%)", tokens, window, pct)), nil
-}
+func (contextCmd) Execute(_ *Context) (*Result, error) { return ResultOf(ShowContextAction{}), nil }
 
 // --- /compact ---
 
@@ -75,19 +61,43 @@ func (statusCmd) Metadata() Metadata {
 }
 func (statusCmd) Execute(_ *Context) (*Result, error) { return ResultOf(ShowStatusAction{}), nil }
 
-// currentSession fetches the session behind ctx.SessionID.
-func currentSession(ctx *Context) *session.Session {
-	if ctx.Session != nil {
-		return ctx.Session.Current()
+type mcpCmd struct{}
+
+func (mcpCmd) Name() string        { return "mcp" }
+func (mcpCmd) Aliases() []string   { return nil }
+func (mcpCmd) Description() string { return "List and manage MCP servers" }
+func (mcpCmd) Metadata() Metadata {
+	return Metadata{Usage: "/mcp [inspect|trust|untrust|refresh|reconnect] [server]", Category: "Info", Policy: PolicyImmediate}
+}
+func (mcpCmd) Execute(ctx *Context) (*Result, error) {
+	op, server := "list", ""
+	var args []string
+	if ctx != nil {
+		args = ctx.Args
 	}
-	if ctx.SessMgr == nil || ctx.SessionID == "" {
-		return nil
+	if len(args) > 0 {
+		op = strings.ToLower(args[0])
 	}
-	sess, _, err := ctx.SessMgr.GetOrCreateByID(ctx.SessionID)
-	if err != nil {
-		return nil
+	if len(args) > 1 {
+		server = args[1]
 	}
-	return sess
+	switch op {
+	case "list":
+		if len(args) > 0 {
+			return nil, fmt.Errorf("usage: /mcp")
+		}
+	case "refresh":
+		if len(args) > 2 {
+			return nil, fmt.Errorf("usage: /mcp refresh [server]")
+		}
+	case "inspect", "trust", "untrust", "reconnect":
+		if server == "" || len(args) != 2 {
+			return nil, fmt.Errorf("usage: /mcp %s <server>", op)
+		}
+	default:
+		return nil, fmt.Errorf("unknown MCP operation %q", op)
+	}
+	return ResultOf(MCPAction{Operation: op, Server: server}), nil
 }
 
 func shortID(id string) string {
@@ -107,4 +117,5 @@ func RegisterInfoCommands(reg *Registry) {
 	reg.Register(compactCmd{})
 	reg.Register(modelCmd{})
 	reg.Register(statusCmd{})
+	reg.Register(mcpCmd{})
 }

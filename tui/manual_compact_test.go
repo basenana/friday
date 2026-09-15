@@ -71,6 +71,26 @@ func TestManualCompactActionStartsAsyncState(t *testing.T) {
 	}
 }
 
+func TestManualCompactRestoresEvictedActor(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	old, ok := m.registry.Get(m.sessionID)
+	if !ok {
+		t.Fatal("expected initial actor")
+	}
+	m.registry.Shutdown(m.sessionID)
+
+	msg, ok := m.compactManually(m.sessionID)().(manualCompactFinishedMsg)
+	if !ok {
+		t.Fatal("compact command returned unexpected message")
+	}
+	if msg.err != nil {
+		t.Fatalf("compact after actor eviction: %v", msg.err)
+	}
+	if rebuilt, live := m.registry.Get(m.sessionID); !live || rebuilt == old {
+		t.Fatalf("manual compact did not rebuild actor: old=%p rebuilt=%p live=%v", old, rebuilt, live)
+	}
+}
+
 func TestFinishManualCompactReportsSuccessAndFailure(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
 		m, _, _ := newTestModel(t)

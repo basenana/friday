@@ -43,13 +43,13 @@ func TestTerminalSafeStripsControlSequences(t *testing.T) {
 
 func TestSlashPopupFiltersAndCompletes(t *testing.T) {
 	m, _, _ := newTestModel(t)
-	m.textarea.SetValue("/rev")
+	m.textarea.SetValue("/compa")
 	m.refreshMenu()
-	if m.menu.mode != menuCommands || len(m.menu.items) != 1 || m.menu.items[0].label != "/review" {
+	if m.menu.mode != menuCommands || len(m.menu.items) != 1 || m.menu.items[0].label != "/compact" {
 		t.Fatalf("unexpected menu: %#v", m.menu)
 	}
 	m.acceptMenuSelection(false)
-	if got := m.textarea.Value(); got != "/review " {
+	if got := m.textarea.Value(); got != "/compact " {
 		t.Fatalf("completion = %q", got)
 	}
 }
@@ -244,6 +244,35 @@ func TestRestoreProposedPlanReopensHandoff(t *testing.T) {
 	}
 }
 
+func TestInfoCommandsRestoreEvictedActor(t *testing.T) {
+	for _, command := range []string{"/context", "/status", "/tasks"} {
+		t.Run(command, func(t *testing.T) {
+			m, _, _ := newTestModel(t)
+			old, ok := m.registry.Get(m.sessionID)
+			if !ok {
+				t.Fatal("expected initial actor")
+			}
+			m.registry.Shutdown(m.sessionID)
+			before := len(m.messages)
+			got, _ := m.handleSlash(command)
+			m = got.(*model)
+			rebuilt, live := m.registry.Get(m.sessionID)
+			if !live || rebuilt == old {
+				t.Fatalf("%s did not rebuild actor: old=%p rebuilt=%p live=%v", command, old, rebuilt, live)
+			}
+			if command == "/tasks" {
+				if m.selector == nil || m.selector.kind != selectorTasks {
+					t.Fatal("/tasks did not open the task selector")
+				}
+				return
+			}
+			if len(m.messages) <= before || strings.Contains(m.messages[len(m.messages)-1].content, "unavailable") {
+				t.Fatalf("%s response = %#v", command, m.messages[before:])
+			}
+		})
+	}
+}
+
 func TestPlanHandoffCompactsAndImplementsInCurrentSession(t *testing.T) {
 	m, mgr, raw := newTestModel(t)
 	plan := planning.Artifact{ID: "plan-current", SessionID: m.sessionID, Version: 1, Title: "Current", Status: planning.ArtifactProposed, Markdown: "## Summary\ncurrent plan"}
@@ -259,6 +288,11 @@ func TestPlanHandoffCompactsAndImplementsInCurrentSession(t *testing.T) {
 	}
 	originalID := m.sessionID
 	m.mode, m.latestPlan, m.planHandoff = collaboration.ModePlan, &plan, &planHandoffState{}
+	oldActor, ok := m.registry.Get(originalID)
+	if !ok {
+		t.Fatal("expected initial actor")
+	}
+	m.registry.Shutdown(originalID)
 
 	got, cmd := m.updatePlanHandoff(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = got.(*model)
@@ -278,6 +312,9 @@ func TestPlanHandoffCompactsAndImplementsInCurrentSession(t *testing.T) {
 	}
 	if m.sessionID != originalID || len(after) != len(before) {
 		t.Fatalf("approval changed session: id=%q want=%q sessions=%d/%d", m.sessionID, originalID, len(after), len(before))
+	}
+	if rebuilt, ok := m.registry.Get(originalID); !ok || rebuilt == oldActor {
+		t.Fatalf("approval did not rebuild the evicted actor: old=%p rebuilt=%p live=%v", oldActor, rebuilt, ok)
 	}
 	if m.planCompacting || !m.running || m.mode != collaboration.ModeDefault || m.latestPlan.Status != planning.ArtifactAccepted {
 		t.Fatalf("handoff: compacting=%v running=%v mode=%q plan=%+v", m.planCompacting, m.running, m.mode, m.latestPlan)
@@ -671,7 +708,11 @@ func TestPlanHandoffRendersCompletePlanCardWithoutInternalScrolling(t *testing.T
 	if !strings.Contains(view, "Approve") || !strings.Contains(view, "Request changes") {
 		t.Fatalf("plan handoff missing actions: %q", view)
 	}
-	if strings.Contains(view, "PgUp") || strings.Contains(view, "PgDn") || strings.Contains(view, "Summary") {
+	if !strings.Contains(view, interactiveStyle(true).Render("› Approve · implement")) ||
+		!strings.Contains(view, interactiveStyle(false).Render("  Request changes")) {
+		t.Fatalf("plan handoff selection styles are inconsistent: %q", view)
+	}
+	if strings.Contains(view, "Summary") {
 		t.Fatalf("handoff still contains an internal plan viewport: %q", view)
 	}
 	for _, width := range []int{80, 40, 30, 20} {
@@ -684,6 +725,33 @@ func TestPlanHandoffRendersCompletePlanCardWithoutInternalScrolling(t *testing.T
 		if lines := len(strings.Split(strings.TrimRight(output, "\n"), "\n")); lines > m.height {
 			t.Fatalf("%d-column layout uses %d lines, terminal has %d", width, lines, m.height)
 		}
+	}
+}
+
+func TestPlanHandoffScrollsConversationWithoutChangingSelection(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	_, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 14})
+	fillHistory(m, 24)
+	m.latestPlan = &planning.Artifact{ID: "plan-scroll", Version: 1, Title: "Scrollable", Markdown: strings.Repeat("plan detail\n", 20)}
+	m.ensurePlanCard(m.latestPlan)
+	m.planHandoff = &planHandoffState{}
+	_ = m.View()
+	bottom := m.viewport.YOffset()
+	if bottom == 0 {
+		t.Fatal("expected scrollable plan history")
+	}
+
+	gotModel, _ := m.Update(tea.MouseWheelMsg{Button: tea.MouseWheelUp})
+	m = gotModel.(*model)
+	if m.viewport.YOffset() >= bottom || m.planHandoff.selected != 0 {
+		t.Fatalf("wheel scroll: offset=%d bottom=%d selected=%d", m.viewport.YOffset(), bottom, m.planHandoff.selected)
+	}
+
+	beforePage := m.viewport.YOffset()
+	gotModel, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyPgUp})
+	m = gotModel.(*model)
+	if m.viewport.YOffset() >= beforePage || m.planHandoff.selected != 0 {
+		t.Fatalf("page scroll: offset=%d before=%d selected=%d", m.viewport.YOffset(), beforePage, m.planHandoff.selected)
 	}
 }
 
@@ -788,7 +856,7 @@ func TestEventLogRestoresTranscript(t *testing.T) {
 	}
 	eventsToWrite := []events.Event{
 		events.NewEvent(events.KindRunStarted, "turn"),
-		events.NewEvent(events.KindCustom, "turn").WithName(events.CustomInputAccepted).WithPayload(events.InputAcceptedBody{TurnID: "turn", Text: "hello"}),
+		events.NewEvent(events.KindCustom, "turn").WithName(events.CustomInputAccepted).WithPayload(events.InputAcceptedBody{TurnID: "turn", Text: "expanded instructions", DisplayText: "/writer hello"}),
 		events.NewEvent(events.KindTextMessageStart, "turn"),
 		events.NewEvent(events.KindTextMessageContent, "turn").WithPayload(events.TextMessageContentData{Content: "world"}),
 		events.NewEvent(events.KindTextMessageEnd, "turn"),
@@ -805,7 +873,7 @@ func TestEventLogRestoresTranscript(t *testing.T) {
 	if err := m.loadTranscript(m.sessionID); err != nil {
 		t.Fatal(err)
 	}
-	if len(m.messages) != 3 || m.messages[0].kind != blockUser || m.messages[1].content != "world" || m.messages[2].content != "completed in <1s" {
+	if len(m.messages) != 3 || m.messages[0].kind != blockUser || m.messages[0].content != "/writer hello" || m.messages[1].content != "world" || m.messages[2].content != "completed in <1s" {
 		t.Fatalf("restored messages = %#v", m.messages)
 	}
 }

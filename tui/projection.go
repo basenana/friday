@@ -84,7 +84,9 @@ func (m *model) applyProjection(p transcriptProjection) {
 	m.seenInputs = p.seenInputs
 	m.cards = p.cards
 	m.todos = append([]todoItem(nil), p.todos...)
-	m.promptHistory = p.promptHistory
+	if m.projectMgr == nil {
+		m.promptHistory = p.promptHistory
+	}
 	m.tokenCount = p.tokenCount
 	m.iteration = p.iteration
 	m.running = false

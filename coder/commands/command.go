@@ -22,7 +22,6 @@ type Action interface{ commandAction() }
 type AppendMessageAction struct{ Content string }
 type ClearSessionAction struct{ SessionID string }
 type QuitAction struct{}
-type RunAgentAction struct{ Agent, Input string }
 type OpenCardAction struct{ ID string }
 type ShowToolAction struct{ ID string }
 type ShowDiffAction struct{}
@@ -37,6 +36,11 @@ type DeleteSessionAction struct{ Target string }
 type OpenModelAction struct{}
 type SetModelAction struct{ Target string }
 type ShowStatusAction struct{}
+type ShowContextAction struct{}
+type MCPAction struct {
+	Operation string
+	Server    string
+}
 type CompactSessionAction struct{}
 type StartLoopAction struct{ Task string }
 type SetModeAction struct {
@@ -47,7 +51,6 @@ type SetModeAction struct {
 func (AppendMessageAction) commandAction()  {}
 func (ClearSessionAction) commandAction()   {}
 func (QuitAction) commandAction()           {}
-func (RunAgentAction) commandAction()       {}
 func (OpenCardAction) commandAction()       {}
 func (ShowToolAction) commandAction()       {}
 func (ShowDiffAction) commandAction()       {}
@@ -62,6 +65,8 @@ func (DeleteSessionAction) commandAction()  {}
 func (OpenModelAction) commandAction()      {}
 func (SetModelAction) commandAction()       {}
 func (ShowStatusAction) commandAction()     {}
+func (ShowContextAction) commandAction()    {}
+func (MCPAction) commandAction()            {}
 func (CompactSessionAction) commandAction() {}
 func (StartLoopAction) commandAction()      {}
 func (SetModeAction) commandAction()        {}

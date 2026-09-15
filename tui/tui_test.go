@@ -258,7 +258,14 @@ func TestUpdateIgnoresStaleSubscriptionMessages(t *testing.T) {
 	}
 }
 
-func TestMouseEventsDoNotCaptureNativeTerminalSelection(t *testing.T) {
+func TestViewEnablesMouseWheelReporting(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	if got := m.View().MouseMode; got != tea.MouseModeCellMotion {
+		t.Fatalf("mouse mode = %v, want cell motion", got)
+	}
+}
+
+func TestMouseWheelScrollsConversation(t *testing.T) {
 	m, _, _ := newTestModel(t)
 	if _, cmd := m.Update(tea.WindowSizeMsg{Width: 80, Height: 12}); cmd != nil {
 		// no-op
@@ -279,8 +286,41 @@ func TestMouseEventsDoNotCaptureNativeTerminalSelection(t *testing.T) {
 		Button: tea.MouseWheelUp,
 	})
 	got := gotModel.(*model)
-	if got.viewport.YOffset() != bottomOffset {
-		t.Fatalf("synthetic mouse event changed YOffset: got %d want %d", got.viewport.YOffset(), bottomOffset)
+	if got.viewport.YOffset() >= bottomOffset {
+		t.Fatalf("mouse wheel did not scroll conversation: got %d, bottom %d", got.viewport.YOffset(), bottomOffset)
+	}
+}
+
+func TestMouseWheelScrollsDetailBeforeConversation(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	_, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 16})
+	fillHistory(m, 20)
+	_ = m.View()
+	conversationOffset := m.viewport.YOffset()
+	m.detail = newDetailState("details", strings.Repeat("detail line\n", 30), m.width, m.height)
+	m.detail.view.GotoBottom()
+	detailBottom := m.detail.view.YOffset()
+	if detailBottom == 0 {
+		t.Fatal("expected scrollable detail content")
+	}
+
+	gotModel, _ := m.Update(tea.MouseWheelMsg{Button: tea.MouseWheelUp})
+	got := gotModel.(*model)
+	if got.detail.view.YOffset() >= detailBottom {
+		t.Fatalf("mouse wheel did not scroll detail: got %d, bottom %d", got.detail.view.YOffset(), detailBottom)
+	}
+	if got.viewport.YOffset() != conversationOffset {
+		t.Fatalf("detail scroll moved conversation: got %d want %d", got.viewport.YOffset(), conversationOffset)
+	}
+}
+
+func TestNonWheelMouseEventsRemainNonInteractive(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	m.planHandoff = &planHandoffState{selected: 1}
+	gotModel, _ := m.Update(tea.MouseClickMsg{Button: tea.MouseLeft})
+	got := gotModel.(*model)
+	if got.planHandoff == nil || got.planHandoff.selected != 1 {
+		t.Fatalf("mouse click changed plan selection: %#v", got.planHandoff)
 	}
 }
 
@@ -391,6 +431,25 @@ func TestBackgroundColorMessageUpdatesTheme(t *testing.T) {
 	}
 
 	m.applyTheme(true)
+}
+
+func TestInteractiveStylesDistinguishSelectedAndInactiveRows(t *testing.T) {
+	defer configureTheme(true)
+	for _, dark := range []bool{false, true} {
+		configureTheme(dark)
+		selected := interactiveStyle(true)
+		if !selected.GetBold() || selected.GetForeground() != themeAccent {
+			t.Fatalf("dark=%v selected style: bold=%v foreground=%v want %v", dark, selected.GetBold(), selected.GetForeground(), themeAccent)
+		}
+		inactive := interactiveStyle(false)
+		if inactive.GetBold() || inactive.GetForeground() != themeMuted {
+			t.Fatalf("dark=%v inactive style: bold=%v foreground=%v want %v", dark, inactive.GetBold(), inactive.GetForeground(), themeMuted)
+		}
+		primary := primaryActionStyle()
+		if !primary.GetBold() || primary.GetForeground() != themeAccent {
+			t.Fatalf("dark=%v primary style: bold=%v foreground=%v want %v", dark, primary.GetBold(), primary.GetForeground(), themeAccent)
+		}
+	}
 }
 
 func TestViewDeclaresConfiguredAlternateScreen(t *testing.T) {

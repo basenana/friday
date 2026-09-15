@@ -87,7 +87,12 @@ var skillsDeleteCmd = &cobra.Command{
 			fmt.Printf("Skill not found: %s\n", skillName)
 			os.Exit(1)
 		}
-		if err := ensureSkillDeletionAllowed(cfg.ProjectScoped(), ws.SkillsPath(), skill); err != nil {
+		writableSkillsPath, err := ws.WritablePath("skills")
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		if err := ensureSkillDeletionAllowed(writableSkillsPath, skill); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
@@ -101,14 +106,14 @@ var skillsDeleteCmd = &cobra.Command{
 	},
 }
 
-func ensureSkillDeletionAllowed(projectScoped bool, writableSkillsPath string, skill *skills.Skill) error {
-	if !projectScoped || skill == nil {
+func ensureSkillDeletionAllowed(writableSkillsPath string, skill *skills.Skill) error {
+	if skill == nil {
 		return nil
 	}
 	if filepath.Clean(filepath.Dir(skill.BasePath)) == filepath.Clean(writableSkillsPath) {
 		return nil
 	}
-	return fmt.Errorf("cannot delete inherited HOME skill %q from a project; add a project override or run the command outside the project", skill.Name)
+	return fmt.Errorf("cannot delete skill %q outside the writable workspace layer", skill.Name)
 }
 
 var skillsInstallURL string
@@ -129,7 +134,11 @@ var skillsInstallCmd = &cobra.Command{
 		}
 
 		ws := configuredWorkspace(cfg)
-		skillsPath := ws.SkillsPath()
+		skillsPath, err := ws.WritablePath("skills")
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
 
 		// Ensure skills directory exists
 		if err := os.MkdirAll(skillsPath, 0755); err != nil {
@@ -137,15 +146,15 @@ var skillsInstallCmd = &cobra.Command{
 			os.Exit(1)
 		}
 
-		var err error
+		var installErr error
 		if skillsInstallURL != "" {
-			err = installSkillFromURL(skillsPath, skillsInstallURL)
+			installErr = installSkillFromURL(skillsPath, skillsInstallURL)
 		} else {
-			err = installSkillFromFile(skillsPath, skillsInstallFile)
+			installErr = installSkillFromFile(skillsPath, skillsInstallFile)
 		}
 
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "failed to install skill: %v\n", err)
+		if installErr != nil {
+			fmt.Fprintf(os.Stderr, "failed to install skill: %v\n", installErr)
 			os.Exit(1)
 		}
 	},

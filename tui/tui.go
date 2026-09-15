@@ -24,8 +24,10 @@ import (
 	"github.com/basenana/friday/core/actor/events"
 	"github.com/basenana/friday/core/collaboration"
 	"github.com/basenana/friday/core/planning"
+	coresession "github.com/basenana/friday/core/session"
 	"github.com/basenana/friday/core/types"
 	"github.com/basenana/friday/sessions"
+	"github.com/basenana/friday/skills"
 )
 
 // Run launches the interactive TUI. Blocks until the user quits.
@@ -47,8 +49,8 @@ func Run(sessMgr *sessions.Manager, cfg *config.Config, sessionID string) error 
 		"requested_session", sessionID != "",
 		"alternate_screen", m.alternateScreen,
 	)
-	// Do not enable terminal mouse reporting: leaving it disabled preserves the
-	// terminal's native click-and-drag text selection behavior.
+	// Mouse reporting is declared by View so wheel input can scroll the active
+	// viewport. Non-wheel mouse events remain non-interactive.
 	final, err := tea.NewProgram(m).Run()
 	if err != nil {
 		m.logError("TUI program failed", err, "duration_ms", elapsedMilliseconds(started))
@@ -156,8 +158,9 @@ type model struct {
 	loopManager *coderloop.Manager
 	workdir     string
 
-	cmdRegistry *codercmds.Registry
-	cfg         *config.Config
+	cmdRegistry   *codercmds.Registry
+	skillRegistry *skills.Registry
+	cfg           *config.Config
 
 	subscriptionToken uint64
 	messages          []chatBlock
@@ -260,7 +263,8 @@ func baseModelAt(sessMgr *sessions.Manager, registry *actor.Registry, cmdRegistr
 
 	m := &model{
 		sessMgr: sessMgr, runtime: sessMgr, registry: registry, cmdRegistry: cmdRegistry, cfg: cfg,
-		sessionID: sessionID, textarea: ta, viewport: viewport.New(viewport.WithWidth(80), viewport.WithHeight(20)),
+		skillRegistry: registry.SkillRegistry(),
+		sessionID:     sessionID, textarea: ta, viewport: viewport.New(viewport.WithWidth(80), viewport.WithHeight(20)),
 		spinner:   spinner.New(spinner.WithSpinner(spinner.Dot), spinner.WithStyle(accentStyle)),
 		toolCalls: make(map[string]int), seenInputs: make(map[string]bool),
 		cards:        make(map[string]*cardState),
@@ -268,7 +272,14 @@ func baseModelAt(sessMgr *sessions.Manager, registry *actor.Registry, cmdRegistr
 		textBlock: -1, reasonBlock: -1,
 		now: time.Now,
 	}
-	m.loopManager = coderloop.NewManager(registry.Bus())
+	m.loopManager = coderloop.NewManager(
+		registry.Bus(),
+		coderloop.WithInputDispatcher(registry.DispatchInput),
+		coderloop.WithActorLease(func(sessionID string) (func(), error) {
+			_, release, err := registry.AcquireLifecycle(sessionID)
+			return release, err
+		}),
+	)
 	m.mode = m.runtime.CollaborationMode(sessionID)
 	m.activeModel, _ = configuredSessionModel(m.runtime, cfg, sessionID)
 	// Focus after the textarea has reached its final storage location. The
@@ -296,10 +307,11 @@ func (m *model) Init() tea.Cmd {
 type dispatchQueuedMsg struct{}
 
 type initialSessionLoadedMsg struct {
-	sessionID  string
-	feed       *bus.Feed
-	projection transcriptProjection
-	err        error
+	sessionID     string
+	feed          *bus.Feed
+	projection    transcriptProjection
+	promptHistory []string
+	err           error
 }
 
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -339,6 +351,13 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.layout()
 		}
 		return m, nil
+	case mcpOperationMsg:
+		if msg.err != nil {
+			m.appendBlock(chatBlock{kind: blockError, content: "mcp: " + msg.err.Error()})
+		} else {
+			m.appendBlock(chatBlock{kind: blockAssistant, content: msg.content})
+		}
+		return m.dispatchIfIdle()
 	case initialSessionLoadedMsg:
 		m.loading = false
 		if msg.err != nil {
@@ -360,6 +379,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.subscriptionToken++
 		m.applyProjection(msg.projection)
+		if m.projectMgr != nil {
+			m.promptHistory = append([]string(nil), msg.promptHistory...)
+			m.historyIndex = -1
+		}
 		if plan, err := m.runtime.LoadLatestPlan(msg.sessionID); err != nil {
 			m.appendBlock(chatBlock{kind: blockError, content: "restore plan: " + err.Error()})
 		} else {
@@ -439,9 +462,20 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 		return m, nil
+	case tea.MouseWheelMsg:
+		if m.loading || m.fatalErr != nil || m.planCompacting || m.manualCompacting {
+			return m, nil
+		}
+		var cmd tea.Cmd
+		if m.detail != nil {
+			m.detail.view, cmd = m.detail.view.Update(msg)
+		} else {
+			m.viewport, cmd = m.viewport.Update(msg)
+		}
+		return m, cmd
 	case tea.MouseMsg:
-		// Mouse reporting is intentionally disabled by Run so the terminal owns
-		// selection. Ignore synthetic mouse messages in embedded/test programs.
+		// Mouse reporting is enabled for wheel scrolling. Click, release, and
+		// motion events are intentionally non-interactive.
 		return m, nil
 	}
 	var cmd tea.Cmd
@@ -468,7 +502,7 @@ func (m *model) loadInitialSession() tea.Cmd {
 			)
 			return initialSessionLoadedMsg{sessionID: sessionID, err: wrapped}
 		}
-		succeed := func(sessionID string, feed *bus.Feed, projection transcriptProjection, created bool) initialSessionLoadedMsg {
+		succeed := func(sessionID string, feed *bus.Feed, projection transcriptProjection, promptHistory []string, created bool) initialSessionLoadedMsg {
 			tuiLogger().Infow("initial session loaded",
 				"session_id", sessionID,
 				"project_mode", projectMode,
@@ -476,7 +510,7 @@ func (m *model) loadInitialSession() tea.Cmd {
 				"duration_ms", elapsedMilliseconds(started),
 				"message_count", len(projection.messages),
 			)
-			return initialSessionLoadedMsg{sessionID: sessionID, feed: feed, projection: projection}
+			return initialSessionLoadedMsg{sessionID: sessionID, feed: feed, projection: projection, promptHistory: promptHistory}
 		}
 		if projectMgr != nil {
 			sessionID, created, err := prepareInitialProjectSession(projectMgr, requested)
@@ -514,7 +548,20 @@ func (m *model) loadInitialSession() tea.Cmd {
 				cleanup()
 				return fail("activate project session", sessionID, err)
 			}
-			return succeed(sessionID, feed, projection, created)
+			var promptHistory []string
+			entries, historyErr := projectMgr.LoadUserHistory()
+			if historyErr != nil {
+				tuiLogger().Warnw("failed to load project user history",
+					"session_id", sessionID,
+					"error", boundedTUILogText(historyErr.Error()),
+				)
+			} else {
+				promptHistory = make([]string, 0, len(entries))
+				for _, entry := range entries {
+					promptHistory = append(promptHistory, entry.Text)
+				}
+			}
+			return succeed(sessionID, feed, projection, promptHistory, created)
 		}
 		sessionID, err := prepareInitialSessionID(sessMgr, requested)
 		if err != nil {
@@ -532,7 +579,7 @@ func (m *model) loadInitialSession() tea.Cmd {
 			feed.Close()
 			return fail("prepare session actor", sessionID, err)
 		}
-		return succeed(sessionID, feed, projection, false)
+		return succeed(sessionID, feed, projection, nil, false)
 	}
 }
 
@@ -722,13 +769,23 @@ func (m *model) submitComposer() (tea.Model, tea.Cmd) {
 	if text == "" {
 		return m, nil
 	}
-	m.rememberPrompt(text)
+	m.recordPrompt(text)
 	m.textarea.Reset()
 	m.menu = menuState{}
 	if strings.HasPrefix(text, "/") {
 		name, _, _ := parseSlash(text)
 		if cmd, ok := m.cmdRegistry.Lookup(name); ok && m.running {
 			if codercmds.CommandMetadata(cmd).Policy == codercmds.PolicyDeferred {
+				m.queued = append(m.queued, pendingInput{text: text})
+				m.layout()
+				return m, nil
+			}
+		} else if m.running {
+			_, found, err := m.resolveSlashSkill(name, true)
+			if err != nil {
+				m.appendBlock(chatBlock{kind: blockError, content: "refresh skills: " + err.Error()})
+			}
+			if found {
 				m.queued = append(m.queued, pendingInput{text: text})
 				m.layout()
 				return m, nil
@@ -756,7 +813,7 @@ func (m *model) queueComposer() (tea.Model, tea.Cmd) {
 	if text == "" {
 		return m, nil
 	}
-	m.rememberPrompt(text)
+	m.recordPrompt(text)
 	active, err := m.isLoopActive()
 	if err != nil {
 		m.appendBlock(chatBlock{kind: blockError, content: "queue input: " + err.Error()})
@@ -798,16 +855,24 @@ func (m *model) dispatchNextQueued() (tea.Model, tea.Cmd) {
 }
 
 func (m *model) startUserTurn(text string, delivery bus.InputDelivery) (tea.Model, tea.Cmd) {
+	return m.startUserTurnWithDisplay(text, "", delivery)
+}
+
+func (m *model) startUserTurnWithDisplay(text, displayText string, delivery bus.InputDelivery) (tea.Model, tea.Cmd) {
 	turnID := types.NewID()
+	renderText := displayText
+	if renderText == "" {
+		renderText = text
+	}
 	if delivery == bus.DeliverySteer {
 		// Steering is an explicit interruption of an autonomous Loop. Persist
 		// cancellation before publishing the preempting input.
 		m.cancelActiveLoop()
 		m.flushStreaming(true)
 	}
-	m.appendBlock(chatBlock{kind: blockUser, id: turnID, content: text})
+	m.appendBlock(chatBlock{kind: blockUser, id: turnID, content: renderText})
 	m.seenInputs[turnID] = true
-	if err := m.sendUserText(text, delivery, turnID); err != nil {
+	if err := m.sendUserTextWithDisplay(text, displayText, delivery, turnID); err != nil {
 		m.appendBlock(chatBlock{kind: blockError, content: err.Error()})
 		return m, nil
 	}
@@ -824,8 +889,10 @@ func (m *model) startUserTurn(text string, delivery bus.InputDelivery) (tea.Mode
 
 func (m *model) cancelRun() (tea.Model, tea.Cmd) {
 	m.cancelActiveLoop()
-	m.registry.Bus().Publish(bus.TopicPreempt(m.sessionID),
-		bus.NewScopedPreempt(m.sessionID, "user.local", "user cancelled", bus.PreemptCurrent))
+	if err := m.registry.DispatchPreempt(bus.NewScopedPreempt(m.sessionID, "user.local", "user cancelled", bus.PreemptCurrent)); err != nil {
+		m.appendBlock(chatBlock{kind: blockError, content: "cancel: " + err.Error()})
+		return m, nil
+	}
 	m.cancelling = true
 	return m, nil
 }
@@ -834,14 +901,18 @@ func (m *model) cancelActiveLoop() bool {
 	if m.loopManager == nil {
 		return false
 	}
-	if lifecycle, ok := m.registry.Lifecycle(m.sessionID); ok && lifecycle.Current() != nil {
-		if cancelled, err := m.loopManager.Cancel(context.Background(), lifecycle.Current()); err != nil {
-			m.appendBlock(chatBlock{kind: blockError, content: "cancel loop: " + err.Error()})
-		} else if cancelled {
-			m.loopActive = false
-			m.appendBlock(chatBlock{kind: blockDivider, content: "loop · cancelled"})
-			return true
-		}
+	sess, release, err := m.acquireCurrentSession()
+	if err != nil {
+		m.appendBlock(chatBlock{kind: blockError, content: "cancel loop: " + err.Error()})
+		return false
+	}
+	defer release()
+	if cancelled, err := m.loopManager.Cancel(context.Background(), sess); err != nil {
+		m.appendBlock(chatBlock{kind: blockError, content: "cancel loop: " + err.Error()})
+	} else if cancelled {
+		m.loopActive = false
+		m.appendBlock(chatBlock{kind: blockDivider, content: "loop · cancelled"})
+		return true
 	}
 	return false
 }
@@ -850,12 +921,16 @@ func (m *model) recordLoopRunFinished(stopReason string) {
 	if m.loopManager == nil {
 		return
 	}
-	if lifecycle, ok := m.registry.Lifecycle(m.sessionID); ok && lifecycle.Current() != nil {
-		if err := m.loopManager.RecordRunFinished(context.Background(), lifecycle.Current(), stopReason); err != nil {
-			m.appendBlock(chatBlock{kind: blockError, content: "record loop state: " + err.Error()})
-		} else if err := m.refreshLoopStatus(); err != nil {
-			m.appendBlock(chatBlock{kind: blockError, content: "read loop state: " + err.Error()})
-		}
+	sess, release, err := m.acquireCurrentSession()
+	if err != nil {
+		m.appendBlock(chatBlock{kind: blockError, content: "record loop state: " + err.Error()})
+		return
+	}
+	defer release()
+	if err := m.loopManager.RecordRunFinished(context.Background(), sess, stopReason); err != nil {
+		m.appendBlock(chatBlock{kind: blockError, content: "record loop state: " + err.Error()})
+	} else if err := m.refreshLoopStatus(); err != nil {
+		m.appendBlock(chatBlock{kind: blockError, content: "read loop state: " + err.Error()})
 	}
 }
 
@@ -863,12 +938,16 @@ func (m *model) resumeLoop() {
 	if m.loopManager == nil {
 		return
 	}
-	if lifecycle, ok := m.registry.Lifecycle(m.sessionID); ok && lifecycle.Current() != nil {
-		if err := m.loopManager.Resume(context.Background(), lifecycle.Current()); err != nil {
-			m.appendBlock(chatBlock{kind: blockError, content: "resume loop: " + err.Error()})
-		} else if err := m.refreshLoopStatus(); err != nil {
-			m.appendBlock(chatBlock{kind: blockError, content: "read loop state: " + err.Error()})
-		}
+	sess, release, err := m.acquireCurrentSession()
+	if err != nil {
+		m.appendBlock(chatBlock{kind: blockError, content: "resume loop: " + err.Error()})
+		return
+	}
+	defer release()
+	if err := m.loopManager.Resume(context.Background(), sess); err != nil {
+		m.appendBlock(chatBlock{kind: blockError, content: "resume loop: " + err.Error()})
+	} else if err := m.refreshLoopStatus(); err != nil {
+		m.appendBlock(chatBlock{kind: blockError, content: "read loop state: " + err.Error()})
 	}
 }
 
@@ -885,24 +964,41 @@ func (m *model) isLoopActive() (bool, error) {
 	if m.loopManager == nil {
 		return false, nil
 	}
-	lifecycle, ok := m.registry.Lifecycle(m.sessionID)
-	if !ok || lifecycle.Current() == nil {
-		return false, nil
+	sess, release, err := m.acquireCurrentSession()
+	if err != nil {
+		return false, err
 	}
-	return m.loopManager.IsActive(context.Background(), lifecycle.Current())
+	defer release()
+	return m.loopManager.IsActive(context.Background(), sess)
+}
+
+func (m *model) acquireCurrentSession() (*coresession.Session, func(), error) {
+	lifecycle, release, err := m.registry.AcquireLifecycle(m.sessionID)
+	if err != nil {
+		return nil, nil, err
+	}
+	sess := lifecycle.Current()
+	if sess == nil {
+		release()
+		return nil, nil, fmt.Errorf("restored session is unavailable")
+	}
+	return sess, release, nil
 }
 
 func (m *model) sendUserText(text string, delivery bus.InputDelivery, turnID string) error {
-	if _, err := m.registry.GetOrCreate(m.sessionID); err != nil {
+	return m.sendUserTextWithDisplay(text, "", delivery, turnID)
+}
+
+func (m *model) sendUserTextWithDisplay(text, displayText string, delivery bus.InputDelivery, turnID string) error {
+	if err := m.registry.DispatchInput(bus.NewUserInput(m.sessionID, "user.local", bus.UserTextInput{
+		Text: text, DisplayText: displayText, TurnID: turnID, Delivery: delivery,
+	})); err != nil {
 		m.logError("failed to prepare actor before publishing user input", err,
 			"turn_id", turnID,
 			"delivery", delivery,
 		)
 		return err
 	}
-	m.registry.Bus().Publish(bus.TopicInbox(m.sessionID), bus.NewUserInput(m.sessionID, "user.local", bus.UserTextInput{
-		Text: text, TurnID: turnID, Delivery: delivery,
-	}))
 	m.logInfo("user input published",
 		"turn_id", turnID,
 		"delivery", delivery,
@@ -1089,9 +1185,15 @@ func (m *model) handleCustomEvent(evt events.Event) tea.Cmd {
 			return nil
 		}
 		if !m.seenInputs[d.TurnID] {
-			m.appendBlock(chatBlock{kind: blockUser, id: d.TurnID, content: d.Text})
+			displayText := d.Text
+			if d.DisplayText != "" {
+				displayText = d.DisplayText
+			}
+			m.appendBlock(chatBlock{kind: blockUser, id: d.TurnID, content: displayText})
 			m.seenInputs[d.TurnID] = true
-			m.rememberPrompt(d.Text)
+			if m.projectMgr == nil {
+				m.rememberPrompt(displayText)
+			}
 		}
 	case events.CustomReasoningDelta:
 		var d events.ReasoningDeltaBody

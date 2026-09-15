@@ -705,7 +705,7 @@ type openConfirmation struct {
 
 func (c *openConfirmation) View(width int) string {
 	return menuStyle.Width(max(width-4, 20)).Render("Open this artifact with the system application?\n" +
-		truncateWidth(terminalSafe(c.target), max(width-8, 16)) + "\n" + accentStyle.Render("y") + " open · " + mutedStyle.Render("n/esc cancel"))
+		truncateWidth(terminalSafe(c.target), max(width-8, 16)) + "\n" + primaryActionStyle().Render("y") + " open · " + mutedStyle.Render("n/esc cancel"))
 }
 
 func (m *model) handleOpenCommand(args []string) (tea.Model, tea.Cmd) {

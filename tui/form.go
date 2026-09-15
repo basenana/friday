@@ -432,7 +432,9 @@ func (m *model) validateCurrentQuestion() error {
 
 func (m *model) cancelForm() (tea.Model, tea.Cmd) {
 	id := m.form.id
-	m.registry.Bus().Publish(bus.TopicInbox(m.sessionID), bus.NewFormCancel(m.sessionID, "user.local", bus.FormCancelInput{FormID: id}))
+	if err := m.registry.DispatchInput(bus.NewFormCancel(m.sessionID, "user.local", bus.FormCancelInput{FormID: id})); err != nil {
+		m.appendBlock(chatBlock{kind: blockError, content: "cancel form: " + err.Error()})
+	}
 	m.form = nil
 	m.layout()
 	return m, nil
@@ -464,7 +466,10 @@ func (m *model) submitForm() (tea.Model, tea.Cmd) {
 		}
 		values[f.fields[i].schema.Name] = value
 	}
-	m.registry.Bus().Publish(bus.TopicInbox(m.sessionID), bus.NewFormSubmit(m.sessionID, "user.local", bus.FormSubmitInput{FormID: f.id, Values: values}))
+	if err := m.registry.DispatchInput(bus.NewFormSubmit(m.sessionID, "user.local", bus.FormSubmitInput{FormID: f.id, Values: values})); err != nil {
+		f.err = "Form is no longer active: " + err.Error()
+		return m, nil
+	}
 	f.submitting = true
 	f.err = ""
 	return m, nil
@@ -767,9 +772,9 @@ func (f *formState) View(width int) string {
 			line += " *"
 		}
 		if i == f.active && isTextField(field.schema.Type) {
-			lines = append(lines, accentStyle.Render(line), f.editor.View())
+			lines = append(lines, interactiveStyle(true).Render(line), f.editor.View())
 		} else {
-			lines = append(lines, line+"  "+mutedStyle.Render(value))
+			lines = append(lines, interactiveStyle(i == f.active).Render(line+"  "+value))
 		}
 		if i == f.active && field.schema.Help != "" {
 			lines = append(lines, mutedStyle.Render(terminalSafe(field.schema.Help)))
@@ -831,10 +836,10 @@ func (f *formState) viewQuestions(width int) string {
 				label += " — " + option.Description
 			}
 			marker := "  ○ "
-			style := mutedStyle
+			style := interactiveStyle(false)
 			if i == field.option {
 				marker = "› ● "
-				style = accentStyle.Copy().Bold(true)
+				style = interactiveStyle(true)
 			}
 			wrapped := strings.Split(ansi.Wrap(terminalSafe(label), max(contentWidth-lipgloss.Width(marker), 8), ""), "\n")
 			for lineIndex, line := range wrapped {

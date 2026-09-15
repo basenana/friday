@@ -500,6 +500,46 @@ func TestActor_TurnMetadataPropagatesToAgentRequest(t *testing.T) {
 	}
 }
 
+func TestActor_DisplayTextIsPersistedButNotSentToAgent(t *testing.T) {
+	mock := newMockAgent(chatScript{deltas: []types.Delta{{Content: "ok"}}})
+	lc := &recordingLifecycle{}
+	a, _ := newTestActor(mock, WithTurnLifecycle(lc))
+	sub := a.Subscribe()
+	a.Start(context.Background())
+	defer a.Stop()
+
+	if err := a.Send(context.Background(), UserTextMessage{
+		Text:        "expanded skill instructions",
+		DisplayText: "/writer task",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	eventsSeen := collectEvents(t, sub, hasRunFinished)
+
+	requests := mock.requestSnapshot()
+	if len(requests) != 1 || requests[0].UserMessage != "expanded skill instructions" {
+		t.Fatalf("agent requests = %#v", requests)
+	}
+	startInfos := lc.startInfoSnapshot()
+	if len(startInfos) != 1 || startInfos[0].Preview != "/writer task" {
+		t.Fatalf("turn preview = %#v", startInfos)
+	}
+	for _, event := range eventsSeen {
+		if event.Name != events.CustomInputAccepted {
+			continue
+		}
+		var body events.InputAcceptedBody
+		if err := events.DecodePayload(event, &body); err != nil {
+			t.Fatal(err)
+		}
+		if body.Text != "expanded skill instructions" || body.DisplayText != "/writer task" {
+			t.Fatalf("accepted input = %+v", body)
+		}
+		return
+	}
+	t.Fatal("input.accepted event not found")
+}
+
 func TestActor_OnTurnEventUsesTurnContext(t *testing.T) {
 	mock := newMockAgent(chatScript{deltas: []types.Delta{{Content: "ok"}}})
 	lc := &blockingEventLifecycle{released: make(chan struct{})}

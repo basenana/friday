@@ -98,8 +98,8 @@ func toolStatusStyle(block *chatBlock) (style lipgloss.Style, icon string) {
 
 func (m *model) presentTool(block *chatBlock) toolPresentation {
 	args, valid := decodeToolArguments(block.toolArgs)
-	if presentation, ok := m.presentBuiltinTool(block.toolName, args); ok {
-		if !valid && strings.TrimSpace(block.toolArgs) != "" && block.toolName != "write_todos" && block.toolName != "request_user_input" && block.toolName != collaboration.SubmitPlanToolName {
+	if presentation, ok := m.presentBuiltinTool(block, args); ok {
+		if !valid && strings.TrimSpace(block.toolArgs) != "" && block.toolName != "write_todos" && block.toolName != "request_user_input" && block.toolName != collaboration.SubmitPlanToolName && block.toolName != "load_skill" {
 			presentation.body = unavailableToolArguments(block)
 		}
 		return presentation
@@ -110,7 +110,7 @@ func (m *model) presentTool(block *chatBlock) toolPresentation {
 	}
 }
 
-func (m *model) presentBuiltinTool(name string, args map[string]any) (toolPresentation, bool) {
+func (m *model) presentBuiltinTool(block *chatBlock, args map[string]any) (toolPresentation, bool) {
 	value := func(key string) string { return stringValue(args[key]) }
 	fields := func(items ...string) string { return strings.Join(nonEmptyStrings(items...), "\n") }
 	command := func(title string, extras ...string) toolPresentation {
@@ -119,13 +119,30 @@ func (m *model) presentBuiltinTool(name string, args map[string]any) (toolPresen
 		return toolPresentation{title: title, body: body, specialized: true}
 	}
 
-	switch name {
+	switch block.toolName {
 	case "write_todos":
 		return toolPresentation{title: "Update todos", specialized: true}, true
 	case "request_user_input":
 		return toolPresentation{title: "Ask user", specialized: true}, true
 	case collaboration.SubmitPlanToolName:
 		return toolPresentation{title: "Submit plan", specialized: true}, true
+	case "load_skill":
+		name := value("name")
+		description := ""
+		if result, ok := decodeLoadSkillResult(block.toolOutput); ok {
+			if result.Name != "" {
+				name = result.Name
+			}
+			description = result.Description
+		}
+		return toolPresentation{
+			title: "Load skill",
+			body: fields(
+				labeledValue("name", name),
+				labeledValue("description", description),
+			),
+			specialized: true,
+		}, true
 	case "fs_read":
 		return toolPresentation{title: "Read file", body: labeledValue("path", value("path")), specialized: true}, true
 	case "fs_list":
@@ -206,6 +223,19 @@ func (m *model) presentBuiltinTool(name string, args map[string]any) (toolPresen
 	default:
 		return toolPresentation{}, false
 	}
+}
+
+type loadSkillResult struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+}
+
+func decodeLoadSkillResult(raw string) (loadSkillResult, bool) {
+	var result loadSkillResult
+	if strings.TrimSpace(raw) == "" || json.Unmarshal([]byte(raw), &result) != nil {
+		return loadSkillResult{}, false
+	}
+	return result, true
 }
 
 func decodeToolArguments(raw string) (map[string]any, bool) {

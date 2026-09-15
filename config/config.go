@@ -318,6 +318,11 @@ func (c *Config) StatePath() string {
 	return filepath.Join(c.DataDirPath(), "states")
 }
 
+// CachesPath is the root for reusable namespaced caches.
+func (c *Config) CachesPath() string {
+	return filepath.Join(c.DataDirPath(), "caches")
+}
+
 func (c *Config) TeamsPath() string {
 	return filepath.Join(c.DataDirPath(), "teams")
 }

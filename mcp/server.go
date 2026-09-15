@@ -13,6 +13,8 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
+// Server is the legacy single Streamable HTTP MCP client.
+// Deprecated: Use Manager with workspace/mcp JSON configuration.
 type Server struct {
 	Name     string
 	Describe string
@@ -22,8 +24,18 @@ type Server struct {
 	client *client.Client
 }
 
+// Connect initializes the deprecated single-server Streamable HTTP facade.
+// New integrations should use Manager and workspace/mcp JSON configuration.
 func (s *Server) Connect() error {
-	httpTransport, err := transport.NewStreamableHTTP(s.SSE.Endpoint)
+	if s.SSE == nil || strings.TrimSpace(s.SSE.Endpoint) == "" {
+		return fmt.Errorf("MCP streamable HTTP endpoint is required")
+	}
+	httpTransport, err := transport.NewStreamableHTTP(
+		s.SSE.Endpoint,
+		transport.WithHTTPHeaders(s.SSE.Headers),
+		transport.WithContinuousListening(),
+		transport.WithHTTPLogger(newTransportLogger(s.Name, TransportStreamableHTTP)),
+	)
 	if err != nil {
 		return fmt.Errorf("failed to create HTTP transport: %w", err)
 	}
@@ -130,6 +142,9 @@ func covertMCPTool(tool *mcp.Tool) *tools.Tool {
 	return converted
 }
 
+// MCPSse is the legacy Streamable HTTP endpoint configuration. The name is
+// retained for source compatibility.
+// Deprecated: Use ServerConfig with TransportStreamableHTTP.
 type MCPSse struct {
 	Endpoint string
 	Headers  map[string]string

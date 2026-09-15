@@ -58,11 +58,7 @@ func runInit(cwd string) error {
 	if err != nil {
 		return fmt.Errorf("load initialized config: %w", err)
 	}
-	ws := workspace.NewWorkspace(
-		initializedCfg.WorkspacePath(),
-		initializedCfg.MemoryPath(),
-		initializedCfg.WorkspaceFallbackPaths()...,
-	)
+	ws := workspace.NewFromConfig(initializedCfg)
 
 	if !isHomeFridayDir(fridayDir) {
 		if err := ws.EnsureDir(""); err != nil {
@@ -70,6 +66,9 @@ func runInit(cwd string) error {
 		}
 		if err := ws.MkdirAll("skills"); err != nil {
 			return fmt.Errorf("create project skills directory: %w", err)
+		}
+		if err := ws.MkdirAll("mcp"); err != nil {
+			return fmt.Errorf("create project MCP directory: %w", err)
 		}
 		fmt.Println("Project workspace initialized at:", ws.BasePath())
 		fmt.Println("Missing workspace files and skills will be inherited from HOME.")
@@ -95,6 +94,9 @@ func runInit(cwd string) error {
 	created, err := ws.InitWithParams(params)
 	if err != nil {
 		return fmt.Errorf("initialize HOME workspace: %w", err)
+	}
+	if err := ws.MkdirAll("mcp"); err != nil {
+		return fmt.Errorf("create MCP directory: %w", err)
 	}
 	if len(created) == 0 {
 		fmt.Println("Workspace already initialized at:", ws.BasePath())

@@ -13,6 +13,11 @@ func TestCommonPromptExplainsTwoCyclesAndCompletionTools(t *testing.T) {
 		"finish_devloop is only a development-to-review handoff",
 		"Only finish_reviewloop completes the Loop",
 		"returns to the development or review cycle that was interrupted",
+		"delegated the complete task to you for autonomous execution",
+		"responsible for the correctness, completeness, and verification",
+		"Never call request_user_input or enter_plan_mode",
+		"choose the approach you judge most appropriate and execute it directly",
+		"Record material assumptions and decisions in the Working Note",
 		"Optional Observations",
 	} {
 		if !strings.Contains(CommonSystemPrompt, want) {

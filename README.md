@@ -40,8 +40,9 @@ friday init
 ```
 
 This creates `.friday/` in the current directory. In a project it creates a
-configuration plus empty `workspace/` and `workspace/skills/` directories;
-missing workspace files and skills are inherited from `~/.friday/`. Running
+configuration plus empty `workspace/`, `workspace/skills/`, and
+`workspace/mcp/` directories; missing workspace files, skills, and MCP
+servers are inherited from `~/.friday/`. Running
 the command from your HOME directory initializes the global workspace with all
 default files.
 
@@ -113,6 +114,45 @@ Create `~/.friday/config.json` (or `friday.yaml`):
 
 </details>
 
+### MCP servers
+
+Place one or more JSON files in `~/.friday/workspace/mcp/`. Project-specific
+servers can be added under `.friday/workspace/mcp/`; a project declaration
+with the same server name overrides the HOME declaration.
+
+```json
+{
+  "mcpServers": {
+    "chrome-devtools": {
+      "command": "npx",
+      "args": ["-y", "chrome-devtools-mcp@latest"]
+    },
+    "remote-search": {
+      "url": "https://example.com/mcp",
+      "headers": {"Authorization": "Bearer $MCP_TOKEN"},
+      "includeTools": ["search"]
+    },
+    "legacy-events": {
+      "type": "sse",
+      "url": "https://example.com/sse"
+    }
+  }
+}
+```
+
+`command` selects stdio, `url` selects Streamable HTTP, and explicit
+`"type": "sse"` selects legacy SSE. Environment references in command
+arguments, env values, URLs, and headers are expanded when connecting.
+`excludeTools` is also supported and takes precedence over `includeTools`.
+
+HOME servers are trusted automatically. Project servers remain blocked until
+their exact configuration is approved with `friday mcp trust <server>` or
+`/mcp trust <server>` in the TUI; changing the configuration invalidates that
+approval. Use `friday mcp list`, `inspect`, `test`, `refresh`, `reconnect`, and
+`untrust` to manage them. Tool schemas are cached under
+`~/.friday/caches/mcp/`, so cached tools are available while Friday refreshes
+connections in the background.
+
 ### Chat
 
 ```bash
@@ -135,15 +175,16 @@ and interactive forms, and supports Codex-style follow-ups:
 - `Shift+Tab` toggles Default/Plan Mode while idle.
 - `Ctrl+J` inserts a newline, `Ctrl+G` opens `$VISUAL`/`$EDITOR`, and `Ctrl+R` searches prompt history.
 - `Esc` cancels the current task, while `Ctrl+C` exits.
-- Type `/` for the command menu. Use `/open <card-id>` for a confirmed external artifact preview and `/show <tool-id>` for complete tool output.
+- Type `/` for the command menu. Installed skills also appear there and can be invoked as `/skill-name [task]`; built-in commands take precedence over conflicting skill names. Use `/open <card-id>` for a confirmed external artifact preview and `/show <tool-id>` for complete tool output.
 
 #### TUI commands
 
 | Area | Commands |
 |------|----------|
 | Session | `/clear`, `/resume [id\|name]`, `/rename <name>`, `/archive [id\|name]`, `/delete [id\|name]`, `/quit` |
-| Collaboration | `/plan [task]`, `/plan off`, `/review [instructions]`, `/advisor <question>` |
+| Collaboration | `/plan [task]`, `/plan off` |
 | Model and context | `/model [provider/model\|model]`, `/status`, `/context`, `/compact` |
+| MCP | `/mcp`, `/mcp inspect <server>`, `/mcp trust <server>`, `/mcp untrust <server>`, `/mcp refresh [server]`, `/mcp reconnect <server>` |
 | Working tree and output | `/diff`, `/copy [n]`, `/open <card-id>`, `/show <tool-call-id>` |
 | Background tasks | `/tasks`, `/stop <task-id\|all>` |
 | Help | `/help [command]` |
@@ -297,6 +338,8 @@ connection can subscribe to multiple persisted sessions.
 ├── sessions/            # Conversation history
 ├── memory/              # Daily memory logs
 │   └── 2024-01-15.md
+├── caches/              # Namespaced reusable caches
+│   └── mcp/             # Cached MCP tool schemas
 ├── log/                 # Application logs
 └── workspace/           # Agent context files
     ├── SOUL.md          # Persona and tone
@@ -305,18 +348,25 @@ connection can subscribe to multiple persisted sessions.
     ├── IDENTITY.md      # Agent name and style
     ├── TOOLS.md         # Tool usage guidance
     ├── HEARTBEAT.md     # Periodic checklist
-    └── MEMORY.md        # Long-term memory
+    ├── MEMORY.md        # Long-term memory
+    ├── skills/          # Installed skills
+    └── mcp/             # MCP server JSON configurations
 
 <project>/.friday/
 ├── config.json          # Independent project configuration
 └── workspace/           # Project overrides for HOME workspace files
-    └── skills/          # Project skills; same-name skills override HOME
+    ├── skills/          # Project skills; same-name skills override HOME
+    └── mcp/             # Project MCP configs; explicit trust required
 ```
 
 Workspace files are resolved one by one: a project file overrides the
 same-named HOME file, while a missing project file falls back to HOME. Skills
-are merged similarly. In project scope, skill installation and deletion only
-modify project skills; inherited HOME skills cannot be deleted there.
+and MCP server definitions are merged similarly. In project scope, skill
+installation and deletion only modify project skills; inherited HOME skills
+cannot be deleted there.
+If a project explicitly points `workspace` at the HOME workspace, that shared
+layer remains readable but is treated as HOME and read-only from the project;
+set `workspace` to `workspace` to create project-local overrides.
 
 Sessions, daily memory, state, teams, projects, and proposals remain under the
 configured data directory (`~/.friday` by default), even when a project config

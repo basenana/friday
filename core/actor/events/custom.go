@@ -62,9 +62,10 @@ type ReasoningDeltaBody struct {
 // emitted immediately after RUN_STARTED so event logs can rebuild a transcript
 // without having to infer user messages from the intentionally short preview.
 type InputAcceptedBody struct {
-	TurnID   string `json:"turn_id"`
-	Text     string `json:"text"`
-	Delivery string `json:"delivery,omitempty"`
+	TurnID      string `json:"turn_id"`
+	Text        string `json:"text"`
+	DisplayText string `json:"display_text,omitempty"`
+	Delivery    string `json:"delivery,omitempty"`
 	// Sources are the transport producers whose inputs were coalesced into the
 	// turn. They describe provenance only and are never exposed to the model.
 	Sources []string `json:"sources,omitempty"`

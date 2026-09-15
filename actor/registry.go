@@ -6,8 +6,10 @@ package actor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -21,9 +23,11 @@ import (
 	"github.com/basenana/friday/core/logger"
 	"github.com/basenana/friday/core/planning"
 	coresession "github.com/basenana/friday/core/session"
+	fridaymcp "github.com/basenana/friday/mcp"
 	"github.com/basenana/friday/sandbox"
 	"github.com/basenana/friday/sessions"
 	"github.com/basenana/friday/setup"
+	"github.com/basenana/friday/skills"
 	"github.com/basenana/friday/workspace"
 )
 
@@ -35,8 +39,9 @@ type RegistryConfig struct {
 	// Workdir is the canonical runtime root used by file validation and agent
 	// tools. Empty preserves the legacy cwd fallback.
 	Workdir string
-	// IdleTimeout is how long an actor with no turn activity is kept
-	// alive before being shut down and evicted. Default 5m.
+	// IdleTimeout is how long an actor with no activity is kept alive before
+	// being shut down and evicted. Active turns, lifecycle leases, and running
+	// background tasks are never considered idle. Default 5m.
 	IdleTimeout time.Duration
 	// SweepInterval is the idle-sweep ticker period. Default 30s.
 	SweepInterval time.Duration
@@ -71,7 +76,7 @@ func DefaultRegistryConfig() RegistryConfig {
 // Registry manages one core/actor Actor per session, along with the
 // setup.AgentContext backing it. Actors are created lazily via
 // GetOrCreate and torn down on Shutdown, ShutdownAll, or after
-// IdleTimeout of inactivity.
+// IdleTimeout of inactivity, provided they own no protected work.
 type Registry struct {
 	mu      sync.Mutex
 	entries map[string]*managedActor
@@ -82,6 +87,8 @@ type Registry struct {
 	catalog sessions.RootCatalog
 	workdir string
 	bus     *eventbus.Bus
+	skills  *skills.Registry
+	mcp     *fridaymcp.Manager
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -107,6 +114,11 @@ func NewRegistry(sessMgr setup.SessionManager, appCfg *config.Config, cfg Regist
 	if workdir == "" {
 		workdir = workdirOrPWD()
 	}
+	ws := workspace.NewFromConfig(appCfg)
+	skillLoader := skills.NewLoader(ws.SkillsPaths()...)
+	if err := skillLoader.Load(); err != nil {
+		logger.New("actor.registry").Warnw("failed to load skills", "error", err)
+	}
 	r := &Registry{
 		entries: make(map[string]*managedActor),
 		cfg:     cfg,
@@ -115,8 +127,19 @@ func NewRegistry(sessMgr setup.SessionManager, appCfg *config.Config, cfg Regist
 		catalog: catalog,
 		workdir: workdir,
 		bus:     cfg.Bus,
+		skills:  skills.NewRegistry(skillLoader),
 		ctx:     ctx,
 		cancel:  cancel,
+	}
+	mcpManager, err := fridaymcp.NewManager(fridaymcp.ManagerConfig{
+		ConfigRoots: ws.MCPRoots(), ProjectRoot: workdir,
+		CacheRoot: appCfg.CachesPath(), TrustPath: filepath.Join(appCfg.StatePath(), "mcp_trust.json"),
+	})
+	if err != nil {
+		logger.New("actor.registry").Warnw("failed to load MCP configuration", "error", err)
+	} else {
+		r.mcp = mcpManager
+		go r.mcp.Warmup(r.ctx)
 	}
 	go r.sweepLoop()
 	return r
@@ -127,14 +150,28 @@ func NewRegistry(sessMgr setup.SessionManager, appCfg *config.Config, cfg Regist
 // calling actor methods directly.
 func (r *Registry) Bus() *eventbus.Bus { return r.bus }
 
+// SkillRegistry returns the shared, refreshable skills catalog used by all
+// agents owned by this registry.
+func (r *Registry) SkillRegistry() *skills.Registry { return r.skills }
+
+// MCPManager returns the process-shared MCP manager used by every actor.
+func (r *Registry) MCPManager() *fridaymcp.Manager { return r.mcp }
+
 // GetOrCreate returns the live Actor for sessionID, constructing it
 // (agent + session via setup.NewAgent) on first use. An actor is built
 // once for its lifetime; its session keeps in-memory history across
 // turns, with persistence handled by the session store.
 func (r *Registry) GetOrCreate(sessionID string) (result *coreactor.Actor, resultErr error) {
+	// Cache misses finish their bounded handshake before the first actor is
+	// exposed. Cached schemas remain non-blocking while their connection is
+	// refreshed in the background.
+	if r.mcp != nil {
+		r.mcp.Warmup(r.ctx)
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if e, ok := r.entries[sessionID]; ok && !e.stopped.Load() {
+		e.touch()
 		return e.actor, nil
 	}
 	if old, ok := r.entries[sessionID]; ok {
@@ -178,12 +215,13 @@ func (r *Registry) GetOrCreate(sessionID string) (result *coreactor.Actor, resul
 			return nil, fmt.Errorf("open session lifecycle %s: %w", sessionID, openErr)
 		}
 		agentCtx, err = setup.NewAgentWithLifecycle(lifecycle, r.sessMgr, agentCfg,
-			setup.WithProviderClient(client), setup.WithWorkdir(r.workdir))
+			setup.WithProviderClient(client), setup.WithSkillRegistry(r.skills), setup.WithMCPManager(r.mcp), setup.WithWorkdir(r.workdir))
 		if err != nil {
 			_ = lifecycle.Close()
 		}
 	} else {
-		agentCtx, err = setup.NewAgent(r.sessMgr, agentCfg, setup.WithSessionID(sessionID), setup.WithWorkdir(r.workdir))
+		agentCtx, err = setup.NewAgent(r.sessMgr, agentCfg, setup.WithSessionID(sessionID),
+			setup.WithSkillRegistry(r.skills), setup.WithMCPManager(r.mcp), setup.WithWorkdir(r.workdir))
 	}
 	if err != nil {
 		return nil, fmt.Errorf("setup agent for session %s: %w", sessionID, err)
@@ -230,6 +268,86 @@ func (r *Registry) GetOrCreate(sessionID string) (result *coreactor.Actor, resul
 	r.entries[sessionID] = e
 	bus.PublishStatus(r.bus, sessionID, e.actor.ID(), bus.StatusCreated)
 	return e.actor, nil
+}
+
+// AcquireLifecycle returns a live root-bound lifecycle and pins its actor
+// against idle eviction until the returned release function is called.
+// Explicit Shutdown still takes precedence over a lease.
+func (r *Registry) AcquireLifecycle(sessionID string) (sessions.SessionLifecycle, func(), error) {
+	if _, err := r.GetOrCreate(sessionID); err != nil {
+		return nil, nil, err
+	}
+	r.mu.Lock()
+	e, ok := r.entries[sessionID]
+	if !ok || e.stopped.Load() || e.agentCtx == nil || e.agentCtx.Lifecycle == nil {
+		r.mu.Unlock()
+		return nil, nil, fmt.Errorf("session actor %q is not running", sessionID)
+	}
+	e.acquire()
+	lifecycle := e.agentCtx.Lifecycle
+	r.mu.Unlock()
+
+	var once sync.Once
+	release := func() { once.Do(e.release) }
+	return lifecycle, release, nil
+}
+
+// DispatchInput delivers one actor inbox envelope. User text transparently
+// starts an evicted actor; stateful controls require the original live actor
+// because pending forms and cancellation targets cannot be reconstructed.
+func (r *Registry) DispatchInput(env bus.Envelope) error {
+	if strings.TrimSpace(env.Session) == "" {
+		return errors.New("input session is required")
+	}
+	if env.Name == bus.InboxUserText {
+		if _, err := r.GetOrCreate(env.Session); err != nil {
+			return err
+		}
+	}
+	e, release, err := r.acquireExisting(env.Session)
+	if err != nil {
+		return err
+	}
+	defer release()
+	if e.stopped.Load() {
+		return fmt.Errorf("session actor %q is not running", env.Session)
+	}
+	env.Topic = bus.TopicInbox(env.Session)
+	r.bus.Publish(env.Topic, env)
+	return nil
+}
+
+// DispatchPreempt delivers a preemption only to an existing actor. Starting a
+// replacement cannot cancel work owned by the previous actor instance.
+func (r *Registry) DispatchPreempt(env bus.Envelope) error {
+	if strings.TrimSpace(env.Session) == "" {
+		return errors.New("preempt session is required")
+	}
+	e, release, err := r.acquireExisting(env.Session)
+	if err != nil {
+		return err
+	}
+	defer release()
+	if e.stopped.Load() {
+		return fmt.Errorf("session actor %q is not running", env.Session)
+	}
+	env.Topic = bus.TopicPreempt(env.Session)
+	r.bus.Publish(env.Topic, env)
+	return nil
+}
+
+func (r *Registry) acquireExisting(sessionID string) (*managedActor, func(), error) {
+	r.mu.Lock()
+	e, ok := r.entries[sessionID]
+	if !ok || e.stopped.Load() {
+		r.mu.Unlock()
+		return nil, nil, fmt.Errorf("session actor %q is not running", sessionID)
+	}
+	e.acquire()
+	r.mu.Unlock()
+
+	var once sync.Once
+	return e, func() { once.Do(e.release) }, nil
 }
 
 func (r *Registry) configForSession(sessionID string) *config.Config {
@@ -284,10 +402,15 @@ func (r *Registry) ListTasks(sessionID string) []*sandbox.Task {
 }
 
 func (r *Registry) KillTask(sessionID, taskID string) error {
-	r.mu.Lock()
-	entry := r.entries[sessionID]
-	r.mu.Unlock()
-	if entry == nil || entry.stopped.Load() || entry.agentCtx == nil || entry.agentCtx.TaskManager == nil {
+	if _, err := r.GetOrCreate(sessionID); err != nil {
+		return fmt.Errorf("restore session actor: %w", err)
+	}
+	entry, release, err := r.acquireExisting(sessionID)
+	if err != nil {
+		return err
+	}
+	defer release()
+	if entry.agentCtx == nil || entry.agentCtx.TaskManager == nil {
 		return fmt.Errorf("session actor is not running")
 	}
 	if taskID == "all" {
@@ -409,10 +532,13 @@ func (r *Registry) ShutdownAll() {
 	for _, entry := range entries {
 		r.stopEntry(entry, false)
 	}
+	if r.mcp != nil {
+		_ = r.mcp.Close()
+	}
 }
 
-// sweepLoop evicts actors whose last turn activity is older than
-// IdleTimeout.
+// sweepLoop evicts actors that have exceeded IdleTimeout and own no protected
+// work.
 func (r *Registry) sweepLoop() {
 	ticker := time.NewTicker(r.cfg.SweepInterval)
 	defer ticker.Stop()
@@ -438,13 +564,26 @@ func (r *Registry) detachStale(now time.Time) []registryEntry {
 	defer r.mu.Unlock()
 	var stale []registryEntry
 	for id, e := range r.entries {
-		if e.stopped.Load() || now.Sub(time.Unix(0, e.lastActive.Load())) > r.cfg.IdleTimeout {
-			// Detach the exact instance while still holding the same lock used
-			// for the staleness decision. A replacement created later under the
-			// same session ID must never be targeted by this sweep.
+		if e.stopped.Load() {
 			delete(r.entries, id)
 			stale = append(stale, registryEntry{sessionID: id, managed: e})
+			continue
 		}
+		if now.Sub(time.Unix(0, e.lastActive.Load())) <= r.cfg.IdleTimeout {
+			continue
+		}
+		runningTasks := e.agentCtx != nil && e.agentCtx.TaskManager != nil && countRunningTasks(e.agentCtx.TaskManager.List("")) > 0
+		if e.protected() || runningTasks {
+			// Give completed turns, released leases, and finished background tasks
+			// a full idle window before the next eligibility decision.
+			e.touch()
+			continue
+		}
+		// Detach the exact instance while still holding the same lock used
+		// for the staleness decision. A replacement created later under the
+		// same session ID must never be targeted by this sweep.
+		delete(r.entries, id)
+		stale = append(stale, registryEntry{sessionID: id, managed: e})
 	}
 	return stale
 }

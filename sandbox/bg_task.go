@@ -13,29 +13,31 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/basenana/friday/core/logger"
 	"github.com/basenana/friday/core/tools"
 )
 
 type TaskStatus string
 
 const (
-	TaskRunning   TaskStatus = "running"
-	TaskCompleted TaskStatus = "completed"
-	TaskFailed    TaskStatus = "failed"
-	TaskKilled    TaskStatus = "killed"
+	TaskRunning     TaskStatus = "running"
+	TaskCompleted   TaskStatus = "completed"
+	TaskFailed      TaskStatus = "failed"
+	TaskKilled      TaskStatus = "killed"
+	TaskInterrupted TaskStatus = "interrupted"
 )
 
 type Task struct {
-	ID         string
-	Command    string
-	Workdir    string
-	PID        int
-	PGID       int
-	Status     TaskStatus
-	StartedAt  time.Time
-	FinishedAt *time.Time
-	ExitCode   int
-	Output     string
+	ID         string     `json:"id"`
+	Command    string     `json:"command"`
+	Workdir    string     `json:"workdir"`
+	PID        int        `json:"pid"`
+	PGID       int        `json:"pgid"`
+	Status     TaskStatus `json:"status"`
+	StartedAt  time.Time  `json:"started_at"`
+	FinishedAt *time.Time `json:"finished_at,omitempty"`
+	ExitCode   int        `json:"exit_code"`
+	Output     string     `json:"output,omitempty"`
 }
 
 type managedTask struct {
@@ -47,6 +49,51 @@ type TaskManager struct {
 	mu    sync.RWMutex
 	tasks map[string]*managedTask
 	exec  *Executor
+	store TaskStore
+}
+
+// NewPersistentTaskManager restores task snapshots from store. Records left
+// running by a previous process are terminalized as interrupted; process IDs
+// are never reused for signalling after restart.
+func NewPersistentTaskManager(exec *Executor, store TaskStore) (*TaskManager, error) {
+	tm := NewTaskManager(exec)
+	tm.store = store
+	if store == nil {
+		return tm, nil
+	}
+	tasks, err := store.Load(context.Background())
+	if err != nil {
+		return nil, err
+	}
+	for _, task := range tasks {
+		if task == nil || task.ID == "" {
+			continue
+		}
+		if task.Status == TaskRunning {
+			now := time.Now()
+			task.Status = TaskInterrupted
+			task.FinishedAt = &now
+			task.ExitCode = -1
+			if task.Output != "" {
+				task.Output += "\n"
+			}
+			task.Output += "[task interrupted by previous Friday process]"
+			if err := store.Upsert(context.Background(), task); err != nil {
+				return nil, err
+			}
+		}
+		done := make(chan struct{})
+		close(done)
+		tm.tasks[task.ID] = &managedTask{Task: *cloneTask(task), done: done}
+	}
+	return tm, nil
+}
+
+func (tm *TaskManager) persist(task *Task) error {
+	if tm == nil || tm.store == nil || task == nil {
+		return nil
+	}
+	return tm.store.Upsert(context.Background(), task)
 }
 
 func NewTaskManager(exec *Executor) *TaskManager {
@@ -129,10 +176,22 @@ func (tm *TaskManager) Start(command, workdir string) (*Task, error) {
 
 	var readers sync.WaitGroup
 	collector := &outputCollector{}
-
 	readers.Add(2)
 	go collectOutput(stdout, collector, &readers)
 	go collectOutput(stderr, collector, &readers)
+
+	if err := tm.persist(snapshotTask(task)); err != nil {
+		_ = signalTaskGroup(task.PGID, syscall.SIGKILL)
+		_ = cmd.Wait()
+		readers.Wait()
+		if cleanup != nil {
+			cleanup()
+		}
+		tm.mu.Lock()
+		delete(tm.tasks, task.ID)
+		tm.mu.Unlock()
+		return nil, fmt.Errorf("persist background task: %w", err)
+	}
 
 	go func() {
 		defer close(task.done)
@@ -145,23 +204,26 @@ func (tm *TaskManager) Start(command, workdir string) (*Task, error) {
 		output := collector.Output()
 
 		tm.mu.Lock()
-		defer tm.mu.Unlock()
 
 		task.Output = output
 		task.ExitCode = exitCodeFromCmd(cmd, waitErr)
 		now := time.Now()
-		task.FinishedAt = &now
-
-		if task.Status == TaskKilled {
-			return
+		if task.FinishedAt == nil {
+			task.FinishedAt = &now
 		}
 
-		if waitErr != nil {
-			task.Status = TaskFailed
-			return
+		if task.Status != TaskKilled {
+			if waitErr != nil {
+				task.Status = TaskFailed
+			} else {
+				task.Status = TaskCompleted
+			}
 		}
-
-		task.Status = TaskCompleted
+		snapshot := snapshotTask(task)
+		tm.mu.Unlock()
+		if err := tm.persist(snapshot); err != nil {
+			logger.New("sandbox.tasks").Warnw("failed to persist completed background task", "task_id", task.ID, "error", err)
+		}
 	}()
 
 	tm.mu.RLock()
@@ -270,13 +332,15 @@ func (tm *TaskManager) Kill(id string) error {
 	task.Status = TaskKilled
 	now := time.Now()
 	task.FinishedAt = &now
+	snapshot := snapshotTask(task)
 	tm.mu.Unlock()
+	persistErr := tm.persist(snapshot)
 
 	_ = signalTaskGroup(task.PGID, syscall.SIGTERM)
 
 	select {
 	case <-task.done:
-		return nil
+		return persistErr
 	case <-time.After(2 * time.Second):
 	}
 
@@ -287,7 +351,7 @@ func (tm *TaskManager) Kill(id string) error {
 	case <-time.After(2 * time.Second):
 	}
 
-	return nil
+	return persistErr
 }
 
 func signalTaskGroup(pgid int, sig syscall.Signal) error {
@@ -404,7 +468,7 @@ func newListTasksTool(tm *TaskManager) *tools.Tool {
 		tools.WithDescription(`List all background tasks with their status.
 
 Returns a table showing task ID, status, command, PID, and duration.`),
-		tools.WithString("status", tools.Description("Filter by status: running, completed, failed, killed"), tools.Enum("running", "completed", "failed", "killed")),
+		tools.WithString("status", tools.Description("Filter by status: running, completed, failed, killed, interrupted"), tools.Enum("running", "completed", "failed", "killed", "interrupted")),
 		tools.WithToolHandler(listTasksHandler(tm)),
 	)
 }

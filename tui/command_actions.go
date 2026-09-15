@@ -3,6 +3,7 @@ package tui
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -16,6 +17,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	fridaymcp "github.com/basenana/friday/mcp"
 
 	"github.com/basenana/friday/bus"
 	"github.com/basenana/friday/config"
@@ -80,11 +82,7 @@ func (s *selectorState) View(width int) string {
 		if s.items[i].description != "" {
 			line += "  " + s.items[i].description
 		}
-		if pos == s.selected {
-			line = accentStyle.Copy().Bold(true).Render(line)
-		} else {
-			line = mutedStyle.Render(line)
-		}
+		line = interactiveStyle(pos == s.selected).Render(line)
 		lines = append(lines, truncateWidth(line, max(width-8, 12)))
 	}
 	hint := "type to filter · ↑/↓ select · Enter open · Esc close"
@@ -263,6 +261,12 @@ func runningTaskCount(tasks []*sandbox.Task) int {
 }
 
 func (m *model) openTasksSelector() {
+	_, release, err := m.acquireCurrentSession()
+	if err != nil {
+		m.appendBlock(chatBlock{kind: blockError, content: "tasks: " + err.Error()})
+		return
+	}
+	defer release()
 	tasks := m.registry.ListTasks(m.sessionID)
 	sort.Slice(tasks, func(i, j int) bool {
 		if tasks[i].Status == sandbox.TaskRunning && tasks[j].Status != sandbox.TaskRunning {
@@ -287,7 +291,7 @@ func (c *commandConfirmation) View(width int) string {
 	if c.action == "stop" {
 		prompt = "Stop all running background tasks?"
 	}
-	return menuStyle.Width(max(width-4, 20)).Render(fmt.Sprintf("%s\n%s confirm · %s cancel", prompt, accentStyle.Render("y"), mutedStyle.Render("n/esc")))
+	return menuStyle.Width(max(width-4, 20)).Render(fmt.Sprintf("%s\n%s confirm · %s cancel", prompt, primaryActionStyle().Render("y"), mutedStyle.Render("n/esc")))
 }
 
 func titleWord(value string) string {
@@ -402,6 +406,12 @@ func (m *model) requestSessionConfirmation(action, target string) {
 }
 
 func (m *model) showStatus() {
+	_, release, err := m.acquireCurrentSession()
+	if err != nil {
+		m.appendBlock(chatBlock{kind: blockError, content: "status: " + err.Error()})
+		return
+	}
+	defer release()
 	meta, _ := m.runtime.GetStore().GetMeta(m.sessionID)
 	model := m.activeModel
 	name := "(unnamed)"
@@ -416,8 +426,85 @@ func (m *model) showStatus() {
 	if m.cfg.Sandbox != nil && !m.cfg.Sandbox.Sandbox.Enabled {
 		sandboxName = "disabled"
 	}
-	msg := fmt.Sprintf("## Friday status\n\n- Session: %s (`%s`)\n- Mode: `%s`\n- Model: `%s/%s`\n- Reasoning: `%s`\n- Workdir: `%s`\n- Context: %s\n- Sandbox: `%s`\n- Background tasks: %d", name, m.sessionID, m.mode, model.Provider, model.Model, effectiveEffort(m), m.workdir, contextLine, sandboxName, len(m.registry.ListTasks(m.sessionID)))
+	mcpSummary := "unavailable"
+	if manager := m.registry.MCPManager(); manager != nil {
+		statuses := manager.Status()
+		ready, blocked, failed := 0, 0, 0
+		for _, status := range statuses {
+			switch status.State {
+			case fridaymcp.StateReady, fridaymcp.StateCached:
+				ready++
+			case fridaymcp.StateBlocked:
+				blocked++
+			case fridaymcp.StateFailed, fridaymcp.StateDegraded:
+				failed++
+			}
+		}
+		mcpSummary = fmt.Sprintf("%d configured, %d available, %d blocked, %d degraded/failed", len(statuses), ready, blocked, failed)
+	}
+	msg := fmt.Sprintf("## Friday status\n\n- Session: %s (`%s`)\n- Mode: `%s`\n- Model: `%s/%s`\n- Reasoning: `%s`\n- Workdir: `%s`\n- Context: %s\n- Sandbox: `%s`\n- MCP: %s\n- Background tasks: %d", name, m.sessionID, m.mode, model.Provider, model.Model, effectiveEffort(m), m.workdir, contextLine, sandboxName, mcpSummary, len(m.registry.ListTasks(m.sessionID)))
 	m.appendBlock(chatBlock{kind: blockAssistant, content: msg})
+}
+
+type mcpOperationMsg struct {
+	content string
+	err     error
+}
+
+func runMCPOperation(manager *fridaymcp.Manager, operation, server string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		var err error
+		switch operation {
+		case "trust":
+			err = manager.Trust(ctx, server)
+		case "untrust":
+			err = manager.Untrust(ctx, server)
+		case "refresh":
+			err = manager.Refresh(ctx, server)
+		case "reconnect":
+			err = manager.Reconnect(ctx, server)
+		case "inspect", "list":
+		default:
+			err = fmt.Errorf("unknown operation %q", operation)
+		}
+		if err != nil {
+			return mcpOperationMsg{err: err}
+		}
+		statuses := manager.Status()
+		if operation == "inspect" {
+			status, inspectErr := manager.Inspect(server)
+			if inspectErr != nil {
+				return mcpOperationMsg{err: inspectErr}
+			}
+			statuses = []fridaymcp.ServerStatus{status}
+		}
+		return mcpOperationMsg{content: formatMCPStatuses(statuses)}
+	}
+}
+
+func formatMCPStatuses(statuses []fridaymcp.ServerStatus) string {
+	if len(statuses) == 0 {
+		return "No MCP servers configured."
+	}
+	var b strings.Builder
+	b.WriteString("## MCP servers\n\n")
+	for _, status := range statuses {
+		fmt.Fprintf(&b, "- `%s` — `%s` / `%s`, %d tools", status.Name, status.Transport, status.State, status.Tools)
+		if status.Project {
+			if status.Trusted {
+				b.WriteString(", trusted")
+			} else {
+				b.WriteString(", trust required")
+			}
+		}
+		if status.Error != "" {
+			fmt.Fprintf(&b, " — %s", status.Error)
+		}
+		b.WriteByte('\n')
+	}
+	return strings.TrimSpace(b.String())
 }
 
 func effectiveEffort(m *model) string {
@@ -710,11 +797,10 @@ func (m *model) renderPlanHandoff() string {
 		prefix := "  "
 		if i == p.selected {
 			prefix = "› "
-			option = accentStyle.Render(option)
 		}
-		lines = append(lines, prefix+option)
+		lines = append(lines, interactiveStyle(i == p.selected).Render(prefix+option))
 	}
-	lines = append(lines, mutedStyle.Render("↑/↓ select · Enter confirm · Esc close"))
+	lines = append(lines, mutedStyle.Render("Wheel/PgUp/PgDn history · ↑/↓ select · Enter confirm · Esc close"))
 	return menuStyle.Width(max(m.width-4, 20)).Render(strings.Join(lines, "\n"))
 }
 
@@ -729,6 +815,11 @@ func (m *model) updatePlanHandoff(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if key.Code == tea.KeyEsc {
 		m.planHandoff = nil
 		return m.dispatchIfIdle()
+	}
+	if key.Code == tea.KeyPgUp || key.Code == tea.KeyPgDown || key.String() == "ctrl+u" || key.String() == "ctrl+d" {
+		var cmd tea.Cmd
+		m.viewport, cmd = m.viewport.Update(key)
+		return m, cmd
 	}
 	switch key.Code {
 	case tea.KeyUp:
@@ -745,15 +836,9 @@ func (m *model) updatePlanHandoff(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if m.latestPlan == nil {
 			return m, nil
 		}
-		lifecycle, ok := m.registry.Lifecycle(m.sessionID)
-		if !ok || lifecycle.Current() == nil {
-			m.appendBlock(chatBlock{kind: blockError, content: "approve plan: active session unavailable"})
-			m.planHandoff = &planHandoffState{}
-			return m, nil
-		}
 		m.planCompacting = true
 		m.layout()
-		return m, compactForPlanApproval(m.sessionID, m.latestPlan.ID, lifecycle.Current())
+		return m, m.compactForPlanApproval(m.sessionID, m.latestPlan.ID)
 	}
 	return m, nil
 }
@@ -799,6 +884,20 @@ func compactManually(sessionID string, sess manualCompactor) tea.Cmd {
 	}
 }
 
+func (m *model) compactManually(sessionID string) tea.Cmd {
+	return func() tea.Msg {
+		lifecycle, release, err := m.registry.AcquireLifecycle(sessionID)
+		if err != nil {
+			return manualCompactFinishedMsg{sessionID: sessionID, err: fmt.Errorf("restore session: %w", err)}
+		}
+		defer release()
+		if lifecycle.Current() == nil {
+			return manualCompactFinishedMsg{sessionID: sessionID, err: errors.New("restored session is unavailable")}
+		}
+		return compactManually(sessionID, lifecycle.Current())()
+	}
+}
+
 func (m *model) finishManualCompact(msg manualCompactFinishedMsg) (tea.Model, tea.Cmd) {
 	m.manualCompacting = false
 	if msg.sessionID != m.sessionID {
@@ -833,6 +932,20 @@ func compactForPlanApproval(sessionID, planID string, sess planCompactor) tea.Cm
 	return func() tea.Msg {
 		err := sess.CompactHistoryWithTrigger(context.Background(), session.CompactTriggerPlanHandoff)
 		return planCompactFinishedMsg{sessionID: sessionID, planID: planID, tokens: int(sess.Tokens()), err: err}
+	}
+}
+
+func (m *model) compactForPlanApproval(sessionID, planID string) tea.Cmd {
+	return func() tea.Msg {
+		lifecycle, release, err := m.registry.AcquireLifecycle(sessionID)
+		if err != nil {
+			return planCompactFinishedMsg{sessionID: sessionID, planID: planID, err: fmt.Errorf("restore session: %w", err)}
+		}
+		defer release()
+		if lifecycle.Current() == nil {
+			return planCompactFinishedMsg{sessionID: sessionID, planID: planID, err: errors.New("restored session is unavailable")}
+		}
+		return compactForPlanApproval(sessionID, planID, lifecycle.Current())()
 	}
 }
 

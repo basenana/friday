@@ -13,8 +13,8 @@ import (
 	codercmds "github.com/basenana/friday/coder/commands"
 	"github.com/basenana/friday/core/collaboration"
 	"github.com/basenana/friday/core/planning"
-	"github.com/basenana/friday/core/types"
 	"github.com/basenana/friday/sessions"
+	"github.com/basenana/friday/skills"
 )
 
 func (m *model) handleSlash(text string) (tea.Model, tea.Cmd) {
@@ -24,8 +24,16 @@ func (m *model) handleSlash(text string) (tea.Model, tea.Cmd) {
 	}
 	cmd, found := m.cmdRegistry.Lookup(name)
 	if !found {
-		m.appendBlock(chatBlock{kind: blockError, content: "unknown command: /" + name + " (try /help)"})
-		return m.dispatchIfIdle()
+		skill, skillFound, err := m.resolveSlashSkill(name, true)
+		if err != nil {
+			m.appendBlock(chatBlock{kind: blockError, content: "refresh skills: " + err.Error()})
+			return m.dispatchIfIdle()
+		}
+		if !skillFound {
+			m.appendBlock(chatBlock{kind: blockError, content: "unknown command: /" + name + " (try /help)"})
+			return m.dispatchIfIdle()
+		}
+		return m.triggerSlashSkill(strings.TrimSpace(text), rawArgs, skill)
 	}
 	lifecycle, _ := m.registry.Lifecycle(m.sessionID)
 	legacyManager := m.sessMgr
@@ -46,6 +54,72 @@ func (m *model) handleSlash(text string) (tea.Model, tea.Cmd) {
 	}
 	m.logInfo("slash command completed", "command", name, "arg_count", len(parts), "action_count", actionCount)
 	return m.applyResult(result)
+}
+
+func (m *model) triggerSlashSkill(displayText, rawArgs string, skill *skills.Skill) (tea.Model, tea.Cmd) {
+	instructions := strings.TrimSpace(skill.Instructions)
+	payload := instructions
+	if rawArgs != "" {
+		if payload != "" {
+			payload += "\n\n"
+		}
+		payload += rawArgs
+	}
+	if payload == "" {
+		m.appendBlock(chatBlock{kind: blockError, content: "skill has no instructions: " + skill.Name})
+		return m.dispatchIfIdle()
+	}
+	m.logInfo("slash skill triggered", "skill", skill.Name, "arg_bytes", len(rawArgs), "instruction_bytes", len(instructions))
+	return m.startUserTurnWithDisplay(payload, displayText, bus.DeliveryNormal)
+}
+
+func (m *model) resolveSlashSkill(name string, refresh bool) (*skills.Skill, bool, error) {
+	if m.skillRegistry == nil {
+		return nil, false, nil
+	}
+	if refresh {
+		if err := m.skillRegistry.Refresh(); err != nil {
+			return nil, false, err
+		}
+	}
+	for _, skill := range m.slashSkills() {
+		if strings.EqualFold(skill.Name, name) {
+			return skill, true, nil
+		}
+	}
+	return nil, false, nil
+}
+
+func (m *model) slashSkills() []*skills.Skill {
+	if m.skillRegistry == nil {
+		return nil
+	}
+	byName := make(map[string][]*skills.Skill)
+	for _, skill := range m.skillRegistry.List() {
+		if skill == nil || !validSlashSkillName(skill.Name) {
+			continue
+		}
+		if _, conflict := m.cmdRegistry.Lookup(skill.Name); conflict {
+			continue
+		}
+		name := strings.ToLower(skill.Name)
+		byName[name] = append(byName[name], skill)
+	}
+	result := make([]*skills.Skill, 0, len(byName))
+	for _, matches := range byName {
+		if len(matches) == 1 {
+			result = append(result, matches[0])
+		}
+	}
+	sort.Slice(result, func(i, j int) bool {
+		return strings.ToLower(result[i].Name) < strings.ToLower(result[j].Name)
+	})
+	return result
+}
+
+func validSlashSkillName(name string) bool {
+	return name != "" && name == strings.TrimSpace(name) &&
+		!strings.HasPrefix(name, "/") && !strings.ContainsAny(name, " \t\r\n")
 }
 
 func parseSlash(text string) (name, rawArgs string, args []string) {
@@ -86,6 +160,7 @@ func (m *model) applyCommandAction(action codercmds.Action) tea.Cmd {
 		m.applyContentAction,
 		m.applyTaskAction,
 		m.applyModelAction,
+		m.applyMCPAction,
 		m.applyCollaborationAction,
 	} {
 		if handled, cmd := handler(action); handled {
@@ -94,6 +169,19 @@ func (m *model) applyCommandAction(action codercmds.Action) tea.Cmd {
 	}
 	m.appendBlock(chatBlock{kind: blockError, content: fmt.Sprintf("unsupported command action %T", action)})
 	return nil
+}
+
+func (m *model) applyMCPAction(action codercmds.Action) (bool, tea.Cmd) {
+	mcpAction, ok := action.(codercmds.MCPAction)
+	if !ok {
+		return false, nil
+	}
+	manager := m.registry.MCPManager()
+	if manager == nil {
+		m.appendBlock(chatBlock{kind: blockError, content: "MCP manager unavailable"})
+		return true, nil
+	}
+	return true, runMCPOperation(manager, mcpAction.Operation, mcpAction.Server)
 }
 
 func (m *model) applyLifecycleAction(action codercmds.Action) (bool, tea.Cmd) {
@@ -116,14 +204,29 @@ func (m *model) applyLifecycleAction(action codercmds.Action) (bool, tea.Cmd) {
 func (m *model) applySessionAction(action codercmds.Action) (bool, tea.Cmd) {
 	switch action := action.(type) {
 	case codercmds.CompactSessionAction:
-		lifecycle, ok := m.registry.Lifecycle(m.sessionID)
-		if !ok || lifecycle.Current() == nil {
-			m.appendBlock(chatBlock{kind: blockError, content: "compact: active session unavailable"})
-			return true, nil
-		}
 		m.manualCompacting = true
 		m.layout()
-		return true, tea.Batch(compactManually(m.sessionID, lifecycle.Current()), m.spinner.Tick)
+		return true, tea.Batch(m.compactManually(m.sessionID), m.spinner.Tick)
+	case codercmds.ShowContextAction:
+		lifecycle, release, err := m.registry.AcquireLifecycle(m.sessionID)
+		if err != nil {
+			m.appendBlock(chatBlock{kind: blockError, content: "context: " + err.Error()})
+			return true, nil
+		}
+		defer release()
+		sess := lifecycle.Current()
+		if sess == nil {
+			m.appendBlock(chatBlock{kind: blockError, content: "context: restored session is unavailable"})
+			return true, nil
+		}
+		window := sess.Context.PromptBudget.ContextWindow
+		tokens := sess.Context.TokenCheckpoint.PromptTokens
+		if window <= 0 {
+			m.appendBlock(chatBlock{kind: blockAssistant, content: fmt.Sprintf("Prompt tokens: %d (context window unknown)", tokens)})
+		} else {
+			m.appendBlock(chatBlock{kind: blockAssistant, content: fmt.Sprintf("Context: %d / %d tokens (%.1f%%)", tokens, window, float64(tokens)/float64(window)*100)})
+		}
+		return true, nil
 	case codercmds.ClearSessionAction:
 		if m.projectMgr != nil {
 			newID, err := m.createProjectRoot(true)
@@ -251,8 +354,6 @@ func (m *model) applyModelAction(action codercmds.Action) (bool, tea.Cmd) {
 
 func (m *model) applyCollaborationAction(action codercmds.Action) (bool, tea.Cmd) {
 	switch action := action.(type) {
-	case codercmds.RunAgentAction:
-		return true, m.runAgentCmd(action.Agent, action.Input)
 	case codercmds.SetModeAction:
 		mode := action.Mode
 		if mode == collaboration.ModePlan && m.mode == mode && action.Prompt == "" && m.latestPlan != nil && m.latestPlan.Status == planning.ArtifactProposed {
@@ -275,12 +376,18 @@ func (m *model) applyCollaborationAction(action codercmds.Action) (bool, tea.Cmd
 			m.appendBlock(chatBlock{kind: blockError, content: "/loop is unavailable in Plan Mode; run /plan off first"})
 			return true, nil
 		}
-		lifecycle, ok := m.registry.Lifecycle(m.sessionID)
-		if !ok || lifecycle.Current() == nil {
-			m.appendBlock(chatBlock{kind: blockError, content: "loop: active session unavailable"})
+		lifecycle, release, err := m.registry.AcquireLifecycle(m.sessionID)
+		if err != nil {
+			m.appendBlock(chatBlock{kind: blockError, content: "loop: " + err.Error()})
 			return true, nil
 		}
-		if err := m.loopManager.Start(context.Background(), lifecycle.Current(), action.Task); err != nil {
+		defer release()
+		sess := lifecycle.Current()
+		if sess == nil {
+			m.appendBlock(chatBlock{kind: blockError, content: "loop: restored session is unavailable"})
+			return true, nil
+		}
+		if err := m.loopManager.Start(context.Background(), sess, action.Task); err != nil {
 			m.appendBlock(chatBlock{kind: blockError, content: "loop: " + err.Error()})
 			return true, nil
 		}
@@ -451,24 +558,6 @@ func sessionSwitchError(cause, cleanup error) error {
 	return fmt.Errorf("%w; cleanup session: %v", cause, cleanup)
 }
 
-func (m *model) runAgentCmd(agentName, input string) tea.Cmd {
-	if m.running {
-		m.appendBlock(chatBlock{kind: blockError, content: "a task is already running; send it after the current task with Tab"})
-		return nil
-	}
-	wrapped := fmt.Sprintf("[/%s] %s\n\nDelegate this to the %q subagent via the run_task tool. Return the subagent's final report verbatim as your answer.", agentName, input, agentName)
-	turnID := types.NewID()
-	m.appendBlock(chatBlock{kind: blockUser, id: turnID, content: fmt.Sprintf("[/%s] %s", agentName, input)})
-	m.seenInputs[turnID] = true
-	if err := m.sendUserText(wrapped, bus.DeliveryNormal, turnID); err != nil {
-		m.appendBlock(chatBlock{kind: blockError, content: err.Error()})
-		return nil
-	}
-	m.running = true
-	m.resetStreaming()
-	return m.spinner.Tick
-}
-
 func (m *model) afterComposerEdit() {
 	m.historyIndex = -1
 	if m.menu.mode == menuHistory {
@@ -487,6 +576,11 @@ func (m *model) refreshMenu() {
 		}
 		return
 	}
+	if m.menu.mode != menuCommands && m.skillRegistry != nil {
+		if err := m.skillRegistry.Refresh(); err != nil {
+			m.logWarn("failed to refresh slash skills", "error", boundedTUILogText(err.Error()))
+		}
+	}
 	query := strings.ToLower(strings.TrimPrefix(value, "/"))
 	var items []menuItem
 	for _, cmd := range m.cmdRegistry.List() {
@@ -494,6 +588,13 @@ func (m *model) refreshMenu() {
 		search := label + " " + cmd.Description() + " " + strings.Join(cmd.Aliases(), " ")
 		if query == "" || strings.Contains(strings.ToLower(search), query) {
 			items = append(items, menuItem{value: label, label: label, description: cmd.Description()})
+		}
+	}
+	for _, skill := range m.slashSkills() {
+		label := "/" + skill.Name
+		search := label + " " + skill.Description
+		if query == "" || strings.Contains(strings.ToLower(search), query) {
+			items = append(items, menuItem{value: label, label: label, description: skill.Description})
 		}
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].label < items[j].label })
@@ -547,10 +648,27 @@ func (m *model) rememberPrompt(text string) {
 		return
 	}
 	m.promptHistory = append(m.promptHistory, text)
-	if len(m.promptHistory) > 200 {
+	if m.projectMgr == nil && len(m.promptHistory) > 200 {
 		m.promptHistory = m.promptHistory[len(m.promptHistory)-200:]
 	}
 	m.historyIndex = -1
+}
+
+func (m *model) recordPrompt(text string) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return
+	}
+	if m.projectMgr != nil {
+		now := time.Now()
+		if m.now != nil {
+			now = m.now()
+		}
+		if _, err := m.projectMgr.AppendUserHistory(text, m.sessionID, now); err != nil {
+			m.logWarn("failed to append project user history", "error", boundedTUILogText(err.Error()))
+		}
+	}
+	m.rememberPrompt(text)
 }
 
 func (m *model) restoreHistory(delta int) {

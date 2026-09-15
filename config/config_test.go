@@ -41,6 +41,9 @@ func TestLoadForDirPrefersProjectAndKeepsConfigIndependent(t *testing.T) {
 	if cfg.DataDirPath() != filepath.Join(home, ".friday") {
 		t.Fatalf("DataDirPath() = %q, want HOME data", cfg.DataDirPath())
 	}
+	if cfg.CachesPath() != filepath.Join(home, ".friday", "caches") {
+		t.Fatalf("CachesPath() = %q, want HOME caches", cfg.CachesPath())
+	}
 	for _, name := range []string{"workspace", "memory"} {
 		want := filepath.Join(home, ".friday", name)
 		if !hasPath(cfg.Sandbox.Sandbox.Filesystem.Write, want) {

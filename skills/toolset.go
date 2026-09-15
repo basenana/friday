@@ -21,7 +21,7 @@ func NewSkillTools(registry *Registry) []*tools.Tool {
 // newLoadSkillTool creates the load_skill tool
 func newLoadSkillTool(registry *Registry) *tools.Tool {
 	return tools.NewTool("load_skill",
-		tools.WithDescription(`Load and return the complete instructions for one of the skills listed in the system prompt. The instructions are added to the conversation context.`),
+		tools.WithDescription(`Load and return the complete instructions for one of the skills listed in the system prompt. The result includes dir_path, the skill's absolute directory; resolve relative file references in the instructions against it. The instructions are added to the conversation context.`),
 		tools.WithString("name",
 			tools.Required(),
 			tools.Description("The name of the skill to load"),
@@ -40,6 +40,7 @@ func newLoadSkillTool(registry *Registry) *tools.Tool {
 			result := map[string]interface{}{
 				"name":         skill.Name,
 				"description":  skill.Description,
+				"dir_path":     skill.BasePath,
 				"instructions": skill.Instructions,
 			}
 

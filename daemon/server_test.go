@@ -33,6 +33,16 @@ func (r *fakeRegistry) GetOrCreate(id string) (*coreactor.Actor, error) {
 	return nil, nil
 }
 
+func (r *fakeRegistry) DispatchInput(env bus.Envelope) error {
+	r.bus.Publish(bus.TopicInbox(env.Session), env)
+	return nil
+}
+
+func (r *fakeRegistry) DispatchPreempt(env bus.Envelope) error {
+	r.bus.Publish(bus.TopicPreempt(env.Session), env)
+	return nil
+}
+
 func (r *fakeRegistry) Bus() *eventbus.Bus { return r.bus }
 func (r *fakeRegistry) ShutdownAll()       {}
 

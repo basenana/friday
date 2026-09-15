@@ -71,6 +71,25 @@ func TestTUILoopRejectedInPlanMode(t *testing.T) {
 	}
 }
 
+func TestTUILoopRestoresEvictedActor(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	defer m.loopManager.Close()
+	old, ok := m.registry.Get(m.sessionID)
+	if !ok {
+		t.Fatal("expected initial actor")
+	}
+	m.registry.Shutdown(m.sessionID)
+
+	got, cmd := m.handleSlash("/loop implement it")
+	m = got.(*model)
+	if cmd == nil {
+		t.Fatal("/loop returned no command after actor eviction")
+	}
+	if rebuilt, live := m.registry.Get(m.sessionID); !live || rebuilt == old {
+		t.Fatalf("/loop did not rebuild actor: old=%p rebuilt=%p live=%v", old, rebuilt, live)
+	}
+}
+
 func TestTUITabDuringLoopPublishesNormalActorInput(t *testing.T) {
 	m, _, _ := newTestModel(t)
 	lifecycle, _ := m.registry.Lifecycle(m.sessionID)

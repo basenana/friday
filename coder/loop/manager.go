@@ -17,6 +17,8 @@ import (
 
 type phase int
 
+const loopCompactThreshold int64 = 80_000
+
 const (
 	phaseUnknown phase = iota
 	phaseBootstrap
@@ -54,6 +56,7 @@ type controller struct {
 	phase   phase
 	cancel  context.CancelFunc
 	done    chan struct{}
+	release func()
 
 	mu                  sync.Mutex
 	currentInputEventID string
@@ -61,14 +64,41 @@ type controller struct {
 }
 
 type Manager struct {
-	bus *eventbus.Bus
+	bus           *eventbus.Bus
+	dispatchInput func(bus.Envelope) error
+	acquireLease  func(string) (func(), error)
 
 	mu          sync.Mutex
 	controllers map[string]*controller
 }
 
-func NewManager(b *eventbus.Bus) *Manager {
-	return &Manager{bus: b, controllers: make(map[string]*controller)}
+type ManagerOption func(*Manager)
+
+func WithInputDispatcher(dispatch func(bus.Envelope) error) ManagerOption {
+	return func(m *Manager) { m.dispatchInput = dispatch }
+}
+
+// WithActorLease keeps the session actor alive for the complete lifetime of
+// each running controller. Suspended and terminal loops remain durable and do
+// not retain a lease.
+func WithActorLease(acquire func(string) (func(), error)) ManagerOption {
+	return func(m *Manager) { m.acquireLease = acquire }
+}
+
+func NewManager(b *eventbus.Bus, opts ...ManagerOption) *Manager {
+	m := &Manager{bus: b, controllers: make(map[string]*controller)}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
+}
+
+func (m *Manager) publishInput(env bus.Envelope) error {
+	if m.dispatchInput != nil {
+		return m.dispatchInput(env)
+	}
+	m.bus.Publish(bus.TopicInbox(env.Session), env)
+	return nil
 }
 
 func (m *Manager) Start(ctx context.Context, sess *session.Session, task string) error {
@@ -191,12 +221,24 @@ func (m *Manager) launch(ctx context.Context, sess *session.Session, initial pha
 	if _, exists := m.controllers[sess.ID]; exists {
 		return nil
 	}
+	var release func()
+	if m.acquireLease != nil {
+		var err error
+		release, err = m.acquireLease(sess.ID)
+		if err != nil {
+			_, _ = transitionState(context.Background(), sess, []State{StateActive}, StateSuspended)
+			return fmt.Errorf("acquire loop actor lease: %w", err)
+		}
+	}
 	if err := writePhase(ctx, sess, initial); err != nil {
+		if release != nil {
+			release()
+		}
 		_, _ = transitionState(context.Background(), sess, []State{StateActive}, StateSuspended)
 		return fmt.Errorf("persist loop phase %q: %w", initial, err)
 	}
 	controllerCtx, cancel := context.WithCancel(context.Background())
-	c := &controller{session: sess, phase: initial, cancel: cancel, done: make(chan struct{})}
+	c := &controller{session: sess, phase: initial, cancel: cancel, done: make(chan struct{}), release: release}
 	m.controllers[sess.ID] = c
 	go m.run(controllerCtx, c)
 	return nil
@@ -204,6 +246,9 @@ func (m *Manager) launch(ctx context.Context, sess *session.Session, initial pha
 
 func (m *Manager) run(ctx context.Context, c *controller) {
 	defer close(c.done)
+	if c.release != nil {
+		defer c.release()
+	}
 	defer m.finishController(c)
 
 	for {
@@ -215,6 +260,7 @@ func (m *Manager) run(ctx context.Context, c *controller) {
 			_ = m.suspend(context.Background(), c.session, "loop phase could not be persisted", false)
 			return
 		}
+		completedPhase := c.phase
 		stopReason, err := m.dispatch(ctx, c, promptFor(c.phase))
 		if err != nil {
 			_ = m.suspend(context.Background(), c.session, "loop turn interrupted", false)
@@ -245,6 +291,21 @@ func (m *Manager) run(ctx context.Context, c *controller) {
 					_ = m.suspend(context.Background(), c.session, "loop phase changed unexpectedly during turn", false)
 					return
 				}
+				if completedPhase == phaseUpdate {
+					// Make the destination durable before compacting. If the
+					// controller is interrupted during compaction, recovery must
+					// resume the cycle selected by the completed update turn.
+					if err := writePhase(ctx, c.session, c.phase); err != nil {
+						_ = m.suspend(context.Background(), c.session, "loop phase could not be persisted before compaction", false)
+						return
+					}
+					if shouldCompactAfterUpdate(c.session.Tokens()) {
+						// This is the same best-effort operation exposed by /compact.
+						// Its events report any failure; compaction is an efficiency
+						// optimization and must not block the autonomous loop.
+						_ = c.session.CompactHistory(ctx)
+					}
+				}
 			case "cancelled":
 				_, _ = transitionState(context.Background(), c.session, []State{StateActive}, StateCancelled)
 				return
@@ -254,6 +315,10 @@ func (m *Manager) run(ctx context.Context, c *controller) {
 			}
 		}
 	}
+}
+
+func shouldCompactAfterUpdate(tokens int64) bool {
+	return tokens >= loopCompactThreshold
 }
 
 func (m *Manager) retireController(ctx context.Context, sessionID, reason string) error {
@@ -354,7 +419,9 @@ func (m *Manager) dispatch(ctx context.Context, c *controller, prompt string) (s
 	c.mu.Lock()
 	c.currentInputEventID = env.ID
 	c.mu.Unlock()
-	m.bus.Publish(bus.TopicInbox(c.session.ID), env)
+	if err := m.publishInput(env); err != nil {
+		return "", fmt.Errorf("dispatch loop input: %w", err)
+	}
 
 	for {
 		select {
@@ -421,10 +488,11 @@ func (m *Manager) cancelInput(sessionID, eventID, reason string) {
 	if eventID == "" {
 		return
 	}
-	m.bus.Publish(bus.TopicInbox(sessionID), bus.NewCancelInput(sessionID, "loop", bus.CancelInput{
+	env := bus.NewCancelInput(sessionID, "loop", bus.CancelInput{
 		EventID: eventID,
 		Reason:  reason,
-	}))
+	})
+	_ = m.publishInput(env)
 }
 
 func (m *Manager) Detach(sessionID string) {

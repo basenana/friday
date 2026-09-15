@@ -108,7 +108,7 @@ Text in, text out. Pipe-friendly. No GUI, no cloud dependency.`,
 }
 
 func configuredWorkspace(c *config.Config) *workspace.Workspace {
-	return workspace.NewWorkspace(c.WorkspacePath(), c.MemoryPath(), c.WorkspaceFallbackPaths()...)
+	return workspace.NewFromConfig(c)
 }
 
 func init() {

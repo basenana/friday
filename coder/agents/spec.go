@@ -7,7 +7,7 @@ type AgentMode int
 
 const (
 	// ModeSubagent forks a child session, runs the agent, and returns a report
-	// to the parent session. Used by /plan, /review, /advisor and the explore tool.
+	// to the parent session. Used by the explore tool.
 	ModeSubagent AgentMode = iota
 	// ModeInline runs in the current session (reserved for future use).
 	ModeInline

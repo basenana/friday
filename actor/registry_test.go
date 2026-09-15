@@ -4,15 +4,18 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/basenana/friday/bus"
 	"github.com/basenana/friday/config"
 	coreactor "github.com/basenana/friday/core/actor"
 	"github.com/basenana/friday/core/actor/events"
 	"github.com/basenana/friday/sandbox"
 	"github.com/basenana/friday/sessions"
 	"github.com/basenana/friday/sessions/file"
+	"github.com/basenana/friday/setup"
 )
 
 func TestCountRunningTasks(t *testing.T) {
@@ -28,6 +31,7 @@ func newTestRegistry(t *testing.T, cfgMod func(*RegistryConfig)) *Registry {
 	cfg.DataDir = t.TempDir()
 	cfg.Workspace = filepath.Join(cfg.DataDir, "workspace")
 	cfg.Memory.Enabled = false
+	cfg.Sandbox.Sandbox.Enabled = false
 
 	store := file.NewFileSessionStore(cfg.SessionsPath())
 	sessMgr := sessions.NewManager(store, filepath.Join(cfg.DataDir, "current"), "")
@@ -170,6 +174,163 @@ func TestRegistry_IdleSweepEvicts(t *testing.T) {
 			t.Fatalf("idle actor was not evicted by the sweep loop")
 		case <-time.After(10 * time.Millisecond):
 		}
+	}
+}
+
+func TestRegistryGetOrCreateRefreshesIdleDeadline(t *testing.T) {
+	r := newTestRegistry(t, nil)
+	defer r.ShutdownAll()
+	if _, err := r.GetOrCreate("sess-touch"); err != nil {
+		t.Fatal(err)
+	}
+	r.mu.Lock()
+	entry := r.entries["sess-touch"]
+	entry.lastActive.Store(time.Now().Add(-time.Hour).UnixNano())
+	r.mu.Unlock()
+
+	if _, err := r.GetOrCreate("sess-touch"); err != nil {
+		t.Fatal(err)
+	}
+	if stale := r.detachStale(time.Now()); len(stale) != 0 {
+		t.Fatalf("cached GetOrCreate did not refresh activity: %+v", stale)
+	}
+}
+
+func TestRegistryLifecycleLeasePreventsIdleEviction(t *testing.T) {
+	r := newTestRegistry(t, nil)
+	defer r.ShutdownAll()
+	_, release, err := r.AcquireLifecycle("sess-lease")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.mu.Lock()
+	entry := r.entries["sess-lease"]
+	entry.lastActive.Store(time.Now().Add(-time.Hour).UnixNano())
+	r.mu.Unlock()
+	if stale := r.detachStale(time.Now()); len(stale) != 0 {
+		t.Fatalf("leased actor was detached: %+v", stale)
+	}
+
+	release()
+	release() // release is intentionally idempotent
+	entry.lastActive.Store(time.Now().Add(-time.Hour).UnixNano())
+	stale := r.detachStale(time.Now())
+	if len(stale) != 1 || stale[0].managed != entry {
+		t.Fatalf("released actor was not eligible for eviction: %+v", stale)
+	}
+	r.stopEntry(stale[0], true)
+}
+
+func TestRegistryActiveTurnPreventsIdleEviction(t *testing.T) {
+	entry := &managedActor{}
+	entry.lastActive.Store(time.Now().Add(-time.Hour).UnixNano())
+	if err := entry.OnTurnStart(context.Background(), coreactor.TurnStartInfo{}); err != nil {
+		t.Fatal(err)
+	}
+	entry.lastActive.Store(time.Now().Add(-time.Hour).UnixNano())
+	r := &Registry{
+		entries: map[string]*managedActor{"sess-turn": entry},
+		cfg:     RegistryConfig{IdleTimeout: time.Minute},
+	}
+	if stale := r.detachStale(time.Now()); len(stale) != 0 {
+		t.Fatalf("active turn was detached: %+v", stale)
+	}
+	if err := entry.OnTurnComplete(context.Background(), "turn", coreactor.TurnOutcome{}); err != nil {
+		t.Fatal(err)
+	}
+	entry.lastActive.Store(time.Now().Add(-time.Hour).UnixNano())
+	if stale := r.detachStale(time.Now()); len(stale) != 1 {
+		t.Fatalf("completed turn did not become evictable: %+v", stale)
+	}
+}
+
+func TestRegistryRunningBackgroundTaskPreventsIdleEviction(t *testing.T) {
+	sandboxCfg := sandbox.DefaultConfig()
+	sandboxCfg.Sandbox.Enabled = false
+	sandboxCfg.Permissions.Allow = append(sandboxCfg.Permissions.Allow, "sleep")
+	tasks := sandbox.NewTaskManager(sandbox.NewExecutor(sandboxCfg))
+	task, err := tasks.Start("sleep 10", t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tasks.KillAll()
+	entry := &managedActor{agentCtx: &setup.AgentContext{TaskManager: tasks}}
+	entry.lastActive.Store(time.Now().Add(-time.Hour).UnixNano())
+	r := &Registry{
+		entries: map[string]*managedActor{"sess-task": entry},
+		cfg:     RegistryConfig{IdleTimeout: time.Minute},
+	}
+	if stale := r.detachStale(time.Now()); len(stale) != 0 {
+		t.Fatalf("actor with running task was detached: %+v", stale)
+	}
+	if err := tasks.Kill(task.ID); err != nil {
+		t.Fatal(err)
+	}
+	entry.lastActive.Store(time.Now().Add(-time.Hour).UnixNano())
+	if stale := r.detachStale(time.Now()); len(stale) != 1 {
+		t.Fatalf("actor with terminal task did not become evictable: %+v", stale)
+	}
+}
+
+func TestRegistryDispatchInputRecreatesEvictedActor(t *testing.T) {
+	r := newTestRegistry(t, nil)
+	defer r.ShutdownAll()
+	old, err := r.GetOrCreate("sess-dispatch")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Shutdown("sess-dispatch")
+	if err := r.DispatchInput(bus.NewUserInput("sess-dispatch", "test", bus.UserTextInput{
+		Text: "hello", Delivery: bus.InputDelivery("invalid-test-delivery"),
+	})); err != nil {
+		t.Fatal(err)
+	}
+	rebuilt, ok := r.Get("sess-dispatch")
+	if !ok || rebuilt == old {
+		t.Fatalf("user input did not rebuild actor: old=%p rebuilt=%p live=%v", old, rebuilt, ok)
+	}
+}
+
+func TestRegistryStatefulInputDoesNotCreateActor(t *testing.T) {
+	r := newTestRegistry(t, nil)
+	defer r.ShutdownAll()
+	err := r.DispatchInput(bus.NewFormSubmit("sess-missing", "test", bus.FormSubmitInput{
+		FormID: "form-1", Values: map[string]any{"answer": "yes"},
+	}))
+	if err == nil {
+		t.Fatal("stateful form input unexpectedly succeeded without a live actor")
+	}
+	if _, ok := r.Get("sess-missing"); ok {
+		t.Fatal("stateful form input created a replacement actor")
+	}
+}
+
+func TestRegistryRestoresCompletedBackgroundTasksAfterRebuild(t *testing.T) {
+	r := newTestRegistry(t, nil)
+	defer r.ShutdownAll()
+	const sessionID = "sess-persisted-task"
+	if _, err := r.GetOrCreate(sessionID); err != nil {
+		t.Fatal(err)
+	}
+	r.mu.Lock()
+	tasks := r.entries[sessionID].agentCtx.TaskManager
+	r.mu.Unlock()
+	task, err := tasks.Start("echo registry-persisted", t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	completed, err := tasks.Wait(task.ID, 5*time.Second)
+	if err != nil || completed.Status != sandbox.TaskCompleted {
+		t.Fatalf("completed task = %+v, err = %v", completed, err)
+	}
+
+	r.Shutdown(sessionID)
+	if _, err := r.GetOrCreate(sessionID); err != nil {
+		t.Fatal(err)
+	}
+	restored := r.ListTasks(sessionID)
+	if len(restored) != 1 || restored[0].ID != task.ID || !strings.Contains(restored[0].Output, "registry-persisted") {
+		t.Fatalf("restored tasks = %+v", restored)
 	}
 }
 

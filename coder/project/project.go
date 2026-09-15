@@ -32,6 +32,8 @@ type Store interface {
 	HasRef(projectID, sessionID string) (bool, error)
 	AddRef(projectID string, ref SessionRef) error
 	RemoveRef(projectID, sessionID string) error
+	LoadUserHistory(projectID string) ([]UserHistoryEntry, error)
+	AppendUserHistory(projectID string, entry UserHistoryEntry) (bool, error)
 }
 
 type Project struct {
@@ -121,4 +123,21 @@ func (p *Project) AddSession(id string) error {
 
 func (p *Project) RemoveSession(id string) error {
 	return p.store.RemoveRef(p.ID(), id)
+}
+
+func (p *Project) LoadUserHistory() ([]UserHistoryEntry, error) {
+	return p.store.LoadUserHistory(p.ID())
+}
+
+func (p *Project) AppendUserHistory(text, sessionID string, createdAt time.Time) (bool, error) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return false, nil
+	}
+	if createdAt.IsZero() {
+		createdAt = time.Now()
+	}
+	return p.store.AppendUserHistory(p.ID(), UserHistoryEntry{
+		Version: 1, Text: text, CreatedAt: createdAt, SessionID: sessionID,
+	})
 }

@@ -7,6 +7,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/basenana/friday/core/collaboration"
@@ -246,6 +247,12 @@ func (m *Manager) LoadPlan(id, planID string) (*planning.Artifact, error) {
 }
 func (m *Manager) LoadLatestPlan(id string) (*planning.Artifact, error) {
 	return m.sessions.LoadLatestPlan(id)
+}
+func (m *Manager) LoadUserHistory() ([]UserHistoryEntry, error) {
+	return m.project.LoadUserHistory()
+}
+func (m *Manager) AppendUserHistory(text, sessionID string, createdAt time.Time) (bool, error) {
+	return m.project.AppendUserHistory(text, sessionID, createdAt)
 }
 func (m *Manager) Base() *sessions.Manager  { return m.sessions }
 func (m *Manager) GetStore() sessions.Store { return m.sessions.GetStore() }

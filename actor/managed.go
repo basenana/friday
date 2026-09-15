@@ -26,8 +26,10 @@ type managedActor struct {
 	outBridge  *bridge.OutBridge
 	hasBridges bool
 
-	stopped    atomic.Bool
-	lastActive atomic.Int64 // UnixNano
+	stopped     atomic.Bool
+	lastActive  atomic.Int64 // UnixNano
+	activeTurns atomic.Int64
+	leases      atomic.Int64
 }
 
 // attach connects the actor to the bus: the InBridge feeds the actor
@@ -38,8 +40,22 @@ func (e *managedActor) attach(b *eventbus.Bus, sessionID string) {
 	e.hasBridges = true
 }
 
-// touch records turn activity for the idle sweep.
+// touch records actor activity for the idle sweep.
 func (e *managedActor) touch() { e.lastActive.Store(time.Now().UnixNano()) }
+
+func (e *managedActor) acquire() {
+	e.leases.Add(1)
+	e.touch()
+}
+
+func (e *managedActor) release() {
+	decrementPositive(&e.leases)
+	e.touch()
+}
+
+func (e *managedActor) protected() bool {
+	return e.activeTurns.Load() > 0 || e.leases.Load() > 0
+}
 
 // close shuts the actor down (gracefully, bounded by grace) and then
 // releases the agent context. Bridge teardown order matters: the
@@ -67,6 +83,7 @@ func (e *managedActor) close(grace time.Duration) {
 var _ coreactor.TurnLifecycle = (*managedActor)(nil)
 
 func (e *managedActor) OnTurnStart(_ context.Context, _ coreactor.TurnStartInfo) error {
+	e.activeTurns.Add(1)
 	e.touch()
 	return nil
 }
@@ -81,5 +98,15 @@ func (e *managedActor) OnTurnFinalize(_ context.Context, _ string) error {
 
 func (e *managedActor) OnTurnComplete(_ context.Context, _ string, _ coreactor.TurnOutcome) error {
 	e.touch()
+	decrementPositive(&e.activeTurns)
 	return nil
+}
+
+func decrementPositive(value *atomic.Int64) {
+	for {
+		current := value.Load()
+		if current <= 0 || value.CompareAndSwap(current, current-1) {
+			return
+		}
+	}
 }

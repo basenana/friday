@@ -65,6 +65,17 @@ var (
 	statusStyle   = lipgloss.NewStyle().Foreground(themeMuted)
 )
 
+func interactiveStyle(selected bool) lipgloss.Style {
+	if selected {
+		return accentStyle.Copy().Bold(true)
+	}
+	return mutedStyle
+}
+
+func primaryActionStyle() lipgloss.Style {
+	return accentStyle.Copy().Bold(true)
+}
+
 func configureTheme(dark bool) {
 	lightDark := lipgloss.LightDark(dark)
 	themeAccent = lightDark(lipgloss.Color("#5F3DC4"), lipgloss.Color("#C4A7FF"))
@@ -250,6 +261,7 @@ func (m *model) View() tea.View {
 func (m *model) newView(content string) tea.View {
 	view := tea.NewView(content)
 	view.AltScreen = m.alternateScreen
+	view.MouseMode = tea.MouseModeCellMotion
 	return view
 }
 
@@ -327,11 +339,7 @@ func (m *model) renderMenu() string {
 			line += "  " + item.description
 		}
 		line = truncateWidth(line, max(m.width-6, 10))
-		if i == m.menu.selected {
-			line = accentStyle.Copy().Bold(true).Render(line)
-		} else {
-			line = mutedStyle.Render(line)
-		}
+		line = interactiveStyle(i == m.menu.selected).Render(line)
 		lines = append(lines, line)
 	}
 	return menuStyle.Width(max(m.width-4, 10)).Render(strings.Join(lines, "\n"))

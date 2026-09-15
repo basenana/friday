@@ -44,6 +44,9 @@ const (
 // (attachment ids, trace ids, etc.) to lifecycle hooks.
 type UserTextMessage struct {
 	Text string
+	// DisplayText is an optional user-facing representation of Text. It is
+	// persisted for transcript consumers but is never sent to the model.
+	DisplayText string
 	// Source identifies the producer of the transport input (for example
 	// "user.local" or "loop"). It is persisted on input.accepted so transcript
 	// consumers can distinguish user-authored messages from internal drivers.

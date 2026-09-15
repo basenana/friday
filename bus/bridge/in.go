@@ -137,6 +137,7 @@ func (ib *InBridge) dispatchInbox(env bus.Envelope) {
 		}
 		user := coreactor.UserTextMessage{
 			Text:          in.Text,
+			DisplayText:   in.DisplayText,
 			Source:        env.From,
 			SourceEventID: env.ID,
 			TurnID:        in.TurnID,
