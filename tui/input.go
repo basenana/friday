@@ -70,7 +70,7 @@ func (m *model) triggerSlashSkill(displayText, rawArgs string, skill *skills.Ski
 		return m.dispatchIfIdle()
 	}
 	m.logInfo("slash skill triggered", "skill", skill.Name, "arg_bytes", len(rawArgs), "instruction_bytes", len(instructions))
-	return m.startUserTurnWithDisplay(payload, displayText, bus.DeliveryNormal)
+	return m.startUserTurnWithDisplay(payload, displayText, nil, bus.DeliveryNormal)
 }
 
 func (m *model) resolveSlashSkill(name string, refresh bool) (*skills.Skill, bool, error) {
@@ -299,6 +299,8 @@ func (m *model) applySessionAction(action codercmds.Action) (bool, tea.Cmd) {
 
 func (m *model) applyContentAction(action codercmds.Action) (bool, tea.Cmd) {
 	switch action := action.(type) {
+	case codercmds.PasteImageAction:
+		return true, m.pasteClipboardImage()
 	case codercmds.OpenCardAction:
 		_, cmd := m.handleOpenCommand([]string{action.ID})
 		return true, cmd
@@ -367,7 +369,7 @@ func (m *model) applyCollaborationAction(action codercmds.Action) (bool, tea.Cmd
 		m.mode = mode
 		m.appendBlock(chatBlock{kind: blockDivider, content: "mode · " + string(mode)})
 		if action.Prompt != "" {
-			_, cmd := m.startUserTurn(action.Prompt, bus.DeliveryNormal)
+			_, cmd := m.startUserTurn(action.Prompt, nil, bus.DeliveryNormal)
 			return true, cmd
 		}
 		return true, nil
@@ -498,6 +500,8 @@ func (m *model) switchSession(newID string) (cmd tea.Cmd, err error) {
 	oldFeed := m.feed
 	m.loopManager.Detach(oldID)
 	m.sessionID, m.feed = newID, newFeed
+	m.attachments = nil
+	m.composerGeneration++
 	m.mode = m.runtime.CollaborationMode(newID)
 	m.latestPlan = latestPlan
 	m.activeModel = activeModel

@@ -18,6 +18,7 @@ import (
 	"github.com/basenana/friday/core/actor/events"
 	"github.com/basenana/friday/core/collaboration"
 	"github.com/basenana/friday/core/planning"
+	"github.com/basenana/friday/core/types"
 	"github.com/basenana/friday/sandbox"
 	"github.com/basenana/friday/sessions"
 	sessionfile "github.com/basenana/friday/sessions/file"
@@ -615,6 +616,15 @@ func TestCtrlJInsertsComposerNewline(t *testing.T) {
 	got, _ := m.updateKey(tea.KeyPressMsg{Code: 'j', Mod: tea.ModCtrl})
 	if value := got.(*model).textarea.Value(); value != "first\n" {
 		t.Fatalf("composer value = %q", value)
+	}
+}
+
+func TestQueueRendersImageOnlyInput(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	m.width = 80
+	m.queued = []pendingInput{{images: []types.ImageContent{{Filename: "queued.png"}}}}
+	if got := m.renderQueue(); !strings.Contains(got, "queued.png") {
+		t.Fatalf("image-only queue = %q", got)
 	}
 }
 

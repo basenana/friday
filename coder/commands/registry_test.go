@@ -61,7 +61,7 @@ func TestRegisterAllDefinesCanonicalCommandSurface(t *testing.T) {
 	for _, cmd := range reg.List() {
 		got = append(got, cmd.Name())
 	}
-	want := []string{"archive", "clear", "compact", "context", "copy", "delete", "diff", "help", "loop", "mcp", "model", "open", "plan", "quit", "rename", "resume", "show", "status", "stop", "tasks"}
+	want := []string{"archive", "clear", "compact", "context", "copy", "delete", "diff", "help", "loop", "mcp", "model", "open", "paste-image", "plan", "quit", "rename", "resume", "show", "status", "stop", "tasks"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("commands = %v, want %v", got, want)
 	}
@@ -80,7 +80,7 @@ func TestRegisterAllDefinesCanonicalCommandSurface(t *testing.T) {
 func TestCommandRunPolicies(t *testing.T) {
 	reg := NewRegistry()
 	RegisterAll(reg)
-	immediate := map[string]bool{"context": true, "copy": true, "diff": true, "help": true, "mcp": true, "open": true, "show": true, "status": true, "stop": true, "tasks": true}
+	immediate := map[string]bool{"context": true, "copy": true, "diff": true, "help": true, "mcp": true, "open": true, "paste-image": true, "show": true, "status": true, "stop": true, "tasks": true}
 	for _, cmd := range reg.List() {
 		want := PolicyDeferred
 		if immediate[cmd.Name()] {

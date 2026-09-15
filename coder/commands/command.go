@@ -26,6 +26,7 @@ type OpenCardAction struct{ ID string }
 type ShowToolAction struct{ ID string }
 type ShowDiffAction struct{}
 type CopyResponseAction struct{ Index int }
+type PasteImageAction struct{}
 type ShowTasksAction struct{}
 type StopTaskAction struct{ ID string }
 type OpenResumeAction struct{}
@@ -55,6 +56,7 @@ func (OpenCardAction) commandAction()       {}
 func (ShowToolAction) commandAction()       {}
 func (ShowDiffAction) commandAction()       {}
 func (CopyResponseAction) commandAction()   {}
+func (PasteImageAction) commandAction()     {}
 func (ShowTasksAction) commandAction()      {}
 func (StopTaskAction) commandAction()       {}
 func (OpenResumeAction) commandAction()     {}

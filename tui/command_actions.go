@@ -984,7 +984,7 @@ func (m *model) finishPlanApproval(msg planCompactFinishedMsg) (tea.Model, tea.C
 
 	m.mode = collaboration.ModeDefault
 	m.appendBlock(chatBlock{kind: blockDivider, content: "context compacted · implementing approved plan"})
-	return m.startUserTurn("Implement the approved plan. Re-read relevant files as needed and verify the result.", bus.DeliveryNormal)
+	return m.startUserTurn("Implement the approved plan. Re-read relevant files as needed and verify the result.", nil, bus.DeliveryNormal)
 }
 
 func (m *model) persistPlanStatus(status planning.ArtifactStatus) error {

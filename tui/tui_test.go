@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -8,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"charm.land/bubbles/v2/textarea"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
@@ -17,9 +19,23 @@ import (
 	"github.com/basenana/friday/core/actor/events"
 	actorsink "github.com/basenana/friday/core/actor/sink"
 	"github.com/basenana/friday/core/planning"
+	"github.com/basenana/friday/core/types"
 	"github.com/basenana/friday/sessions"
 	sessionfile "github.com/basenana/friday/sessions/file"
 )
+
+type historyProgramModel struct{ inner *model }
+
+func (m *historyProgramModel) Init() tea.Cmd  { return nil }
+func (m *historyProgramModel) View() tea.View { return m.inner.View() }
+func (m *historyProgramModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if key, ok := msg.(tea.KeyPressMsg); ok && key.String() == "ctrl+c" {
+		return m, tea.Quit
+	}
+	updated, cmd := m.inner.Update(msg)
+	m.inner = updated.(*model)
+	return m, cmd
+}
 
 type faultStore struct {
 	sessions.Store
@@ -143,6 +159,73 @@ func fillHistory(m *model, count int) {
 			kind:    blockAssistant,
 			content: fmt.Sprintf("message %02d", i),
 		})
+	}
+}
+
+func TestPasteImageActionAttachesClipboardImage(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	m.clipboardImageReader = func(context.Context) (types.ImageContent, error) {
+		return types.ImageContent{
+			Type:      types.ImageTypeBase64,
+			MediaType: "image/png",
+			Data:      "cG5n",
+			Filename:  "clipboard.png",
+		}, nil
+	}
+
+	cmd := m.applyCommandAction(codercmds.PasteImageAction{})
+	if cmd == nil {
+		t.Fatal("PasteImageAction returned nil command")
+	}
+	updated, _ := m.Update(cmd())
+	got := updated.(*model)
+	if len(got.attachments) != 1 || got.attachments[0].Filename != "clipboard.png" {
+		t.Fatalf("attachments = %#v, want clipboard.png", got.attachments)
+	}
+	if view := got.View().Content; !strings.Contains(view, "clipboard.png") {
+		t.Fatalf("composer does not show attached image: %q", view)
+	}
+}
+
+func TestCtrlPReadsClipboardImage(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	m.clipboardImageReader = func(context.Context) (types.ImageContent, error) {
+		return types.ImageContent{Type: types.ImageTypeBase64, MediaType: "image/jpeg", Data: "anBlZw==", Filename: "clipboard.jpg"}, nil
+	}
+
+	updated, cmd := m.Update(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
+	if cmd == nil {
+		t.Fatal("Ctrl+P returned nil command")
+	}
+	updated, _ = updated.(*model).Update(cmd())
+	if got := updated.(*model).attachments; len(got) != 1 || got[0].Filename != "clipboard.jpg" {
+		t.Fatalf("attachments = %#v, want clipboard.jpg", got)
+	}
+}
+
+func TestBackspaceOnEmptyComposerRemovesLastAttachment(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	m.attachments = []types.ImageContent{{Filename: "first.png"}, {Filename: "second.png"}}
+
+	updated, _ := m.updateKey(tea.KeyPressMsg{Code: tea.KeyBackspace})
+	got := updated.(*model)
+	if len(got.attachments) != 1 || got.attachments[0].Filename != "first.png" {
+		t.Fatalf("attachments = %#v, want only first.png", got.attachments)
+	}
+}
+
+func TestEscIgnoresLateClipboardImageResult(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	m.clipboardImageReader = func(context.Context) (types.ImageContent, error) {
+		return types.ImageContent{Type: types.ImageTypeBase64, MediaType: "image/png", Data: "cG5n", Filename: "late.png"}, nil
+	}
+	read := m.pasteClipboardImage()
+	updated, _ := m.updateKey(tea.KeyPressMsg{Code: tea.KeyEsc})
+	m = updated.(*model)
+
+	updated, _ = m.Update(read())
+	if attachments := updated.(*model).attachments; len(attachments) != 0 {
+		t.Fatalf("late clipboard result restored cleared attachments: %#v", attachments)
 	}
 }
 
@@ -364,6 +447,93 @@ func TestUpdateAcceptsTypingAndEnterSendsMessage(t *testing.T) {
 	}
 	if len(m.messages) == 0 || m.messages[len(m.messages)-1].kind != blockUser || m.messages[len(m.messages)-1].content != "hello" {
 		t.Fatalf("messages = %#v", m.messages)
+	}
+}
+
+func TestArrowKeysWalkBackAndForwardThroughMultiplePrompts(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	m.promptHistory = []string{"first", "second", "third"}
+
+	for _, want := range []string{"third", "second", "first"} {
+		updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyUp})
+		m = updated.(*model)
+		if got := m.textarea.Value(); got != want {
+			t.Fatalf("Up history value = %q, want %q (index %d)", got, want, m.historyIndex)
+		}
+	}
+	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyUp})
+	m = updated.(*model)
+	if got := m.textarea.Value(); got != "first" {
+		t.Fatalf("Up past oldest history value = %q, want first", got)
+	}
+
+	for _, want := range []string{"second", "third", ""} {
+		updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+		m = updated.(*model)
+		if got := m.textarea.Value(); got != want {
+			t.Fatalf("Down history value = %q, want %q (index %d)", got, want, m.historyIndex)
+		}
+	}
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	if got := updated.(*model).textarea.Value(); got != "" {
+		t.Fatalf("Down past newest history value = %q, want empty composer", got)
+	}
+}
+
+func TestTerminalArrowEscapeSequencesNavigateHistoryBothDirections(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	m.promptHistory = []string{"first", "second", "third"}
+	programModel := &historyProgramModel{inner: m}
+	input := bytes.NewBufferString("\x1b[A\x1b[A\x1b[B\x03")
+
+	final, err := tea.NewProgram(programModel, tea.WithInput(input), tea.WithOutput(&bytes.Buffer{}), tea.WithoutRenderer()).Run()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := final.(*historyProgramModel).inner
+	if got.textarea.Value() != "third" || got.historyIndex != 2 {
+		t.Fatalf("terminal Up, Up, Down ended at value %q index %d; want third, 2", got.textarea.Value(), got.historyIndex)
+	}
+}
+
+func TestHistoryNavigationSurvivesCursorBlinkBetweenArrowKeys(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	m.promptHistory = []string{"first", "second", "third"}
+
+	for _, step := range []struct {
+		key  tea.KeyPressMsg
+		want string
+	}{
+		{key: tea.KeyPressMsg{Code: tea.KeyUp}, want: "third"},
+		{key: tea.KeyPressMsg{Code: tea.KeyUp}, want: "second"},
+		{key: tea.KeyPressMsg{Code: tea.KeyDown}, want: "third"},
+	} {
+		updated, _ := m.Update(step.key)
+		m = updated.(*model)
+		updated, _ = m.Update(textarea.Blink())
+		m = updated.(*model)
+		if got := m.textarea.Value(); got != step.want {
+			t.Fatalf("history value after %s and cursor blink = %q, want %q (index %d)", step.key.String(), got, step.want, m.historyIndex)
+		}
+	}
+}
+
+func TestPastedTextExitsHistoryNavigation(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	m.promptHistory = []string{"first", "second"}
+	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyUp})
+	m = updated.(*model)
+	if m.historyIndex != 1 {
+		t.Fatalf("history index after Up = %d, want 1", m.historyIndex)
+	}
+
+	updated, _ = m.Update(tea.PasteMsg{Content: " pasted"})
+	m = updated.(*model)
+	if m.textarea.Value() != "second pasted" {
+		t.Fatalf("pasted composer value = %q", m.textarea.Value())
+	}
+	if m.historyIndex != -1 {
+		t.Fatalf("history index after paste = %d, want -1", m.historyIndex)
 	}
 }
 

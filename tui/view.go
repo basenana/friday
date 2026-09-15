@@ -252,10 +252,28 @@ func (m *model) View() tea.View {
 		if m.menu.mode != menuNone {
 			parts = append(parts, m.renderMenu())
 		}
+		if attachments := m.renderAttachments(); attachments != "" {
+			parts = append(parts, attachments)
+		}
 		parts = append(parts, inputBoxStyle.Width(max(m.width-2, 10)).Render(m.textarea.View()))
 	}
 	parts = append(parts, m.renderStatus())
 	return m.newView(lipgloss.JoinVertical(lipgloss.Left, parts...))
+}
+
+func (m *model) renderAttachments() string {
+	if len(m.attachments) == 0 {
+		return ""
+	}
+	labels := make([]string, 0, len(m.attachments))
+	for i, image := range m.attachments {
+		name := image.Filename
+		if name == "" {
+			name = fmt.Sprintf("image-%d", i+1)
+		}
+		labels = append(labels, "[image: "+name+" ×]")
+	}
+	return strings.Join(labels, " ")
 }
 
 func (m *model) newView(content string) tea.View {
@@ -272,6 +290,9 @@ func (m *model) layout() {
 	composerLines := max(m.textarea.Height(), 1)
 	statusLines := max(lipgloss.Height(m.renderStatus()), 1)
 	extra := composerLines + 2 + statusLines // input border + wrapped status
+	if attachments := m.renderAttachments(); attachments != "" {
+		extra += lipgloss.Height(attachments)
+	}
 	if len(m.queued) > 0 {
 		extra += min(len(m.queued), 3) + 3
 	}
@@ -313,7 +334,8 @@ func (m *model) renderQueue() string {
 	start := max(len(m.queued)-3, 0)
 	lines := []string{mutedStyle.Render(fmt.Sprintf("up next (%d) · sent after the current task", len(m.queued)))}
 	for i := start; i < len(m.queued); i++ {
-		lines = append(lines, fmt.Sprintf("  %d. %s", i+1, terminalSafe(firstLine(m.queued[i].text))))
+		item := m.queued[i]
+		lines = append(lines, fmt.Sprintf("  %d. %s", i+1, terminalSafe(firstLine(userInputDisplay(item.text, item.images)))))
 	}
 	return menuStyle.Width(max(m.width-4, 10)).Render(strings.Join(lines, "\n"))
 }
