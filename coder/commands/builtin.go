@@ -35,6 +35,20 @@ func (quitCmd) Execute(_ *Context) (*Result, error) {
 	return ResultOf(QuitAction{}), nil
 }
 
+// --- /paste-image ---
+
+type pasteImageCmd struct{}
+
+func (pasteImageCmd) Name() string        { return "paste-image" }
+func (pasteImageCmd) Aliases() []string   { return nil }
+func (pasteImageCmd) Description() string { return "Attach an image from the system clipboard" }
+func (pasteImageCmd) Metadata() Metadata {
+	return Metadata{Usage: "/paste-image", Category: "Input", Policy: PolicyImmediate}
+}
+func (pasteImageCmd) Execute(_ *Context) (*Result, error) {
+	return ResultOf(PasteImageAction{}), nil
+}
+
 // --- /help ---
 
 type helpCmd struct {
@@ -84,7 +98,9 @@ func buildHelpText(reg *Registry) string {
 	b.WriteString("- `Tab` — Complete a command; while running, send input after the current task\n")
 	b.WriteString("- `Ctrl+J` — Insert a newline\n")
 	b.WriteString("- `Ctrl+G` — Edit the prompt with `VISUAL`/`EDITOR`\n")
+	b.WriteString("- `Ctrl+P` — Attach an image from the system clipboard\n")
 	b.WriteString("- `Ctrl+R` — Search prompt history\n")
+	b.WriteString("- `Backspace` — Remove the last attachment when the prompt is empty\n")
 	b.WriteString("- `Shift+Tab` — Toggle Default/Plan Mode while idle\n")
 	b.WriteString("- `Ctrl+L` — Clear the terminal view, keeping the session\n")
 	b.WriteString("- `Ctrl+C` — Quit\n")
@@ -101,5 +117,6 @@ func RegisterBuiltins(reg *Registry) {
 	}
 	reg.Register(clearCmd{})
 	reg.Register(quitCmd{})
+	reg.Register(pasteImageCmd{})
 	reg.Register(helpCmd{registry: reg})
 }

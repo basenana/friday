@@ -13,7 +13,68 @@ import (
 	coderloop "github.com/basenana/friday/coder/loop"
 	"github.com/basenana/friday/core/actor/events"
 	"github.com/basenana/friday/core/session"
+	"github.com/basenana/friday/core/types"
 )
+
+func TestComposerPublishesImageOnlyInput(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	m.attachments = []types.ImageContent{{
+		Type: types.ImageTypeBase64, MediaType: "image/png", Data: "cG5n", Filename: "clipboard.png",
+	}}
+	inbox := make(chan bus.Envelope, 1)
+	id := m.registry.Bus().SubscribeSerial([]string{bus.TopicInbox(m.sessionID)}, func(env bus.Envelope) {
+		if env.Name == bus.InboxUserText {
+			inbox <- env
+		}
+	}, eventbus.SerialConfig{Overflow: eventbus.OverflowBlock})
+	defer m.registry.Bus().Unsubscribe(id)
+
+	got, cmd := m.submitComposer()
+	m = got.(*model)
+	if cmd == nil || !m.running {
+		t.Fatalf("image-only input was not dispatched: running=%v cmd=%v", m.running, cmd != nil)
+	}
+	if len(m.attachments) != 0 {
+		t.Fatalf("sent attachments were not cleared: %#v", m.attachments)
+	}
+	select {
+	case env := <-inbox:
+		var body bus.UserTextInput
+		if err := events.DecodePayload(env.Event, &body); err != nil {
+			t.Fatal(err)
+		}
+		if body.Text != "" || len(body.Images) != 1 || body.Images[0].Filename != "clipboard.png" {
+			t.Fatalf("actor input = %+v", body)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("image-only input was not published to the Actor inbox")
+	}
+}
+
+func TestQueuedComposerPreservesAttachedImages(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	m.running = true
+	m.textarea.SetValue("inspect this")
+	m.attachments = []types.ImageContent{{Type: types.ImageTypeBase64, MediaType: "image/jpeg", Data: "anBlZw==", Filename: "clipboard.jpg"}}
+
+	got, _ := m.queueComposer()
+	m = got.(*model)
+	if len(m.queued) != 1 || len(m.queued[0].images) != 1 || m.queued[0].images[0].Filename != "clipboard.jpg" {
+		t.Fatalf("queued input = %#v", m.queued)
+	}
+	if len(m.attachments) != 0 {
+		t.Fatalf("composer retained queued attachments: %#v", m.attachments)
+	}
+}
+
+func TestEscClearsComposerAttachments(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	m.attachments = []types.ImageContent{{Filename: "clipboard.png"}}
+	got, _ := m.updateKey(tea.KeyPressMsg{Code: tea.KeyEsc})
+	if attachments := got.(*model).attachments; len(attachments) != 0 {
+		t.Fatalf("Esc left attachments behind: %#v", attachments)
+	}
+}
 
 func TestTUILoopCommandSeedsRecordsAndIdleEscCancels(t *testing.T) {
 	m, _, _ := newTestModel(t)

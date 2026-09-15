@@ -112,7 +112,17 @@ func useAlternateScreen(mode string) bool {
 }
 
 type pendingInput struct {
-	text string
+	text   string
+	images []types.ImageContent
+}
+
+type clipboardImageReader func(context.Context) (types.ImageContent, error)
+
+type clipboardImageLoadedMsg struct {
+	image      types.ImageContent
+	err        error
+	generation uint64
+	sessionID  string
 }
 
 type menuMode int
@@ -168,22 +178,25 @@ type model struct {
 	cards             map[string]*cardState
 	todos             []todoItem
 
-	textarea         textarea.Model
-	viewport         viewport.Model
-	spinner          spinner.Model
-	markdownRenderer *glamour.TermRenderer
-	markdownWidth    int
-	darkBackground   bool
-	alternateScreen  bool
-	menu             menuState
-	form             *formState
-	confirm          *openConfirmation
-	detail           *detailState
-	selector         *selectorState
-	commandConfirm   *commandConfirmation
-	planHandoff      *planHandoffState
-	planCompacting   bool
-	manualCompacting bool
+	textarea             textarea.Model
+	attachments          []types.ImageContent
+	clipboardImageReader clipboardImageReader
+	composerGeneration   uint64
+	viewport             viewport.Model
+	spinner              spinner.Model
+	markdownRenderer     *glamour.TermRenderer
+	markdownWidth        int
+	darkBackground       bool
+	alternateScreen      bool
+	menu                 menuState
+	form                 *formState
+	confirm              *openConfirmation
+	detail               *detailState
+	selector             *selectorState
+	commandConfirm       *commandConfirmation
+	planHandoff          *planHandoffState
+	planCompacting       bool
+	manualCompacting     bool
 
 	running         bool
 	currentRunID    string
@@ -251,7 +264,7 @@ func baseModel(sessMgr *sessions.Manager, registry *actor.Registry, cmdRegistry 
 func baseModelAt(sessMgr *sessions.Manager, registry *actor.Registry, cmdRegistry *codercmds.Registry, cfg *config.Config, sessionID, workdir string) *model {
 	configureTheme(true)
 	ta := textarea.New()
-	ta.Placeholder = "Send a message…  / commands · Ctrl+G editor"
+	ta.Placeholder = "Send a message…  / commands · Ctrl+P image · Ctrl+G editor"
 	ta.CharLimit = 0
 	ta.DynamicHeight = true
 	ta.MinHeight = 1
@@ -272,6 +285,7 @@ func baseModelAt(sessMgr *sessions.Manager, registry *actor.Registry, cmdRegistr
 		textBlock: -1, reasonBlock: -1,
 		now: time.Now,
 	}
+	m.clipboardImageReader = readClipboardImage
 	m.loopManager = coderloop.NewManager(
 		registry.Bus(),
 		coderloop.WithInputDispatcher(registry.DispatchInput),
@@ -334,6 +348,17 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.textarea.CursorEnd()
 		}
 		m.refreshMenu()
+		return m, nil
+	case clipboardImageLoadedMsg:
+		if msg.generation != m.composerGeneration || msg.sessionID != m.sessionID {
+			return m, nil
+		}
+		if msg.err != nil {
+			m.appendBlock(chatBlock{kind: blockError, content: "paste image: " + msg.err.Error()})
+		} else {
+			m.attachments = append(m.attachments, msg.image)
+			m.layout()
+		}
 		return m, nil
 	case openFinishedMsg:
 		if msg.err != nil {
@@ -478,9 +503,16 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// motion events are intentionally non-interactive.
 		return m, nil
 	}
+	oldValue := m.textarea.Value()
 	var cmd tea.Cmd
 	m.textarea, cmd = m.textarea.Update(msg)
-	m.afterComposerEdit()
+	if m.textarea.Value() != oldValue {
+		m.afterComposerEdit()
+	} else {
+		// Cursor blink and other presentation-only messages must not reset
+		// prompt-history navigation between arrow key presses.
+		m.layout()
+	}
 	return m, cmd
 }
 
@@ -671,6 +703,9 @@ func (m *model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if msg.String() == "ctrl+g" {
 		return m, m.openEditor()
 	}
+	if msg.String() == "ctrl+p" {
+		return m, m.pasteClipboardImage()
+	}
 	if msg.String() == "ctrl+r" {
 		m.openHistoryMenu()
 		return m, nil
@@ -692,6 +727,11 @@ func (m *model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.cards = make(map[string]*cardState)
 		m.invalidateRendered()
 		return m, tea.ClearScreen
+	}
+	if msg.Code == tea.KeyBackspace && m.textarea.Value() == "" && len(m.attachments) > 0 {
+		m.attachments = m.attachments[:len(m.attachments)-1]
+		m.layout()
+		return m, nil
 	}
 
 	if m.menu.mode != menuNone {
@@ -731,6 +771,8 @@ func (m *model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.textarea.Reset()
+		m.attachments = nil
+		m.composerGeneration++
 		m.menu = menuState{}
 		return m, nil
 	case tea.KeyTab:
@@ -744,7 +786,7 @@ func (m *model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return m.submitComposer()
 	case tea.KeyUp:
-		if m.textarea.Value() == "" && len(m.promptHistory) > 0 {
+		if (m.textarea.Value() == "" || m.historyIndex >= 0) && len(m.promptHistory) > 0 {
 			m.restoreHistory(-1)
 			return m, nil
 		}
@@ -764,9 +806,21 @@ func (m *model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+func (m *model) pasteClipboardImage() tea.Cmd {
+	reader := m.clipboardImageReader
+	generation := m.composerGeneration
+	sessionID := m.sessionID
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		image, err := reader(ctx)
+		return clipboardImageLoadedMsg{image: image, err: err, generation: generation, sessionID: sessionID}
+	}
+}
+
 func (m *model) submitComposer() (tea.Model, tea.Cmd) {
 	text := strings.TrimSpace(m.textarea.Value())
-	if text == "" {
+	if text == "" && len(m.attachments) == 0 {
 		return m, nil
 	}
 	m.recordPrompt(text)
@@ -793,6 +847,9 @@ func (m *model) submitComposer() (tea.Model, tea.Cmd) {
 		}
 		return m.handleSlash(text)
 	}
+	images := append([]types.ImageContent(nil), m.attachments...)
+	m.attachments = nil
+	m.composerGeneration++
 	if m.running {
 		activeLoop, err := m.isLoopActive()
 		if err != nil {
@@ -801,40 +858,44 @@ func (m *model) submitComposer() (tea.Model, tea.Cmd) {
 		}
 		if activeLoop {
 			m.loopActive = true
-			return m.sendLoopInbox(text)
+			return m.sendLoopInbox(text, images)
 		}
-		return m.startUserTurn(text, bus.DeliverySteer)
+		return m.startUserTurn(text, images, bus.DeliverySteer)
 	}
-	return m.startUserTurn(text, bus.DeliveryNormal)
+	return m.startUserTurn(text, images, bus.DeliveryNormal)
 }
 
 func (m *model) queueComposer() (tea.Model, tea.Cmd) {
 	text := strings.TrimSpace(m.textarea.Value())
-	if text == "" {
+	if text == "" && len(m.attachments) == 0 {
 		return m, nil
 	}
 	m.recordPrompt(text)
+	images := append([]types.ImageContent(nil), m.attachments...)
+	m.composerGeneration++
 	active, err := m.isLoopActive()
 	if err != nil {
 		m.appendBlock(chatBlock{kind: blockError, content: "queue input: " + err.Error()})
 	} else if active {
 		m.textarea.Reset()
+		m.attachments = nil
 		m.menu = menuState{}
 		m.loopActive = true
-		return m.sendLoopInbox(text)
+		return m.sendLoopInbox(text, images)
 	}
-	m.queued = append(m.queued, pendingInput{text: text})
+	m.queued = append(m.queued, pendingInput{text: text, images: images})
 	m.textarea.Reset()
+	m.attachments = nil
 	m.menu = menuState{}
 	m.layout()
 	return m, nil
 }
 
-func (m *model) sendLoopInbox(text string) (tea.Model, tea.Cmd) {
+func (m *model) sendLoopInbox(text string, images []types.ImageContent) (tea.Model, tea.Cmd) {
 	turnID := types.NewID()
-	m.appendBlock(chatBlock{kind: blockUser, id: turnID, content: text})
+	m.appendBlock(chatBlock{kind: blockUser, id: turnID, content: userInputDisplay(text, images)})
 	m.seenInputs[turnID] = true
-	if err := m.sendUserText(text, bus.DeliveryNormal, turnID); err != nil {
+	if err := m.sendUserText(text, images, bus.DeliveryNormal, turnID); err != nil {
 		m.appendBlock(chatBlock{kind: blockError, content: err.Error()})
 		return m, nil
 	}
@@ -851,18 +912,18 @@ func (m *model) dispatchNextQueued() (tea.Model, tea.Cmd) {
 	if strings.HasPrefix(strings.TrimSpace(next.text), "/") {
 		return m.handleSlash(next.text)
 	}
-	return m.startUserTurn(next.text, bus.DeliveryNormal)
+	return m.startUserTurn(next.text, next.images, bus.DeliveryNormal)
 }
 
-func (m *model) startUserTurn(text string, delivery bus.InputDelivery) (tea.Model, tea.Cmd) {
-	return m.startUserTurnWithDisplay(text, "", delivery)
+func (m *model) startUserTurn(text string, images []types.ImageContent, delivery bus.InputDelivery) (tea.Model, tea.Cmd) {
+	return m.startUserTurnWithDisplay(text, "", images, delivery)
 }
 
-func (m *model) startUserTurnWithDisplay(text, displayText string, delivery bus.InputDelivery) (tea.Model, tea.Cmd) {
+func (m *model) startUserTurnWithDisplay(text, displayText string, images []types.ImageContent, delivery bus.InputDelivery) (tea.Model, tea.Cmd) {
 	turnID := types.NewID()
 	renderText := displayText
 	if renderText == "" {
-		renderText = text
+		renderText = userInputDisplay(text, images)
 	}
 	if delivery == bus.DeliverySteer {
 		// Steering is an explicit interruption of an autonomous Loop. Persist
@@ -872,7 +933,7 @@ func (m *model) startUserTurnWithDisplay(text, displayText string, delivery bus.
 	}
 	m.appendBlock(chatBlock{kind: blockUser, id: turnID, content: renderText})
 	m.seenInputs[turnID] = true
-	if err := m.sendUserTextWithDisplay(text, displayText, delivery, turnID); err != nil {
+	if err := m.sendUserTextWithDisplay(text, displayText, images, delivery, turnID); err != nil {
 		m.appendBlock(chatBlock{kind: blockError, content: err.Error()})
 		return m, nil
 	}
@@ -985,13 +1046,14 @@ func (m *model) acquireCurrentSession() (*coresession.Session, func(), error) {
 	return sess, release, nil
 }
 
-func (m *model) sendUserText(text string, delivery bus.InputDelivery, turnID string) error {
-	return m.sendUserTextWithDisplay(text, "", delivery, turnID)
+func (m *model) sendUserText(text string, images []types.ImageContent, delivery bus.InputDelivery, turnID string) error {
+	return m.sendUserTextWithDisplay(text, "", images, delivery, turnID)
 }
 
-func (m *model) sendUserTextWithDisplay(text, displayText string, delivery bus.InputDelivery, turnID string) error {
+func (m *model) sendUserTextWithDisplay(text, displayText string, images []types.ImageContent, delivery bus.InputDelivery, turnID string) error {
 	if err := m.registry.DispatchInput(bus.NewUserInput(m.sessionID, "user.local", bus.UserTextInput{
 		Text: text, DisplayText: displayText, TurnID: turnID, Delivery: delivery,
+		Images: append([]types.ImageContent(nil), images...),
 	})); err != nil {
 		m.logError("failed to prepare actor before publishing user input", err,
 			"turn_id", turnID,
@@ -1006,6 +1068,24 @@ func (m *model) sendUserTextWithDisplay(text, displayText string, delivery bus.I
 		"queued_count", len(m.queued),
 	)
 	return nil
+}
+
+func userInputDisplay(text string, images []types.ImageContent) string {
+	if len(images) == 0 {
+		return text
+	}
+	labels := make([]string, 0, len(images))
+	for i, image := range images {
+		name := image.Filename
+		if name == "" {
+			name = fmt.Sprintf("image-%d", i+1)
+		}
+		labels = append(labels, "[image: "+name+"]")
+	}
+	if text == "" {
+		return strings.Join(labels, " ")
+	}
+	return text + "\n\n" + strings.Join(labels, " ")
 }
 
 func (m *model) handleActorEvent(evt events.Event) tea.Cmd {
