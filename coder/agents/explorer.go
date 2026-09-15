@@ -9,9 +9,9 @@ import "github.com/basenana/friday/config"
 // added later is automatically available.
 func ExplorerSpec(model config.ModelConfig) *AgentSpec {
 	return &AgentSpec{
-		Name:        NameExplorer,
-		Description: "Read-only investigator. Explores the codebase and returns a structured report with findings, files examined, and recommended next steps. Cannot modify files.",
-		Model:       model,
+		Name:         NameExplorer,
+		Description:  "Read-only investigator. Explores the codebase and returns a structured report with findings, files examined, and recommended next steps. Cannot modify files.",
+		Model:        model,
 		SystemPrompt: ExplorerSystemPrompt,
 		ToolPolicy: ToolPolicy{
 			Deny: []string{
@@ -24,7 +24,7 @@ func ExplorerSpec(model config.ModelConfig) *AgentSpec {
 				ToolKillTask,
 			},
 		},
-		MaxLoopTimes: 30,
+		MaxLoopTimes: 100,
 		Mode:         ModeSubagent,
 	}
 }

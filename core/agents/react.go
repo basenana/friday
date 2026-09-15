@@ -782,7 +782,7 @@ func New(llm providers.Client, option Option) Agent {
 		option.SystemPrompt = DEFAULT_SYSTEM_PROMPT
 	}
 	if option.MaxLoopTimes == 0 {
-		option.MaxLoopTimes = 100
+		option.MaxLoopTimes = 500
 	}
 
 	agt := &react{
