@@ -58,15 +58,17 @@ func NewExecutor(cfg *Config) *Executor {
 // Run executes a command with sandboxing and permission checks
 func (e *Executor) Run(ctx context.Context, cmd string, opts ExecOptions) (*Result, error) {
 	// 1. Check permissions
-	decision, reason, err := e.perm.CheckWithReason(cmd)
-	if err != nil {
-		return nil, fmt.Errorf("permission check failed: %w", err)
-	}
-	if decision == Deny {
-		return &Result{
-			ExitCode: 1,
-			Stderr:   fmt.Sprintf("Permission denied: %s", reason),
-		}, ErrPermissionDenied
+	if !e.config.IsolationDisabled() {
+		decision, reason, err := e.perm.CheckWithReason(cmd)
+		if err != nil {
+			return nil, fmt.Errorf("permission check failed: %w", err)
+		}
+		if decision == Deny {
+			return &Result{
+				ExitCode: 1,
+				Stderr:   fmt.Sprintf("Permission denied: %s", reason),
+			}, ErrPermissionDenied
+		}
 	}
 
 	// 2. Set default timeout
@@ -120,7 +122,7 @@ func (e *Executor) execute(ctx context.Context, cmdStr string, opts ExecOptions)
 
 	// Set environment: build the child environment from a minimal safe base
 	// plus anything the caller passed explicitly.
-	cmd.Env = buildCommandEnv(opts.Env, opts.HomeDir)
+	cmd.Env = e.buildCommandEnv(opts.Env, opts.HomeDir)
 
 	// Capture output with a hard cap per stream so a runaway command cannot
 	// exhaust memory.
@@ -216,6 +218,17 @@ func buildCommandEnv(extraEnv []string, homeDir string) []string {
 		env = mergeEnvLists(env, []string{"HOME=" + strings.TrimSpace(homeDir)})
 	}
 	return env
+}
+
+func (e *Executor) buildCommandEnv(extraEnv []string, homeDir string) []string {
+	if e != nil && e.config != nil && e.config.IsolationDisabled() {
+		env := mergeEnvLists(os.Environ(), extraEnv)
+		if strings.TrimSpace(homeDir) != "" && !envListHas(extraEnv, "HOME") {
+			env = mergeEnvLists(env, []string{"HOME=" + strings.TrimSpace(homeDir)})
+		}
+		return env
+	}
+	return buildCommandEnv(extraEnv, homeDir)
 }
 
 // safeChildEnvBase returns the minimal host environment variables inherited
@@ -315,6 +328,9 @@ func truncateOutputWithFlag(output string) (string, bool) {
 
 // CheckPermission checks if a command would be allowed without executing it
 func (e *Executor) CheckPermission(cmd string) (Decision, string, error) {
+	if e.config.IsolationDisabled() {
+		return Allow, "isolation disabled by outer sandbox", nil
+	}
 	return e.perm.CheckWithReason(cmd)
 }
 

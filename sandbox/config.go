@@ -18,6 +18,8 @@ const maxConfigFileSize = 1 << 20 // 1 MiB
 type Config struct {
 	Permissions PermissionsConfig `json:"permissions" yaml:"permissions"`
 	Sandbox     SandboxConfig     `json:"sandbox" yaml:"sandbox"`
+
+	isolationDisabled bool
 }
 
 // PermissionsConfig defines allow/deny rules for commands
@@ -123,6 +125,10 @@ func (c *Config) ApplyRuntimeDefaults() {
 	if c == nil {
 		return
 	}
+	if os.Getenv("IS_SANDBOX") == "1" {
+		c.DisableIsolation()
+		return
+	}
 	home := strings.TrimSpace(defaultExecutionHome())
 	if home == "" {
 		return
@@ -134,6 +140,30 @@ func (c *Config) ApplyRuntimeDefaults() {
 			c.Sandbox.Filesystem.Write = append(c.Sandbox.Filesystem.Write, root)
 		}
 	}
+}
+
+// DisableIsolation makes configuration-based isolation inactive for this
+// runtime without changing the serialized configuration format.
+func (c *Config) DisableIsolation() {
+	if c == nil {
+		return
+	}
+	c.isolationDisabled = true
+	c.Permissions.Allow = []string{"*"}
+	c.Permissions.Deny = nil
+	c.Sandbox.Enabled = false
+	c.Sandbox.Filesystem.ReadOnly = nil
+	c.Sandbox.Filesystem.Deny = nil
+	c.Sandbox.Filesystem.Write = nil
+	c.Sandbox.Filesystem.Protected = nil
+	c.Sandbox.Network.Isolation = false
+	c.Sandbox.Network.Allow = nil
+}
+
+// IsolationDisabled reports whether an outer process sandbox disabled all
+// configuration-based isolation for this runtime.
+func (c *Config) IsolationDisabled() bool {
+	return c != nil && c.isolationDisabled
 }
 
 func containsFilesystemRoot(roots []string, target string) bool {

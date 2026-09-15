@@ -87,7 +87,7 @@ func newPollWaitToolHandler(runner execRunner, baseWorkdir string, defaultAttemp
 			return tools.NewToolResultActionableError(err.Error(), "use a positive duration long enough for all polling attempts and retry"), nil
 		}
 
-		workdir, err := resolveToolWorkdir(baseWorkdir, req.Arguments)
+		workdir, err := resolveRunnerToolWorkdir(runner, baseWorkdir, req.Arguments)
 		if err != nil {
 			return tools.NewToolResultActionableError(err.Error(), "use an existing directory inside the agent workdir and retry"), nil
 		}
@@ -139,6 +139,11 @@ func newPollWaitToolHandler(runner execRunner, baseWorkdir string, defaultAttemp
 
 		return tools.NewToolResultActionableError(newPollWaitTimeoutMessage(maxTimeout, attempts, lastResult), "increase max_timeout, correct the polled command, or verify the external dependency before retrying"), nil
 	}
+}
+
+func resolveRunnerToolWorkdir(runner execRunner, base string, args map[string]interface{}) (string, error) {
+	exec, _ := runner.(*Executor)
+	return resolveExecutorToolWorkdir(exec, base, args)
 }
 
 func defaultPollWaitAttemptTimeout(defaultMaxTimeout time.Duration) time.Duration {

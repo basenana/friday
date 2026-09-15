@@ -94,6 +94,37 @@ func TestExecutePermissionDenied(t *testing.T) {
 	}
 }
 
+func TestExecuteSkipsPermissionsWhenIsolationDisabled(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Permissions.Allow = []string{"echo"}
+	cfg.Permissions.Deny = []string{"printf"}
+	cfg.DisableIsolation()
+	exec := NewExecutor(cfg)
+
+	result, err := exec.Run(context.Background(), "printf unrestricted", ExecOptions{})
+	if err != nil {
+		t.Fatalf("Executor.Run error = %v", err)
+	}
+	if result.ExitCode != 0 || result.Stdout != "unrestricted" {
+		t.Fatalf("result = %+v, want unrestricted output", result)
+	}
+}
+
+func TestExecuteInheritsProcessEnvironmentWhenIsolationDisabled(t *testing.T) {
+	t.Setenv("FRIDAY_OUTER_SANDBOX_SECRET", "visible-to-child")
+	cfg := DefaultConfig()
+	cfg.DisableIsolation()
+	exec := NewExecutor(cfg)
+
+	result, err := exec.Run(context.Background(), `printf %s "$FRIDAY_OUTER_SANDBOX_SECRET"`, ExecOptions{})
+	if err != nil {
+		t.Fatalf("Executor.Run error = %v", err)
+	}
+	if result.Stdout != "visible-to-child" {
+		t.Fatalf("Stdout = %q, want inherited environment value", result.Stdout)
+	}
+}
+
 func TestExecuteWorkdir(t *testing.T) {
 	exec := newTestExecutor()
 

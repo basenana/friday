@@ -482,6 +482,9 @@ func resolveToolPath(cfg *Config, workdir, path string, mode fsAccessMode) (stri
 	if err != nil {
 		return "", err
 	}
+	if cfg.IsolationDisabled() {
+		return absPath, nil
+	}
 	resolvedWorkdir := workdir
 	if strings.TrimSpace(workdir) != "" {
 		if resolved, err := resolveSymlinkedPath(workdir); err == nil {

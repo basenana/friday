@@ -140,6 +140,70 @@ func TestLoadForDirDoesNotHideBrokenProjectConfig(t *testing.T) {
 	}
 }
 
+func TestLoadForDirDisablesSandboxWhenProcessIsSandboxed(t *testing.T) {
+	home := t.TempDir()
+	project := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("IS_SANDBOX", "1")
+	writeTestConfig(t, filepath.Join(project, ".friday", "config.json"), `{
+  "sandbox": {
+    "permissions": {"allow": ["echo"], "deny": ["rm"]},
+    "sandbox": {
+      "enabled": true,
+      "filesystem": {
+        "readonly": ["/readonly"],
+        "deny": ["/denied"],
+        "write": ["/write"],
+        "protected": ["/protected"]
+      },
+      "network": {"isolation": true, "allow": ["example.com"]}
+    }
+  }
+}`)
+
+	cfg, err := LoadForDir("", project)
+	if err != nil {
+		t.Fatalf("LoadForDir() error = %v", err)
+	}
+	if !cfg.Sandbox.IsolationDisabled() {
+		t.Fatal("expected runtime sandbox isolation to be disabled")
+	}
+	if cfg.Sandbox.Sandbox.Enabled {
+		t.Fatal("expected OS sandbox to be disabled")
+	}
+	if cfg.Sandbox.Sandbox.Network.Isolation {
+		t.Fatal("expected network isolation to be disabled")
+	}
+	if len(cfg.Sandbox.Permissions.Allow) != 1 || cfg.Sandbox.Permissions.Allow[0] != "*" || len(cfg.Sandbox.Permissions.Deny) != 0 {
+		t.Fatalf("unexpected permissions after override: %#v", cfg.Sandbox.Permissions)
+	}
+	filesystem := cfg.Sandbox.Sandbox.Filesystem
+	if len(filesystem.ReadOnly) != 0 || len(filesystem.Deny) != 0 || len(filesystem.Write) != 0 || len(filesystem.Protected) != 0 {
+		t.Fatalf("unexpected filesystem policy after override: %#v", filesystem)
+	}
+}
+
+func TestLoadForDirRequiresExactSandboxEnvironmentValue(t *testing.T) {
+	for _, value := range []string{"", "0", "true", "yes"} {
+		t.Run(value, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			t.Setenv("IS_SANDBOX", value)
+
+			cfg, err := LoadForDir("", t.TempDir())
+			if err != nil {
+				t.Fatalf("LoadForDir() error = %v", err)
+			}
+			if cfg.Sandbox.IsolationDisabled() {
+				t.Fatalf("IS_SANDBOX=%q unexpectedly disabled isolation", value)
+			}
+			if !cfg.Sandbox.Sandbox.Enabled {
+				t.Fatalf("IS_SANDBOX=%q unexpectedly disabled OS sandbox", value)
+			}
+		})
+	}
+}
+
 func writeTestConfig(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

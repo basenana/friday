@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/basenana/friday/core/tools"
@@ -108,5 +109,29 @@ func TestBashToolHandlerRejectsWorkdirOutsideBase(t *testing.T) {
 	}
 	if result.IsError {
 		t.Fatalf("unexpected tool error: %s", textResult(t, result))
+	}
+}
+
+func TestBashToolHandlerAllowsWorkdirOutsideBaseWhenIsolationDisabled(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.DisableIsolation()
+	exec := NewExecutor(cfg)
+	base := t.TempDir()
+	outside := t.TempDir()
+
+	result, err := bashToolHandler(exec, base)(context.Background(), &tools.Request{
+		Arguments: map[string]interface{}{
+			"command": "pwd",
+			"workdir": outside,
+		},
+	})
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("tool error: %s", textResult(t, result))
+	}
+	if !strings.Contains(textResult(t, result), outside) {
+		t.Fatalf("result = %q, want outside workdir %q", textResult(t, result), outside)
 	}
 }

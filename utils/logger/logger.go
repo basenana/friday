@@ -18,6 +18,8 @@ var (
 
 // Init initializes the logger writing to stdout only
 func Init() {
+	logFile = nil
+	coreAdapter = nil
 	atom = zap.NewAtomicLevel()
 	encoderCfg := zap.NewProductionEncoderConfig()
 	encoderCfg.TimeKey = "timestamp"
@@ -33,6 +35,8 @@ func Init() {
 
 // InitWithFile initializes the logger writing to the specified file
 func InitWithFile(logPath string) {
+	logFile = nil
+	coreAdapter = nil
 	atom = zap.NewAtomicLevel()
 	encoderCfg := zap.NewProductionEncoderConfig()
 	encoderCfg.TimeKey = "timestamp"
@@ -79,8 +83,14 @@ func Sync() {
 func Close() {
 	Sync()
 	if logFile != nil {
-		logFile.Close()
+		_ = logFile.Close()
+		logFile = nil
 	}
+}
+
+// IsFileBacked reports whether the active logger writes to a file.
+func IsFileBacked() bool {
+	return logFile != nil
 }
 
 // CoreLogger returns a logger that implements core/logger.Logger interface

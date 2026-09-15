@@ -77,7 +77,7 @@ func bashToolHandler(exec *Executor, baseWorkdir string) tools.ToolHandlerFunc {
 		}
 
 		// Resolve and validate optional workdir
-		workdir, err := resolveToolWorkdir(baseWorkdir, req.Arguments)
+		workdir, err := resolveExecutorToolWorkdir(exec, baseWorkdir, req.Arguments)
 		if err != nil {
 			return tools.NewToolResultActionableError(err.Error(), "use an existing directory inside the agent workdir and retry"), nil
 		}
@@ -159,6 +159,15 @@ func parseDuration(s string) (time.Duration, error) {
 // workdir must stay inside the agent's base workdir so a model-controlled
 // value cannot point the sandbox at arbitrary host directories.
 func resolveToolWorkdir(base string, args map[string]interface{}) (string, error) {
+	return resolveToolWorkdirWithPolicy(base, args, false)
+}
+
+func resolveExecutorToolWorkdir(exec *Executor, base string, args map[string]interface{}) (string, error) {
+	disabled := exec != nil && exec.config != nil && exec.config.IsolationDisabled()
+	return resolveToolWorkdirWithPolicy(base, args, disabled)
+}
+
+func resolveToolWorkdirWithPolicy(base string, args map[string]interface{}, isolationDisabled bool) (string, error) {
 	if base == "" {
 		cwd, err := os.Getwd()
 		if err != nil {
@@ -181,7 +190,7 @@ func resolveToolWorkdir(base string, args map[string]interface{}) (string, error
 		workdir = validated
 	}
 
-	if !pathWithinRoot(workdir, baseAbs) {
+	if !isolationDisabled && !pathWithinRoot(workdir, baseAbs) {
 		return "", fmt.Errorf("invalid workdir: %q is outside the agent workdir %q", workdir, baseAbs)
 	}
 	return workdir, nil

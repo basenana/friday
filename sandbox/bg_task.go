@@ -131,7 +131,7 @@ func (tm *TaskManager) Start(command, workdir string) (*Task, error) {
 
 	cmd := exec.Command("bash", "-c", wrappedCmd)
 	cmd.Dir = dir
-	cmd.Env = buildCommandEnv(nil, "")
+	cmd.Env = tm.exec.buildCommandEnv(nil, "")
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	stdout, err := cmd.StdoutPipe()

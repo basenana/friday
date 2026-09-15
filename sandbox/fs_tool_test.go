@@ -113,6 +113,28 @@ func TestResolveToolPathRejectsDeniedPath(t *testing.T) {
 	}
 }
 
+func TestResolveToolPathAllowsOutsideAndDeniedPathsWhenIsolationDisabled(t *testing.T) {
+	cfg := DefaultConfig()
+	workdir := t.TempDir()
+	outside := t.TempDir()
+	target := filepath.Join(outside, "data.txt")
+	cfg.Sandbox.Filesystem.Deny = []string{outside}
+	cfg.DisableIsolation()
+
+	got, err := resolveToolPath(cfg, workdir, target, fsAccessWrite)
+	if err != nil {
+		t.Fatalf("resolveToolPath() error = %v", err)
+	}
+	wantRoot, err := filepath.EvalSymlinks(outside)
+	if err != nil {
+		t.Fatalf("filepath.EvalSymlinks() error = %v", err)
+	}
+	want := filepath.Join(wantRoot, "data.txt")
+	if got != want {
+		t.Fatalf("resolveToolPath() = %q, want %q", got, want)
+	}
+}
+
 func TestResolveToolPathAllowsProtectedReadButRejectsWrite(t *testing.T) {
 	cfg := DefaultConfig()
 	workdir := t.TempDir()
