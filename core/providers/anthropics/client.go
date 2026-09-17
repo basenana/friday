@@ -66,6 +66,10 @@ func (c *client) reasoningOpts(requestEffort ...string) []option.RequestOption {
 	}
 }
 
+func (c *client) reasoningEffort(request providers.Request) string {
+	return providers.ResolveReasoningEffort(request, c.model.ReasoningEffort)
+}
+
 // isThirdPartyHost reports whether the configured base URL points at a host
 // other than the vendor's official API endpoint. An empty base URL means the
 // SDK default, i.e. the official endpoint.
@@ -143,7 +147,7 @@ func (c *client) Completion(ctx context.Context, request providers.Request) prov
 			c.logger.Infow("client-side llm api throttled", "wait", time.Since(startAt).String())
 		}
 
-		stream := c.anthropic.Messages.NewStreaming(ctx, *params, c.reasoningOpts(providers.RequestReasoningEffort(request))...)
+		stream := c.anthropic.Messages.NewStreaming(ctx, *params, c.reasoningOpts(c.reasoningEffort(request))...)
 
 		for stream.Next() {
 			event := stream.Current()
@@ -211,7 +215,7 @@ Retry:
 		c.logger.Infow("client-side llm api throttled", "wait", time.Since(startAt).String())
 	}
 
-	message, err := c.anthropic.Messages.New(ctx, *params, c.reasoningOpts(providers.RequestReasoningEffort(request))...)
+	message, err := c.anthropic.Messages.New(ctx, *params, c.reasoningOpts(c.reasoningEffort(request))...)
 	if err != nil {
 		if common.IsRetriableError(err) && attempts < common.MaxAttempts {
 			attempts++
@@ -281,10 +285,7 @@ func (c *client) messageCreateParams(request providers.Request) *anthropic.Messa
 	if c.model.Temperature != nil {
 		params.Temperature = anthropic.Float(*c.model.Temperature)
 	}
-	e := providers.RequestReasoningEffort(request)
-	if e == "" {
-		e = c.model.ReasoningEffort
-	}
+	e := c.reasoningEffort(request)
 	if e != "" && e != providers.ReasoningEffortDefault && e != providers.ReasoningEffortNone {
 		// The Anthropic API only accepts low/medium/high efforts; clamp the
 		// higher generic levels (xhigh/max) down to high.

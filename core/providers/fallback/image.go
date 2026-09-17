@@ -70,6 +70,7 @@ func StripImagesFromRequest(req providers.Request) providers.Request {
 	newReq.SetToolDefines(req.ToolDefines())
 	newReq.SetPromptCacheKey(req.PromptCacheKey())
 	providers.SetRequestReasoningEffort(newReq, providers.RequestReasoningEffort(req))
+	providers.SetRequestDefaultReasoningEffort(newReq, providers.RequestDefaultReasoningEffort(req))
 
 	return newReq
 }

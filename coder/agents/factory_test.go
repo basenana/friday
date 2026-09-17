@@ -4,7 +4,6 @@ import (
 	"context"
 	"testing"
 
-	"github.com/basenana/friday/config"
 	"github.com/basenana/friday/core/providers"
 	"github.com/basenana/friday/core/tools"
 )
@@ -23,56 +22,58 @@ func (f *fakeClient) StructuredPredict(_ context.Context, _ providers.Request, _
 }
 func (f *fakeClient) ContextWindow() int64 { return 4096 }
 
-func TestClientFactory_ClientForUnconfiguredReturnsPrimary(t *testing.T) {
-	primary := &fakeClient{name: "primary"}
-	f := NewClientFactory(primary, config.ModelConfig{}, nil)
-	got, err := f.ClientFor(config.ModelConfig{})
+type forkableClient struct {
+	fakeClient
+	policy providers.ClientPolicy
+}
+
+func (f *forkableClient) Fork(policy providers.ClientPolicy) providers.Client {
+	return &forkableClient{fakeClient: fakeClient{name: "fork"}, policy: policy}
+}
+
+func TestClientFactory_ClientForUnconfiguredForksPrimary(t *testing.T) {
+	primary := &forkableClient{fakeClient: fakeClient{name: "primary"}}
+	f := NewClientFactory(primary)
+	got, err := f.ClientFor("", "")
 	if err != nil {
 		t.Fatalf("ClientFor error: %v", err)
 	}
-	if got != primary {
-		t.Fatal("expected primary client for unconfigured model")
+	forked, ok := got.(*forkableClient)
+	if !ok || forked == primary {
+		t.Fatalf("client = %T, want isolated fork", got)
+	}
+	if forked.policy != (providers.ClientPolicy{}) {
+		t.Fatalf("fork policy = %+v, want empty", forked.policy)
 	}
 }
 
-func TestClientFactory_ClientForConfiguredUsesBuilder(t *testing.T) {
-	primary := &fakeClient{name: "primary"}
-	secondary := &fakeClient{name: "secondary"}
-	calls := 0
-	builder := func(mc config.ModelConfig) (providers.Client, error) {
-		calls++
-		return secondary, nil
-	}
-	f := NewClientFactory(primary, config.ModelConfig{}, builder)
-	cfg := config.ModelConfig{Provider: "openai", Model: "gpt-4o-mini"}
-	got, err := f.ClientFor(cfg)
+func TestClientFactory_ClientForConfiguredForksPrimary(t *testing.T) {
+	primary := &forkableClient{fakeClient: fakeClient{name: "primary"}}
+	f := NewClientFactory(primary)
+	got, err := f.ClientFor("gpt-4o-mini", "high")
 	if err != nil {
 		t.Fatalf("ClientFor error: %v", err)
 	}
-	if got != secondary {
-		t.Fatal("expected builder-provided client for configured model")
+	forked, ok := got.(*forkableClient)
+	if !ok {
+		t.Fatalf("client = %T, want forked client", got)
 	}
-	if calls != 1 {
-		t.Errorf("builder called %d times, want 1", calls)
+	if forked.policy != (providers.ClientPolicy{PreferredModel: "gpt-4o-mini", Effort: "high"}) {
+		t.Fatalf("fork policy = %+v", forked.policy)
 	}
 }
 
-func TestClientFactory_ClientForConfiguredButNilBuilderReturnsPrimary(t *testing.T) {
+func TestClientFactory_ClientForRequiresForkableClient(t *testing.T) {
 	primary := &fakeClient{name: "primary"}
-	f := NewClientFactory(primary, config.ModelConfig{}, nil)
-	cfg := config.ModelConfig{Provider: "openai", Model: "gpt-4o-mini"}
-	got, err := f.ClientFor(cfg)
-	if err != nil {
-		t.Fatalf("ClientFor error: %v", err)
-	}
-	if got != primary {
-		t.Fatal("nil builder should fall back to primary")
+	f := NewClientFactory(primary)
+	if _, err := f.ClientFor("", ""); err == nil {
+		t.Fatal("agent view on non-forkable client should fail")
 	}
 }
 
 func TestBuildAgent_AppliesToolPolicy(t *testing.T) {
-	primary := &fakeClient{name: "primary"}
-	f := NewClientFactory(primary, config.ModelConfig{}, nil)
+	primary := &forkableClient{fakeClient: fakeClient{name: "primary"}}
+	f := NewClientFactory(primary)
 
 	all := []*tools.Tool{
 		tools.NewTool("fs_read"),
@@ -95,8 +96,8 @@ func TestBuildAgent_AppliesToolPolicy(t *testing.T) {
 }
 
 func TestBuildExpertAgents_CreatesOnePerSpec(t *testing.T) {
-	primary := &fakeClient{name: "primary"}
-	f := NewClientFactory(primary, config.ModelConfig{}, nil)
+	primary := &forkableClient{fakeClient: fakeClient{name: "primary"}}
+	f := NewClientFactory(primary)
 
 	all := []*tools.Tool{tools.NewTool("fs_read"), tools.NewTool("bash")}
 	specs := []*AgentSpec{

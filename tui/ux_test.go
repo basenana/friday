@@ -18,8 +18,8 @@ import (
 	"github.com/basenana/friday/core/actor/events"
 	"github.com/basenana/friday/core/collaboration"
 	"github.com/basenana/friday/core/planning"
+	"github.com/basenana/friday/core/providers"
 	"github.com/basenana/friday/core/types"
-	"github.com/basenana/friday/sandbox"
 	"github.com/basenana/friday/sessions"
 	sessionfile "github.com/basenana/friday/sessions/file"
 )
@@ -218,6 +218,59 @@ func TestStatusShowsLoopAsModeAndExplainsRunningKeys(t *testing.T) {
 	}
 }
 
+func TestRuntimeModelDisplayOmitsDefaultEffort(t *testing.T) {
+	tests := []struct {
+		info providers.ClientRuntimeInfo
+		want string
+	}{
+		{info: providers.ClientRuntimeInfo{Model: "gpt-test"}, want: "gpt-test"},
+		{info: providers.ClientRuntimeInfo{Model: "gpt-test", Effort: providers.ReasoningEffortDefault}, want: "gpt-test"},
+		{info: providers.ClientRuntimeInfo{Model: "gpt-test", Effort: providers.ReasoningEffortHigh}, want: "gpt-test [high]"},
+	}
+	for _, tt := range tests {
+		if got := formatRuntimeModel(tt.info); got != tt.want {
+			t.Errorf("formatRuntimeModel(%+v) = %q, want %q", tt.info, got, tt.want)
+		}
+	}
+}
+
+func TestStatusShowsSessionClientEndpoint(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	m.showStatus()
+	status := m.messages[len(m.messages)-1].content
+	if !strings.Contains(status, "- Model: `gpt-4o`") || !strings.Contains(status, "- Endpoint: `openai.") {
+		t.Fatalf("status missing client runtime details: %q", status)
+	}
+	if strings.Contains(status, "Reasoning:") {
+		t.Fatalf("status retained duplicate reasoning line: %q", status)
+	}
+}
+
+func TestModelRetryDisplayDistinguishesFallback(t *testing.T) {
+	m := &model{textBlock: -1, reasonBlock: -1, toolCalls: make(map[string]int)}
+	fallbackEvent := events.NewEvent(events.KindCustom, "run-fallback").
+		WithName(events.CustomModelRetry).
+		WithPayload(events.CustomData{Body: map[string]any{
+			"provider": "fallback", "model": "shared", "model_key": "b.example/shared",
+			"previous_model": "shared", "previous_model_key": "a.example/shared",
+			"attempt": "2", "max_attempts": "3",
+		}})
+	m.handleActorEvent(fallbackEvent)
+	if got := m.messages[len(m.messages)-1].content; got != "model fallback · a.example/shared → b.example/shared · attempt 2/3" {
+		t.Fatalf("fallback label = %q", got)
+	}
+
+	retryEvent := events.NewEvent(events.KindCustom, "run-retry").
+		WithName(events.CustomModelRetry).
+		WithPayload(events.CustomData{Body: map[string]any{
+			"provider": "openai", "model": "gpt-test", "attempt": "2", "max_attempts": "3",
+		}})
+	m.handleActorEvent(retryEvent)
+	if got := m.messages[len(m.messages)-1].content; got != "model request failed · retrying · gpt-test · attempt 2/3" {
+		t.Fatalf("retry label = %q", got)
+	}
+}
+
 func TestRunCompletionFallsBackToEventTimestamps(t *testing.T) {
 	m, _, _ := newTestModel(t)
 	started := time.Date(2026, 9, 11, 10, 0, 0, 0, time.UTC)
@@ -381,28 +434,36 @@ func TestPlanHandoffFailuresRestoreProposalAndQueue(t *testing.T) {
 	})
 }
 
-func TestModelSelectionPersistsAndRollsBack(t *testing.T) {
-	m, mgr, _ := newTestModel(t)
-	m.cfg.Models = []config.ModelConfig{
-		{Provider: "openai", Model: "gpt-4o", ContextWindow: 128000, ReasoningEffort: "low"},
-		{Provider: "openai", Model: "gpt-alt", ContextWindow: 32000, ReasoningEffort: "high"},
-		{Provider: "unsupported", Model: "broken"},
+func TestModelSelectionPersistsWithoutRebuildingActor(t *testing.T) {
+	m, mgr, _ := newTestModelWithConfig(t, func(cfg *config.Config) {
+		cfg.Model = &config.ModelConfig{Provider: "openai", Model: "gpt-4o", ContextWindow: 128000, ReasoningEffort: "low"}
+		cfg.Models = []config.ModelConfig{
+			{Provider: "openai", Model: "gpt-alt", ContextWindow: 32000, ReasoningEffort: "high"},
+		}
+	})
+	actorBefore, ok := m.registry.Get(m.sessionID)
+	if !ok {
+		t.Fatal("session actor is not running")
 	}
-	m.applyModel(m.cfg.Models[1])
+	m.applyModel(m.cfg.Models[0].Model)
 	runtimeState, _ := mgr.Runtime(m.sessionID)
 	if runtimeState.Model.Model != "gpt-alt" || effectiveEffort(m) != "high" {
 		t.Fatalf("selected runtime=%+v effort=%q", runtimeState, effectiveEffort(m))
 	}
+	if actorAfter, ok := m.registry.Get(m.sessionID); !ok || actorAfter != actorBefore {
+		t.Fatal("model selection rebuilt the session actor")
+	}
 	m.showStatus()
-	if status := m.messages[len(m.messages)-1].content; !strings.Contains(status, "32000") || !strings.Contains(status, "Reasoning: `high`") {
+	if status := m.messages[len(m.messages)-1].content; !strings.Contains(status, "32000") || !strings.Contains(status, "Model: `gpt-alt [high]`") {
 		t.Fatalf("status did not use complete selected model config: %q", status)
 	}
-	m.applyModel(m.cfg.Models[2])
+	m.cfg.Models = append(m.cfg.Models, config.ModelConfig{Provider: "unsupported", Model: "broken"})
+	m.applyModel("broken")
 	runtimeState, _ = mgr.Runtime(m.sessionID)
-	if runtimeState.Model.Model != "gpt-alt" {
-		t.Fatalf("failed reconfigure was not rolled back: %+v", runtimeState)
+	if runtimeState.Model.Model != "broken" {
+		t.Fatalf("selected model was not persisted: %+v", runtimeState)
 	}
-	if err := mgr.UpdateMeta(m.sessionID, sessions.SessionMetaPatch{Runtime: &sessions.SessionRuntime{Mode: collaboration.ModeDefault, Model: sessions.ModelSelection{Provider: "openai", Model: "removed"}}}); err != nil {
+	if err := mgr.UpdateMeta(m.sessionID, sessions.SessionMetaPatch{Runtime: &sessions.SessionRuntime{Mode: collaboration.ModeDefault, Model: sessions.ModelSelection{Model: "removed"}}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := normalizeSessionModel(mgr, m.cfg, m.sessionID); err != nil {
@@ -414,17 +475,58 @@ func TestModelSelectionPersistsAndRollsBack(t *testing.T) {
 	}
 }
 
-func TestRunningTaskCountOnlyCountsActiveTasks(t *testing.T) {
-	tasks := []*sandbox.Task{
-		nil,
-		{Status: sandbox.TaskRunning},
-		{Status: sandbox.TaskCompleted},
-		{Status: sandbox.TaskFailed},
-		{Status: sandbox.TaskKilled},
-		{Status: sandbox.TaskRunning},
+func TestModelSelectorGroupsEndpointsByExactModelName(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	m.cfg.Model = &config.ModelConfig{Provider: "openai", BaseURL: "https://a.example/v1", Model: "shared"}
+	m.cfg.Models = []config.ModelConfig{
+		{Provider: "openai", BaseURL: "https://b.example/v1", Model: "shared"},
+		{Provider: "openai", BaseURL: "https://a.example/v1", Model: "other"},
 	}
-	if got := runningTaskCount(tasks); got != 2 {
-		t.Fatalf("runningTaskCount = %d, want 2", got)
+	m.openModelSelector()
+	if m.selector == nil || len(m.selector.items) != 2 {
+		t.Fatalf("selector = %#v", m.selector)
+	}
+	if m.selector.items[0].value != "shared" || !strings.Contains(m.selector.items[0].description, "2 endpoints") {
+		t.Fatalf("grouped item = %+v", m.selector.items[0])
+	}
+	if _, err := m.resolveModel("openai/shared"); err == nil {
+		t.Fatal("provider/model syntax should not resolve")
+	}
+}
+
+func TestEffortSelectionPersistsAndExplicitEffortSurvivesPlanMode(t *testing.T) {
+	m, mgr, _ := newTestModel(t)
+	m.applyEffort("default")
+	runtimeState, _ := mgr.Runtime(m.sessionID)
+	if runtimeState.Effort != "default" || effectiveEffort(m) != "default" {
+		t.Fatalf("default effort runtime=%+v effective=%q", runtimeState, effectiveEffort(m))
+	}
+	m.applyEffort("high")
+	m.mode = collaboration.ModePlan
+	if got := effectiveEffort(m); got != providers.ReasoningEffortHigh {
+		t.Fatalf("Plan Mode effort = %q, want explicit high", got)
+	}
+}
+
+func TestNewSessionInheritsCurrentRuntimePolicy(t *testing.T) {
+	m, mgr, _ := newTestModel(t)
+	want := sessions.SessionRuntime{
+		Mode:   collaboration.ModePlan,
+		Model:  sessions.ModelSelection{Model: m.cfg.PrimaryModel().Model},
+		Effort: "high",
+	}
+	if err := mgr.UpdateMeta(m.sessionID, sessions.SessionMetaPatch{Runtime: &want}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.switchSession("inherited-runtime"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := mgr.Runtime("inherited-runtime")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("new Session runtime = %+v, want %+v", got, want)
 	}
 }
 

@@ -54,6 +54,7 @@ type commonRequest struct {
 	history         []types.Message
 	promptCacheKey  string
 	reasoningEffort string
+	defaultEffort   string
 }
 
 func NewRequest(systemMessage string, history ...types.Message) Request {
@@ -102,6 +103,8 @@ func (s *commonRequest) PromptCacheKey() string {
 
 func (s *commonRequest) ReasoningEffort() string { return s.reasoningEffort }
 
+func (s *commonRequest) DefaultReasoningEffort() string { return s.defaultEffort }
+
 func (s *commonRequest) SetHistory(history []types.Message) {
 	s.history = history
 }
@@ -134,6 +137,8 @@ func (s *commonRequest) SetPromptCacheKey(key string) {
 }
 
 func (s *commonRequest) SetReasoningEffort(effort string) { s.reasoningEffort = effort }
+
+func (s *commonRequest) SetDefaultReasoningEffort(effort string) { s.defaultEffort = effort }
 
 func (s *commonRequest) AppendHistory(messages ...types.Message) {
 	s.history = append(s.history, messages...)

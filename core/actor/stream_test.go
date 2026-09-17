@@ -1,18 +1,26 @@
 package actor
 
 import (
-	"log"
 	"testing"
 	"time"
 
 	"github.com/basenana/friday/core/actor/events"
 )
 
+func TestEventStreamDefaultSubscriberCapacity(t *testing.T) {
+	s := NewEventStream(nil)
+	sub := s.Subscribe(0)
+	defer sub.Close()
+	if got := cap(sub.events); got != 256 {
+		t.Fatalf("default subscriber capacity = %d, want 256", got)
+	}
+}
+
 // TestEventStream_TerminalEviction verifies that when a subscriber
 // buffer fills up, terminal events still get through by evicting
 // older non-terminal events.
 func TestEventStream_TerminalEviction(t *testing.T) {
-	s := NewEventStream(log.New(&bytesBuffer{}, "", 0))
+	s := NewEventStream(nil)
 	// Buffer of 2 so we can fill it deterministically.
 	sub := s.Subscribe(2)
 
@@ -53,7 +61,7 @@ collect:
 }
 
 func TestEventStream_PreservesDistinctTerminalEvents(t *testing.T) {
-	s := NewEventStream(log.New(&bytesBuffer{}, "", 0))
+	s := NewEventStream(nil)
 	sub := s.Subscribe(2)
 
 	s.Publish(events.NewEvent(events.KindTextMessageContent, "r1"))
@@ -77,14 +85,4 @@ func TestEventStream_PreservesDistinctTerminalEvents(t *testing.T) {
 	if got[0].Type != events.KindRunError || got[1].Type != events.KindRunFinished {
 		t.Fatalf("terminal order = [%s %s], want [RUN_ERROR RUN_FINISHED]", got[0].Type, got[1].Type)
 	}
-}
-
-// bytesBuffer is a minimal io.Writer backing the test logger.
-type bytesBuffer struct {
-	data []byte
-}
-
-func (b *bytesBuffer) Write(p []byte) (int, error) {
-	b.data = append(b.data, p...)
-	return len(p), nil
 }

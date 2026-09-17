@@ -35,9 +35,14 @@ type ToolCall struct {
 
 // ToolResult represents the result of a tool execution
 type ToolResult struct {
-	CallID  string `json:"call_id,omitempty"`
-	Content string `json:"content,omitempty"`
-	Success bool   `json:"success,omitempty"`
+	CallID      string `json:"call_id,omitempty"`
+	Content     string `json:"content,omitempty"`
+	Success     bool   `json:"success,omitempty"`
+	Status      string `json:"status,omitempty"`
+	ErrorCode   string `json:"error_code,omitempty"`
+	TimeoutKind string `json:"timeout_kind,omitempty"`
+	TimeoutMs   int64  `json:"timeout_ms,omitempty"`
+	ElapsedMs   int64  `json:"elapsed_ms,omitempty"`
 }
 
 // ImageType represents the type of image content

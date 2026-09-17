@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/basenana/friday/core/tools"
 	"gopkg.in/yaml.v3"
 )
 
@@ -178,8 +179,14 @@ func containsFilesystemRoot(roots []string, target string) bool {
 
 // Validate checks the config for invalid values
 func (c *Config) Validate() error {
-	if _, err := time.ParseDuration(c.Sandbox.Defaults.Timeout); c.Sandbox.Defaults.Timeout != "" && err != nil {
-		return fmt.Errorf("invalid sandbox.defaults.timeout: %w", err)
+	if c.Sandbox.Defaults.Timeout != "" {
+		timeout, err := time.ParseDuration(c.Sandbox.Defaults.Timeout)
+		if err != nil {
+			return fmt.Errorf("invalid sandbox.defaults.timeout: %w", err)
+		}
+		if timeout <= 0 || timeout > tools.MaxDeclaredToolTimeout {
+			return fmt.Errorf("invalid sandbox.defaults.timeout: must be greater than zero and no more than %s", tools.MaxDeclaredToolTimeout)
+		}
 	}
 	for _, entry := range c.Sandbox.Network.Allow {
 		if err := validateNetworkAllowEntry(entry); err != nil {

@@ -10,16 +10,16 @@ import (
 )
 
 // NewSkillTools creates the skill management tools
-func NewSkillTools(registry *Registry) []*tools.Tool {
+func NewSkillTools(provider Provider) []*tools.Tool {
 	return []*tools.Tool{
-		newLoadSkillTool(registry),
-		newListSkillFilesTool(registry),
-		newReadSkillFileTool(registry),
+		newLoadSkillTool(provider),
+		newListSkillFilesTool(provider),
+		newReadSkillFileTool(provider),
 	}
 }
 
 // newLoadSkillTool creates the load_skill tool
-func newLoadSkillTool(registry *Registry) *tools.Tool {
+func newLoadSkillTool(provider Provider) *tools.Tool {
 	return tools.NewTool("load_skill",
 		tools.WithDescription(`Load and return the complete instructions for one of the skills listed in the system prompt. The result includes dir_path, the skill's absolute directory; resolve relative file references in the instructions against it. The instructions are added to the conversation context.`),
 		tools.WithString("name",
@@ -32,7 +32,7 @@ func newLoadSkillTool(registry *Registry) *tools.Tool {
 				return tools.NewToolResultError("name parameter is required"), nil
 			}
 
-			skill, err := registry.Get(name)
+			skill, err := provider.Get(name)
 			if err != nil {
 				return tools.NewToolResultError(fmt.Sprintf("Failed to load skill: %v", err)), nil
 			}
@@ -59,7 +59,7 @@ func newLoadSkillTool(registry *Registry) *tools.Tool {
 }
 
 // newListSkillFilesTool creates the list_skill_files tool.
-func newListSkillFilesTool(registry *Registry) *tools.Tool {
+func newListSkillFilesTool(provider Provider) *tools.Tool {
 	return tools.NewTool("list_skill_files",
 		tools.WithDescription(`List files and directories within a skill's directory.
 Use this to explore what's inside a skill - sub-skills, scripts, references, examples, etc.
@@ -78,7 +78,7 @@ Leave path empty to list the root directory, or specify a sub-path to browse dee
 			}
 			subPath, _ := req.Arguments["path"].(string)
 
-			entries, err := registry.ListFiles(skillName, subPath)
+			entries, err := provider.ListFiles(skillName, subPath)
 			if err != nil {
 				return tools.NewToolResultError(fmt.Sprintf("Failed to list files: %v", err)), nil
 			}
@@ -112,7 +112,7 @@ Leave path empty to list the root directory, or specify a sub-path to browse dee
 }
 
 // newReadSkillFileTool creates the read_skill_file tool.
-func newReadSkillFileTool(registry *Registry) *tools.Tool {
+func newReadSkillFileTool(provider Provider) *tools.Tool {
 	return tools.NewTool("read_skill_file",
 		tools.WithDescription(`Read any file within a skill's directory tree.
 Use list_skill_files first to discover available files, then read them with this tool.`),
@@ -134,7 +134,7 @@ Use list_skill_files first to discover available files, then read them with this
 				return tools.NewToolResultError("path parameter is required: the file path relative to the skill's base path"), nil
 			}
 
-			content, err := registry.ReadFile(skillName, filePath)
+			content, err := provider.ReadFile(skillName, filePath)
 			if err != nil {
 				return tools.NewToolResultError(fmt.Sprintf("Failed to read file: %v", err)), nil
 			}

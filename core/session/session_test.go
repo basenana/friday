@@ -156,6 +156,15 @@ func newTestSession(history ...types.Message) *Session {
 	return New("test-session", nil, WithHistory(history...))
 }
 
+func TestSubscribeEventsDefaultCapacity(t *testing.T) {
+	sess := newTestSession()
+	events, unsubscribe := sess.SubscribeEvents()
+	defer unsubscribe()
+	if got := cap(events); got != 256 {
+		t.Fatalf("default event subscriber capacity = %d, want 256", got)
+	}
+}
+
 func TestFork_PreservesParentHistory(t *testing.T) {
 	parent := newTestSession(userMsg("hi"), assistantMsg("hello"))
 	fork := parent.Fork()

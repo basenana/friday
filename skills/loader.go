@@ -18,6 +18,7 @@ import (
 type Loader struct {
 	skillsPaths []string
 	skills      map[string]*Skill
+	loadErrors  []error
 }
 
 // NewLoader creates a new skill loader with multiple paths
@@ -62,6 +63,7 @@ func (l *Loader) loadFromDir(skillsPath string) error {
 		skillPath := filepath.Join(skillsPath, entry.Name())
 		skill, err := l.loadSkill(skillPath)
 		if err != nil {
+			l.loadErrors = append(l.loadErrors, fmt.Errorf("load skill %s: %w", entry.Name(), err))
 			logger.New("skills").Warnw("failed to load skill",
 				"skill", entry.Name(),
 				"error", err,

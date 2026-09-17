@@ -61,7 +61,7 @@ func TestRegisterAllDefinesCanonicalCommandSurface(t *testing.T) {
 	for _, cmd := range reg.List() {
 		got = append(got, cmd.Name())
 	}
-	want := []string{"archive", "clear", "compact", "context", "copy", "delete", "diff", "help", "loop", "mcp", "model", "open", "paste-image", "plan", "quit", "rename", "resume", "show", "status", "stop", "tasks"}
+	want := []string{"archive", "clear", "compact", "context", "copy", "delete", "diff", "effort", "help", "loop", "mcp", "model", "open", "paste-image", "plan", "quit", "rename", "resume", "show", "status", "stop", "tasks"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("commands = %v, want %v", got, want)
 	}

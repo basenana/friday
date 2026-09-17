@@ -466,6 +466,9 @@ func (s *FileSessionStore) UpdateMeta(sessionID string, patch sessions.SessionMe
 	if patch.Model != nil {
 		meta.Runtime.Model = *patch.Model
 	}
+	if patch.Effort != nil {
+		meta.Runtime.Effort = *patch.Effort
+	}
 	if patch.LatestPlanID != nil {
 		meta.LatestPlanID = *patch.LatestPlanID
 	}

@@ -52,12 +52,17 @@ func TestSubagent_RunTask(t *testing.T) {
 
 		resp := mainAgent.Chat(ctx, &api.Request{
 			Session:     sess,
-			UserMessage: "Delegate to the 'echo' subagent: ask it to run the bash command `echo hello_from_subagent` and report its output.",
+			UserMessage: "Use one run_task call to delegate two independent tasks to the 'echo' subagent in parallel: run `echo hello_from_subagent_one` and run `echo hello_from_subagent_two`. Report both outputs.",
 		})
-		collectResponse(t, ctx, resp)
+		content, _ := collectResponse(t, ctx, resp)
 
 		if !historyHasToolCall(sess, "run_task", 1) {
 			return errAssertion{msg: "run_task not called"}
+		}
+		for _, marker := range []string{"hello_from_subagent_one", "hello_from_subagent_two"} {
+			if !strings.Contains(content, marker) {
+				return errAssertion{msg: "batched run_task response missing " + marker + ": " + truncate(content, 300)}
+			}
 		}
 		return nil
 	})
@@ -234,10 +239,15 @@ func TestSubagent_Explore(t *testing.T) {
 	workdir := t.TempDir()
 	workerTools := newBashFsTools(t, exec, workdir)
 
-	// Drop a file for the explore clone to investigate.
-	const payload = "hello-from-explore-target"
-	if err := os.WriteFile(filepath.Join(workdir, "target.txt"), []byte(payload), 0o644); err != nil {
-		t.Fatalf("write target: %v", err)
+	// Drop two files for independent explore clones to investigate in one batch.
+	payloads := map[string]string{
+		"target-one.txt": "hello-from-explore-target-one",
+		"target-two.txt": "hello-from-explore-target-two",
+	}
+	for name, payload := range payloads {
+		if err := os.WriteFile(filepath.Join(workdir, name), []byte(payload), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
 	}
 
 	exploreAgent := agents.New(client, agents.Option{
@@ -258,13 +268,15 @@ func TestSubagent_Explore(t *testing.T) {
 
 	resp := mainAgent.Chat(ctx, &api.Request{
 		Session:     sess,
-		UserMessage: "Use the explore tool to read the file target.txt and report its contents back to me.",
+		UserMessage: "Use one explore call with two independent tasks in its tasks array: read target-one.txt and read target-two.txt. Report both exact contents.",
 	})
 	content, _ := collectResponse(t, ctx, resp)
 
 	assertHistoryHasToolCall(t, sess, "explore")
-	if !strings.Contains(strings.ToLower(content), strings.ToLower(payload)) {
-		t.Errorf("explore report did not surface file content; got: %s", truncate(content, 500))
+	for _, payload := range payloads {
+		if !strings.Contains(strings.ToLower(content), strings.ToLower(payload)) {
+			t.Errorf("batched explore report did not surface %q; got: %s", payload, truncate(content, 500))
+		}
 	}
 }
 

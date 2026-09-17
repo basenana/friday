@@ -10,6 +10,7 @@ import (
 func TestLoadConfig_EmptyPathUsesDefaults(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("IS_SANDBOX", "")
 	cfg, err := LoadConfig("")
 	if err != nil {
 		t.Fatalf("LoadConfig returned error: %v", err)
@@ -26,6 +27,7 @@ func TestLoadConfig_EmptyPathUsesDefaults(t *testing.T) {
 func TestLoadConfig_JSONLoadsFullConfig(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("IS_SANDBOX", "")
 	dir := t.TempDir()
 	path := filepath.Join(dir, "sandbox.json")
 	data := []byte(`{
@@ -46,7 +48,7 @@ func TestLoadConfig_JSONLoadsFullConfig(t *testing.T) {
 	      "allow": ["example.com", "api.example.com"]
 	    },
 	    "defaults": {
-	      "timeout": "30m"
+		      "timeout": "15m"
 	    }
 	  }
 	}`)
@@ -82,7 +84,7 @@ func TestLoadConfig_JSONLoadsFullConfig(t *testing.T) {
 				Allow:     []string{"example.com", "api.example.com"},
 			},
 			Defaults: DefaultsConfig{
-				Timeout: "30m",
+				Timeout: "15m",
 			},
 		},
 	}
@@ -94,6 +96,7 @@ func TestLoadConfig_JSONLoadsFullConfig(t *testing.T) {
 func TestLoadConfig_YAMLLoadsFullConfig(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("IS_SANDBOX", "")
 	dir := t.TempDir()
 	path := filepath.Join(dir, "sandbox.yaml")
 	data := []byte(`permissions:
@@ -122,7 +125,7 @@ sandbox:
       - example.com
       - api.example.com
   defaults:
-    timeout: 30m
+    timeout: 15m
 `)
 	if err := os.WriteFile(path, data, 0644); err != nil {
 		t.Fatalf("WriteFile failed: %v", err)
@@ -145,8 +148,8 @@ sandbox:
 	if cfg.Sandbox.Network.Isolation {
 		t.Fatal("expected isolation to be false")
 	}
-	if cfg.Sandbox.Defaults.Timeout != "30m" {
-		t.Fatalf("expected timeout 30m, got %q", cfg.Sandbox.Defaults.Timeout)
+	if cfg.Sandbox.Defaults.Timeout != "15m" {
+		t.Fatalf("expected timeout 15m, got %q", cfg.Sandbox.Defaults.Timeout)
 	}
 	if !reflect.DeepEqual(cfg.Sandbox.Filesystem.ReadOnly, []string{"/etc", "/usr/share"}) {
 		t.Fatalf("unexpected readonly: %#v", cfg.Sandbox.Filesystem.ReadOnly)
@@ -171,6 +174,7 @@ sandbox:
 }
 
 func TestLoadConfig_PartialConfigPreservesDefaults(t *testing.T) {
+	t.Setenv("IS_SANDBOX", "")
 	dir := t.TempDir()
 	path := filepath.Join(dir, "sandbox.json")
 	data := []byte(`{"sandbox":{"network":{"isolation":false}}}`)
@@ -197,6 +201,7 @@ func TestLoadConfig_PartialConfigPreservesDefaults(t *testing.T) {
 }
 
 func TestLoadConfig_NotExistUsesDefaults(t *testing.T) {
+	t.Setenv("IS_SANDBOX", "")
 	path := filepath.Join(t.TempDir(), "missing.yaml")
 
 	cfg, err := LoadConfig(path)
@@ -250,9 +255,22 @@ func TestLoadConfig_InvalidTimeoutReturnsError(t *testing.T) {
 	}
 }
 
+func TestLoadConfig_RejectsTimeoutAboveMaximum(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "sandbox.json")
+	if err := os.WriteFile(path, []byte(`{"sandbox":{"defaults":{"timeout":"15m1s"}}}`), 0644); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+
+	if _, err := LoadConfig(path); err == nil {
+		t.Fatal("expected timeout above 15m to be rejected")
+	}
+}
+
 func TestLoadConfig_PreservesTildePaths(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("IS_SANDBOX", "")
 	dir := t.TempDir()
 	path := filepath.Join(dir, "sandbox.json")
 	if err := os.WriteFile(path, []byte(`{"sandbox":{"filesystem":{"write":["~/sandbox-write"]}}}`), 0644); err != nil {

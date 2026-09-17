@@ -82,29 +82,44 @@ func (a *imageAnalyzer) clientForModel(modelCfg config.ModelConfig) (providers.C
 }
 
 func CreateProviderClient(cfg *config.Config) (providers.Client, error) {
+	pool, err := CreateModelPool(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return pool.NewClient(fallback.NewSessionPolicy(providers.ClientPolicy{}), providers.ClientPolicy{}), nil
+}
+
+// CreateModelPool constructs every configured leaf client once. Views derived
+// from the pool share transports and rate limiters while choosing their own
+// preferred model name and effort.
+func CreateModelPool(cfg *config.Config) (*fallback.ModelPool, error) {
 	models := cfg.ChatModels()
-	if len(models) <= 1 {
-		// Single model — no fallback needed.
-		if len(models) == 1 {
-			return CreateProviderClientFromModel(models[0])
-		}
-		return CreateProviderClientFromModel(cfg.PrimaryModel())
+	if len(models) == 0 {
+		return nil, fmt.Errorf("no chat models configured")
 	}
 
-	// Multiple models — wrap in FallbackClient.
 	entries := make([]fallback.ModelEntry, 0, len(models))
 	for _, m := range models {
 		c, err := CreateProviderClientFromModel(m)
 		if err != nil {
 			return nil, fmt.Errorf("create provider client for model %s: %w", m.Model, err)
 		}
-		entries = append(entries, fallback.ModelEntry{Client: c, Name: m.Model})
+		identity := m.Identity()
+		entries = append(entries, fallback.ModelEntry{
+			Client:          c,
+			Name:            m.Model,
+			Key:             fmt.Sprintf("%s.%s/%s", identity.Provider, identity.Server, identity.Model),
+			ReasoningEffort: m.ReasoningEffort,
+			Capabilities: fallback.ModelCapabilities{
+				SupportsImage: m.HasInput("image"),
+			},
+		})
 	}
-	return fallback.NewFallbackClient(entries), nil
+	return fallback.NewModelPool(entries), nil
 }
 
 func CreateProviderClientFromModel(modelCfg config.ModelConfig) (providers.Client, error) {
-	provider := strings.ToLower(modelCfg.Provider)
+	provider := config.CanonicalProvider(modelCfg.Provider)
 
 	switch provider {
 	case "anthropic":

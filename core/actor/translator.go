@@ -2,6 +2,7 @@ package actor
 
 import (
 	"context"
+	"strconv"
 
 	"github.com/basenana/friday/core/actor/events"
 	"github.com/basenana/friday/core/types"
@@ -128,10 +129,16 @@ func (t *Translator) FromCoreEvent(evt types.Event) []events.Event {
 		id := t.toolFinishID(evt.Data["id"])
 		success := evt.Data["success"] != "false"
 		output := evt.Data["output"]
+		timeoutMs, _ := strconv.ParseInt(evt.Data["timeout_ms"], 10, 64)
+		elapsedMs, _ := strconv.ParseInt(evt.Data["elapsed_ms"], 10, 64)
 		return []events.Event{
 			events.NewEvent(events.KindToolCallResult, t.runID).
 				WithMessageID(id).
-				WithPayload(events.ToolCallResultData{ToolCallID: id, Success: success, Output: output}),
+				WithPayload(events.ToolCallResultData{
+					ToolCallID: id, Success: success, Output: output,
+					Status: evt.Data["status"], ErrorCode: evt.Data["error_code"],
+					TimeoutKind: evt.Data["timeout_kind"], TimeoutMs: timeoutMs, ElapsedMs: elapsedMs,
+				}),
 			events.NewEvent(events.KindStepFinished, t.runID).
 				WithMessageID(id).
 				WithPayload(events.StepFinishedData{Kind: "tool_call"}),

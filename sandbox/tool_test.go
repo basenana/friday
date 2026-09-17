@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/basenana/friday/core/tools"
 )
@@ -133,5 +134,59 @@ func TestBashToolHandlerAllowsWorkdirOutsideBaseWhenIsolationDisabled(t *testing
 	}
 	if !strings.Contains(textResult(t, result), outside) {
 		t.Fatalf("result = %q, want outside workdir %q", textResult(t, result), outside)
+	}
+}
+
+func TestBashToolHandlerReturnsTimeoutResult(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.DisableIsolation()
+	exec := NewExecutor(cfg)
+
+	started := time.Now()
+	tool := NewBashTool(exec, t.TempDir())
+	result, err := tools.NewInvoker().Invoke(context.Background(), tool, &tools.Request{
+		Arguments: map[string]interface{}{
+			"command": "sleep 30",
+			"timeout": "200ms",
+		},
+	})
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+	if !result.IsError {
+		t.Fatalf("result = %+v, want tool error", result)
+	}
+	if !result.TimedOut || result.Status != tools.ResultStatusTimedOut || result.TimeoutKind != tools.TimeoutKindDeclared {
+		t.Fatalf("timeout metadata = %+v, want declared timeout", result)
+	}
+	if result.ExitCode == nil || *result.ExitCode != 124 {
+		t.Fatalf("exit code = %v, want 124", result.ExitCode)
+	}
+	if !strings.Contains(strings.ToLower(textResult(t, result)), "timed out") {
+		t.Fatalf("result = %q, want timeout message", textResult(t, result))
+	}
+	if elapsed := time.Since(started); elapsed > 3*time.Second {
+		t.Fatalf("handler returned after %s, want <= 3s", elapsed)
+	}
+}
+
+func TestBashToolDeclaredTimeoutOverridesShorterConfigDefault(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.DisableIsolation()
+	cfg.Sandbox.Defaults.Timeout = "20ms"
+	exec := NewExecutor(cfg)
+	tool := NewBashTool(exec, t.TempDir())
+
+	result, err := tools.NewInvoker().Invoke(context.Background(), tool, &tools.Request{
+		Arguments: map[string]interface{}{
+			"command": "sleep 0.05 && printf done",
+			"timeout": "200ms",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Invoke() error = %v", err)
+	}
+	if result.IsError || textResult(t, result) != "done" {
+		t.Fatalf("result = %+v, want successful command", result)
 	}
 }

@@ -107,6 +107,36 @@ func LoadConfigRoots(roots []workspace.ResourceRoot) (map[string]ServerConfig, e
 	return result, nil
 }
 
+// ConfigFilesStamp returns a stable signature of the JSON configuration files
+// in roots. It intentionally uses metadata rather than file contents so callers
+// can cheaply decide whether a full parse is necessary.
+func ConfigFilesStamp(roots []workspace.ResourceRoot) (string, error) {
+	records := make([]string, 0)
+	for _, root := range roots {
+		entries, err := os.ReadDir(root.Path)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return "", fmt.Errorf("read MCP config directory %s: %w", root.Path, err)
+		}
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.EqualFold(filepath.Ext(entry.Name()), ".json") {
+				continue
+			}
+			path := filepath.Join(root.Path, entry.Name())
+			info, err := os.Stat(path)
+			if err != nil {
+				return "", fmt.Errorf("stat MCP config %s: %w", path, err)
+			}
+			records = append(records, fmt.Sprintf("%s\x00%d\x00%d", filepath.Clean(path), info.ModTime().UnixNano(), info.Size()))
+		}
+	}
+	sort.Strings(records)
+	sum := sha256.Sum256([]byte(strings.Join(records, "\n")))
+	return hex.EncodeToString(sum[:]), nil
+}
+
 func (c *ServerConfig) normalize() error {
 	c.Name = strings.TrimSpace(c.Name)
 	c.Command = strings.TrimSpace(c.Command)
@@ -152,6 +182,11 @@ func (c *ServerConfig) normalize() error {
 	c.Digest = hex.EncodeToString(digest[:])
 	return nil
 }
+
+// Normalize validates a programmatically constructed server definition and
+// computes its canonical digest. Name, Source, and Project should be populated
+// by the caller before invoking it.
+func (c *ServerConfig) Normalize() error { return c.normalize() }
 
 func expand(value string) string { return os.ExpandEnv(value) }
 

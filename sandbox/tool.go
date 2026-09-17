@@ -5,9 +5,7 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"strconv"
 	"strings"
-	"time"
 
 	"github.com/basenana/friday/core/tools"
 )
@@ -21,7 +19,7 @@ Commands are executed with safety restrictions:
 - Commands must be in the allow list
 - Dangerous commands are blocked
 - File system and network access may be restricted
-- Commands have a timeout
+- Commands have a timeout of at most 15 minutes; use background_task for longer work
 
 Usage notes:
 - Execute commands using bash -c, so you can use pipes, redirects, and compound commands
@@ -55,8 +53,9 @@ func NewBashTool(exec *Executor, workdir string) *tools.Tool {
 	return tools.NewTool(bashToolName,
 		tools.WithDescription(desc),
 		tools.WithString("command", tools.Required(), tools.Description("The bash command to execute")),
-		tools.WithString("timeout", tools.Description("Timeout duration (e.g. '30s', '5m'). Default is from config.")),
+		tools.WithString("timeout", tools.Description("Timeout duration (e.g. '30s', '5m'), up to 15m. Default is from config.")),
 		tools.WithString("workdir", tools.Description("Working directory. Default is current directory.")),
+		tools.WithToolTimeout(exec.parseTimeout(), "timeout"),
 		tools.WithToolHandler(bashToolHandler(exec, workdir)),
 	)
 }
@@ -70,12 +69,6 @@ func bashToolHandler(exec *Executor, baseWorkdir string) tools.ToolHandlerFunc {
 			return tools.NewToolResultActionableError("command is required and must be a non-empty string", "provide the shell command in the command field and retry"), nil
 		}
 
-		// Extract optional timeout
-		var timeout string
-		if t, ok := req.Arguments["timeout"].(string); ok {
-			timeout = t
-		}
-
 		// Resolve and validate optional workdir
 		workdir, err := resolveExecutorToolWorkdir(exec, baseWorkdir, req.Arguments)
 		if err != nil {
@@ -85,15 +78,10 @@ func bashToolHandler(exec *Executor, baseWorkdir string) tools.ToolHandlerFunc {
 		// Build options
 		opts := ExecOptions{
 			Workdir: workdir,
-		}
-
-		// Parse timeout if provided
-		if timeout != "" {
-			d, err := parseDuration(timeout)
-			if err != nil {
-				return tools.NewToolResultActionableError(fmt.Sprintf("invalid timeout: %v", err), "use a positive duration such as 30s or 5m and retry"), nil
-			}
-			opts.Timeout = d
+			// The Invoker owns the declared timeout and passes its deadline in
+			// ctx. Keep only the executor's independent safety ceiling here so
+			// a per-call timeout longer than the configured default is honored.
+			Timeout: tools.MaxDeclaredToolTimeout,
 		}
 
 		// Execute command
@@ -140,17 +128,6 @@ func bashToolHandler(exec *Executor, baseWorkdir string) tools.ToolHandlerFunc {
 
 		return tools.NewToolResultText(output.String()), nil
 	}
-}
-
-// parseDuration parses a duration string, handling common formats
-func parseDuration(s string) (time.Duration, error) {
-	s = strings.TrimSpace(s)
-
-	// Handle plain numbers as seconds
-	if _, err := strconv.Atoi(s); err == nil {
-		s = s + "s"
-	}
-	return time.ParseDuration(s)
 }
 
 // resolveToolWorkdir resolves the effective workdir for a tool call: the

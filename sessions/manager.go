@@ -291,10 +291,19 @@ func (m *Manager) SetMode(sessionID string, mode collaboration.Mode) error {
 }
 
 func (m *Manager) SetModel(sessionID string, model ModelSelection) error {
-	if strings.TrimSpace(model.Provider) == "" || strings.TrimSpace(model.Model) == "" {
-		return errors.New("provider and model are required")
+	model.Model = strings.TrimSpace(model.Model)
+	if model.Model == "" {
+		return errors.New("model is required")
 	}
 	return m.UpdateMeta(sessionID, SessionMetaPatch{Model: &model})
+}
+
+func (m *Manager) SetEffort(sessionID, effort string) error {
+	effort = strings.ToLower(strings.TrimSpace(effort))
+	if !providers.IsValidReasoningEffort(effort) {
+		return fmt.Errorf("invalid reasoning effort %q: must be one of default, none, low, medium, high, xhigh, max", effort)
+	}
+	return m.UpdateMeta(sessionID, SessionMetaPatch{Effort: &effort})
 }
 
 // ClearModel removes the session override so future actors use the configured

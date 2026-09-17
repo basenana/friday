@@ -33,6 +33,14 @@ func Init() {
 	sugar = root.Sugar()
 }
 
+func initDiscard() {
+	logFile = nil
+	coreAdapter = nil
+	atom = zap.NewAtomicLevel()
+	root = zap.NewNop()
+	sugar = root.Sugar()
+}
+
 // InitWithFile initializes the logger writing to the specified file
 func InitWithFile(logPath string) {
 	logFile = nil
@@ -44,16 +52,16 @@ func InitWithFile(logPath string) {
 
 	// Ensure log directory exists
 	if err := os.MkdirAll(filepath.Dir(logPath), 0755); err != nil {
-		// Fall back to stdout if directory creation fails
-		Init()
+		// Never fall back to a terminal writer: this logger is also used by the
+		// full-screen TUI, where an unexpected write would corrupt the display.
+		initDiscard()
 		return
 	}
 
 	// Open log file for appending
 	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
 	if err != nil {
-		// Fall back to stdout if file open fails
-		Init()
+		initDiscard()
 		return
 	}
 	logFile = f

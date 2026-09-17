@@ -5,6 +5,7 @@ import (
 
 	"github.com/basenana/friday/config"
 	"github.com/basenana/friday/core/providers"
+	"github.com/basenana/friday/core/providers/fallback"
 )
 
 func TestCreateProviderClientSupportsOpenAIResponse(t *testing.T) {
@@ -23,6 +24,24 @@ func TestCreateProviderClientSupportsOpenAIResponse(t *testing.T) {
 	modelProvider, ok := client.(providers.ModelNameProvider)
 	if !ok || modelProvider.ModelName() != "gpt-test" {
 		t.Fatalf("unexpected Responses client: %#v", client)
+	}
+}
+
+func TestCreateModelPoolCarriesRuntimeMetadata(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Model.Provider = "openai"
+	cfg.Model.BaseURL = "https://example.test/v1"
+	cfg.Model.Model = "gpt-test"
+	cfg.Model.ReasoningEffort = providers.ReasoningEffortHigh
+
+	pool, err := CreateModelPool(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := pool.NewClient(fallback.NewSessionPolicy(providers.ClientPolicy{}), providers.ClientPolicy{})
+	info, ok := providers.RuntimeInfo(client)
+	if !ok || info.Model != "gpt-test" || info.EndpointKey == "" || info.Effort != providers.ReasoningEffortHigh || info.Actual {
+		t.Fatalf("runtime metadata = %+v, ok=%v", info, ok)
 	}
 }
 

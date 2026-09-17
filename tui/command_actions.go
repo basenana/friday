@@ -23,6 +23,7 @@ import (
 	"github.com/basenana/friday/config"
 	"github.com/basenana/friday/core/collaboration"
 	"github.com/basenana/friday/core/planning"
+	"github.com/basenana/friday/core/providers"
 	"github.com/basenana/friday/core/session"
 	"github.com/basenana/friday/core/types"
 	"github.com/basenana/friday/sandbox"
@@ -34,6 +35,7 @@ type selectorKind string
 const (
 	selectorResume selectorKind = "resume"
 	selectorModel  selectorKind = "model"
+	selectorEffort selectorKind = "effort"
 	selectorTasks  selectorKind = "tasks"
 )
 
@@ -131,7 +133,9 @@ func (m *model) updateSelector(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 			return m, cmd
 		case selectorModel:
-			return m.applyModel(item.data.(config.ModelConfig))
+			return m.applyModel(item.value)
+		case selectorEffort:
+			return m.applyEffort(item.value)
 		case selectorTasks:
 			task := item.data.(*sandbox.Task)
 			content := fmt.Sprintf("Status: %s\nPID: %d\nCommand: %s\n\n%s", task.Status, task.PID, task.Command, task.Output)
@@ -185,79 +189,91 @@ func (m *model) openResumeSelector() {
 
 func (m *model) openModelSelector() {
 	runtimeState, _ := m.runtime.Runtime(m.sessionID)
-	items := make([]selectorItem, 0, len(m.cfg.ChatModels()))
-	for _, model := range m.cfg.ChatModels() {
+	currentName := runtimeState.Model.Model
+	if currentName == "" {
+		currentName = m.cfg.PrimaryModel().Model
+	}
+	items := make([]selectorItem, 0, len(m.cfg.ModelNames()))
+	for _, name := range m.cfg.ModelNames() {
+		endpoints := 0
+		for _, model := range m.cfg.ChatModels() {
+			if model.Model == name {
+				endpoints++
+			}
+		}
 		current := ""
-		if runtimeState.Model.Model == model.Model && runtimeState.Model.Provider == model.Provider {
+		if currentName == name {
 			current = "current · "
 		}
-		items = append(items, selectorItem{value: model.Provider + "/" + model.Model, label: model.Model, description: current + model.Provider, data: model})
+		description := fmt.Sprintf("%s%d endpoint", current, endpoints)
+		if endpoints != 1 {
+			description += "s"
+		}
+		items = append(items, selectorItem{value: name, label: name, description: description})
 	}
 	m.selector = &selectorState{kind: selectorModel, title: "Select model", items: items}
 }
 
-func (m *model) resolveModel(target string) (config.ModelConfig, error) {
+func (m *model) resolveModel(target string) (string, error) {
 	target = strings.TrimSpace(target)
-	var matches []config.ModelConfig
-	for _, candidate := range m.cfg.ChatModels() {
-		if target == candidate.Provider+"/"+candidate.Model || target == candidate.Model {
-			matches = append(matches, candidate)
-		}
+	if m.cfg.HasModelName(target) {
+		return target, nil
 	}
-	if len(matches) == 1 {
-		return matches[0], nil
-	}
-	if len(matches) > 1 {
-		return config.ModelConfig{}, fmt.Errorf("model %q is ambiguous; use provider/model", target)
-	}
-	return config.ModelConfig{}, fmt.Errorf("model not configured: %s", target)
+	return "", fmt.Errorf("model not configured: %s", target)
 }
 
-func (m *model) applyModel(model config.ModelConfig) (tea.Model, tea.Cmd) {
-	if count := runningTaskCount(m.registry.ListTasks(m.sessionID)); count > 0 {
-		m.appendBlock(chatBlock{kind: blockError, content: fmt.Sprintf("switch model: %d background task(s) still running; stop or wait for them first", count)})
-		return m, nil
-	}
-	old, err := m.runtime.Runtime(m.sessionID)
-	if err != nil {
-		m.appendBlock(chatBlock{kind: blockError, content: err.Error()})
-		return m, nil
-	}
-	selection := sessions.ModelSelection{Provider: model.Provider, Model: model.Model}
+func (m *model) applyModel(name string) (tea.Model, tea.Cmd) {
+	selection := sessions.ModelSelection{Model: name}
 	if err := m.runtime.SetModel(m.sessionID, selection); err != nil {
 		m.appendBlock(chatBlock{kind: blockError, content: err.Error()})
 		return m, nil
 	}
-	if err := m.registry.Reconfigure(m.sessionID); err != nil {
-		var rollbackErr error
-		if old.Model.Model == "" {
-			rollbackErr = m.runtime.ClearModel(m.sessionID)
-		} else {
-			rollbackErr = m.runtime.SetModel(m.sessionID, old.Model)
+	m.registry.RefreshSessionPolicy(m.sessionID)
+	for _, model := range m.cfg.ChatModels() {
+		if model.Model == name {
+			m.activeModel = model
+			break
 		}
-		if rollbackErr == nil {
-			rollbackErr = m.registry.Reconfigure(m.sessionID)
-		}
-		message := "switch model: " + err.Error()
-		if rollbackErr != nil {
-			message += "; rollback failed: " + rollbackErr.Error()
-		}
-		m.appendBlock(chatBlock{kind: blockError, content: message})
-		return m, nil
 	}
-	m.activeModel = model
-	m.appendBlock(chatBlock{kind: blockDivider, content: "model · " + model.Provider + "/" + model.Model})
+	m.appendBlock(chatBlock{kind: blockDivider, content: "model · " + name})
 	return m, nil
 }
 
-func runningTaskCount(tasks []*sandbox.Task) int {
-	count := 0
-	for _, task := range tasks {
-		if task != nil && task.Status == sandbox.TaskRunning {
-			count++
+var reasoningEfforts = []string{"default", "none", "low", "medium", "high", "xhigh", "max"}
+
+func (m *model) openEffortSelector() {
+	current := effectiveEffort(m)
+	items := make([]selectorItem, 0, len(reasoningEfforts))
+	for _, effort := range reasoningEfforts {
+		description := ""
+		if effort == current {
+			description = "current"
 		}
+		if effort == "default" {
+			if description != "" {
+				description += " · "
+			}
+			description += "provider default"
+		}
+		items = append(items, selectorItem{value: effort, label: effort, description: description})
 	}
-	return count
+	title := "Reasoning effort"
+	m.selector = &selectorState{kind: selectorEffort, title: title, items: items}
+}
+
+func (m *model) applyEffort(effort string) (tea.Model, tea.Cmd) {
+	effort = strings.ToLower(strings.TrimSpace(effort))
+	if !providers.IsValidReasoningEffort(effort) {
+		m.appendBlock(chatBlock{kind: blockError, content: fmt.Sprintf("invalid reasoning effort %q: use default, none, low, medium, high, xhigh, or max", effort)})
+		return m, nil
+	}
+	if err := m.runtime.SetEffort(m.sessionID, effort); err != nil {
+		m.appendBlock(chatBlock{kind: blockError, content: err.Error()})
+		return m, nil
+	}
+	m.registry.RefreshSessionPolicy(m.sessionID)
+	m.appendBlock(chatBlock{kind: blockDivider, content: "effort · " + effort})
+	return m, nil
 }
 
 func (m *model) openTasksSelector() {
@@ -442,7 +458,25 @@ func (m *model) showStatus() {
 		}
 		mcpSummary = fmt.Sprintf("%d configured, %d available, %d blocked, %d degraded/failed", len(statuses), ready, blocked, failed)
 	}
-	msg := fmt.Sprintf("## Friday status\n\n- Session: %s (`%s`)\n- Mode: `%s`\n- Model: `%s/%s`\n- Reasoning: `%s`\n- Workdir: `%s`\n- Context: %s\n- Sandbox: `%s`\n- MCP: %s\n- Background tasks: %d", name, m.sessionID, m.mode, model.Provider, model.Model, effectiveEffort(m), m.workdir, contextLine, sandboxName, mcpSummary, len(m.registry.ListTasks(m.sessionID)))
+	runtimeInfo := m.clientRuntimeInfo()
+	lines := []string{
+		"## Friday status",
+		"",
+		fmt.Sprintf("- Session: %s (`%s`)", name, m.sessionID),
+		fmt.Sprintf("- Mode: `%s`", m.mode),
+		fmt.Sprintf("- Model: `%s`", formatRuntimeModel(runtimeInfo)),
+	}
+	if runtimeInfo.EndpointKey != "" {
+		lines = append(lines, fmt.Sprintf("- Endpoint: `%s`", runtimeInfo.EndpointKey))
+	}
+	lines = append(lines,
+		fmt.Sprintf("- Workdir: `%s`", m.workdir),
+		"- Context: "+contextLine,
+		fmt.Sprintf("- Sandbox: `%s`", sandboxName),
+		"- MCP: "+mcpSummary,
+		fmt.Sprintf("- Background tasks: %d", len(m.registry.ListTasks(m.sessionID))),
+	)
+	msg := strings.Join(lines, "\n")
 	m.appendBlock(chatBlock{kind: blockAssistant, content: msg})
 }
 
@@ -508,14 +542,26 @@ func formatMCPStatuses(statuses []fridaymcp.ServerStatus) string {
 }
 
 func effectiveEffort(m *model) string {
-	if m.mode == collaboration.ModePlan {
-		return m.cfg.Collaboration.Plan.ReasoningEffort
-	}
-	e := m.activeModel.ReasoningEffort
-	if e == "" {
+	effort := m.clientRuntimeInfo().Effort
+	if effort == "" {
 		return "default"
 	}
-	return e
+	return effort
+}
+
+func (m *model) clientRuntimeInfo() providers.ClientRuntimeInfo {
+	if m != nil && m.registry != nil {
+		if info, ok := m.registry.SessionClientRuntime(m.sessionID); ok {
+			return info
+		}
+	}
+	info := providers.ClientRuntimeInfo{Model: m.activeModel.Model, Effort: m.activeModel.ReasoningEffort}
+	if m.runtime != nil {
+		if runtimeState, err := m.runtime.Runtime(m.sessionID); err == nil && runtimeState.Effort != "" {
+			info.Effort = runtimeState.Effort
+		}
+	}
+	return info
 }
 
 type diffLoadedMsg struct {
@@ -712,7 +758,7 @@ func configuredSessionModel(sessMgr sessionRuntime, cfg *config.Config, sessionI
 		return fallback, false
 	}
 	for _, candidate := range cfg.ChatModels() {
-		if candidate.Provider == runtimeState.Model.Provider && candidate.Model == runtimeState.Model.Model {
+		if candidate.Model == runtimeState.Model.Model {
 			return candidate, true
 		}
 	}

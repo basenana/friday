@@ -39,7 +39,10 @@ func TestCoderLoop_AutonomousFix(t *testing.T) {
 	mgr.SetLLM(newClient(t, cfg, "chat"))
 	regCfg := actor.DefaultRegistryConfig()
 	regCfg.Workdir = workdir
-	reg := actor.NewRegistry(mgr, fc, regCfg)
+	reg, err := actor.NewRegistry(mgr, fc, regCfg)
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer reg.ShutdownAll()
 
 	sessionID := types.NewID()

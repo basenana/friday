@@ -10,6 +10,7 @@ func TestLoadForDirPrefersProjectAndKeepsConfigIndependent(t *testing.T) {
 	home := t.TempDir()
 	project := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("IS_SANDBOX", "")
 
 	writeTestConfig(t, filepath.Join(home, ".friday", "config.json"), `{
   "model": {"provider":"openai","model":"home-model","key":"home-secret"},
@@ -43,6 +44,13 @@ func TestLoadForDirPrefersProjectAndKeepsConfigIndependent(t *testing.T) {
 	}
 	if cfg.CachesPath() != filepath.Join(home, ".friday", "caches") {
 		t.Fatalf("CachesPath() = %q, want HOME caches", cfg.CachesPath())
+	}
+	wantAgentPaths := []string{
+		filepath.Join(home, ".friday", "agents"),
+		filepath.Join(project, ".friday", "agents"),
+	}
+	if got := cfg.AgentPaths(); len(got) != 2 || got[0] != wantAgentPaths[0] || got[1] != wantAgentPaths[1] {
+		t.Fatalf("AgentPaths() = %v, want %v", got, wantAgentPaths)
 	}
 	for _, name := range []string{"workspace", "memory"} {
 		want := filepath.Join(home, ".friday", name)

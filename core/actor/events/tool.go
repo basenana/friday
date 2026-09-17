@@ -40,9 +40,14 @@ type ToolCallEndData struct {
 
 // ToolCallResultData carries the final result of a tool invocation.
 type ToolCallResultData struct {
-	ToolCallID string `json:"tool_call_id"`
-	Success    bool   `json:"success"`
-	Output     string `json:"output"`
+	ToolCallID  string `json:"tool_call_id"`
+	Success     bool   `json:"success"`
+	Output      string `json:"output"`
+	Status      string `json:"status,omitempty"`
+	ErrorCode   string `json:"error_code,omitempty"`
+	TimeoutKind string `json:"timeout_kind,omitempty"`
+	TimeoutMs   int64  `json:"timeout_ms,omitempty"`
+	ElapsedMs   int64  `json:"elapsed_ms,omitempty"`
 	// OriginSessionID mirrors ToolCallStartData.OriginSessionID so the
 	// finish side of a relayed pair stays self-describing.
 	OriginSessionID string `json:"origin_session_id,omitempty"`

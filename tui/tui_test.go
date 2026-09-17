@@ -87,7 +87,10 @@ func newFaultTestModel(t *testing.T) (*model, *sessions.Manager, *sessionfile.Fi
 	cfg.DataDir = baseDir
 	cfg.Workspace = filepath.Join(baseDir, "workspace")
 	cfg.Memory.Enabled = false
-	registry := actor.NewRegistry(mgr, cfg, actor.DefaultRegistryConfig())
+	registry, err := actor.NewRegistry(mgr, cfg, actor.DefaultRegistryConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(registry.ShutdownAll)
 	commands := codercmds.NewRegistry()
 	codercmds.RegisterAll(commands)
@@ -124,6 +127,10 @@ func (s *blockingEventStore) LoadEvents(ctx context.Context, id string) ([]event
 }
 
 func newTestModel(t *testing.T) (*model, *sessions.Manager, *sessionfile.FileSessionStore) {
+	return newTestModelWithConfig(t, nil)
+}
+
+func newTestModelWithConfig(t *testing.T, configure func(*config.Config)) (*model, *sessions.Manager, *sessionfile.FileSessionStore) {
 	t.Helper()
 
 	baseDir := t.TempDir()
@@ -139,8 +146,14 @@ func newTestModel(t *testing.T) (*model, *sessions.Manager, *sessionfile.FileSes
 	cfg.DataDir = baseDir
 	cfg.Workspace = filepath.Join(baseDir, "workspace")
 	cfg.Memory.Enabled = false
+	if configure != nil {
+		configure(cfg)
+	}
 
-	registry := actor.NewRegistry(mgr, cfg, actor.DefaultRegistryConfig())
+	registry, err := actor.NewRegistry(mgr, cfg, actor.DefaultRegistryConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(registry.ShutdownAll)
 
 	cmdRegistry := codercmds.NewRegistry()
@@ -285,7 +298,10 @@ func TestFailedSessionSwitchKeepsOldSessionAndTranscript(t *testing.T) {
 	cfg.DataDir = baseDir
 	cfg.Workspace = filepath.Join(baseDir, "workspace")
 	cfg.Memory.Enabled = false
-	registry := actor.NewRegistry(mgr, cfg, actor.DefaultRegistryConfig())
+	registry, err := actor.NewRegistry(mgr, cfg, actor.DefaultRegistryConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(registry.ShutdownAll)
 	commands := codercmds.NewRegistry()
 	codercmds.RegisterBuiltins(commands)
@@ -564,7 +580,10 @@ func TestInitialSessionLoadRendersWhileStorageIsBlocked(t *testing.T) {
 	cfg.DataDir = baseDir
 	cfg.Workspace = filepath.Join(baseDir, "workspace")
 	cfg.Memory.Enabled = false
-	registry := actor.NewRegistry(mgr, cfg, actor.DefaultRegistryConfig())
+	registry, err := actor.NewRegistry(mgr, cfg, actor.DefaultRegistryConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(registry.ShutdownAll)
 	commands := codercmds.NewRegistry()
 	m := loadingModel(mgr, registry, commands, cfg, "")

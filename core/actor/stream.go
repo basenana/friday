@@ -1,10 +1,10 @@
 package actor
 
 import (
-	"log"
 	"sync"
 
 	"github.com/basenana/friday/core/actor/events"
+	corelogger "github.com/basenana/friday/core/logger"
 )
 
 // EventStream fans out events to multiple subscribers. Publish is
@@ -14,15 +14,15 @@ type EventStream struct {
 	mu   sync.RWMutex
 	subs []*Subscription
 
-	logger *log.Logger
+	logger corelogger.Logger
 	closed bool
 }
 
-// NewEventStream builds a fresh stream. logger may be nil; a default
-// discard logger is used in that case.
-func NewEventStream(logger *log.Logger) *EventStream {
+// NewEventStream builds a fresh stream. logger may be nil; in that case the
+// project logger is used (and remains silent until the process configures it).
+func NewEventStream(logger corelogger.Logger) *EventStream {
 	if logger == nil {
-		logger = log.New(devZero{}, "", 0)
+		logger = corelogger.New("actor.stream")
 	}
 	return &EventStream{logger: logger}
 }
@@ -70,7 +70,7 @@ func (s *EventStream) Publish(evt events.Event) {
 //     non-terminal events first, preserving as many terminal events as
 //     will fit while keeping the newest terminal;
 //   - non-terminal events are dropped (logged).
-func (sub *Subscription) publish(evt events.Event, logger *log.Logger) {
+func (sub *Subscription) publish(evt events.Event, logger corelogger.Logger) {
 	sub.mu.Lock()
 	defer sub.mu.Unlock()
 
@@ -83,7 +83,7 @@ func (sub *Subscription) publish(evt events.Event, logger *log.Logger) {
 
 	if !IsTerminal(evt) {
 		if logger != nil {
-			logger.Printf("actor: event stream subscriber buffer full, dropping event type=%s", evt.Type)
+			logger.Warnw("event stream subscriber buffer full; dropping event", "event_type", evt.Type)
 		}
 		return
 	}
@@ -128,7 +128,9 @@ rebuild:
 			keepTerminal[i] = false
 			drop--
 			if logger != nil {
-				logger.Printf("actor: evicting oldest terminal event type=%s run_id=%s to keep newer terminal type=%s run_id=%s", queued[i].Type, queued[i].RunID, evt.Type, evt.RunID)
+				logger.Warnw("evicting oldest terminal event to keep newer terminal event",
+					"old_event_type", queued[i].Type, "old_run_id", queued[i].RunID,
+					"new_event_type", evt.Type, "new_run_id", evt.RunID)
 			}
 		}
 	}
@@ -163,7 +165,8 @@ rebuild:
 			}
 		} else if !keepTail[i] {
 			if logger != nil {
-				logger.Printf("actor: evicting event type=%s to deliver terminal event type=%s", old.Type, evt.Type)
+				logger.Warnw("evicting event to deliver terminal event",
+					"event_type", old.Type, "terminal_event_type", evt.Type)
 			}
 			continue
 		}
@@ -171,13 +174,13 @@ rebuild:
 		case sub.events <- old:
 		default:
 			if logger != nil {
-				logger.Printf("actor: dropping replayed event type=%s while rebuilding terminal queue", old.Type)
+				logger.Warnw("dropping replayed event while rebuilding terminal queue", "event_type", old.Type)
 			}
 		}
 	}
 	if duplicate {
 		if logger != nil {
-			logger.Printf("actor: dropping duplicate terminal event type=%s run_id=%s", evt.Type, evt.RunID)
+			logger.Warnw("dropping duplicate terminal event", "event_type", evt.Type, "run_id", evt.RunID)
 		}
 		return
 	}
@@ -185,7 +188,8 @@ rebuild:
 	case sub.events <- evt:
 	default:
 		if logger != nil {
-			logger.Printf("actor: dropping terminal event type=%s run_id=%s because subscriber queue remained full", evt.Type, evt.RunID)
+			logger.Warnw("dropping terminal event because subscriber queue remained full",
+				"event_type", evt.Type, "run_id", evt.RunID)
 		}
 	}
 }
@@ -247,10 +251,4 @@ func (s *Subscription) close() {
 	})
 }
 
-// devZero is a minimal io.Writer that discards output, used to back
-// the default logger without pulling in ioutil/iolog.
-type devZero struct{}
-
-func (devZero) Write(p []byte) (int, error) { return len(p), nil }
-
-const defaultSubscriberBuffer = 64
+const defaultSubscriberBuffer = 256

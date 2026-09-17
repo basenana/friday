@@ -15,19 +15,106 @@ type ModelCapabilities struct {
 	SupportsImage bool
 }
 
-// ModelEntry pairs a providers.Client with its capabilities and a name for logging.
+// ModelEntry pairs a leaf client with the immutable routing metadata needed to
+// select it and report the effective runtime state.
 type ModelEntry struct {
-	Client       providers.Client
-	Capabilities ModelCapabilities
-	Name         string
+	Client          providers.Client
+	Capabilities    ModelCapabilities
+	Name            string
+	Key             string
+	ReasoningEffort string
+}
+
+type sessionPolicyState struct {
+	policy  providers.ClientPolicy
+	version uint64
+}
+
+// SessionPolicy is the mutable, session-scoped routing state shared by the
+// root client and every agent view derived from it.
+type SessionPolicy struct {
+	state atomic.Pointer[sessionPolicyState]
+}
+
+func NewSessionPolicy(initial providers.ClientPolicy) *SessionPolicy {
+	p := &SessionPolicy{}
+	p.Update(initial)
+	return p
+}
+
+func (p *SessionPolicy) Update(next providers.ClientPolicy) {
+	if p == nil {
+		return
+	}
+	for {
+		current := p.state.Load()
+		version := uint64(1)
+		if current != nil {
+			version = current.version + 1
+		}
+		replacement := &sessionPolicyState{policy: next, version: version}
+		if p.state.CompareAndSwap(current, replacement) {
+			return
+		}
+	}
+}
+
+func (p *SessionPolicy) Snapshot() providers.ClientPolicy {
+	if p == nil {
+		return providers.ClientPolicy{}
+	}
+	if state := p.state.Load(); state != nil {
+		return state.policy
+	}
+	return providers.ClientPolicy{}
+}
+
+func (p *SessionPolicy) snapshot() (providers.ClientPolicy, uint64) {
+	if p == nil {
+		return providers.ClientPolicy{}, 0
+	}
+	if state := p.state.Load(); state != nil {
+		return state.policy, state.version
+	}
+	return providers.ClientPolicy{}, 0
+}
+
+// ModelPool owns an immutable set of leaf provider clients. Client views share
+// these entries and alter only request-local order and effort.
+type ModelPool struct {
+	models []ModelEntry
+}
+
+func NewModelPool(entries []ModelEntry) *ModelPool {
+	return &ModelPool{models: append([]ModelEntry(nil), entries...)}
+}
+
+func (p *ModelPool) NewClient(policy *SessionPolicy, defaults providers.ClientPolicy, opts ...FallbackOption) *FallbackClient {
+	cfg := defaultConfig()
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+	if cfg.maxTotalRetries <= 0 {
+		cfg.maxTotalRetries = len(p.models)
+	}
+	return &FallbackClient{
+		pool:            p,
+		sessionPolicy:   policy,
+		defaults:        defaults,
+		maxTotalRetries: cfg.maxTotalRetries,
+		logger:          logger.New("fallback"),
+	}
 }
 
 // FallbackClient tries each eligible model at most once. Each leaf provider is
 // responsible for its own bounded physical-request retries.
 type FallbackClient struct {
-	models          []ModelEntry
+	pool            *ModelPool
+	sessionPolicy   *SessionPolicy
+	defaults        providers.ClientPolicy
 	maxTotalRetries int
 	logger          logger.Logger
+	runtime         atomic.Pointer[clientRuntimeState]
 	// primaryIndex points at the model currently used as the starting
 	// point for new requests. Callers can advance it via Fallback() to
 	// drive caller-side model rotation (e.g. when a reviewer agent
@@ -35,22 +122,15 @@ type FallbackClient struct {
 	primaryIndex atomic.Int32
 }
 
+type clientRuntimeState struct {
+	info          providers.ClientRuntimeInfo
+	policyVersion uint64
+}
+
 // NewFallbackClient creates a new FallbackClient with the given ordered model entries.
 func NewFallbackClient(entries []ModelEntry, opts ...FallbackOption) *FallbackClient {
-	cfg := defaultConfig()
-	for _, opt := range opts {
-		opt(&cfg)
-	}
-
-	if cfg.maxTotalRetries <= 0 {
-		cfg.maxTotalRetries = len(entries)
-	}
-
-	fc := &FallbackClient{
-		models:          entries,
-		maxTotalRetries: cfg.maxTotalRetries,
-		logger:          logger.New("fallback"),
-	}
+	pool := NewModelPool(entries)
+	fc := pool.NewClient(NewSessionPolicy(providers.ClientPolicy{}), providers.ClientPolicy{}, opts...)
 
 	names := make([]string, len(entries))
 	for i, e := range entries {
@@ -64,11 +144,31 @@ func NewFallbackClient(entries []ModelEntry, opts ...FallbackOption) *FallbackCl
 	return fc
 }
 
+// Fork returns a lightweight agent view over the same immutable model pool.
+// Session policy remains authoritative; defaults apply only when the session
+// has no explicit value.
+func (fc *FallbackClient) Fork(defaults providers.ClientPolicy) providers.Client {
+	if fc == nil || fc.pool == nil {
+		return fc
+	}
+	return fc.pool.NewClient(fc.sessionPolicy, defaults, WithMaxTotalRetries(fc.maxTotalRetries))
+}
+
+// SessionPolicy returns the mutable Session policy shared by this view and
+// every view forked from it.
+func (fc *FallbackClient) SessionPolicy() *SessionPolicy {
+	if fc == nil {
+		return nil
+	}
+	return fc.sessionPolicy
+}
+
 // Completion tries each candidate once in order, without cycling back.
 func (fc *FallbackClient) Completion(ctx context.Context, req providers.Request) providers.Response {
 	ctx, span := tracing.Start(ctx, "llm.fallback.completion")
 	resp := providers.NewCommonResponse()
-	models := fc.candidateModels(req)
+	policy, policyVersion := fc.requestPolicy(req)
+	models := fc.candidateModels(req, policy.PreferredModel)
 
 	go func() {
 		defer span.End()
@@ -88,11 +188,11 @@ func (fc *FallbackClient) Completion(ctx context.Context, req providers.Request)
 			cachedTok      int64
 			cacheCreateTok int64
 		)
-		start := fc.startModelIndex(req, models)
-		for modelIndex := start; modelIndex < len(models) && attempt < fc.maxTotalRetries; modelIndex++ {
+		for modelIndex := 0; modelIndex < len(models) && attempt < fc.maxTotalRetries; modelIndex++ {
 			entry := models[modelIndex]
 			attempt++
 			modelReq := fc.prepareRequest(req, entry)
+			fc.recordRuntime(entry, modelReq, policyVersion)
 
 			span.SetAttributes(
 				tracing.String("fallback.model", entry.Name),
@@ -181,18 +281,19 @@ func (fc *FallbackClient) Completion(ctx context.Context, req providers.Request)
 
 // CompletionNonStreaming tries each candidate once without cycling.
 func (fc *FallbackClient) CompletionNonStreaming(ctx context.Context, req providers.Request) (string, error) {
-	models := fc.candidateModels(req)
+	policy, policyVersion := fc.requestPolicy(req)
+	models := fc.candidateModels(req, policy.PreferredModel)
 	if len(models) == 0 {
 		return "", fmt.Errorf("fallback has no models configured")
 	}
 
 	var attempt int
 	var lastErr error
-	start := fc.startModelIndex(req, models)
-	for modelIndex := start; modelIndex < len(models) && attempt < fc.maxTotalRetries; modelIndex++ {
+	for modelIndex := 0; modelIndex < len(models) && attempt < fc.maxTotalRetries; modelIndex++ {
 		entry := models[modelIndex]
 		attempt++
 		modelReq := fc.prepareRequest(req, entry)
+		fc.recordRuntime(entry, modelReq, policyVersion)
 
 		result, err := entry.Client.CompletionNonStreaming(ctx, modelReq)
 		if err != nil {
@@ -213,18 +314,19 @@ func (fc *FallbackClient) CompletionNonStreaming(ctx context.Context, req provid
 
 // StructuredPredict tries each model with circular retry for structured prediction.
 func (fc *FallbackClient) StructuredPredict(ctx context.Context, req providers.Request, model any) error {
-	models := fc.candidateModels(req)
+	policy, policyVersion := fc.requestPolicy(req)
+	models := fc.candidateModels(req, policy.PreferredModel)
 	if len(models) == 0 {
 		return fmt.Errorf("fallback has no models configured")
 	}
 
 	var attempt int
 	var lastErr error
-	start := fc.startModelIndex(req, models)
-	for modelIndex := start; modelIndex < len(models) && attempt < fc.maxTotalRetries; modelIndex++ {
+	for modelIndex := 0; modelIndex < len(models) && attempt < fc.maxTotalRetries; modelIndex++ {
 		entry := models[modelIndex]
 		attempt++
 		modelReq := fc.prepareRequest(req, entry)
+		fc.recordRuntime(entry, modelReq, policyVersion)
 
 		err := entry.Client.StructuredPredict(ctx, modelReq, model)
 		if err != nil {
@@ -248,16 +350,18 @@ func (fc *FallbackClient) notifyFallback(ctx context.Context, models []ModelEntr
 	if next >= len(models) || attempts >= fc.maxTotalRetries {
 		return
 	}
+	currentEntry, nextEntry := models[currentIndex], models[next]
 	providers.NotifyRetry(ctx, providers.RetryEvent{
-		Provider: "fallback", Model: models[next].Name, Attempt: attempts + 1,
-		MaxAttempts: min(len(models), fc.maxTotalRetries), Error: cause,
+		Provider: "fallback", Model: nextEntry.Name, ModelKey: nextEntry.Key,
+		PreviousModel: currentEntry.Name, PreviousModelKey: currentEntry.Key,
+		Attempt: attempts + 1, MaxAttempts: min(len(models), fc.maxTotalRetries), Error: cause,
 	})
 }
 
 // ContextWindow returns the minimum context window across all models.
 func (fc *FallbackClient) ContextWindow() int64 {
 	var min int64 = -1
-	for _, entry := range fc.models {
+	for _, entry := range fc.pool.models {
 		if cw, ok := entry.Client.(providers.ContextWindowProvider); ok {
 			w := cw.ContextWindow()
 			if w > 0 && (min < 0 || w < min) {
@@ -278,7 +382,7 @@ func (fc *FallbackClient) ContextWindow() int64 {
 // entry reports a budget.
 func (fc *FallbackClient) MaxOutputTokens() int64 {
 	var max int64
-	for _, entry := range fc.models {
+	for _, entry := range fc.pool.models {
 		if mp, ok := entry.Client.(providers.MaxOutputTokensProvider); ok {
 			if v := mp.MaxOutputTokens(); v > max {
 				max = v
@@ -293,23 +397,21 @@ func (fc *FallbackClient) MaxOutputTokens() int64 {
 // mid-call the actual serving model may differ; this reflects the
 // caller-visible primary.
 func (fc *FallbackClient) ModelName() string {
-	idx := int(fc.primaryIndex.Load())
-	if idx < 0 || idx >= len(fc.models) {
+	models := fc.orderedModels(fc.effectivePolicy().PreferredModel)
+	if len(models) == 0 {
 		return ""
 	}
-	return fc.models[idx].Name
+	return models[0].Name
 }
 
 // SupportsImage returns true if any model entry supports image input.
 func (fc *FallbackClient) SupportsImage() bool {
-	return AnySupportsImage(fc.models)
+	return AnySupportsImage(fc.pool.models)
 }
 
 // Entries returns a copy of the model entries.
 func (fc *FallbackClient) Entries() []ModelEntry {
-	result := make([]ModelEntry, len(fc.models))
-	copy(result, fc.models)
-	return result
+	return fc.orderedModels(fc.effectivePolicy().PreferredModel)
 }
 
 // Fallback advances the internal primary model pointer to the next model
@@ -319,18 +421,21 @@ func (fc *FallbackClient) Entries() []ModelEntry {
 // Subsequent requests will start from the new primary. No-op if only one
 // model is configured. Safe for concurrent use.
 func (fc *FallbackClient) Fallback() {
-	if len(fc.models) <= 1 {
+	if fc == nil || fc.pool == nil || len(fc.pool.models) <= 1 {
 		return
 	}
 	for {
 		old := fc.primaryIndex.Load()
-		needImage := fc.models[int(old)].Capabilities.SupportsImage
+		if old < 0 || int(old) >= len(fc.pool.models) {
+			old = 0
+		}
+		needImage := fc.pool.models[int(old)].Capabilities.SupportsImage
 
 		next := -1
-		fallback := (int(old) + 1) % len(fc.models)
-		for i := 1; i < len(fc.models); i++ {
-			candidate := (int(old) + i) % len(fc.models)
-			if !needImage || fc.models[candidate].Capabilities.SupportsImage {
+		fallback := (int(old) + 1) % len(fc.pool.models)
+		for i := 1; i < len(fc.pool.models); i++ {
+			candidate := (int(old) + i) % len(fc.pool.models)
+			if !needImage || fc.pool.models[candidate].Capabilities.SupportsImage {
 				next = candidate
 				break
 			}
@@ -340,9 +445,10 @@ func (fc *FallbackClient) Fallback() {
 		}
 
 		if fc.primaryIndex.CompareAndSwap(old, int32(next)) {
+			fc.runtime.Store(nil)
 			fc.logger.Infow("fallback client primary model advanced",
 				"from_index", old, "to_index", next,
-				"to_model", fc.models[next].Name)
+				"to_model", fc.pool.models[next].Name)
 			return
 		}
 	}
@@ -352,14 +458,15 @@ func (fc *FallbackClient) Fallback() {
 // requests with at least one image-capable entry, image-capable entries come
 // first and text-only entries are appended as a last resort (their requests
 // get images stripped by prepareRequest).
-func (fc *FallbackClient) candidateModels(req providers.Request) []ModelEntry {
+func (fc *FallbackClient) candidateModels(req providers.Request, preferred string) []ModelEntry {
+	models := fc.orderedModels(preferred)
 	if !RequestHasImage(req) || !fc.SupportsImage() {
-		return fc.models
+		return models
 	}
 
-	candidates := make([]ModelEntry, 0, len(fc.models))
-	textOnly := make([]ModelEntry, 0, len(fc.models))
-	for _, entry := range fc.models {
+	candidates := make([]ModelEntry, 0, len(models))
+	textOnly := make([]ModelEntry, 0, len(models))
+	for _, entry := range models {
 		if entry.Capabilities.SupportsImage {
 			candidates = append(candidates, entry)
 		} else {
@@ -369,31 +476,96 @@ func (fc *FallbackClient) candidateModels(req providers.Request) []ModelEntry {
 	return append(candidates, textOnly...)
 }
 
-// startModelIndex resolves the caller-selected primary model (see Fallback())
-// to an index within models, which may be a capability-filtered reorder of
-// fc.models. Matching is by entry identity; if the primary is not part of the
-// candidate list, the first candidate is used. For image requests the
-// image-capable entries form the head of models, and a text-only primary
-// never starts inside the text-only tail: rotation reaches it only after the
-// image-capable entries are exhausted. The result is always in range.
-func (fc *FallbackClient) startModelIndex(req providers.Request, models []ModelEntry) int {
-	if len(models) == 0 {
-		return 0
+func (fc *FallbackClient) effectivePolicy() providers.ClientPolicy {
+	policy, _ := fc.effectivePolicyState()
+	return policy
+}
+
+func (fc *FallbackClient) effectivePolicyState() (providers.ClientPolicy, uint64) {
+	policy, version := fc.sessionPolicy.snapshot()
+	if policy.PreferredModel == "" {
+		policy.PreferredModel = fc.defaults.PreferredModel
 	}
-	idx := int(fc.primaryIndex.Load())
-	if idx < 0 || idx >= len(fc.models) {
-		return 0
+	if policy.Effort == "" {
+		policy.Effort = fc.defaults.Effort
 	}
-	primary := fc.models[idx]
-	if RequestHasImage(req) && !primary.Capabilities.SupportsImage && models[0].Capabilities.SupportsImage {
-		return 0
-	}
-	for i, entry := range models {
-		if entry.Client == primary.Client && entry.Name == primary.Name {
-			return i
+	if policy.PreferredModel == "" && fc.pool != nil && len(fc.pool.models) > 0 {
+		idx := int(fc.primaryIndex.Load())
+		if idx >= 0 && idx < len(fc.pool.models) {
+			policy.PreferredModel = fc.pool.models[idx].Name
 		}
 	}
-	return 0
+	return policy, version
+}
+
+func (fc *FallbackClient) requestPolicy(req providers.Request) (providers.ClientPolicy, uint64) {
+	policy, version := fc.effectivePolicyState()
+	// Explicit request effort remains authoritative. Plan Mode uses the
+	// separate request default effort and is resolved by the selected provider.
+	if providers.RequestReasoningEffort(req) == "" && policy.Effort != "" {
+		providers.SetRequestReasoningEffort(req, policy.Effort)
+	}
+	return policy, version
+}
+
+func (fc *FallbackClient) recordRuntime(entry ModelEntry, req providers.Request, policyVersion uint64) {
+	if fc == nil {
+		return
+	}
+	fc.runtime.Store(&clientRuntimeState{
+		info: providers.ClientRuntimeInfo{
+			Model:       entry.Name,
+			EndpointKey: entry.Key,
+			Effort:      providers.ResolveReasoningEffort(req, entry.ReasoningEffort),
+			Actual:      true,
+		},
+		policyVersion: policyVersion,
+	})
+}
+
+// RuntimeInfo returns the actual candidate most recently attempted by this
+// client view. After a Session policy change, the stale actual snapshot is
+// ignored and the next candidate is derived from the new policy until a
+// physical request is made.
+func (fc *FallbackClient) RuntimeInfo() providers.ClientRuntimeInfo {
+	if fc == nil {
+		return providers.ClientRuntimeInfo{}
+	}
+	policy, version := fc.effectivePolicyState()
+	if current := fc.runtime.Load(); current != nil && current.policyVersion == version {
+		return current.info
+	}
+	models := fc.orderedModels(policy.PreferredModel)
+	if len(models) == 0 {
+		return providers.ClientRuntimeInfo{}
+	}
+	entry := models[0]
+	effort := policy.Effort
+	if effort == "" {
+		effort = entry.ReasoningEffort
+	}
+	return providers.ClientRuntimeInfo{
+		Model: entry.Name, EndpointKey: entry.Key, Effort: effort, Actual: false,
+	}
+}
+
+func (fc *FallbackClient) orderedModels(preferred string) []ModelEntry {
+	if fc == nil || fc.pool == nil {
+		return nil
+	}
+	preferredModels := make([]ModelEntry, 0, len(fc.pool.models))
+	rest := make([]ModelEntry, 0, len(fc.pool.models))
+	for _, entry := range fc.pool.models {
+		if preferred != "" && entry.Name == preferred {
+			preferredModels = append(preferredModels, entry)
+		} else {
+			rest = append(rest, entry)
+		}
+	}
+	if len(preferredModels) == 0 {
+		return append([]ModelEntry(nil), fc.pool.models...)
+	}
+	return append(preferredModels, rest...)
 }
 
 // prepareRequest strips image content from the request if the target model
@@ -416,6 +588,8 @@ func fallbackExhaustedError(attempt int, lastErr error) error {
 // Ensure FallbackClient implements providers.Client and
 // providers.ContextWindowProvider.
 var (
-	_ providers.Client                = (*FallbackClient)(nil)
-	_ providers.ContextWindowProvider = (*FallbackClient)(nil)
+	_ providers.Client                    = (*FallbackClient)(nil)
+	_ providers.ContextWindowProvider     = (*FallbackClient)(nil)
+	_ providers.ForkableClient            = (*FallbackClient)(nil)
+	_ providers.ClientRuntimeInfoProvider = (*FallbackClient)(nil)
 )

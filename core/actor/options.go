@@ -1,11 +1,11 @@
 package actor
 
 import (
-	"log"
 	"time"
 
 	"github.com/basenana/friday/core/actor/sink"
 	"github.com/basenana/friday/core/collaboration"
+	"github.com/basenana/friday/core/logger"
 	"github.com/basenana/friday/core/planning"
 	coretools "github.com/basenana/friday/core/tools"
 )
@@ -13,7 +13,7 @@ import (
 // Options configures an Actor at construction time.
 type Options struct {
 	sink                    sink.EventSink
-	logger                  *log.Logger
+	logger                  logger.Logger
 	inboxBuffer             int
 	preemptBuffer           int
 	filePathValidator       FilePathValidator
@@ -64,9 +64,9 @@ func WithSink(s sink.EventSink) Option {
 	return func(o *Options) { o.sink = s }
 }
 
-// WithLogger attaches a logger used by the inbox / stream for drop
-// warnings. Defaults to a discarding logger.
-func WithLogger(l *log.Logger) Option {
+// WithLogger attaches a project logger used by the inbox / stream for drop
+// warnings. The process root determines its destination.
+func WithLogger(l logger.Logger) Option {
 	return func(o *Options) { o.logger = l }
 }
 

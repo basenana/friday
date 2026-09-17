@@ -40,7 +40,7 @@ friday init
 ```
 
 This creates `.friday/` in the current directory. In a project it creates a
-configuration plus empty `workspace/`, `workspace/skills/`, and
+configuration plus empty `agents/`, `workspace/`, `workspace/skills/`, and
 `workspace/mcp/` directories; missing workspace files, skills, and MCP
 servers are inherited from `~/.friday/`. Running
 the command from your HOME directory initializes the global workspace with all
@@ -70,6 +70,34 @@ Create `~/.friday/config.json` (or `friday.yaml`):
   }
 }
 ```
+
+`model` is the preferred chat model. Optional `models` entries are the
+remaining fallback endpoints, in order:
+
+```yaml
+model:
+  provider: openai
+  base_url: https://a.example/v1
+  key: $A_KEY
+  model: model-1
+models:
+  - provider: openai
+    base_url: https://b.example/v1
+    key: $B_KEY
+    model: model-1
+  - provider: anthropic
+    key: $ANTHROPIC_KEY
+    model: claude-sonnet
+```
+
+If `model` is omitted, is `null`, or does not contain a non-empty nested
+`model` name, the first valid `models` entry becomes the primary model. The
+same rule makes an unnamed `image_model` inactive.
+
+Endpoints are deduplicated by provider, effective `base_url`, and model name.
+The same model name may therefore be served by several providers or servers;
+selecting it moves every matching endpoint to the front while preserving their
+relative order. `image_model` remains the dedicated image-analysis model.
 
 <details>
 <summary>More provider examples</summary>
@@ -175,7 +203,7 @@ and interactive forms, and supports Codex-style follow-ups:
 - `Shift+Tab` toggles Default/Plan Mode while idle.
 - `Ctrl+J` inserts a newline, `Ctrl+G` opens `$VISUAL`/`$EDITOR`, and `Ctrl+R` searches prompt history.
 - `Esc` cancels the current task, while `Ctrl+C` exits.
-- Type `/` for the command menu. Installed skills also appear there and can be invoked as `/skill-name [task]`; built-in commands take precedence over conflicting skill names. Use `/open <card-id>` for a confirmed external artifact preview and `/show <tool-id>` for complete tool output.
+- Type `/` for the command menu. Disk-defined Agents and installed Skills also appear there. Invoke an Agent with `/agent-name <task>` or a Skill with `/skill-name [task]`. Name precedence is built-in command, Agent, then Skill. Use `/open <card-id>` for a confirmed external artifact preview and `/show <tool-id>` for complete tool output.
 
 #### TUI commands
 
@@ -183,16 +211,19 @@ and interactive forms, and supports Codex-style follow-ups:
 |------|----------|
 | Session | `/clear`, `/resume [id\|name]`, `/rename <name>`, `/archive [id\|name]`, `/delete [id\|name]`, `/quit` |
 | Collaboration | `/plan [task]`, `/plan off` |
-| Model and context | `/model [provider/model\|model]`, `/status`, `/context`, `/compact` |
+| Model and context | `/model [name]`, `/effort [default\|none\|low\|medium\|high\|xhigh\|max]`, `/status`, `/context`, `/compact` |
 | MCP | `/mcp`, `/mcp inspect <server>`, `/mcp trust <server>`, `/mcp untrust <server>`, `/mcp refresh [server]`, `/mcp reconnect <server>` |
 | Working tree and output | `/diff`, `/copy [n]`, `/open <card-id>`, `/show <tool-call-id>` |
 | Background tasks | `/tasks`, `/stop <task-id\|all>` |
 | Help | `/help [command]` |
 
 `/clear` is the single new-conversation command: it creates a session, clears
-the transcript, returns to Default Mode, and inherits the current model. Model
-choices are stored per session. `/resume` lists active sessions only; archived
-sessions remain available through the external `friday sessions` CLI.
+the transcript, and inherits the current runtime mode, model, and effort.
+`/model` lists unique model names and changes fallback order without rebuilding
+the running actor. `/effort default` explicitly requests the provider default
+and emits no provider reasoning field. Choices are stored per session.
+`/resume` lists active sessions only; archived sessions remain available
+through the external `friday sessions` CLI.
 
 #### Plan Mode
 
@@ -330,6 +361,16 @@ only the `/ws` WebSocket endpoint. JSON frames use a Friday routing envelope;
 `run` payloads and streamed actor events retain AG-UI semantics. A single
 connection can subscribe to multiple persisted sessions.
 
+### Tool execution limits
+
+Foreground tool invocations have a 30-minute absolute wall-clock limit. Tools
+that expose a `timeout` argument accept at most 15 minutes; larger values are
+returned as `invalid_argument` instead of being silently truncated. Retries
+and retry backoff consume the same invocation budget. Use `background_task`
+for longer commands: starting, listing, waiting for, or stopping a task is
+still bounded, while the background process itself may continue past 30
+minutes.
+
 ## Data Structure
 
 ```
@@ -341,6 +382,9 @@ connection can subscribe to multiple persisted sessions.
 ├── caches/              # Namespaced reusable caches
 │   └── mcp/             # Cached MCP tool schemas
 ├── log/                 # Application logs
+├── agents/              # Named Agent definitions
+│   └── reviewer/
+│       └── AGENT-SPEC.md
 └── workspace/           # Agent context files
     ├── SOUL.md          # Persona and tone
     ├── ENVIRONMENT.md   # Machine and execution environment
@@ -354,6 +398,7 @@ connection can subscribe to multiple persisted sessions.
 
 <project>/.friday/
 ├── config.json          # Independent project configuration
+├── agents/              # Project Agents; same-name Agents override HOME
 └── workspace/           # Project overrides for HOME workspace files
     ├── skills/          # Project skills; same-name skills override HOME
     └── mcp/             # Project MCP configs; explicit trust required
@@ -368,12 +413,55 @@ If a project explicitly points `workspace` at the HOME workspace, that shared
 layer remains readable but is treated as HOME and read-only from the project;
 set `workspace` to `workspace` to create project-local overrides.
 
-Sessions, daily memory, state, teams, projects, and proposals remain under the
+Sessions, daily memory, state, and projects remain under the
 configured data directory (`~/.friday` by default), even when a project config
 is active.
 
 **Portability**: Copy `~/.friday/` to another machine to transfer the global
 agent data, and copy a project's `.friday/` with the project for its overrides.
+
+### Agent definitions
+
+Each named Agent is defined by `agents/<agent-name>/AGENT-SPEC.md`. The file
+uses YAML frontmatter for metadata and the Markdown body as the Agent-specific
+system prompt:
+
+```markdown
+---
+name: reviewer
+description: Reviews changes for correctness and maintainability
+model: claude-sonnet
+effort: high
+max_loop_times: 100
+---
+You are a focused code reviewer. Inspect the requested changes and report
+concrete findings with file references.
+```
+
+`name` defaults to the directory name, `description` defaults to the name, and
+`max_loop_times` defaults to `100`. Optional `model` is an exact configured
+model name and optional `effort` is one of `default`, `none`, `low`, `medium`,
+`high`, `xhigh`, or `max`. Unknown frontmatter fields are ignored with
+a warning so definitions created by newer Friday versions remain usable after
+a downgrade. Invalid description or loop-count values fall back to their
+defaults; malformed YAML, invalid model/effort values, unsafe or mismatched
+names, and an empty Markdown body stop startup.
+
+HOME Agents are loaded before project Agents, so a project definition with the
+same name overrides its HOME definition. Every loaded Agent is available both
+through `run_task` and as `/agent-name <task>` in the TUI. Slash invocation
+applies only to that one root-session turn; the following turn returns to the
+primary Agent.
+
+An Agent's stable system prompt is the composed workspace prompt (`AGENTS.md`,
+`SOUL.md`, and `IDENTITY.md`) followed by a blank line and the Markdown body of
+`AGENT-SPEC.md`. Request hooks continue to add Skills, Memory/history, project
+instructions, MCP, and subagent/collaboration context. Agent client views share
+the Session's configured model pool and rate limiters. In Default Mode the
+runtime priority is Session override, then Agent frontmatter, then model
+configuration. In Plan Mode, `collaboration.plan.reasoning_effort` supplies the
+default when the normally selected Session, Agent, or model effort is empty or
+`default`; an explicit non-default effort continues to take priority.
 
 ---
 

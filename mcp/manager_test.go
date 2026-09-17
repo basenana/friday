@@ -238,3 +238,52 @@ func homeConfigRoots(paths ...string) []workspace.ResourceRoot {
 	}
 	return roots
 }
+
+func TestManagerHotReloadsConfigFiles(t *testing.T) {
+	root := t.TempDir()
+	configs := filepath.Join(root, "mcp")
+	if err := os.MkdirAll(configs, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(configs, "servers.json")
+	writeMCPConfig(t, path, `{"mcpServers":{"alpha":{"command":"unused","disabled":true}}}`)
+	manager, err := NewManager(ManagerConfig{ConfigRoots: homeConfigRoots(configs), CacheRoot: filepath.Join(root, "cache"), TrustPath: filepath.Join(root, "trust.json")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	if statuses := manager.Status(); len(statuses) != 1 || statuses[0].Name != "alpha" {
+		t.Fatalf("initial statuses = %#v", statuses)
+	}
+	writeMCPConfig(t, path, `{"mcpServers":{"beta":{"command":"unused","disabled":true}}}`)
+	now := time.Now().Add(time.Second)
+	if err := os.Chtimes(path, now, now); err != nil {
+		t.Fatal(err)
+	}
+	if statuses := manager.Status(); len(statuses) != 1 || statuses[0].Name != "beta" {
+		t.Fatalf("hot-loaded statuses = %#v", statuses)
+	}
+}
+
+func TestManagerHotReloadKeepsLastGoodOnInvalidConfig(t *testing.T) {
+	root := t.TempDir()
+	configs := filepath.Join(root, "mcp")
+	if err := os.MkdirAll(configs, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(configs, "servers.json")
+	writeMCPConfig(t, path, `{"mcpServers":{"alpha":{"command":"unused","disabled":true}}}`)
+	manager, err := NewManager(ManagerConfig{ConfigRoots: homeConfigRoots(configs), CacheRoot: filepath.Join(root, "cache"), TrustPath: filepath.Join(root, "trust.json")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	writeMCPConfig(t, path, `{broken`)
+	now := time.Now().Add(time.Second)
+	if err := os.Chtimes(path, now, now); err != nil {
+		t.Fatal(err)
+	}
+	if statuses := manager.Status(); len(statuses) != 1 || statuses[0].Name != "alpha" {
+		t.Fatalf("last-good statuses = %#v", statuses)
+	}
+}

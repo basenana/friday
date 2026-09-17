@@ -9,6 +9,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/basenana/friday/core/planning"
+	"github.com/basenana/friday/core/providers"
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/x/ansi"
 )
@@ -38,6 +39,8 @@ type chatBlock struct {
 	success          bool
 	pending          bool
 	interrupted      bool
+	timedOut         bool
+	timeoutKind      string
 	card             *cardState
 }
 
@@ -368,10 +371,7 @@ func (m *model) renderMenu() string {
 }
 
 func (m *model) renderStatus() string {
-	modelName := m.activeModel.Model
-	if modelName == "" {
-		modelName = "model?"
-	}
+	modelName := formatRuntimeModel(m.clientRuntimeInfo())
 	mode := string(m.mode)
 	if m.loopActive {
 		mode = "loop"
@@ -405,6 +405,17 @@ func (m *model) renderStatus() string {
 		parts = append(parts, "↑ history")
 	}
 	return statusStyle.Width(max(m.width-1, 10)).Render(terminalSafe(strings.Join(parts, " · ")))
+}
+
+func formatRuntimeModel(info providers.ClientRuntimeInfo) string {
+	modelName := info.Model
+	if modelName == "" {
+		modelName = "model?"
+	}
+	if info.Effort != "" && info.Effort != providers.ReasoningEffortDefault {
+		modelName += " [" + info.Effort + "]"
+	}
+	return modelName
 }
 
 func shortID(id string) string {

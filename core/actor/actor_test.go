@@ -15,6 +15,23 @@ import (
 	"github.com/basenana/friday/core/types"
 )
 
+type blockingPublishSink struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+func (s *blockingPublishSink) Append(context.Context, events.Event) error {
+	select {
+	case <-s.started:
+	default:
+		close(s.started)
+	}
+	<-s.release
+	return nil
+}
+
+func (s *blockingPublishSink) Close() error { return nil }
+
 // collectEvents drains the subscription until the predicate returns
 // true or the deadline expires. Returns all events seen.
 func collectEvents(t *testing.T, sub *Subscription, done func([]events.Event) bool) []events.Event {
@@ -46,6 +63,34 @@ func hasRunFinished(seen []events.Event) bool {
 	return false
 }
 
+func TestActorPublishPersistsBeforeLiveDelivery(t *testing.T) {
+	a, _ := newTestActor(newMockAgent())
+	sink := &blockingPublishSink{started: make(chan struct{}), release: make(chan struct{})}
+	a.sink = sink
+	sub := a.Subscribe()
+	done := make(chan struct{})
+	go func() {
+		a.publish(context.Background(), events.NewEvent(events.KindRunStarted, "run"))
+		close(done)
+	}()
+	<-sink.started
+	select {
+	case evt := <-sub.Events():
+		t.Fatalf("event %s was delivered before persistence completed", evt.Type)
+	default:
+	}
+	close(sink.release)
+	select {
+	case evt := <-sub.Events():
+		if evt.Seq != 1 {
+			t.Fatalf("event sequence = %d, want 1", evt.Seq)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("persisted event was not delivered")
+	}
+	<-done
+}
+
 // TestActor_MultiMessageDrain verifies that three quick user messages
 // are coalesced into a single turn and produce one RUN_STARTED with
 // Batch=3 followed by one RUN_FINISHED.
@@ -69,6 +114,11 @@ func TestActor_MultiMessageDrain(t *testing.T) {
 	}
 
 	seen := collectEvents(t, sub, hasRunFinished)
+	for i, evt := range seen {
+		if want := int64(i + 1); evt.Seq != want {
+			t.Fatalf("event %d sequence = %d, want %d", i, evt.Seq, want)
+		}
+	}
 	var starts, finishes, accepted int
 	var batch int
 	for _, e := range seen {

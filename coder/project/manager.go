@@ -236,6 +236,9 @@ func (m *Manager) SetModel(id string, model sessions.ModelSelection) error {
 	return m.sessions.SetModel(id, model)
 }
 func (m *Manager) ClearModel(id string) error { return m.sessions.ClearModel(id) }
+func (m *Manager) SetEffort(id, effort string) error {
+	return m.sessions.SetEffort(id, effort)
+}
 func (m *Manager) SavePlan(id string, plan planning.Artifact) error {
 	return m.sessions.SavePlan(id, plan)
 }

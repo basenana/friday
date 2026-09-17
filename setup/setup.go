@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	coderagents "github.com/basenana/friday/coder/agents"
+	"github.com/basenana/friday/coder/configtools"
 	"github.com/basenana/friday/coder/filetools"
 	coderloop "github.com/basenana/friday/coder/loop"
 	"github.com/basenana/friday/config"
@@ -18,21 +19,21 @@ import (
 	"github.com/basenana/friday/core/logger"
 	"github.com/basenana/friday/core/planning"
 	"github.com/basenana/friday/core/providers"
+	"github.com/basenana/friday/core/providers/fallback"
 	coreSession "github.com/basenana/friday/core/session"
 	"github.com/basenana/friday/core/subagents"
 	"github.com/basenana/friday/core/tools"
 	fridaymcp "github.com/basenana/friday/mcp"
 	"github.com/basenana/friday/memory"
-	"github.com/basenana/friday/proposals"
 	"github.com/basenana/friday/sandbox"
 	"github.com/basenana/friday/sessions"
 	"github.com/basenana/friday/skills"
-	"github.com/basenana/friday/teams"
 	"github.com/basenana/friday/workspace"
 )
 
 type AgentContext struct {
 	Client      providers.Client
+	Policy      *fallback.SessionPolicy
 	Workspace   *workspace.Workspace
 	Lifecycle   sessions.SessionLifecycle
 	Session     *coreSession.Session
@@ -52,10 +53,14 @@ type options struct {
 	verbose        bool
 	extraTools     []*tools.Tool
 	providerClient providers.Client
-	skillRegistry  *skills.Registry
+	modelPool      *fallback.ModelPool
+	sessionPolicy  *fallback.SessionPolicy
+	skillRegistry  skills.Catalog
+	agentRegistry  coderagents.SpecProvider
 	mcpManager     *fridaymcp.Manager
 	lifecycle      sessions.SessionLifecycle
 	workdir        string
+	configTools    bool
 }
 
 type SessionManager interface {
@@ -107,13 +112,31 @@ func WithProviderClient(c providers.Client) Option {
 	}
 }
 
+// WithModelPool supplies the immutable configured model catalog used when
+// creating per-agent client views.
+func WithModelPool(pool *fallback.ModelPool) Option {
+	return func(o *options) { o.modelPool = pool }
+}
+
+// WithSessionPolicy supplies the mutable policy shared by the root client and
+// every agent view in this Session.
+func WithSessionPolicy(policy *fallback.SessionPolicy) Option {
+	return func(o *options) { o.sessionPolicy = policy }
+}
+
 // WithSkillRegistry supplies a shared skills registry. Interactive runtimes
 // use this so skill discovery, slash expansion, and agent hooks observe the
 // same refreshable snapshot.
-func WithSkillRegistry(registry *skills.Registry) Option {
+func WithSkillRegistry(registry skills.Catalog) Option {
 	return func(o *options) {
 		o.skillRegistry = registry
 	}
+}
+
+// WithAgentRegistry supplies the process-shared catalog of disk-defined
+// agents. Callers that omit it get an mtime-refreshable filesystem catalog.
+func WithAgentRegistry(registry coderagents.SpecProvider) Option {
+	return func(o *options) { o.agentRegistry = registry }
 }
 
 // WithMCPManager supplies a process-shared MCP manager. Its lifecycle remains
@@ -126,6 +149,12 @@ func WithMCPManager(manager *fridaymcp.Manager) Option {
 // root. Interactive project callers should always set it explicitly.
 func WithWorkdir(workdir string) Option {
 	return func(o *options) { o.workdir = workdir }
+}
+
+// WithConfigTools exposes agent_config and mcp_config. Interactive coder
+// entrypoints enable it explicitly; automation remains read-only by default.
+func WithConfigTools(enabled bool) Option {
+	return func(o *options) { o.configTools = enabled }
 }
 
 // NewAgentWithLifecycle builds an agent around an already-selected root
@@ -141,16 +170,29 @@ func NewAgent(sessionMgr SessionManager, cfg *config.Config, opts ...Option) (*A
 	for _, opt := range opts {
 		opt(options)
 	}
+	if options.sessionPolicy == nil && options.providerClient != nil {
+		if view, ok := options.providerClient.(interface {
+			SessionPolicy() *fallback.SessionPolicy
+		}); ok {
+			options.sessionPolicy = view.SessionPolicy()
+		}
+	}
+	if options.sessionPolicy == nil {
+		options.sessionPolicy = fallback.NewSessionPolicy(providers.ClientPolicy{})
+	}
 
 	var client providers.Client
 	if options.providerClient != nil {
 		client = options.providerClient
+	} else if options.modelPool != nil {
+		client = options.modelPool.NewClient(options.sessionPolicy, providers.ClientPolicy{})
 	} else {
-		c, err := CreateProviderClient(cfg)
+		pool, err := CreateModelPool(cfg)
 		if err != nil {
-			return nil, fmt.Errorf("create provider client: %w", err)
+			return nil, fmt.Errorf("create provider model pool: %w", err)
 		}
-		client = c
+		options.modelPool = pool
+		client = pool.NewClient(options.sessionPolicy, providers.ClientPolicy{})
 	}
 
 	if options.lifecycle == nil {
@@ -190,6 +232,18 @@ func NewAgent(sessionMgr SessionManager, cfg *config.Config, opts ...Option) (*A
 	if err != nil {
 		return nil, fmt.Errorf("get/create session: %w", err)
 	}
+	if provider, ok := sessionMgr.(interface{ GetStore() sessions.Store }); ok {
+		if meta, metaErr := provider.GetStore().GetMeta(sess.Root.ID); metaErr == nil && meta != nil {
+			policy := providers.ClientPolicy{}
+			if cfg.HasModelName(meta.Runtime.Model.Model) {
+				policy.PreferredModel = meta.Runtime.Model.Model
+			}
+			if providers.IsValidReasoningEffort(meta.Runtime.Effort) {
+				policy.Effort = meta.Runtime.Effort
+			}
+			options.sessionPolicy.Update(policy)
+		}
+	}
 
 	if options.verbose {
 		sessionType := ""
@@ -214,6 +268,32 @@ func NewAgent(sessionMgr SessionManager, cfg *config.Config, opts ...Option) (*A
 	loaded, err := ws.Load(workspace.WithMemoryDays(cfg.Memory.Days))
 	if err != nil {
 		return nil, fmt.Errorf("load workspace content: %w", err)
+	}
+	agentRegistry := options.agentRegistry
+	if agentRegistry == nil {
+		agentRegistry, err = coderagents.NewLoader(cfg.AgentPaths()...).Load()
+		if err != nil {
+			return nil, fmt.Errorf("load agents: %w", err)
+		}
+	}
+	validateAgentSpec := func(spec *coderagents.AgentSpec) error {
+		if spec != nil && spec.Model != "" && !cfg.HasModelName(spec.Model) {
+			return fmt.Errorf("agent %q in %s selects unknown model %q", spec.Name, spec.SourcePath, spec.Model)
+		}
+		return nil
+	}
+	if registry, ok := agentRegistry.(interface {
+		SetValidator(coderagents.SpecValidator) error
+	}); ok {
+		if err := registry.SetValidator(validateAgentSpec); err != nil {
+			return nil, err
+		}
+	} else {
+		for _, spec := range agentRegistry.List() {
+			if err := validateAgentSpec(spec); err != nil {
+				return nil, err
+			}
+		}
 	}
 
 	workdir := options.workdir
@@ -254,17 +334,10 @@ func NewAgent(sessionMgr SessionManager, cfg *config.Config, opts ...Option) (*A
 		skillRegistry = skills.NewRegistry(skillLoader)
 	}
 	skillHook := skills.NewHook(skillRegistry)
-
-	// Team system: provides team_load/team_list/team_comment tools and the
-	// active-team system prompt hint. The registry is shared with the proposal
-	// strategy so proposal_run can pick the active team.
-	teamLoader := teams.NewLoader(cfg.TeamsPath())
-	if err := teamLoader.Load(); err != nil {
-		logger.New("setup").Warnw("failed to load teams", "error", err)
+	var configToolsHook *configtools.Hook
+	if options.configTools {
+		configToolsHook = configtools.NewHook(configtools.NewFileStore(cfg.AgentPaths(), ws.MCPRoots(), cfg.HasModelName))
 	}
-	teamRegistry := teams.NewRegistry(teamLoader)
-	teamRegistry.Refresh()
-	teamHook := teams.NewHook(teamRegistry, cfg.TeamsPath())
 
 	approvedPlanHook := planning.NewApprovedPlanContextHook(planRepositoryFromManager(sessionMgr))
 	loopHook := coderloop.NewHook()
@@ -281,7 +354,7 @@ func NewAgent(sessionMgr SessionManager, cfg *config.Config, opts ...Option) (*A
 		return nil, fmt.Errorf("create file tools: %w", err)
 	}
 	contextHook := contextmgr.New(client, contextmgr.Config{
-		ContextWindow:      cfg.Model.ContextWindow,
+		ContextWindow:      cfg.PrimaryModel().ContextWindow,
 		SessionMemoryStore: sessionMemoryStoreFromManager(sessionMgr),
 		ReservedTokens: func(sess *coreSession.Session) int64 {
 			return fileHook.ReservedTokens(sess) + approvedPlanHook.ReservedTokens(sess)
@@ -293,8 +366,6 @@ func NewAgent(sessionMgr SessionManager, cfg *config.Config, opts ...Option) (*A
 	allTools = append(allTools, imageTool)
 	bashTool := sandbox.NewBashTool(sandboxExec, workdir)
 	allTools = append(allTools, bashTool)
-	pollWaitTool := sandbox.NewPollWaitTool(sandboxExec, workdir)
-	allTools = append(allTools, pollWaitTool)
 	taskManager, err := sandbox.NewPersistentTaskManager(sandboxExec, sandbox.NewSessionTaskStore(sess))
 	if err != nil {
 		return nil, fmt.Errorf("restore background tasks: %w", err)
@@ -306,28 +377,35 @@ func NewAgent(sessionMgr SessionManager, cfg *config.Config, opts ...Option) (*A
 		allTools = append(allTools, options.extraTools...)
 	}
 
-	// Trace wraps the real handler (innermost) so every invocation —
-	// including each retry attempt — is observed with its evidence; retry
-	// sits outside and injects that evidence into the context. Registering
-	// both here wraps the shared tool set exactly once.
-	allTools = wrapToolsWithInvocationRetry(
-		wrapToolsWithTrace(allTools, toolTraceSinkForConfig(cfg)),
-		defaultToolInvocationPolicy,
-	)
+	// Every tool, including tools injected later by hooks, goes through this
+	// shared invocation pipeline. Retry is outermost and trace records each
+	// individual attempt.
+	toolInvoker := tools.NewInvoker(tools.WithInvocationMiddleware(
+		toolInvocationRetryMiddleware(defaultToolInvocationPolicy),
+		toolTraceMiddleware(toolTraceSinkForConfig(cfg)),
+	))
 
-	agent := agents.New(client, agents.Option{
-		SystemPrompt: workspace.ComposeSystemPrompt(loaded),
+	workspacePrompt := workspace.ComposeSystemPrompt(loaded)
+	primaryAgent := agents.New(client, agents.Option{
+		SystemPrompt: workspacePrompt,
 		Tools:        allTools,
+		Invoker:      toolInvoker,
 	})
 
 	// Build the explorer with a filtered tool set. It reuses the main system
 	// prompt so forked sessions share the same cache prefix.
-	factory := coderagents.NewClientFactory(client, cfg.PrimaryModel(), CreateProviderClientFromModel)
-	exploreSpec := coderagents.ExplorerSpec(cfg.AgentModel(coderagents.NameExplorer))
+	factory := coderagents.NewClientFactory(client)
+	factory.SetInvoker(toolInvoker)
+	exploreSpec := coderagents.ExplorerSpec()
 	exploreSpec.SystemPrompt = workspace.ComposeSystemPrompt(loaded)
 	exploreAgent, err := factory.BuildAgent(exploreSpec, allTools)
 	if err != nil {
 		return nil, fmt.Errorf("build explore agent: %w", err)
+	}
+
+	expertProvider, err := coderagents.NewExpertProvider(agentRegistry, factory, workspacePrompt, allTools, validateAgentSpec)
+	if err != nil {
+		return nil, fmt.Errorf("build expert agents: %w", err)
 	}
 
 	subagentHook := subagents.NewHook(client, subagents.Option{
@@ -335,14 +413,15 @@ func NewAgent(sessionMgr SessionManager, cfg *config.Config, opts ...Option) (*A
 			Name:  coderagents.NameExplorer,
 			Agent: exploreAgent,
 		},
+		AgentProvider: expertProvider,
 		SessionForker: lifecycle,
 	})
+	routedAgent := coderagents.NewDynamicRouter(primaryAgent, expertProvider)
 
 	sharedHooks := []coreSession.Hook{
 		planningHook,
 		fridaymcp.NewHook(mcpManager),
 		skillHook,
-		teamHook,
 		// Memory must be injected before the context manager runs so its
 		// projection accounts for the extra per-request messages.
 		newMemoryHook(ws),
@@ -358,17 +437,13 @@ func NewAgent(sessionMgr SessionManager, cfg *config.Config, opts ...Option) (*A
 		collaborationHook,
 		planning.TerminalHook{ModeProvider: collaborationProvider(sessionMgr)},
 	}
+	if configToolsHook != nil {
+		// Configuration tools are appended at a stable final position and are
+		// inherited by forked sessions, as required by coder mode.
+		sharedHooks = append(sharedHooks, configToolsHook)
+	}
 	replaceSessionHooks(sess, sharedHooks...)
 
-	// Proposal system: a RunnerFactory picks SingleAgent vs Team strategy at
-	// call time based on whether the agent supplied a `team` argument. The
-	// factory closes over client + tools + session manager so the proposal
-	// package stays free of agent-construction concerns.
-	proposalLoader := proposals.NewLoader(cfg.ProposalsPath())
-	proposalRunnerFactory := buildProposalRunnerFactory(
-		client, allTools, sharedHooks, lifecycle, teamRegistry, cfg, loaded,
-	)
-	sess.RegisterHook(proposals.NewHook(proposalLoader, proposalRunnerFactory))
 	// Loop is last so its stable autonomous-work contract has the final
 	// system-prompt position while active. It is otherwise a no-op.
 	sess.RegisterHook(loopHook)
@@ -376,10 +451,11 @@ func NewAgent(sessionMgr SessionManager, cfg *config.Config, opts ...Option) (*A
 	mcpHandedOff = true
 	return &AgentContext{
 		Client:      client,
+		Policy:      options.sessionPolicy,
 		Workspace:   ws,
 		Lifecycle:   lifecycle,
 		Session:     sess,
-		Agent:       agent,
+		Agent:       routedAgent,
 		Memory:      memSys,
 		TaskManager: taskManager,
 		mcpManager:  mcpManager,
@@ -487,108 +563,6 @@ func appendImageRefsToMessage(message string, imageRefs []string) string {
 	}
 	builder.WriteString("If you need to inspect image contents, use the image tool with the relevant image reference instead of guessing.")
 	return builder.String()
-}
-
-// buildProposalRunnerFactory constructs a proposals.RunnerFactory. The factory
-// inspects proposal.OwningTeam to pick a strategy: if a team is named, it
-// loads the team + members and uses TeamStrategy; otherwise it uses
-// SingleAgentStrategy against a detached proposal session.
-//
-// Both branches close over the same client, tool set, and session manager so
-// the proposals package never needs to import agents/providers directly.
-func buildProposalRunnerFactory(
-	client providers.Client,
-	allTools []*tools.Tool,
-	sharedHooks []coreSession.Hook,
-	lifecycle sessions.SessionLifecycle,
-	teamRegistry *teams.Registry,
-	cfg *config.Config,
-	loaded *workspace.LoadedContent,
-) proposals.RunnerFactory {
-	agentFactory := func(systemPrompt string, tools []*tools.Tool) agents.Agent {
-		return agents.New(client, agents.Option{
-			SystemPrompt: systemPrompt,
-			Tools:        tools,
-		})
-	}
-	systemPrompt := workspace.ComposeSystemPrompt(loaded)
-
-	return func(proposal *proposals.Proposal, designDoc string) (*proposals.Runner, proposals.ExecutionStrategy, error) {
-		if lifecycle == nil {
-			return nil, nil, fmt.Errorf("session lifecycle is unavailable")
-		}
-		loader := proposals.NewLoader(cfg.ProposalsPath())
-
-		if proposal.OwningTeam != "" {
-			team, ok := teamRegistry.Get(proposal.OwningTeam)
-			if !ok {
-				// Refresh once in case the team was added after setup.
-				if err := teamRegistry.Loader().Load(); err != nil {
-					return nil, nil, fmt.Errorf("load teams: %w", err)
-				}
-				teamRegistry.Refresh()
-				team, ok = teamRegistry.Get(proposal.OwningTeam)
-			}
-			if !ok {
-				return nil, nil, fmt.Errorf("team not found: %s", proposal.OwningTeam)
-			}
-			members, err := teams.LoadMembers(cfg.TeamsPath(), team.Name, team.Members)
-			if err != nil {
-				return nil, nil, fmt.Errorf("load members: %w", err)
-			}
-			sessionFactory := proposals.SessionFactory(func(proposalID, assignee string) (*coreSession.Session, error) {
-				key := fmt.Sprintf("proposal/%s/member/%s", proposalID, assignee)
-				resumeID := ""
-				if proposal.Sessions != nil {
-					resumeID = proposal.Sessions[assignee]
-				}
-				s, _, err := lifecycle.GetOrCreateAssociated(
-					context.Background(), sessions.AssociatedSpec{Key: key, ResumeID: resumeID},
-					coreSession.WithState(workspace.NewFileState(cfg.StatePath())),
-				)
-				if err != nil {
-					return nil, err
-				}
-				replaceSessionHooks(s, sharedHooks...)
-				if proposal.Sessions == nil {
-					proposal.Sessions = map[string]string{}
-				}
-				proposal.Sessions[assignee] = s.ID
-				return s, nil
-			})
-			strategy, err := proposals.NewTeamStrategy(
-				client, agentFactory, team, members, allTools,
-				cfg.TeamsPath(), teamRegistry, sessionFactory,
-			)
-			if err != nil {
-				return nil, nil, fmt.Errorf("team strategy: %w", err)
-			}
-			return proposals.NewRunner(proposal, loader, strategy), strategy, nil
-		}
-
-		// Single-agent mode: one detached session for the whole proposal.
-		proposalKey := fmt.Sprintf("proposal/%s/self", proposal.ID)
-		resumeID := ""
-		if proposal.Sessions != nil {
-			resumeID = proposal.Sessions["self"]
-		}
-		proposalSession, _, err := lifecycle.GetOrCreateAssociated(
-			context.Background(), sessions.AssociatedSpec{Key: proposalKey, ResumeID: resumeID},
-			coreSession.WithState(workspace.NewFileState(cfg.StatePath())),
-		)
-		if err != nil {
-			return nil, nil, fmt.Errorf("create proposal session: %w", err)
-		}
-		replaceSessionHooks(proposalSession, sharedHooks...)
-		if proposal.Sessions == nil {
-			proposal.Sessions = map[string]string{}
-		}
-		proposal.Sessions["self"] = proposalSession.ID
-		strategy := proposals.NewSingleAgentStrategy(
-			client, agentFactory, allTools, proposalSession, systemPrompt,
-		)
-		return proposals.NewRunner(proposal, loader, strategy), strategy, nil
-	}
 }
 
 func replaceSessionHooks(sess *coreSession.Session, hooks ...coreSession.Hook) {

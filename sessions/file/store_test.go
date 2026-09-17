@@ -27,11 +27,12 @@ func TestConcurrentMetadataUpdatesAcrossStoreInstances(t *testing.T) {
 		t.Fatal(err)
 	}
 	mode := collaboration.ModePlan
-	model := sessions.ModelSelection{Provider: "openai", Model: "gpt-test"}
+	model := sessions.ModelSelection{Model: "gpt-test"}
+	effort := "default"
 	start := make(chan struct{})
-	errs := make(chan error, 102)
+	errs := make(chan error, 103)
 	var wg sync.WaitGroup
-	wg.Add(4)
+	wg.Add(5)
 	go func() {
 		defer wg.Done()
 		<-start
@@ -41,6 +42,11 @@ func TestConcurrentMetadataUpdatesAcrossStoreInstances(t *testing.T) {
 		defer wg.Done()
 		<-start
 		errs <- second.UpdateMeta("shared", sessions.SessionMetaPatch{Model: &model})
+	}()
+	go func() {
+		defer wg.Done()
+		<-start
+		errs <- first.UpdateMeta("shared", sessions.SessionMetaPatch{Effort: &effort})
 	}()
 	appendMessages := func(store *FileSessionStore, prefix string) {
 		defer wg.Done()
@@ -63,7 +69,7 @@ func TestConcurrentMetadataUpdatesAcrossStoreInstances(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if meta.Runtime.Mode != mode || meta.Runtime.Model != model || meta.MessageCount != 100 {
+	if meta.Runtime.Mode != mode || meta.Runtime.Model != model || meta.Runtime.Effort != effort || meta.MessageCount != 100 {
 		t.Fatalf("lost metadata update: %+v", meta)
 	}
 	messages, err := second.LoadMessages("shared")

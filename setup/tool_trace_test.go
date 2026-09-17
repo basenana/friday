@@ -230,6 +230,35 @@ func TestRetryGivesUpAfterMaxAttempts(t *testing.T) {
 	}
 }
 
+func TestInvocationRetrySharesInvokerDeadline(t *testing.T) {
+	calls := 0
+	tool := tools.NewTool("retry-budget", tools.WithToolHandler(func(context.Context, *tools.Request) (*tools.Result, error) {
+		calls++
+		return tools.NewToolResultRetryableError("transient", "test"), nil
+	}))
+	invoker := tools.NewInvoker(
+		tools.WithInvokerHardLimit(40*time.Millisecond),
+		tools.WithInvocationMiddleware(toolInvocationRetryMiddleware(func(string) ToolInvocationPolicy {
+			return ToolInvocationPolicy{MaxAttempts: 3, Backoff: 200 * time.Millisecond}
+		})),
+	)
+
+	started := time.Now()
+	result, err := invoker.Invoke(context.Background(), tool, &tools.Request{})
+	if err != nil {
+		t.Fatalf("Invoke() error = %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("handler calls = %d, want 1 before the shared budget expired", calls)
+	}
+	if result == nil || !result.TimedOut || result.TimeoutKind != tools.TimeoutKindHardLimit {
+		t.Fatalf("result = %+v, want hard-limit timeout", result)
+	}
+	if elapsed := time.Since(started); elapsed > 2*time.Second {
+		t.Fatalf("retry refreshed the invocation budget; elapsed = %s", elapsed)
+	}
+}
+
 func TestTraceArgumentsRedactedAndCapped(t *testing.T) {
 	var events []ToolTraceEvent
 	base := []*tools.Tool{tools.NewTool("bash", tools.WithToolHandler(func(context.Context, *tools.Request) (*tools.Result, error) {

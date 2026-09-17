@@ -16,7 +16,7 @@ Core features:
 ## Module Structure
 
 This repository contains two Go modules:
-- **Root module** (`/`) — CLI application, config, workspace, memory, skills, sandbox, MCP
+- **Root module** (`/`) — CLI application, config, workspace, disk-defined agents, memory, skills, sandbox, MCP
 - **Core module** (`/core`) — Agent interfaces, providers, session management, tools, planning
 
 The `core` package is a separate module with its own `go.mod`. See `core/CLAUDE.md` for details.
@@ -74,7 +74,18 @@ Sessions support forking for sub-agent execution (`core/session/session.go:57-75
 
 Orchestrates expert sub-agents:
 - `hook.go` - Registers `BeforeAgent` and `BeforeModel` hooks to inject subagent tools
-- `tool.go` - Main agent tool `run_task` delegates to registered expert agents
+- `tool.go` - Batched `explore` and `run_task` tools execute independent subagent work under a shared concurrency limit
+
+### Disk-defined Agents (`coder/agents/`)
+
+Named Agents load at startup from `~/.friday/agents/<name>/AGENT-SPEC.md` and
+project-local `.friday/agents/<name>/AGENT-SPEC.md`; project definitions
+override HOME definitions with the same name. Specs use permissive YAML
+frontmatter plus a Markdown system prompt. Optional `model` and `effort`
+frontmatter select defaults from the shared model pool; Session overrides have
+higher priority. Loaded Agents reuse tools, hooks, and session services, are
+exposed through `run_task`, and can handle one TUI turn through
+`/agent-name <task>`.
 
 ### Planning (`core/planning/`)
 
@@ -156,6 +167,7 @@ Default paths:
 ├── sessions/            # Conversation history
 ├── memory/              # Daily memory logs
 ├── log/                 # Application logs
+├── agents/              # Named Agent definitions (AGENT-SPEC.md)
 └── workspace/           # Agent context files
 ```
 
@@ -180,9 +192,11 @@ Setup flow:
 2. Initialize workspace directory
 3. Get or create session (from session manager)
 4. Register compact hook for conversation summarization
-5. Load workspace content (system prompts + memory history)
-6. Create agent with system prompt and tools
-7. Ensure memory log exists for today
+5. Load workspace content and disk-defined Agent specs
+6. Compose each disk Agent prompt as workspace prompt + AGENT-SPEC.md body
+7. Create the primary Agent and named Agents with shared tools and hooks
+8. Register named Agents for `run_task` and one-turn slash routing
+9. Ensure memory log exists for today
 
 ## Skills System (`skills/`)
 

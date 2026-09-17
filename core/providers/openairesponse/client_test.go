@@ -78,6 +78,21 @@ func TestResponseNewParamsUsesResponsesWireFormat(t *testing.T) {
 	}
 }
 
+func TestResponseNewParamsDefaultReasoningEffort(t *testing.T) {
+	req := providers.NewRequest("system")
+	providers.SetRequestDefaultReasoningEffort(req, providers.ReasoningEffortHigh)
+
+	configured := &client{model: Model{Name: "gpt-test", ReasoningEffort: providers.ReasoningEffortLow}}
+	if got := configured.responseNewParams(req).Reasoning.Effort; got != "low" {
+		t.Fatalf("configured effort = %q, want low", got)
+	}
+
+	defaulted := &client{model: Model{Name: "gpt-test", ReasoningEffort: providers.ReasoningEffortDefault}}
+	if got := defaulted.responseNewParams(req).Reasoning.Effort; got != "high" {
+		t.Fatalf("default effort = %q, want high", got)
+	}
+}
+
 func assertItemType(t *testing.T, raw any, want string) {
 	t.Helper()
 	item, ok := raw.(map[string]any)

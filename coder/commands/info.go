@@ -3,6 +3,8 @@ package commands
 import (
 	"fmt"
 	"strings"
+
+	"github.com/basenana/friday/core/providers"
 )
 
 // --- /context ---
@@ -39,7 +41,7 @@ func (modelCmd) Name() string        { return "model" }
 func (modelCmd) Aliases() []string   { return nil }
 func (modelCmd) Description() string { return "Show the current model (or set with /model <name>)" }
 func (modelCmd) Metadata() Metadata {
-	return Metadata{Usage: "/model [provider/model|model]", Category: "Info", Policy: PolicyDeferred}
+	return Metadata{Usage: "/model [name]", Category: "Info", Policy: PolicyDeferred}
 }
 func (modelCmd) Execute(ctx *Context) (*Result, error) {
 	if ctx.Config == nil {
@@ -49,6 +51,30 @@ func (modelCmd) Execute(ctx *Context) (*Result, error) {
 		return ResultOf(OpenModelAction{}), nil
 	}
 	return ResultOf(SetModelAction{Target: strings.TrimSpace(ctx.RawArgs)}), nil
+}
+
+// --- /effort ---
+
+type effortCmd struct{}
+
+func (effortCmd) Name() string        { return "effort" }
+func (effortCmd) Aliases() []string   { return nil }
+func (effortCmd) Description() string { return "Show or set the session reasoning effort" }
+func (effortCmd) Metadata() Metadata {
+	return Metadata{Usage: "/effort [default|none|low|medium|high|xhigh|max]", Category: "Info", Policy: PolicyDeferred}
+}
+func (effortCmd) Execute(ctx *Context) (*Result, error) {
+	if len(ctx.Args) == 0 {
+		return ResultOf(OpenEffortAction{}), nil
+	}
+	if len(ctx.Args) != 1 {
+		return nil, fmt.Errorf("usage: /effort [default|none|low|medium|high|xhigh|max]")
+	}
+	effort := strings.ToLower(strings.TrimSpace(ctx.Args[0]))
+	if !providers.IsValidReasoningEffort(effort) {
+		return nil, fmt.Errorf("invalid reasoning effort %q: use default, none, low, medium, high, xhigh, or max", effort)
+	}
+	return ResultOf(SetEffortAction{Effort: effort}), nil
 }
 
 type statusCmd struct{}
@@ -116,6 +142,7 @@ func RegisterInfoCommands(reg *Registry) {
 	reg.Register(contextCmd{})
 	reg.Register(compactCmd{})
 	reg.Register(modelCmd{})
+	reg.Register(effortCmd{})
 	reg.Register(statusCmd{})
 	reg.Register(mcpCmd{})
 }

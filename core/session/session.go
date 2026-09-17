@@ -381,8 +381,9 @@ func WithTemporary(v bool) Option {
 }
 
 // defaultEventBufSize is the buffer size for each subscriber channel.
-// 64 is sufficient to absorb event bursts during a single agent loop.
-const defaultEventBufSize = 64
+// Keep enough headroom for bursty tool and lifecycle events while the actor
+// translator is also draining a high-volume model response.
+const defaultEventBufSize = 256
 
 // SubscribeEvents creates a new event channel owned by the session and returns
 // a read-only channel for the caller to consume, plus an unsubscribe function.

@@ -20,11 +20,11 @@ Do not use "explore" when:
 - you need to make changes directly
 - a named expert is a better fit; use "run_task" for specialized expert work
 
-The clone is stateless and returns one report. Give complete context, request specific findings, and parallelize independent explore tasks when useful.
+Each clone is stateless and returns one report. Before calling the tool, identify every investigation that can run independently now and submit all of them together in one tasks array. The runtime queues excess work and keeps all available parallel slots busy, so do not serialize independent investigations or split them into artificial waves. Use a one-item array only when the investigation is genuinely indivisible. Give every item complete context, scope, and requested findings. Put dependent investigations in a later call after their prerequisites finish, and do not invent duplicate or low-value tasks merely to increase parallelism.
 </explore>
 `
 
-	EXPLORE_DESCRIPTION_PROMPT = `Launch a short-lived clone in a forked session to investigate and return a single structured report.
+	EXPLORE_DESCRIPTION_PROMPT = `Launch short-lived clones in forked sessions to investigate independent tasks concurrently and return an ordered batch of structured reports.
 
 Use this tool for:
 - reading multiple files or tracing execution paths
@@ -36,12 +36,14 @@ Avoid this tool for:
 - direct edits or implementation work
 - tasks that clearly belong to a named expert
 
-Write task so it includes:
+Submit every independent investigation that can run now in one tasks array. The runtime automatically queues work above the active concurrency limit while keeping available slots busy; task count itself is not limited. Do not make several sequential calls for work that has no dependency.
+
+Write each task so it includes:
 - the question to answer or issue to investigate
 - relevant scope, files, subsystems, or hypotheses when known
 - the exact findings you want back in the report
 
-The clone is stateless. Put all required context in the request. Its report comes back only to you, so summarize relevant findings to the user.`
+Each clone is stateless. Put all required context in every item. Submit dependent work only after its prerequisite report arrives, avoid duplicate or artificial tasks, and summarize the returned reports to the user.`
 
 	EXPERT_SYSTEM_PROMPT = `<run_task>
 You can use "run_task" to delegate work to named expert agents with specialized capabilities.
@@ -56,46 +58,48 @@ Do not use "run_task" when:
 - the task is trivial
 - no expert description matches the need
 
-Each expert call is stateless and returns one result. Provide full context, constraints, and the exact outcome you want back.
+Each expert task is stateless and returns one result. Before calling the tool, identify every expert task that can run independently now and submit all of them together in one tasks array. The runtime queues excess work and keeps every available parallel slot busy, so do not serialize independent tasks or split them into artificial waves. Use a one-item array only when the work is genuinely indivisible. Give every item full context, constraints, and the exact outcome required. Defer tasks with data dependencies, ordering requirements, or overlapping writes until their prerequisites finish, and do not manufacture duplicate work merely to increase parallelism.
 </run_task>
 `
 
-	EXPERT_DESCRIPTION_PROMPT = `Delegate work to a specialized expert agent.
+	EXPERT_DESCRIPTION_PROMPT = `Delegate independent work to specialized expert agents concurrently and return an ordered batch of results.
 
 Available expert agents:
 {available_agents}
 
-Select agent_name by matching the task to the agent's description. Do not guess from the name alone.
+Submit every independent expert task that can run now in one tasks array, selecting agent_name separately for each item by matching its task to the agent description. The runtime automatically queues work above the active concurrency limit while keeping available slots busy; task count itself is not limited. Do not serialize independent work across multiple calls.
 
-Use task to provide:
+Use each task to provide:
 - the task to complete
 - relevant context, constraints, and expected output
 - any files, artifacts, or checks the expert should pay attention to
 
 Notes:
-1. Each expert call is stateless, so include all necessary context
-2. Use parallel expert calls only for independent tasks
-3. The expert's result is returned only to you; summarize relevant parts to the user
-4. For general investigation or broad research, prefer "explore"
+1. Each task is stateless, so include all necessary context in every item
+2. Batch all independent tasks immediately; use later calls only for real dependencies, ordering requirements, or write conflicts
+3. Avoid duplicate, overlapping, artificially narrow, or low-value tasks
+4. Successful results remain valid when another item fails; correct and retry only failed items
+5. Results are returned only to you; synthesize relevant parts for the user
+6. For general investigation or broad research, prefer "explore"
 `
 )
 
-func initSystemPrompts(opt Option) []string {
+func initSystemPrompts(opt Option, experts []ExpertAgent) []string {
 	var prompts []string
 	if opt.SelfAgent != nil && strings.TrimSpace(opt.ExploreSystemPrompt) != "" {
 		prompts = append(prompts, opt.ExploreSystemPrompt)
 	}
-	if len(opt.ExpertAgents) > 0 && strings.TrimSpace(opt.RunTaskSystemPrompt) != "" {
+	if len(experts) > 0 && strings.TrimSpace(opt.RunTaskSystemPrompt) != "" {
 		prompts = append(prompts, opt.RunTaskSystemPrompt)
 	}
 	return prompts
 }
 
-func initExpertDescriptionPrompt(opt Option) string {
+func initExpertDescriptionPrompt(opt Option, experts []ExpertAgent) string {
 	buf := &bytes.Buffer{}
 	buf.WriteString("<available_agents>\n")
 
-	for _, agt := range opt.ExpertAgents {
+	for _, agt := range experts {
 		buf.WriteString(fmt.Sprintf("<agent_name>%s</agent_name>\n", agt.Name))
 		buf.WriteString(fmt.Sprintf("<description>\n%s\n</description>\n", agt.Description))
 	}

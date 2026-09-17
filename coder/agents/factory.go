@@ -3,41 +3,36 @@ package agents
 import (
 	"fmt"
 
-	"github.com/basenana/friday/config"
 	coreagents "github.com/basenana/friday/core/agents"
 	"github.com/basenana/friday/core/providers"
 	"github.com/basenana/friday/core/subagents"
 	"github.com/basenana/friday/core/tools"
 )
 
-// ClientBuilder constructs a providers.Client from a ModelConfig.
-// Implementations typically wrap setup.CreateProviderClientFromModel.
-type ClientBuilder func(modelCfg config.ModelConfig) (providers.Client, error)
-
 // ClientFactory builds providers.Client instances per AgentSpec.
-// When a spec's Model is not configured, the primary client is reused.
+// Agent views share the primary client's model pool when it is forkable.
 type ClientFactory struct {
 	primaryClient providers.Client
-	primaryCfg    config.ModelConfig
-	builder       ClientBuilder
+	invoker       *tools.Invoker
 }
 
-// NewClientFactory returns a factory that reuses primary for unconfigured
-// agents and falls back to builder for configured ones.
-func NewClientFactory(primary providers.Client, primaryCfg config.ModelConfig, builder ClientBuilder) *ClientFactory {
-	return &ClientFactory{primaryClient: primary, primaryCfg: primaryCfg, builder: builder}
+// SetInvoker configures the shared tool invocation pipeline for agents built
+// by this factory.
+func (f *ClientFactory) SetInvoker(invoker *tools.Invoker) { f.invoker = invoker }
+
+// NewClientFactory returns a factory that forks an isolated lightweight client
+// view for every Agent. This keeps Agent runtime observability separate from
+// the primary Session client even when the Agent has no policy overrides.
+func NewClientFactory(primary providers.Client) *ClientFactory {
+	return &ClientFactory{primaryClient: primary}
 }
 
-// ClientFor returns the primary client when modelCfg is not configured, or
-// builds a new client via the builder otherwise.
-func (f *ClientFactory) ClientFor(modelCfg config.ModelConfig) (providers.Client, error) {
-	if !modelCfg.IsConfigured() {
-		return f.primaryClient, nil
+func (f *ClientFactory) ClientFor(model, effort string) (providers.Client, error) {
+	forkable, ok := f.primaryClient.(providers.ForkableClient)
+	if !ok {
+		return nil, fmt.Errorf("provider client does not support isolated agent views")
 	}
-	if f.builder == nil {
-		return f.primaryClient, nil
-	}
-	return f.builder(modelCfg)
+	return forkable.Fork(providers.ClientPolicy{PreferredModel: model, Effort: effort}), nil
 }
 
 // BuildAgent constructs a coreagents.Agent for the given spec, with tools
@@ -46,7 +41,7 @@ func (f *ClientFactory) BuildAgent(spec *AgentSpec, allTools []*tools.Tool) (cor
 	if spec == nil {
 		return nil, fmt.Errorf("nil agent spec")
 	}
-	client, err := f.ClientFor(spec.Model)
+	client, err := f.ClientFor(spec.Model, spec.Effort)
 	if err != nil {
 		return nil, fmt.Errorf("build client for agent %s: %w", spec.Name, err)
 	}
@@ -58,6 +53,7 @@ func (f *ClientFactory) BuildAgent(spec *AgentSpec, allTools []*tools.Tool) (cor
 		SystemPrompt: spec.SystemPrompt,
 		Tools:        spec.ToolPolicy.Apply(allTools),
 		MaxLoopTimes: maxLoop,
+		Invoker:      f.invoker,
 	}), nil
 }
 
@@ -81,6 +77,3 @@ func (f *ClientFactory) BuildExpertAgents(specs []*AgentSpec, allTools []*tools.
 
 // PrimaryClient returns the factory's primary client.
 func (f *ClientFactory) PrimaryClient() providers.Client { return f.primaryClient }
-
-// PrimaryConfig returns the factory's primary model config.
-func (f *ClientFactory) PrimaryConfig() config.ModelConfig { return f.primaryCfg }

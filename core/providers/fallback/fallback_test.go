@@ -23,6 +23,8 @@ type fakeClient struct {
 	streamContent  []string // content to stream on successful Completion
 	streamEmpty    bool
 	structuredErrs []error
+	lastEffort     string
+	modelEffort    string
 }
 
 func (f *fakeClient) callCount() int {
@@ -59,8 +61,9 @@ func (f *fakeClient) Completion(ctx context.Context, _ providers.Request) provid
 	return resp
 }
 
-func (f *fakeClient) CompletionNonStreaming(_ context.Context, _ providers.Request) (string, error) {
+func (f *fakeClient) CompletionNonStreaming(_ context.Context, req providers.Request) (string, error) {
 	f.mu.Lock()
+	f.lastEffort = providers.ResolveReasoningEffort(req, f.modelEffort)
 	idx := f.calls
 	f.calls++
 	f.mu.Unlock()
@@ -68,6 +71,12 @@ func (f *fakeClient) CompletionNonStreaming(_ context.Context, _ providers.Reque
 		return "", f.nonStreamErrs[idx]
 	}
 	return "ok", nil
+}
+
+func (f *fakeClient) effort() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.lastEffort
 }
 
 func (f *fakeClient) StructuredPredict(_ context.Context, _ providers.Request, _ any) error {
@@ -137,10 +146,14 @@ func TestStripImagesPreservesReasoningEffort(t *testing.T) {
 		Role: types.RoleUser, Content: "inspect", Image: &types.ImageContent{Type: types.ImageTypeURL, URL: "https://example.test/image.png"},
 	})
 	providers.SetRequestReasoningEffort(req, "medium")
+	providers.SetRequestDefaultReasoningEffort(req, "high")
 
 	stripped := StripImagesFromRequest(req)
 	if got := providers.RequestReasoningEffort(stripped); got != "medium" {
 		t.Fatalf("reasoning effort = %q, want medium", got)
+	}
+	if got := providers.RequestDefaultReasoningEffort(stripped); got != "high" {
+		t.Fatalf("default reasoning effort = %q, want high", got)
 	}
 	if RequestHasImage(stripped) {
 		t.Fatal("stripped request still contains an image")
@@ -151,7 +164,7 @@ func TestFallback_FallsToSecondModel(t *testing.T) {
 	broken := &fakeClient{name: "broken", completionErrs: []error{errors.New("connection refused")}}
 	ok := &fakeClient{name: "ok", streamContent: []string{"recovered"}, contextWindow: 50_000}
 	// The compatibility limit must not cause a model to be revisited.
-	fc := NewFallbackClient([]ModelEntry{{Client: broken, Name: "broken"}, {Client: ok, Name: "ok"}}, WithMaxTotalRetries(3))
+	fc := NewFallbackClient([]ModelEntry{{Client: broken, Name: "broken", Key: "a/broken"}, {Client: ok, Name: "ok", Key: "b/ok"}}, WithMaxTotalRetries(3))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -166,6 +179,9 @@ func TestFallback_FallsToSecondModel(t *testing.T) {
 	}
 	if len(retries) != 1 || retries[0].Provider != "fallback" || retries[0].Model != "ok" {
 		t.Fatalf("fallback retry events = %#v", retries)
+	}
+	if retries[0].PreviousModel != "broken" || retries[0].PreviousModelKey != "a/broken" || retries[0].ModelKey != "b/ok" {
+		t.Fatalf("fallback transition = %#v", retries[0])
 	}
 }
 
@@ -237,6 +253,169 @@ func TestFallback_ContextWindow_DefaultWhenUnknown(t *testing.T) {
 	fc := NewFallbackClient([]ModelEntry{{Client: c, Name: "zero"}})
 	if got := fc.ContextWindow(); got != 128_000 {
 		t.Fatalf("expected default 128000, got %d", got)
+	}
+}
+
+func TestModelPoolPromotesEveryEndpointWithPreferredName(t *testing.T) {
+	pool := NewModelPool([]ModelEntry{
+		{Client: &fakeClient{}, Name: "model-1", Key: "a/model-1"},
+		{Client: &fakeClient{}, Name: "model-2", Key: "a/model-2"},
+		{Client: &fakeClient{}, Name: "model-1", Key: "b/model-1"},
+		{Client: &fakeClient{}, Name: "model-3", Key: "a/model-3"},
+	})
+	policy := NewSessionPolicy(providers.ClientPolicy{PreferredModel: "model-1"})
+	entries := pool.NewClient(policy, providers.ClientPolicy{}).Entries()
+	want := []string{"a/model-1", "b/model-1", "a/model-2", "a/model-3"}
+	for i, key := range want {
+		if entries[i].Key != key {
+			t.Fatalf("entry %d = %q, want %q", i, entries[i].Key, key)
+		}
+	}
+}
+
+func TestForkPolicyPriorityAndDefaultEffort(t *testing.T) {
+	a := &fakeClient{name: "a"}
+	b := &fakeClient{name: "b"}
+	pool := NewModelPool([]ModelEntry{{Client: a, Name: "a"}, {Client: b, Name: "b"}})
+	session := NewSessionPolicy(providers.ClientPolicy{})
+	root := pool.NewClient(session, providers.ClientPolicy{})
+	agent := root.Fork(providers.ClientPolicy{PreferredModel: "b", Effort: "high"})
+
+	agentReq := providers.NewRequest("sys")
+	providers.SetRequestDefaultReasoningEffort(agentReq, "medium")
+	if _, err := agent.CompletionNonStreaming(context.Background(), agentReq); err != nil {
+		t.Fatal(err)
+	}
+	if b.callCount() != 1 || b.effort() != "high" {
+		t.Fatalf("agent defaults not applied: calls=%d effort=%q", b.callCount(), b.effort())
+	}
+
+	session.Update(providers.ClientPolicy{PreferredModel: "a", Effort: "low"})
+	sessionReq := providers.NewRequest("sys")
+	providers.SetRequestDefaultReasoningEffort(sessionReq, "medium")
+	if _, err := agent.CompletionNonStreaming(context.Background(), sessionReq); err != nil {
+		t.Fatal(err)
+	}
+	if a.callCount() != 1 || a.effort() != "low" {
+		t.Fatalf("session policy did not override agent: calls=%d effort=%q", a.callCount(), a.effort())
+	}
+
+	req := providers.NewRequest("sys")
+	providers.SetRequestReasoningEffort(req, "max")
+	if _, err := agent.CompletionNonStreaming(context.Background(), req); err != nil {
+		t.Fatal(err)
+	}
+	if a.effort() != "max" {
+		t.Fatalf("request effort = %q, want max", a.effort())
+	}
+}
+
+func TestFallbackEachEndpointResolvesItsOwnModelEffort(t *testing.T) {
+	first := &fakeClient{name: "first", modelEffort: providers.ReasoningEffortHigh, nonStreamErrs: []error{errors.New("connection refused")}}
+	second := &fakeClient{name: "second", modelEffort: providers.ReasoningEffortNone}
+	client := NewFallbackClient([]ModelEntry{
+		{Client: first, Name: "first", ReasoningEffort: providers.ReasoningEffortHigh},
+		{Client: second, Name: "second", ReasoningEffort: providers.ReasoningEffortNone},
+	})
+	req := providers.NewRequest("sys")
+	providers.SetRequestDefaultReasoningEffort(req, providers.ReasoningEffortMedium)
+
+	if _, err := client.CompletionNonStreaming(context.Background(), req); err != nil {
+		t.Fatal(err)
+	}
+	if got := first.effort(); got != providers.ReasoningEffortHigh {
+		t.Fatalf("first endpoint effort = %q, want high", got)
+	}
+	if got := second.effort(); got != providers.ReasoningEffortNone {
+		t.Fatalf("second endpoint effort = %q, want none", got)
+	}
+}
+
+func TestRuntimeInfoTracksFallbackAndInvalidatesWithSessionPolicy(t *testing.T) {
+	first := &fakeClient{name: "shared", nonStreamErrs: []error{errors.New("connection refused")}}
+	second := &fakeClient{name: "shared"}
+	pool := NewModelPool([]ModelEntry{
+		{Client: first, Name: "shared", Key: "a.example/shared", ReasoningEffort: providers.ReasoningEffortHigh},
+		{Client: second, Name: "shared", Key: "b.example/shared", ReasoningEffort: providers.ReasoningEffortNone},
+	})
+	policy := NewSessionPolicy(providers.ClientPolicy{})
+	root := pool.NewClient(policy, providers.ClientPolicy{})
+
+	if got := root.RuntimeInfo(); got != (providers.ClientRuntimeInfo{Model: "shared", EndpointKey: "a.example/shared", Effort: providers.ReasoningEffortHigh}) {
+		t.Fatalf("predicted runtime = %+v", got)
+	}
+
+	req := providers.NewRequest("sys")
+	providers.SetRequestDefaultReasoningEffort(req, providers.ReasoningEffortMedium)
+	if _, err := root.CompletionNonStreaming(context.Background(), req); err != nil {
+		t.Fatal(err)
+	}
+	if got := root.RuntimeInfo(); got != (providers.ClientRuntimeInfo{Model: "shared", EndpointKey: "b.example/shared", Effort: providers.ReasoningEffortNone, Actual: true}) {
+		t.Fatalf("actual runtime = %+v", got)
+	}
+
+	policy.Update(providers.ClientPolicy{Effort: providers.ReasoningEffortLow})
+	if got := root.RuntimeInfo(); got != (providers.ClientRuntimeInfo{Model: "shared", EndpointKey: "a.example/shared", Effort: providers.ReasoningEffortLow}) {
+		t.Fatalf("runtime after policy update = %+v", got)
+	}
+}
+
+func TestRuntimeInfoIsIsolatedAcrossForks(t *testing.T) {
+	a, b := &fakeClient{name: "a"}, &fakeClient{name: "b"}
+	pool := NewModelPool([]ModelEntry{{Client: a, Name: "a"}, {Client: b, Name: "b"}})
+	root := pool.NewClient(NewSessionPolicy(providers.ClientPolicy{}), providers.ClientPolicy{})
+	fork := root.Fork(providers.ClientPolicy{PreferredModel: "b", Effort: providers.ReasoningEffortHigh}).(*FallbackClient)
+
+	if _, err := fork.CompletionNonStreaming(context.Background(), providers.NewRequest("fork")); err != nil {
+		t.Fatal(err)
+	}
+	if got := fork.RuntimeInfo(); got.Model != "b" || got.Effort != providers.ReasoningEffortHigh || !got.Actual {
+		t.Fatalf("fork runtime = %+v", got)
+	}
+	if got := root.RuntimeInfo(); got.Model != "a" || got.Actual {
+		t.Fatalf("root runtime was polluted by fork: %+v", got)
+	}
+}
+
+func TestRuntimeInfoRecordedForStreamingAndStructuredCalls(t *testing.T) {
+	streaming := NewFallbackClient([]ModelEntry{{
+		Client: &fakeClient{name: "stream", streamContent: []string{"ok"}}, Name: "stream", Key: "p/stream", ReasoningEffort: providers.ReasoningEffortDefault,
+	}})
+	streamReq := providers.NewRequest("stream")
+	providers.SetRequestDefaultReasoningEffort(streamReq, providers.ReasoningEffortMedium)
+	if _, err := collect(t, context.Background(), streaming.Completion(context.Background(), streamReq)); err != nil {
+		t.Fatal(err)
+	}
+	if got := streaming.RuntimeInfo(); got.Model != "stream" || got.Effort != providers.ReasoningEffortMedium || !got.Actual {
+		t.Fatalf("streaming runtime = %+v", got)
+	}
+
+	structured := NewFallbackClient([]ModelEntry{{
+		Client: &fakeClient{name: "structured"}, Name: "structured", Key: "p/structured", ReasoningEffort: providers.ReasoningEffortLow,
+	}})
+	if err := structured.StructuredPredict(context.Background(), providers.NewRequest("structured"), &struct{}{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := structured.RuntimeInfo(); got.Model != "structured" || got.Effort != providers.ReasoningEffortLow || !got.Actual {
+		t.Fatalf("structured runtime = %+v", got)
+	}
+}
+
+func TestModelPoolSessionViewsAreIsolated(t *testing.T) {
+	a := &fakeClient{name: "a"}
+	b := &fakeClient{name: "b"}
+	pool := NewModelPool([]ModelEntry{{Client: a, Name: "a"}, {Client: b, Name: "b"}})
+	one := pool.NewClient(NewSessionPolicy(providers.ClientPolicy{PreferredModel: "a"}), providers.ClientPolicy{})
+	two := pool.NewClient(NewSessionPolicy(providers.ClientPolicy{PreferredModel: "b"}), providers.ClientPolicy{})
+
+	if _, err := one.CompletionNonStreaming(context.Background(), providers.NewRequest("one")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := two.CompletionNonStreaming(context.Background(), providers.NewRequest("two")); err != nil {
+		t.Fatal(err)
+	}
+	if a.callCount() != 1 || b.callCount() != 1 {
+		t.Fatalf("isolated views routed calls incorrectly: a=%d b=%d", a.callCount(), b.callCount())
 	}
 }
 

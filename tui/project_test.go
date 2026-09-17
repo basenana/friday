@@ -41,7 +41,10 @@ func newLoadedProjectTestModel(t *testing.T) (*model, *projectpkg.Manager, *sess
 	registryConfig := actor.DefaultRegistryConfig()
 	registryConfig.Catalog = manager
 	registryConfig.Workdir = project.Root()
-	registry := actor.NewRegistry(base, cfg, registryConfig)
+	registry, err := actor.NewRegistry(base, cfg, registryConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(registry.ShutdownAll)
 	commands := codercmds.NewRegistry()
 	codercmds.RegisterAll(commands)
@@ -84,7 +87,10 @@ func TestProjectClearCreatesReferencedRoot(t *testing.T) {
 	registryConfig := actor.DefaultRegistryConfig()
 	registryConfig.Catalog = manager
 	registryConfig.Workdir = project.Root()
-	registry := actor.NewRegistry(base, cfg, registryConfig)
+	registry, err := actor.NewRegistry(base, cfg, registryConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(registry.ShutdownAll)
 	commands := codercmds.NewRegistry()
 	codercmds.RegisterAll(commands)

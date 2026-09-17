@@ -1,6 +1,7 @@
 package sandbox
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -9,6 +10,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/basenana/friday/core/tools"
 )
 
 func newTestTaskManager() *TaskManager {
@@ -22,7 +25,9 @@ func newTestTaskManager() *TaskManager {
 func waitForTask(t *testing.T, tm *TaskManager, id string) *Task {
 	t.Helper()
 
-	task, err := tm.Wait(id, 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	task, err := tm.Wait(ctx, id)
 	if err != nil {
 		t.Fatalf("Wait failed: %v", err)
 	}
@@ -32,7 +37,9 @@ func waitForTask(t *testing.T, tm *TaskManager, id string) *Task {
 func waitForTaskTimeout(t *testing.T, tm *TaskManager, id string, timeout time.Duration) *Task {
 	t.Helper()
 
-	task, err := tm.Wait(id, timeout)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	task, err := tm.Wait(ctx, id)
 	if err != nil {
 		t.Fatalf("Wait failed: %v", err)
 	}
@@ -121,7 +128,9 @@ func TestTaskManagerWait(t *testing.T) {
 		t.Fatalf("Start failed: %v", err)
 	}
 
-	result, err := tm.Wait(task.ID, 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	result, err := tm.Wait(ctx, task.ID)
 	if err != nil {
 		t.Fatalf("Wait failed: %v", err)
 	}
@@ -142,16 +151,41 @@ func TestTaskManagerWaitTimeout(t *testing.T) {
 	}
 	defer tm.Kill(task.ID)
 
-	_, err = tm.Wait(task.ID, 100*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	_, err = tm.Wait(ctx, task.ID)
 	if err == nil {
 		t.Fatal("expected timeout error")
+	}
+}
+
+func TestWaitTaskToolTimeoutDoesNotKillBackgroundTask(t *testing.T) {
+	tm := newTestTaskManager()
+	task, err := tm.Start("sleep 10", "")
+	if err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	defer tm.Kill(task.ID)
+
+	result, err := tools.NewInvoker().Invoke(context.Background(), newWaitTaskTool(tm), &tools.Request{
+		Arguments: map[string]interface{}{"task_id": task.ID, "timeout": "20ms"},
+	})
+	if err != nil {
+		t.Fatalf("Invoke failed: %v", err)
+	}
+	if result == nil || !result.TimedOut || result.TimeoutKind != tools.TimeoutKindDeclared {
+		t.Fatalf("result = %+v, want declared timeout", result)
+	}
+	running, ok := tm.Get(task.ID)
+	if !ok || running.Status != TaskRunning {
+		t.Fatalf("background task after wait timeout = %+v, want running", running)
 	}
 }
 
 func TestTaskManagerWaitNotFound(t *testing.T) {
 	tm := newTestTaskManager()
 
-	_, err := tm.Wait("nonexistent", time.Second)
+	_, err := tm.Wait(context.Background(), "nonexistent")
 	if err == nil {
 		t.Fatal("expected error for nonexistent task")
 	}

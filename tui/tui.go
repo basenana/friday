@@ -17,6 +17,7 @@ import (
 
 	"github.com/basenana/friday/actor"
 	"github.com/basenana/friday/bus"
+	coderagents "github.com/basenana/friday/coder/agents"
 	codercmds "github.com/basenana/friday/coder/commands"
 	coderloop "github.com/basenana/friday/coder/loop"
 	projectpkg "github.com/basenana/friday/coder/project"
@@ -35,7 +36,11 @@ func Run(sessMgr *sessions.Manager, cfg *config.Config, sessionID string) error 
 	started := time.Now()
 	registryConfig := actor.DefaultRegistryConfig()
 	registryConfig.AgentPlanEntry = true
-	registry := actor.NewRegistry(sessMgr, cfg, registryConfig)
+	registryConfig.ConfigTools = true
+	registry, err := actor.NewRegistry(sessMgr, cfg, registryConfig)
+	if err != nil {
+		return err
+	}
 	defer registry.ShutdownAll()
 
 	cmdRegistry := codercmds.NewRegistry()
@@ -69,9 +74,13 @@ func RunProject(projectMgr *projectpkg.Manager, cfg *config.Config, sessionID st
 	started := time.Now()
 	registryConfig := actor.DefaultRegistryConfig()
 	registryConfig.AgentPlanEntry = true
+	registryConfig.ConfigTools = true
 	registryConfig.Catalog = projectMgr
 	registryConfig.Workdir = projectMgr.Project().Root()
-	registry := actor.NewRegistry(projectMgr.Base(), cfg, registryConfig)
+	registry, err := actor.NewRegistry(projectMgr.Base(), cfg, registryConfig)
+	if err != nil {
+		return err
+	}
 	defer registry.ShutdownAll()
 
 	cmdRegistry := codercmds.NewRegistry()
@@ -153,6 +162,7 @@ type sessionRuntime interface {
 	UpdateMeta(string, sessions.SessionMetaPatch) error
 	SetMode(string, collaboration.Mode) error
 	SetModel(string, sessions.ModelSelection) error
+	SetEffort(string, string) error
 	ClearModel(string) error
 	LoadLatestPlan(string) (*planning.Artifact, error)
 	SavePlan(string, planning.Artifact) error
@@ -169,14 +179,21 @@ type model struct {
 	workdir     string
 
 	cmdRegistry   *codercmds.Registry
+	agentRegistry *coderagents.Registry
 	skillRegistry *skills.Registry
 	cfg           *config.Config
 
-	subscriptionToken uint64
-	messages          []chatBlock
-	seenInputs        map[string]bool
-	cards             map[string]*cardState
-	todos             []todoItem
+	subscriptionToken    uint64
+	eventActorID         string
+	lastEventSeq         int64
+	feedDropped          uint64
+	transcriptDesynced   bool
+	reconciling          bool
+	resumeAfterReconcile bool
+	messages             []chatBlock
+	seenInputs           map[string]bool
+	cards                map[string]*cardState
+	todos                []todoItem
 
 	textarea             textarea.Model
 	attachments          []types.ImageContent
@@ -276,8 +293,8 @@ func baseModelAt(sessMgr *sessions.Manager, registry *actor.Registry, cmdRegistr
 
 	m := &model{
 		sessMgr: sessMgr, runtime: sessMgr, registry: registry, cmdRegistry: cmdRegistry, cfg: cfg,
-		skillRegistry: registry.SkillRegistry(),
-		sessionID:     sessionID, textarea: ta, viewport: viewport.New(viewport.WithWidth(80), viewport.WithHeight(20)),
+		agentRegistry: registry.AgentRegistry(), skillRegistry: registry.SkillRegistry(),
+		sessionID: sessionID, textarea: ta, viewport: viewport.New(viewport.WithWidth(80), viewport.WithHeight(20)),
 		spinner:   spinner.New(spinner.WithSpinner(spinner.Dot), spinner.WithStyle(accentStyle)),
 		toolCalls: make(map[string]int), seenInputs: make(map[string]bool),
 		cards:        make(map[string]*cardState),
@@ -307,6 +324,13 @@ func baseModelAt(sessMgr *sessions.Manager, registry *actor.Registry, cmdRegistr
 			m.workdir = wd
 		}
 	}
+	if m.agentRegistry != nil {
+		for _, agent := range m.agentRegistry.List() {
+			if _, conflict := m.cmdRegistry.Lookup(agent.Name); conflict {
+				m.logWarn("agent slash route hidden by built-in command", "agent", agent.Name)
+			}
+		}
+	}
 	return m
 }
 
@@ -326,6 +350,13 @@ type initialSessionLoadedMsg struct {
 	projection    transcriptProjection
 	promptHistory []string
 	err           error
+}
+
+type transcriptReconciledMsg struct {
+	token      uint64
+	sessionID  string
+	projection transcriptProjection
+	err        error
 }
 
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -395,6 +426,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.mode = m.runtime.CollaborationMode(msg.sessionID)
 		m.activeModel, _ = configuredSessionModel(m.runtime, m.cfg, msg.sessionID)
 		m.feed = msg.feed
+		m.resetEventTracking()
 		if lifecycle, ok := m.registry.Lifecycle(msg.sessionID); ok && lifecycle.Current() != nil {
 			if err := m.loopManager.Attach(context.Background(), lifecycle.Current()); err != nil {
 				m.appendBlock(chatBlock{kind: blockError, content: "restore loop: " + err.Error()})
@@ -416,6 +448,30 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.layout()
 		return m, m.waitForActorEvent()
+	case transcriptReconciledMsg:
+		if msg.token != m.subscriptionToken || msg.sessionID != m.sessionID {
+			return m, nil
+		}
+		m.reconciling = false
+		if msg.err != nil {
+			m.transcriptDesynced = false
+			m.logError("failed to reconcile actor event transcript", msg.err)
+			m.appendBlock(chatBlock{kind: blockError, content: "restore live transcript: " + msg.err.Error()})
+		} else if m.running {
+			// Another producer started a run while the projection was loading.
+			// Keep the desync marker and retry at that run's terminal event.
+			m.logWarn("deferred transcript reconciliation because a new run started")
+		} else {
+			m.applyProjection(msg.projection)
+			m.transcriptDesynced = false
+			m.logInfo("actor event transcript reconciled")
+		}
+		if m.resumeAfterReconcile && !m.transcriptDesynced {
+			m.resumeAfterReconcile = false
+			m.resumeLoop()
+			return m, nil
+		}
+		return m.dispatchIfIdle()
 	case planCompactFinishedMsg:
 		return m.finishPlanApproval(msg)
 	case manualCompactFinishedMsg:
@@ -430,7 +486,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.closeFeed()
 			return m, tea.Quit
 		}
-		if m.loading || m.fatalErr != nil || m.planCompacting || m.manualCompacting {
+		if m.loading || m.fatalErr != nil || m.planCompacting || m.manualCompacting || m.reconciling {
 			return m, nil
 		}
 		if m.detail != nil {
@@ -458,21 +514,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		next, keyCmd := m.updateKey(msg)
 		return next, tea.Batch(focusCmd, keyCmd)
 	case actorEventMsg:
-		if msg.token != m.subscriptionToken {
-			return m, nil
-		}
-		eventCmd := m.handleActorEvent(msg.event)
-		cmds := []tea.Cmd{m.waitForActorEvent()}
-		if eventCmd != nil {
-			cmds = append(cmds, eventCmd)
-		}
-		if m.running {
-			cmds = append(cmds, m.spinner.Tick)
-		}
-		if msg.event.Type == events.KindRunFinished && m.canDispatchQueued() {
-			cmds = append(cmds, func() tea.Msg { return dispatchQueuedMsg{} })
-		}
-		return m, tea.Batch(cmds...)
+		return m.updateActorEvents(actorEventsMsg{token: msg.token, events: []events.Event{msg.event}, dropped: m.feedDropped})
+	case actorEventsMsg:
+		return m.updateActorEvents(msg)
 	case feedClosedMsg:
 		if msg.token == m.subscriptionToken && !m.quitting {
 			m.logWarn("active actor event feed closed unexpectedly", "subscription_token", msg.token)
@@ -514,6 +558,115 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.layout()
 	}
 	return m, cmd
+}
+
+func (m *model) updateActorEvents(msg actorEventsMsg) (tea.Model, tea.Cmd) {
+	if msg.token != m.subscriptionToken {
+		return m, nil
+	}
+	m.observeActorEvents(msg.events, msg.dropped)
+	batch := mergeAdjacentStreamEvents(msg.events)
+	cmds := []tea.Cmd{m.waitForActorEvent()}
+	sawRunFinished := false
+	watermarkEventID := ""
+	for _, evt := range batch {
+		if eventCmd := m.handleActorEvent(evt); eventCmd != nil {
+			cmds = append(cmds, eventCmd)
+		}
+		if evt.Type == events.KindRunFinished {
+			sawRunFinished = true
+		}
+		if evt.Seq > 0 && evt.ID != "" {
+			watermarkEventID = evt.ID
+		}
+	}
+	if m.running {
+		cmds = append(cmds, m.spinner.Tick)
+	}
+	if m.transcriptDesynced && !m.reconciling && !m.running {
+		m.reconciling = true
+		cmds = append(cmds, m.reconcileTranscript(watermarkEventID))
+	}
+	if sawRunFinished && !m.reconciling && m.canDispatchQueued() {
+		cmds = append(cmds, func() tea.Msg { return dispatchQueuedMsg{} })
+	}
+	return m, tea.Batch(cmds...)
+}
+
+func (m *model) reconcileTranscript(watermarkEventID string) tea.Cmd {
+	runtime, cfg := m.runtime, m.cfg
+	workdir, width, height := m.workdir, m.width, m.height
+	sessionID, token := m.sessionID, m.subscriptionToken
+	return func() tea.Msg {
+		if watermarkEventID != "" {
+			eventStore, ok := runtime.GetStore().(sessions.EventStore)
+			if !ok {
+				return transcriptReconciledMsg{token: token, sessionID: sessionID, err: fmt.Errorf("event store is unavailable")}
+			}
+			persisted, err := eventStore.LoadEvents(context.Background(), sessionID)
+			if err != nil {
+				return transcriptReconciledMsg{token: token, sessionID: sessionID, err: err}
+			}
+			found := false
+			for _, evt := range persisted {
+				if evt.ID == watermarkEventID {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return transcriptReconciledMsg{token: token, sessionID: sessionID, err: fmt.Errorf("event %s is not persisted", shortID(watermarkEventID))}
+			}
+		}
+		projection, err := buildTranscriptProjection(runtime, cfg, workdir, width, height, sessionID)
+		return transcriptReconciledMsg{token: token, sessionID: sessionID, projection: projection, err: err}
+	}
+}
+
+func (m *model) resetEventTracking() {
+	m.eventActorID = ""
+	m.lastEventSeq = 0
+	m.feedDropped = 0
+	m.transcriptDesynced = false
+	m.reconciling = false
+	m.resumeAfterReconcile = false
+}
+
+func (m *model) observeActorEvents(batch []events.Event, dropped uint64) {
+	if dropped > m.feedDropped {
+		m.transcriptDesynced = true
+		m.logWarn("actor event feed dropped events",
+			"dropped", dropped-m.feedDropped,
+			"dropped_total", dropped,
+		)
+	}
+	m.feedDropped = dropped
+	for _, evt := range batch {
+		if evt.Type == events.KindCustom && evt.Name == "status."+bus.StatusCreated {
+			m.eventActorID = evt.ActorID
+			m.lastEventSeq = 0
+			continue
+		}
+		if evt.Seq <= 0 {
+			continue
+		}
+		if evt.ActorID != m.eventActorID {
+			m.eventActorID = evt.ActorID
+			m.lastEventSeq = evt.Seq
+			continue
+		}
+		if m.lastEventSeq > 0 && evt.Seq > m.lastEventSeq+1 {
+			m.transcriptDesynced = true
+			m.logWarn("actor event sequence gap detected",
+				"actor_id", evt.ActorID,
+				"expected_seq", m.lastEventSeq+1,
+				"received_seq", evt.Seq,
+			)
+		}
+		if evt.Seq > m.lastEventSeq {
+			m.lastEventSeq = evt.Seq
+		}
+	}
 }
 
 func (m *model) loadInitialSession() tea.Cmd {
@@ -835,6 +988,11 @@ func (m *model) submitComposer() (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 		} else if m.running {
+			if _, found := m.resolveSlashAgent(name); found {
+				m.queued = append(m.queued, pendingInput{text: text})
+				m.layout()
+				return m, nil
+			}
 			_, found, err := m.resolveSlashSkill(name, true)
 			if err != nil {
 				m.appendBlock(chatBlock{kind: blockError, content: "refresh skills: " + err.Error()})
@@ -920,6 +1078,10 @@ func (m *model) startUserTurn(text string, images []types.ImageContent, delivery
 }
 
 func (m *model) startUserTurnWithDisplay(text, displayText string, images []types.ImageContent, delivery bus.InputDelivery) (tea.Model, tea.Cmd) {
+	return m.startUserTurnWithMetadata(text, displayText, images, delivery, nil)
+}
+
+func (m *model) startUserTurnWithMetadata(text, displayText string, images []types.ImageContent, delivery bus.InputDelivery, metadata map[string]any) (tea.Model, tea.Cmd) {
 	turnID := types.NewID()
 	renderText := displayText
 	if renderText == "" {
@@ -933,7 +1095,7 @@ func (m *model) startUserTurnWithDisplay(text, displayText string, images []type
 	}
 	m.appendBlock(chatBlock{kind: blockUser, id: turnID, content: renderText})
 	m.seenInputs[turnID] = true
-	if err := m.sendUserTextWithDisplay(text, displayText, images, delivery, turnID); err != nil {
+	if err := m.sendUserTextWithMetadata(text, displayText, images, delivery, turnID, metadata); err != nil {
 		m.appendBlock(chatBlock{kind: blockError, content: err.Error()})
 		return m, nil
 	}
@@ -1051,9 +1213,13 @@ func (m *model) sendUserText(text string, images []types.ImageContent, delivery 
 }
 
 func (m *model) sendUserTextWithDisplay(text, displayText string, images []types.ImageContent, delivery bus.InputDelivery, turnID string) error {
+	return m.sendUserTextWithMetadata(text, displayText, images, delivery, turnID, nil)
+}
+
+func (m *model) sendUserTextWithMetadata(text, displayText string, images []types.ImageContent, delivery bus.InputDelivery, turnID string, metadata map[string]any) error {
 	if err := m.registry.DispatchInput(bus.NewUserInput(m.sessionID, "user.local", bus.UserTextInput{
 		Text: text, DisplayText: displayText, TurnID: turnID, Delivery: delivery,
-		Images: append([]types.ImageContent(nil), images...),
+		Images: append([]types.ImageContent(nil), images...), Metadata: metadata,
 	})); err != nil {
 		m.logError("failed to prepare actor before publishing user input", err,
 			"turn_id", turnID,
@@ -1141,7 +1307,11 @@ func (m *model) handleActorEvent(evt events.Event) tea.Cmd {
 		}
 		m.cancelling = false
 		if !m.replaying && userTurn && d.StopReason == "end_turn" {
-			m.resumeLoop()
+			if m.transcriptDesynced {
+				m.resumeAfterReconcile = true
+			} else {
+				m.resumeLoop()
+			}
 		}
 		proposalRunFinished := m.planProposalRunID == evt.RunID || (m.planProposalRunID == "" && d.StopReason == "plan_completed")
 		if finishedCurrent && !m.replaying && proposalRunFinished && m.mode == collaboration.ModePlan && m.latestPlan != nil && m.latestPlan.Status == planning.ArtifactProposed {
@@ -1204,11 +1374,13 @@ func (m *model) handleActorEvent(evt events.Event) tea.Cmd {
 				block.toolOutput = d.Output
 				block.toolArgsComplete = true
 				block.success = d.Success
+				block.timedOut = d.Status == "timed_out"
+				block.timeoutKind = d.TimeoutKind
 				block.pending = false
 				block.rendered = ""
 				delete(m.toolCalls, d.ToolCallID)
 			} else {
-				m.appendBlock(chatBlock{kind: blockToolCall, id: d.ToolCallID, toolName: "tool", toolOutput: d.Output, toolArgsComplete: true, success: d.Success})
+				m.appendBlock(chatBlock{kind: blockToolCall, id: d.ToolCallID, toolName: "tool", toolOutput: d.Output, toolArgsComplete: true, success: d.Success, timedOut: d.Status == "timed_out", timeoutKind: d.TimeoutKind})
 			}
 			if !m.replaying {
 				fields := []interface{}{
@@ -1216,8 +1388,14 @@ func (m *model) handleActorEvent(evt events.Event) tea.Cmd {
 					"tool_call_id", d.ToolCallID,
 					"tool_name", toolName,
 					"success", d.Success,
-					"output_bytes", len(d.Output),
 				}
+				if d.Status != "" {
+					fields = append(fields, "status", d.Status)
+				}
+				if d.TimeoutKind != "" {
+					fields = append(fields, "timeout_kind", d.TimeoutKind)
+				}
+				fields = append(fields, "output_bytes", len(d.Output))
 				if d.Success {
 					m.logInfo("tool call finished", fields...)
 				} else {
@@ -1311,12 +1489,28 @@ func (m *model) handleCustomEvent(evt events.Event) tea.Cmd {
 	case events.CustomModelRetry:
 		var d events.CustomData
 		if m.decodeEventPayload(evt, &d) {
+			provider, _ := d.Body["provider"].(string)
 			attempt, _ := d.Body["attempt"].(string)
 			maxAttempts, _ := d.Body["max_attempts"].(string)
 			model, _ := d.Body["model"].(string)
+			modelKey, _ := d.Body["model_key"].(string)
+			previousModel, _ := d.Body["previous_model"].(string)
+			previousModelKey, _ := d.Body["previous_model_key"].(string)
 			m.runActivity = "retrying model"
 			label := "model request failed · retrying"
-			if model != "" {
+			if provider == "fallback" {
+				m.runActivity = "switching model"
+				label = "model fallback"
+				from, to := previousModel, model
+				if from == to && previousModelKey != "" && modelKey != "" {
+					from, to = previousModelKey, modelKey
+				}
+				if from != "" && to != "" {
+					label += " · " + terminalSafe(from) + " → " + terminalSafe(to)
+				} else if to != "" {
+					label += " · " + terminalSafe(to)
+				}
+			} else if model != "" {
 				label += " · " + terminalSafe(model)
 			}
 			if attempt != "" && maxAttempts != "" {
@@ -1601,6 +1795,7 @@ func (m *model) bindSession(sessionID string) error {
 		return fmt.Errorf("failed to bind session %s: %w", shortID(sessionID), err)
 	}
 	m.sessionID, m.feed = sessionID, feed
+	m.resetEventTracking()
 	m.subscriptionToken++
 	return nil
 }

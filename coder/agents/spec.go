@@ -1,7 +1,5 @@
 package agents
 
-import "github.com/basenana/friday/config"
-
 // AgentMode controls how an agent is executed.
 type AgentMode int
 
@@ -19,9 +17,11 @@ const (
 type AgentSpec struct {
 	Name         string
 	Description  string
-	Model        config.ModelConfig // zero value = inherit primary client
+	Model        string
+	Effort       string
 	SystemPrompt string
 	ToolPolicy   ToolPolicy
 	MaxLoopTimes int
 	Mode         AgentMode
+	SourcePath   string
 }

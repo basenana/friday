@@ -17,6 +17,7 @@ import (
 	"time"
 
 	fridaycache "github.com/basenana/friday/cache"
+	"github.com/basenana/friday/core/logger"
 	"github.com/basenana/friday/core/tools"
 	"github.com/basenana/friday/workspace"
 	"github.com/mark3labs/mcp-go/client"
@@ -60,7 +61,10 @@ type ServerStatus struct {
 
 type Manager struct {
 	mu       sync.RWMutex
+	reloadMu sync.Mutex
 	servers  map[string]*managedServer
+	roots    []workspace.ResourceRoot
+	stamp    string
 	cache    fridaycache.Store
 	trust    *trustStore
 	timeout  time.Duration
@@ -80,6 +84,8 @@ type managedServer struct {
 	connCancel context.CancelFunc
 	attempt    chan struct{}
 	refreshing bool
+	active     int
+	retiring   bool
 }
 
 type cachedDefinition struct {
@@ -119,27 +125,13 @@ func NewManager(config ManagerConfig) (*Manager, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	m := &Manager{
 		servers: make(map[string]*managedServer, len(definitions)), cache: config.Cache,
+		roots:   append([]workspace.ResourceRoot(nil), config.ConfigRoots...),
 		trust:   newTrustStore(config.TrustPath, canonicalProject(config.ProjectRoot)),
 		timeout: config.HandshakeTimeout, cacheTTL: config.CacheTTL, ctx: ctx, cancel: cancel,
 	}
+	m.stamp, _ = ConfigFilesStamp(config.ConfigRoots)
 	for name, definition := range definitions {
-		state := StateStarting
-		trusted := !definition.Project || m.trust.trusted(name, definition.Digest)
-		if definition.Disabled {
-			state = StateDisabled
-		} else if !trusted {
-			state = StateBlocked
-		}
-		server := &managedServer{config: definition, state: state}
-		m.servers[name] = server
-		if trusted && !definition.Disabled {
-			var cached cachedToolSet
-			status, cacheErr := m.cache.Get(context.Background(), "mcp", cacheKey(definition), &cached)
-			if cacheErr == nil && status != fridaycache.StatusMiss {
-				server.tools = m.adaptCached(name, cached.Tools)
-				server.state = StateCached
-			}
-		}
+		m.servers[name] = m.newManagedServer(name, definition)
 	}
 	return m, nil
 }
@@ -147,9 +139,13 @@ func NewManager(config ManagerConfig) (*Manager, error) {
 // Warmup connects cache misses before returning and refreshes cached servers
 // in the background. Each server has an independent timeout and failure.
 func (m *Manager) Warmup(ctx context.Context) {
+	m.reloadConfigIfChanged()
 	var wait sync.WaitGroup
 	for _, name := range m.names() {
 		server := m.server(name)
+		if server == nil {
+			continue
+		}
 		server.mu.Lock()
 		state := server.state
 		server.mu.Unlock()
@@ -167,9 +163,13 @@ func (m *Manager) Warmup(ctx context.Context) {
 }
 
 func (m *Manager) Tools() []*tools.Tool {
+	m.reloadConfigIfChanged()
 	var result []*tools.Tool
 	for _, name := range m.names() {
 		server := m.server(name)
+		if server == nil {
+			continue
+		}
 		server.mu.Lock()
 		if server.state != StateBlocked && server.state != StateDisabled && server.state != StateClosed {
 			result = append(result, server.tools...)
@@ -181,8 +181,10 @@ func (m *Manager) Tools() []*tools.Tool {
 }
 
 func (m *Manager) Status() []ServerStatus {
-	result := make([]ServerStatus, 0, len(m.servers))
-	for _, name := range m.names() {
+	m.reloadConfigIfChanged()
+	names := m.names()
+	result := make([]ServerStatus, 0, len(names))
+	for _, name := range names {
 		status, _ := m.Inspect(name)
 		result = append(result, status)
 	}
@@ -190,6 +192,7 @@ func (m *Manager) Status() []ServerStatus {
 }
 
 func (m *Manager) Inspect(name string) (ServerStatus, error) {
+	m.reloadConfigIfChanged()
 	server := m.server(name)
 	if server == nil {
 		return ServerStatus{}, fmt.Errorf("unknown MCP server %q", name)
@@ -204,6 +207,7 @@ func (m *Manager) Inspect(name string) (ServerStatus, error) {
 }
 
 func (m *Manager) Refresh(ctx context.Context, name string) error {
+	m.reloadConfigIfChanged()
 	if name != "" {
 		return m.ensureReady(ctx, name, true)
 	}
@@ -230,10 +234,12 @@ func (m *Manager) Refresh(ctx context.Context, name string) error {
 }
 
 func (m *Manager) Reconnect(ctx context.Context, name string) error {
+	m.reloadConfigIfChanged()
 	return m.ensureReady(ctx, name, true)
 }
 
 func (m *Manager) Trust(ctx context.Context, name string) error {
+	m.reloadConfigIfChanged()
 	server := m.server(name)
 	if server == nil {
 		return fmt.Errorf("unknown MCP server %q", name)
@@ -256,6 +262,7 @@ func (m *Manager) Trust(ctx context.Context, name string) error {
 }
 
 func (m *Manager) Untrust(_ context.Context, name string) error {
+	m.reloadConfigIfChanged()
 	server := m.server(name)
 	if server == nil {
 		return fmt.Errorf("unknown MCP server %q", name)
@@ -404,7 +411,7 @@ func (m *Manager) ensureReady(ctx context.Context, name string, force bool) erro
 		server.connCancel = cancel
 		server.lastErr = nil
 		server.state = StateReady
-		server.tools = m.adaptCached(name, definitions)
+		server.tools = m.adaptCached(name, definitions, server.config.Digest)
 	}
 	server.attempt = nil
 	close(done)
@@ -531,14 +538,18 @@ func (m *Manager) connect(parent context.Context, config ServerConfig, name stri
 	return cli, connCancel, definitions, nil
 }
 
-func (m *Manager) adaptCached(serverName string, definitions []cachedDefinition) []*tools.Tool {
+func (m *Manager) adaptCached(serverName string, definitions []cachedDefinition, generation ...string) []*tools.Tool {
+	expectedDigest := ""
+	if len(generation) > 0 {
+		expectedDigest = generation[0]
+	}
 	result := make([]*tools.Tool, 0, len(definitions))
 	for _, definition := range definitions {
 		original := definition.Name
 		converted := covertMCPTool(&mcpgo.Tool{Name: original, Description: definition.Description, RawInputSchema: definition.InputSchema})
 		converted.Name = namespacedTool(serverName, original)
 		converted.Handler = func(ctx context.Context, request *tools.Request) (*tools.Result, error) {
-			return m.call(ctx, serverName, original, request)
+			return m.callGeneration(ctx, serverName, original, expectedDigest, request)
 		}
 		result = append(result, converted)
 	}
@@ -546,16 +557,43 @@ func (m *Manager) adaptCached(serverName string, definitions []cachedDefinition)
 }
 
 func (m *Manager) call(ctx context.Context, serverName, toolName string, request *tools.Request) (*tools.Result, error) {
+	return m.callGeneration(ctx, serverName, toolName, "", request)
+}
+
+func (m *Manager) callGeneration(ctx context.Context, serverName, toolName, expectedDigest string, request *tools.Request) (*tools.Result, error) {
+	if expectedDigest != "" {
+		server := m.server(serverName)
+		if server == nil {
+			return nil, fmt.Errorf("MCP server %q was removed; retry with the refreshed tool list", serverName)
+		}
+		server.mu.Lock()
+		actualDigest := server.config.Digest
+		server.mu.Unlock()
+		if actualDigest != expectedDigest {
+			return nil, fmt.Errorf("MCP server %q configuration changed; retry with the refreshed tool list", serverName)
+		}
+	}
 	if err := m.ensureReady(ctx, serverName, false); err != nil {
 		return nil, err
 	}
 	server := m.server(serverName)
+	if server == nil {
+		return nil, fmt.Errorf("MCP server %q configuration changed during the call; retry", serverName)
+	}
 	server.mu.Lock()
+	if server.retiring || server.state == StateClosed || (expectedDigest != "" && server.config.Digest != expectedDigest) {
+		server.mu.Unlock()
+		return nil, fmt.Errorf("MCP server %q configuration changed during the call; retry with the refreshed tool list", serverName)
+	}
 	cli := server.client
+	if cli != nil {
+		server.active++
+	}
 	server.mu.Unlock()
 	if cli == nil {
 		return nil, fmt.Errorf("MCP server %q is not connected", serverName)
 	}
+	defer releaseManagedServer(server)
 	var arguments map[string]interface{}
 	if request != nil {
 		arguments = request.Arguments
@@ -611,7 +649,7 @@ func (m *Manager) scheduleToolRefresh(name string) {
 					defs = append(defs, cachedDefinition{Name: tool.Name, Description: tool.Description, InputSchema: raw})
 				}
 				server.mu.Lock()
-				server.tools = m.adaptCached(name, defs)
+				server.tools = m.adaptCached(name, defs, config.Digest)
 				server.state = StateReady
 				server.lastErr = nil
 				server.mu.Unlock()
@@ -695,4 +733,148 @@ func (m *Manager) ConfigSourceSummary(name string) (string, error) {
 		return "", err
 	}
 	return filepath.Clean(status.Source), nil
+}
+
+func (m *Manager) newManagedServer(name string, definition ServerConfig) *managedServer {
+	state := StateStarting
+	trusted := !definition.Project || m.trust.trusted(name, definition.Digest)
+	if definition.Disabled {
+		state = StateDisabled
+	} else if !trusted {
+		state = StateBlocked
+	}
+	server := &managedServer{config: definition, state: state}
+	if trusted && !definition.Disabled {
+		var cached cachedToolSet
+		status, err := m.cache.Get(context.Background(), "mcp", cacheKey(definition), &cached)
+		if err == nil && status != fridaycache.StatusMiss {
+			server.tools = m.adaptCached(name, cached.Tools, definition.Digest)
+			server.state = StateCached
+		}
+	}
+	return server
+}
+
+// reloadConfigIfChanged reconciles the live server map with the filesystem.
+// Invalid edits retain the last usable generation and are retried after the
+// next metadata change.
+func (m *Manager) reloadConfigIfChanged() {
+	if m == nil || len(m.roots) == 0 {
+		return
+	}
+	m.reloadMu.Lock()
+	defer m.reloadMu.Unlock()
+	stamp, err := ConfigFilesStamp(m.roots)
+	if err != nil || stamp == m.stamp {
+		if err != nil {
+			logger.New("mcp").Warnw("failed to inspect MCP configuration", "error", err)
+		}
+		return
+	}
+	m.stamp = stamp
+	definitions, err := LoadConfigRoots(m.roots)
+	if err != nil {
+		logger.New("mcp").Warnw("failed to hot reload MCP configuration", "error", err)
+		return
+	}
+
+	var retired []*managedServer
+	changed := false
+	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		return
+	}
+	for name, current := range m.servers {
+		definition, exists := definitions[name]
+		if !exists {
+			delete(m.servers, name)
+			retired = append(retired, current)
+			changed = true
+			continue
+		}
+		current.mu.Lock()
+		same := current.config.Digest == definition.Digest && current.config.Source == definition.Source && current.config.Project == definition.Project && current.config.Disabled == definition.Disabled
+		current.mu.Unlock()
+		if same {
+			delete(definitions, name)
+			continue
+		}
+		m.servers[name] = m.newManagedServer(name, definition)
+		delete(definitions, name)
+		retired = append(retired, current)
+		changed = true
+	}
+	for name, definition := range definitions {
+		m.servers[name] = m.newManagedServer(name, definition)
+		changed = true
+	}
+	m.mu.Unlock()
+
+	for _, server := range retired {
+		retireManagedServer(server)
+	}
+	if changed {
+		go m.Warmup(m.ctx)
+	}
+}
+
+func closeManagedServer(server *managedServer) {
+	if server == nil {
+		return
+	}
+	server.mu.Lock()
+	cli, cancel := server.client, server.connCancel
+	server.client = nil
+	server.connCancel = nil
+	server.state = StateClosed
+	server.mu.Unlock()
+	if cli != nil {
+		_ = cli.Close()
+	}
+	if cancel != nil {
+		cancel()
+	}
+}
+
+func retireManagedServer(server *managedServer) {
+	if server == nil {
+		return
+	}
+	server.mu.Lock()
+	server.retiring = true
+	server.state = StateClosed
+	if server.active > 0 {
+		server.mu.Unlock()
+		return
+	}
+	cli, cancel := server.client, server.connCancel
+	server.client = nil
+	server.connCancel = nil
+	server.mu.Unlock()
+	if cli != nil {
+		_ = cli.Close()
+	}
+	if cancel != nil {
+		cancel()
+	}
+}
+
+func releaseManagedServer(server *managedServer) {
+	server.mu.Lock()
+	server.active--
+	if !server.retiring || server.active > 0 {
+		server.mu.Unlock()
+		return
+	}
+	cli, cancel := server.client, server.connCancel
+	server.client = nil
+	server.connCancel = nil
+	server.mu.Unlock()
+	if cli != nil {
+		_ = cli.Close()
+	}
+	if cancel != nil {
+		cancel()
+	}
 }

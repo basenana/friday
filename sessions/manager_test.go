@@ -182,6 +182,9 @@ func (m *mockStore) UpdateMeta(sessionID string, patch SessionMetaPatch) error {
 	if patch.Model != nil {
 		meta.Runtime.Model = *patch.Model
 	}
+	if patch.Effort != nil {
+		meta.Runtime.Effort = *patch.Effort
+	}
 	if patch.LatestPlanID != nil {
 		meta.LatestPlanID = *patch.LatestPlanID
 	}
@@ -425,12 +428,15 @@ func TestManagerRuntimeRenameAndLifecycle(t *testing.T) {
 	if err := mgr.SetMode("one-abcdef", "plan"); err != nil {
 		t.Fatal(err)
 	}
-	selection := ModelSelection{Provider: "openai", Model: "gpt-test"}
+	selection := ModelSelection{Model: "gpt-test"}
+	if err := mgr.SetEffort("one-abcdef", "high"); err != nil {
+		t.Fatal(err)
+	}
 	if err := mgr.SetModel("one-abcdef", selection); err != nil {
 		t.Fatal(err)
 	}
 	runtimeState, err := mgr.Runtime("one-abcdef")
-	if err != nil || runtimeState.Mode != "plan" || runtimeState.Model != selection {
+	if err != nil || runtimeState.Mode != "plan" || runtimeState.Model != selection || runtimeState.Effort != "high" {
 		t.Fatalf("runtime = %+v, err=%v", runtimeState, err)
 	}
 	if err := mgr.ClearModel("one-abcdef"); err != nil {

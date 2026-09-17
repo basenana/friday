@@ -512,14 +512,9 @@ func TestReactChatPropagatesTurnMetadata(t *testing.T) {
 }
 
 func TestTryToolCallReturnsInterruptedToolResultWhenContextCanceled(t *testing.T) {
-	release := make(chan struct{})
-	handlerDone := make(chan struct{})
-
 	waitTool := tools.NewTool("wait_tool",
 		tools.WithToolHandler(func(ctx context.Context, request *tools.Request) (*tools.Result, error) {
-			defer close(handlerDone)
-			<-release
-			return tools.NewToolResultText("finished"), nil
+			return tools.NewToolResultText("unexpected"), nil
 		}),
 	)
 
@@ -534,14 +529,6 @@ func TestTryToolCallReturnsInterruptedToolResultWhenContextCanceled(t *testing.T
 		Name:      "wait_tool",
 		Arguments: `{}`,
 	}, "", "", "", []*tools.Tool{waitTool}, nil)
-
-	close(release)
-
-	select {
-	case <-handlerDone:
-	case <-time.After(time.Second):
-		t.Fatal("background tool handler did not exit")
-	}
 
 	if len(msgs) != 2 {
 		t.Fatalf("expected assistant tool call plus interrupted tool result, got %#v", msgs)

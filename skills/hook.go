@@ -8,29 +8,35 @@ import (
 )
 
 type Hook struct {
-	registry *Registry
+	catalog Catalog
 }
 
 var _ session.BeforeAgentHook = &Hook{}
 var _ session.BeforeModelHook = &Hook{}
 
-func NewHook(registry *Registry) *Hook {
+func NewHook(catalog Catalog) *Hook {
 	return &Hook{
-		registry: registry,
+		catalog: catalog,
 	}
 }
 
 func (h *Hook) BeforeAgent(ctx context.Context, sess *session.Session, req session.AgentRequest) error {
-	req.AppendTools(NewSkillTools(h.registry)...)
+	if h == nil || h.catalog == nil || req == nil {
+		return nil
+	}
+	req.AppendTools(NewSkillTools(h.catalog)...)
 	return nil
 }
 
 func (h *Hook) BeforeModel(ctx context.Context, sess *session.Session, req providers.Request) error {
-	skills := h.registry.List()
+	if h == nil || h.catalog == nil || req == nil {
+		return nil
+	}
+	skills := h.catalog.List()
 	if len(skills) == 0 {
 		return nil
 	}
 
-	req.AppendSystemPrompt(builtSkillsSystemPrompt(h.registry, skills))
+	req.AppendSystemPrompt(builtSkillsSystemPrompt(h.catalog, skills))
 	return nil
 }

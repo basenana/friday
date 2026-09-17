@@ -33,7 +33,7 @@ type PlanningStore interface {
 }
 
 // Relation describes a persisted session that is private to a root session's
-// lifecycle (for example a proposal worker). Related sessions are deliberately
+// lifecycle (for example an associated worker). Related sessions are deliberately
 // not part of project or global-current selection.
 type Relation struct {
 	Version   int       `json:"version"`
@@ -74,13 +74,13 @@ type SessionMeta struct {
 }
 
 type ModelSelection struct {
-	Provider string `json:"provider,omitempty"`
-	Model    string `json:"model,omitempty"`
+	Model string `json:"model,omitempty"`
 }
 
 type SessionRuntime struct {
-	Mode  collaboration.Mode `json:"mode,omitempty"`
-	Model ModelSelection     `json:"model,omitempty"`
+	Mode   collaboration.Mode `json:"mode,omitempty"`
+	Model  ModelSelection     `json:"model,omitempty"`
+	Effort string             `json:"effort,omitempty"`
 }
 
 type SessionMetaPatch struct {
@@ -89,6 +89,7 @@ type SessionMetaPatch struct {
 	Runtime      *SessionRuntime
 	Mode         *collaboration.Mode
 	Model        *ModelSelection
+	Effort       *string
 	LatestPlanID *string
 }
 

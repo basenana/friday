@@ -5,12 +5,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 )
 
 type ToolSet interface {
 	List() []*Tool
 }
 
+// ToolHandlerFunc must stop promptly when ctx is done. Invoker cancellation is
+// the enforcement boundary for execution deadlines, including third-party
+// handlers supplied by MCP or embedding applications.
 type ToolHandlerFunc func(ctx context.Context, request *Request) (*Result, error)
 
 // SessionRecords is a session-bound auxiliary record store exposed to tools.
@@ -31,6 +35,7 @@ type Tool struct {
 	RawInputSchema map[string]interface{}   `json:"-"`
 	Examples       []map[string]interface{} `json:"-"`
 	Handler        ToolHandlerFunc          `json:"-"`
+	timeoutPolicy  *TimeoutPolicy
 }
 
 func (t *Tool) JsonSchema() map[string]interface{} {
@@ -104,13 +109,43 @@ type Request struct {
 }
 
 type Result struct {
-	Content     []Content `json:"content"`
-	FYI         string    `json:"fyi,omitempty"`
-	IsError     bool      `json:"is_error,omitempty"`
-	Retryable   bool      `json:"retryable,omitempty"`
-	RetryReason string    `json:"retry_reason,omitempty"`
-	ExitCode    *int      `json:"exit_code,omitempty"`
-	Cancelled   bool      `json:"cancelled,omitempty"`
+	Content     []Content    `json:"content"`
+	FYI         string       `json:"fyi,omitempty"`
+	IsError     bool         `json:"is_error,omitempty"`
+	Status      ResultStatus `json:"status,omitempty"`
+	ErrorCode   string       `json:"error_code,omitempty"`
+	Retryable   bool         `json:"retryable,omitempty"`
+	RetryReason string       `json:"retry_reason,omitempty"`
+	ExitCode    *int         `json:"exit_code,omitempty"`
+	Cancelled   bool         `json:"cancelled,omitempty"`
+	TimedOut    bool         `json:"timed_out,omitempty"`
+	TimeoutKind TimeoutKind  `json:"timeout_kind,omitempty"`
+	TimeoutMs   int64        `json:"timeout_ms,omitempty"`
+	ElapsedMs   int64        `json:"elapsed_ms,omitempty"`
+}
+
+type ResultStatus string
+
+const (
+	ResultStatusSuccess   ResultStatus = "success"
+	ResultStatusError     ResultStatus = "error"
+	ResultStatusCancelled ResultStatus = "cancelled"
+	ResultStatusTimedOut  ResultStatus = "timed_out"
+)
+
+type TimeoutKind string
+
+const (
+	TimeoutKindDeclared       TimeoutKind = "declared"
+	TimeoutKindHardLimit      TimeoutKind = "hard_limit"
+	TimeoutKindParentDeadline TimeoutKind = "parent_deadline"
+)
+
+// TimeoutPolicy declares a model-visible timeout argument and its default.
+// The Invoker validates both values against MaxDeclaredToolTimeout.
+type TimeoutPolicy struct {
+	Default  time.Duration
+	Argument string
 }
 
 // NewToolResultRetryableError marks a failure as safe for an execution-plan retry.
@@ -131,6 +166,7 @@ func NewToolResultText(text string) *Result {
 				Text: text,
 			},
 		},
+		Status: ResultStatusSuccess,
 	}
 }
 
@@ -152,6 +188,7 @@ func NewToolResultError(text string) *Result {
 			},
 		},
 		IsError: true,
+		Status:  ResultStatusError,
 	}
 }
 
@@ -204,6 +241,21 @@ func WithToolHandler(handler ToolHandlerFunc) ToolOption {
 	return func(t *Tool) {
 		t.Handler = handler
 	}
+}
+
+// WithToolTimeout declares an optional timeout argument and its default value.
+// An empty argument makes the timeout fixed and invisible to the model.
+func WithToolTimeout(defaultTimeout time.Duration, argument string) ToolOption {
+	return func(t *Tool) {
+		t.timeoutPolicy = &TimeoutPolicy{Default: defaultTimeout, Argument: strings.TrimSpace(argument)}
+	}
+}
+
+func (t *Tool) TimeoutPolicy() (TimeoutPolicy, bool) {
+	if t == nil || t.timeoutPolicy == nil {
+		return TimeoutPolicy{}, false
+	}
+	return *t.timeoutPolicy, true
 }
 
 // WithExample adds one complete, valid invocation example. Providers append

@@ -21,6 +21,7 @@ import (
 	"github.com/basenana/friday/core/agents"
 	"github.com/basenana/friday/core/api"
 	"github.com/basenana/friday/core/collaboration"
+	corelogger "github.com/basenana/friday/core/logger"
 	"github.com/basenana/friday/core/planning"
 	"github.com/basenana/friday/core/session"
 	coretools "github.com/basenana/friday/core/tools"
@@ -45,6 +46,12 @@ type Actor struct {
 	inbox  *Inbox
 	stream *EventStream
 	sink   sink.EventSink
+	logger corelogger.Logger
+
+	// publishMu gives every live actor event one authoritative order before it
+	// reaches either persistence or the lossy subscriber stream.
+	publishMu sync.Mutex
+	eventSeq  int64
 
 	// tools are the three card tools exposed to the agent.
 	cardTools []*coretools.Tool
@@ -102,6 +109,7 @@ func New(agent agents.Agent, sess *session.Session, opts ...Option) *Actor {
 		inbox:                   NewInbox(o.inboxBuffer, o.preemptBuffer),
 		stream:                  NewEventStream(o.logger),
 		sink:                    o.sink,
+		logger:                  o.logger,
 		pendingForms:            make(map[string]chan FormOutcome),
 		filePathValidator:       o.filePathValidator,
 		richPathValidator:       o.richPathValidator,
@@ -118,6 +126,9 @@ func New(agent agents.Agent, sess *session.Session, opts ...Option) *Actor {
 	}
 	if a.sink == nil {
 		a.sink = sink.Nop()
+	}
+	if a.logger == nil {
+		a.logger = corelogger.New("actor")
 	}
 	a.cardTools = append(makeShowCardTools(a), makeRequestUserInputTool(a))
 	if a.modeProvider != nil {
@@ -937,10 +948,26 @@ func (a *Actor) publish(ctx context.Context, evt events.Event) {
 			evt.CausedBy = append([]string(nil), causes.([]string)...)
 		}
 	}
+
+	// Serialize sequence assignment, persistence, and live publication so a
+	// subscriber can use Seq to detect loss at any downstream queue. Persist
+	// first so a live consumer that observes a gap can immediately rebuild from
+	// the authoritative event log.
+	a.publishMu.Lock()
+	a.eventSeq++
+	evt.Seq = a.eventSeq
+	if err := a.sink.Append(context.Background(), evt); err != nil {
+		a.logger.Errorw("failed to persist actor event",
+			"event_type", evt.Type,
+			"event_name", evt.Name,
+			"run_id", evt.RunID,
+			"event_id", evt.ID,
+			"seq", evt.Seq,
+			"err", err,
+		)
+	}
 	a.stream.Publish(evt)
-	// Append to sink best-effort; sink errors are not surfaced to the
-	// actor's callers in the MVP.
-	_ = a.sink.Append(context.Background(), evt)
+	a.publishMu.Unlock()
 	// Forward to the lifecycle implementation. Use evt.RunID as the
 	// runID argument (the event carries it for non-CUSTOM events; for
 	// CUSTOM events emitted by card/form tools it is also set via

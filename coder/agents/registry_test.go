@@ -3,7 +3,7 @@ package agents
 import (
 	"testing"
 
-	"github.com/basenana/friday/config"
+	"github.com/basenana/friday/core/providers"
 )
 
 func TestRegistry_RegisterAndGet(t *testing.T) {
@@ -46,7 +46,7 @@ func TestRegistry_ListReturnsAllRegistered(t *testing.T) {
 }
 
 func TestExplorerSpec_HasReadOnlyDenyPolicy(t *testing.T) {
-	spec := ExplorerSpec(config.ModelConfig{})
+	spec := ExplorerSpec()
 	denied := make(map[string]struct{}, len(spec.ToolPolicy.Deny))
 	for _, n := range spec.ToolPolicy.Deny {
 		denied[n] = struct{}{}
@@ -56,10 +56,13 @@ func TestExplorerSpec_HasReadOnlyDenyPolicy(t *testing.T) {
 			t.Errorf("explorer policy missing deny for %q", mustDeny)
 		}
 	}
-	if spec.MaxLoopTimes != 30 {
-		t.Errorf("explorer MaxLoopTimes = %d, want 30", spec.MaxLoopTimes)
+	if spec.MaxLoopTimes != 100 {
+		t.Errorf("explorer MaxLoopTimes = %d, want 100", spec.MaxLoopTimes)
 	}
 	if spec.Mode != ModeSubagent {
 		t.Errorf("explorer Mode = %v, want ModeSubagent", spec.Mode)
+	}
+	if spec.Effort != providers.ReasoningEffortNone {
+		t.Errorf("explorer Effort = %q, want none", spec.Effort)
 	}
 }

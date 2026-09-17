@@ -1,13 +1,10 @@
 package agents
 
-import "github.com/basenana/friday/config"
-
-// RegisterBuiltins registers the explorer spec. Its model is resolved from
-// cfg.AgentModel(name), falling back to the primary model when the user has not
-// configured a per-agent override.
-func RegisterBuiltins(reg *Registry, cfg *config.Config) {
-	if reg == nil || cfg == nil {
+// RegisterBuiltins registers the built-in read-only explorer. Runtime model
+// policy is inherited from the Session unless an Agent spec overrides it.
+func RegisterBuiltins(reg *Registry) {
+	if reg == nil {
 		return
 	}
-	reg.Register(ExplorerSpec(cfg.AgentModel(NameExplorer)))
+	reg.Register(ExplorerSpec())
 }

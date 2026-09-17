@@ -127,12 +127,15 @@ func (m *model) projectMessage(msg types.Message) {
 				block.toolOutput = msg.ToolResult.Content
 				block.toolArgsComplete = true
 				block.success = msg.ToolResult.Success
+				block.timedOut = msg.ToolResult.Status == "timed_out"
+				block.timeoutKind = msg.ToolResult.TimeoutKind
 				block.pending = false
 				block.rendered = ""
 				delete(m.toolCalls, msg.ToolResult.CallID)
 			} else {
 				m.appendBlock(chatBlock{kind: blockToolCall, id: msg.ToolResult.CallID, toolName: "tool",
-					toolOutput: msg.ToolResult.Content, toolArgsComplete: true, success: msg.ToolResult.Success})
+					toolOutput: msg.ToolResult.Content, toolArgsComplete: true, success: msg.ToolResult.Success,
+					timedOut: msg.ToolResult.Status == "timed_out", timeoutKind: msg.ToolResult.TimeoutKind})
 			}
 		}
 	}

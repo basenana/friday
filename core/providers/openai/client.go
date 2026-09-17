@@ -58,6 +58,10 @@ func (c *client) reasoningOpts(requestEffort ...string) []option.RequestOption {
 	return opts
 }
 
+func (c *client) reasoningEffort(request providers.Request) string {
+	return providers.ResolveReasoningEffort(request, c.model.ReasoningEffort)
+}
+
 // isThirdPartyHost reports whether the configured base URL points at a host
 // other than the vendor's official API endpoint. An empty base URL means the
 // SDK default, i.e. the official endpoint.
@@ -132,7 +136,7 @@ func (c *client) Completion(ctx context.Context, request providers.Request) prov
 			c.logger.Infow("client-side llm api throttled", "wait", time.Since(startAt).String())
 		}
 
-		stream := c.openai.Chat.Completions.NewStreaming(ctx, *p, c.reasoningOpts(providers.RequestReasoningEffort(request))...)
+		stream := c.openai.Chat.Completions.NewStreaming(ctx, *p, c.reasoningOpts(c.reasoningEffort(request))...)
 
 		for stream.Next() {
 			chunk := stream.Current()
@@ -207,7 +211,7 @@ Retry:
 		c.logger.Infow("client-side llm api throttled", "wait", time.Since(startAt).String())
 	}
 
-	opts := append(c.reasoningOpts(providers.RequestReasoningEffort(request)),
+	opts := append(c.reasoningOpts(c.reasoningEffort(request)),
 		option.WithJSONSet("stream", false), // for some model using stream as default
 	)
 	response, err := c.openai.Chat.Completions.New(ctx, *p, opts...)
@@ -282,10 +286,7 @@ func (c *client) chatCompletionNewParams(request providers.Request) *openai.Chat
 	if c.model.PresencePenalty != nil {
 		p.PresencePenalty = param.NewOpt(*c.model.PresencePenalty)
 	}
-	e := providers.RequestReasoningEffort(request)
-	if e == "" {
-		e = c.model.ReasoningEffort
-	}
+	e := c.reasoningEffort(request)
 	if e != "" && e != providers.ReasoningEffortDefault && e != providers.ReasoningEffortNone {
 		p.ReasoningEffort = shared.ReasoningEffort(e)
 	}

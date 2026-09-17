@@ -53,6 +53,9 @@ func runInit(cwd string) error {
 			fmt.Println("Config file created:", configPath)
 		}
 	}
+	if err := os.MkdirAll(filepath.Join(fridayDir, "agents"), 0o755); err != nil {
+		return fmt.Errorf("create agents directory: %w", err)
+	}
 
 	initializedCfg, err := config.LoadForDir(configPath, cwd)
 	if err != nil {

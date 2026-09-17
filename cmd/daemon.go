@@ -28,7 +28,11 @@ var daemonCmd = &cobra.Command{
 		registryConfig := actor.DefaultRegistryConfig()
 		registryConfig.Catalog = sessMgr
 		registryConfig.AgentPlanEntry = true
-		registry := actor.NewRegistry(sessMgr, cfg, registryConfig)
+		registryConfig.ConfigTools = true
+		registry, err := actor.NewRegistry(sessMgr, cfg, registryConfig)
+		if err != nil {
+			return err
+		}
 		defer registry.ShutdownAll()
 
 		server, err := fridaydaemon.NewServer(fridaydaemon.Config{Port: daemonPort}, registry, catalog)

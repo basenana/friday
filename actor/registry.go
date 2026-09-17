@@ -17,11 +17,14 @@ import (
 	eventbus "github.com/hyponet/eventbus/bus"
 
 	"github.com/basenana/friday/bus"
+	coderagents "github.com/basenana/friday/coder/agents"
 	"github.com/basenana/friday/config"
 	coreactor "github.com/basenana/friday/core/actor"
 	"github.com/basenana/friday/core/collaboration"
 	"github.com/basenana/friday/core/logger"
 	"github.com/basenana/friday/core/planning"
+	"github.com/basenana/friday/core/providers"
+	"github.com/basenana/friday/core/providers/fallback"
 	coresession "github.com/basenana/friday/core/session"
 	fridaymcp "github.com/basenana/friday/mcp"
 	"github.com/basenana/friday/sandbox"
@@ -62,6 +65,9 @@ type RegistryConfig struct {
 	// AgentPlanEntry exposes enter_plan_mode to the agent. It should only be
 	// enabled by interactive clients that implement plan approval.
 	AgentPlanEntry bool
+	// ConfigTools exposes agent_config and mcp_config to every agent spawned by
+	// this registry. Interactive coder clients enable it explicitly.
+	ConfigTools bool
 }
 
 // DefaultRegistryConfig returns a sensible default configuration.
@@ -88,6 +94,8 @@ type Registry struct {
 	workdir string
 	bus     *eventbus.Bus
 	skills  *skills.Registry
+	agents  *coderagents.Registry
+	models  *fallback.ModelPool
 	mcp     *fridaymcp.Manager
 
 	ctx    context.Context
@@ -95,7 +103,7 @@ type Registry struct {
 }
 
 // NewRegistry creates a Registry and starts its idle-sweep loop.
-func NewRegistry(sessMgr setup.SessionManager, appCfg *config.Config, cfg RegistryConfig) *Registry {
+func NewRegistry(sessMgr setup.SessionManager, appCfg *config.Config, cfg RegistryConfig) (*Registry, error) {
 	if cfg.IdleTimeout <= 0 {
 		cfg.IdleTimeout = 5 * time.Minute
 	}
@@ -119,6 +127,25 @@ func NewRegistry(sessMgr setup.SessionManager, appCfg *config.Config, cfg Regist
 	if err := skillLoader.Load(); err != nil {
 		logger.New("actor.registry").Warnw("failed to load skills", "error", err)
 	}
+	agentRegistry, err := coderagents.NewLoader(appCfg.AgentPaths()...).Load()
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("load agents: %w", err)
+	}
+	if err := agentRegistry.SetValidator(func(spec *coderagents.AgentSpec) error {
+		if spec != nil && spec.Model != "" && !appCfg.HasModelName(spec.Model) {
+			return fmt.Errorf("agent %q in %s selects unknown model %q", spec.Name, spec.SourcePath, spec.Model)
+		}
+		return nil
+	}); err != nil {
+		cancel()
+		return nil, err
+	}
+	modelPool, err := setup.CreateModelPool(appCfg)
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("create model pool: %w", err)
+	}
 	r := &Registry{
 		entries: make(map[string]*managedActor),
 		cfg:     cfg,
@@ -128,6 +155,8 @@ func NewRegistry(sessMgr setup.SessionManager, appCfg *config.Config, cfg Regist
 		workdir: workdir,
 		bus:     cfg.Bus,
 		skills:  skills.NewRegistry(skillLoader),
+		agents:  agentRegistry,
+		models:  modelPool,
 		ctx:     ctx,
 		cancel:  cancel,
 	}
@@ -142,7 +171,7 @@ func NewRegistry(sessMgr setup.SessionManager, appCfg *config.Config, cfg Regist
 		go r.mcp.Warmup(r.ctx)
 	}
 	go r.sweepLoop()
-	return r
+	return r, nil
 }
 
 // Bus returns the event bus the registry bridges its actors onto.
@@ -153,6 +182,9 @@ func (r *Registry) Bus() *eventbus.Bus { return r.bus }
 // SkillRegistry returns the shared, refreshable skills catalog used by all
 // agents owned by this registry.
 func (r *Registry) SkillRegistry() *skills.Registry { return r.skills }
+
+// AgentRegistry returns the shared, mtime-refreshable catalog of disk-defined agents.
+func (r *Registry) AgentRegistry() *coderagents.Registry { return r.agents }
 
 // MCPManager returns the process-shared MCP manager used by every actor.
 func (r *Registry) MCPManager() *fridaymcp.Manager { return r.mcp }
@@ -202,26 +234,23 @@ func (r *Registry) GetOrCreate(sessionID string) (result *coreactor.Actor, resul
 		registryLogger.Infow("session actor created", fields...)
 	}()
 
-	agentCfg := r.configForSession(sessionID)
+	policy := fallback.NewSessionPolicy(r.sessionPolicy(sessionID))
+	client := r.models.NewClient(policy, providers.ClientPolicy{})
 	var agentCtx *setup.AgentContext
 	var err error
 	if r.catalog != nil {
-		client, clientErr := setup.CreateProviderClient(agentCfg)
-		if clientErr != nil {
-			return nil, fmt.Errorf("create provider for session %s: %w", sessionID, clientErr)
-		}
-		lifecycle, openErr := r.catalog.OpenRoot(r.ctx, sessionID, client, coresession.WithState(workspace.NewFileState(agentCfg.StatePath())))
+		lifecycle, openErr := r.catalog.OpenRoot(r.ctx, sessionID, client, coresession.WithState(workspace.NewFileState(r.appCfg.StatePath())))
 		if openErr != nil {
 			return nil, fmt.Errorf("open session lifecycle %s: %w", sessionID, openErr)
 		}
-		agentCtx, err = setup.NewAgentWithLifecycle(lifecycle, r.sessMgr, agentCfg,
-			setup.WithProviderClient(client), setup.WithSkillRegistry(r.skills), setup.WithMCPManager(r.mcp), setup.WithWorkdir(r.workdir))
+		agentCtx, err = setup.NewAgentWithLifecycle(lifecycle, r.sessMgr, r.appCfg,
+			setup.WithProviderClient(client), setup.WithModelPool(r.models), setup.WithSessionPolicy(policy), setup.WithSkillRegistry(r.skills), setup.WithAgentRegistry(r.agents), setup.WithMCPManager(r.mcp), setup.WithWorkdir(r.workdir), setup.WithConfigTools(r.cfg.ConfigTools))
 		if err != nil {
 			_ = lifecycle.Close()
 		}
 	} else {
-		agentCtx, err = setup.NewAgent(r.sessMgr, agentCfg, setup.WithSessionID(sessionID),
-			setup.WithSkillRegistry(r.skills), setup.WithMCPManager(r.mcp), setup.WithWorkdir(r.workdir))
+		agentCtx, err = setup.NewAgent(r.sessMgr, r.appCfg, setup.WithSessionID(sessionID),
+			setup.WithProviderClient(client), setup.WithModelPool(r.models), setup.WithSessionPolicy(policy), setup.WithSkillRegistry(r.skills), setup.WithAgentRegistry(r.agents), setup.WithMCPManager(r.mcp), setup.WithWorkdir(r.workdir), setup.WithConfigTools(r.cfg.ConfigTools))
 	}
 	if err != nil {
 		return nil, fmt.Errorf("setup agent for session %s: %w", sessionID, err)
@@ -350,45 +379,51 @@ func (r *Registry) acquireExisting(sessionID string) (*managedActor, func(), err
 	return e, func() { once.Do(e.release) }, nil
 }
 
-func (r *Registry) configForSession(sessionID string) *config.Config {
-	copy := *r.appCfg
+func (r *Registry) sessionPolicy(sessionID string) providers.ClientPolicy {
+	var policy providers.ClientPolicy
 	provider, ok := r.sessMgr.(interface{ GetStore() sessions.Store })
 	if !ok {
-		return &copy
+		return policy
 	}
 	meta, err := provider.GetStore().GetMeta(sessionID)
-	if err != nil || meta.Runtime.Model.Model == "" {
-		return &copy
+	if err != nil || meta == nil {
+		return policy
 	}
-	for _, candidate := range r.appCfg.ChatModels() {
-		if candidate.Model == meta.Runtime.Model.Model && candidate.Provider == meta.Runtime.Model.Provider {
-			copy.Model = candidate
-			copy.Models = nil
-			return &copy
-		}
+	if r.appCfg.HasModelName(meta.Runtime.Model.Model) {
+		policy.PreferredModel = meta.Runtime.Model.Model
 	}
-	return &copy
+	if providers.IsValidReasoningEffort(meta.Runtime.Effort) {
+		policy.Effort = meta.Runtime.Effort
+	}
+	return policy
 }
 
-// Reconfigure replaces an idle session actor so provider-level settings such
-// as the selected model take effect. The persisted transcript remains intact.
-func (r *Registry) Reconfigure(sessionID string) error {
-	if count := countRunningTasks(r.ListTasks(sessionID)); count > 0 {
-		return fmt.Errorf("cannot reconfigure session with %d running background task(s)", count)
+// RefreshSessionPolicy applies persisted model and effort choices to a live
+// actor without rebuilding it. If the actor is not live, its next creation
+// reads the persisted runtime and starts with the same policy.
+func (r *Registry) RefreshSessionPolicy(sessionID string) {
+	policy := r.sessionPolicy(sessionID)
+	r.mu.Lock()
+	entry := r.entries[sessionID]
+	if entry != nil && !entry.stopped.Load() && entry.agentCtx != nil && entry.agentCtx.Policy != nil {
+		entry.agentCtx.Policy.Update(policy)
 	}
-	r.Shutdown(sessionID)
-	_, err := r.GetOrCreate(sessionID)
-	return err
+	r.mu.Unlock()
 }
 
-func countRunningTasks(tasks []*sandbox.Task) int {
-	count := 0
-	for _, task := range tasks {
-		if task != nil && task.Status == sandbox.TaskRunning {
-			count++
-		}
+// SessionClientRuntime returns the primary Agent client's current routing
+// snapshot. Agent and subagent forks own separate snapshots and therefore do
+// not affect this Session-level view.
+func (r *Registry) SessionClientRuntime(sessionID string) (providers.ClientRuntimeInfo, bool) {
+	r.mu.Lock()
+	entry := r.entries[sessionID]
+	if entry == nil || entry.stopped.Load() || entry.agentCtx == nil {
+		r.mu.Unlock()
+		return providers.ClientRuntimeInfo{}, false
 	}
-	return count
+	client := entry.agentCtx.Client
+	r.mu.Unlock()
+	return providers.RuntimeInfo(client)
 }
 
 func (r *Registry) ListTasks(sessionID string) []*sandbox.Task {
@@ -399,6 +434,16 @@ func (r *Registry) ListTasks(sessionID string) []*sandbox.Task {
 		return nil
 	}
 	return entry.agentCtx.TaskManager.List("")
+}
+
+func countRunningTasks(tasks []*sandbox.Task) int {
+	count := 0
+	for _, task := range tasks {
+		if task != nil && task.Status == sandbox.TaskRunning {
+			count++
+		}
+	}
+	return count
 }
 
 func (r *Registry) KillTask(sessionID, taskID string) error {

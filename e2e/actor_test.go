@@ -25,7 +25,10 @@ func newActorEnv(t *testing.T, cfg *E2EConfig, modelName string) (*actor.Registr
 	dir := fc.DataDir
 	mgr := newSessionManager(t, dir)
 	mgr.SetLLM(newClient(t, cfg, modelName))
-	reg := actor.NewRegistry(mgr, fc, actor.DefaultRegistryConfig())
+	reg, err := actor.NewRegistry(mgr, fc, actor.DefaultRegistryConfig())
+	if err != nil {
+		t.Fatalf("create registry: %v", err)
+	}
 	sessID := types.NewID()
 	if _, _, err := mgr.GetOrCreateByID(sessID); err != nil {
 		t.Fatalf("create session: %v", err)
@@ -194,11 +197,14 @@ func TestActor_InboxFull(t *testing.T) {
 	dir := fc.DataDir
 	mgr := newSessionManager(t, dir)
 	mgr.SetLLM(newClient(t, cfg, "chat"))
-	reg := actor.NewRegistry(mgr, fc, actor.RegistryConfig{
+	reg, err := actor.NewRegistry(mgr, fc, actor.RegistryConfig{
 		IdleTimeout:   time.Minute,
 		SweepInterval: time.Minute,
 		InboxBuffer:   1,
 	})
+	if err != nil {
+		t.Fatalf("create registry: %v", err)
+	}
 	sessID := types.NewID()
 	if _, _, err := mgr.GetOrCreateByID(sessID); err != nil {
 		t.Fatalf("create session: %v", err)

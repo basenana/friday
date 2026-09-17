@@ -23,8 +23,27 @@ func TestHookInjectsPlanInstructionsAndEffort(t *testing.T) {
 	if !strings.Contains(req.SystemPrompt(), "decision-complete") {
 		t.Fatalf("missing plan instructions: %q", req.SystemPrompt())
 	}
-	if providers.RequestReasoningEffort(req) != "medium" {
-		t.Fatalf("effort = %q", providers.RequestReasoningEffort(req))
+	if providers.RequestReasoningEffort(req) != "" {
+		t.Fatalf("explicit effort = %q, want empty", providers.RequestReasoningEffort(req))
+	}
+	if providers.RequestDefaultReasoningEffort(req) != "medium" {
+		t.Fatalf("default effort = %q, want medium", providers.RequestDefaultReasoningEffort(req))
+	}
+}
+
+func TestHookPlanEffortDoesNotReplaceExplicitEffort(t *testing.T) {
+	hook := NewHook(fixedModes{"s": ModePlan}, providers.ReasoningEffortMedium)
+	req := providers.NewRequest("base")
+	providers.SetRequestReasoningEffort(req, providers.ReasoningEffortNone)
+
+	if err := hook.BeforeModel(context.Background(), session.New("s", nil), req); err != nil {
+		t.Fatal(err)
+	}
+	if got := providers.RequestReasoningEffort(req); got != providers.ReasoningEffortNone {
+		t.Fatalf("explicit effort = %q, want none", got)
+	}
+	if got := providers.RequestDefaultReasoningEffort(req); got != providers.ReasoningEffortMedium {
+		t.Fatalf("default effort = %q, want medium", got)
 	}
 }
 
@@ -34,8 +53,8 @@ func TestHookLeavesDefaultModeUntouched(t *testing.T) {
 	if err := hook.BeforeModel(context.Background(), session.New("s", nil), req); err != nil {
 		t.Fatal(err)
 	}
-	if req.SystemPrompt() != "base\n\n" || providers.RequestReasoningEffort(req) != "" {
-		t.Fatalf("default request changed: prompt=%q effort=%q", req.SystemPrompt(), providers.RequestReasoningEffort(req))
+	if req.SystemPrompt() != "base\n\n" || providers.RequestReasoningEffort(req) != "" || providers.RequestDefaultReasoningEffort(req) != "" {
+		t.Fatalf("default request changed: prompt=%q effort=%q default_effort=%q", req.SystemPrompt(), providers.RequestReasoningEffort(req), providers.RequestDefaultReasoningEffort(req))
 	}
 }
 

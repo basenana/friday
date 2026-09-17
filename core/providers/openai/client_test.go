@@ -781,6 +781,32 @@ func TestRequestReasoningEffortOverridesModel(t *testing.T) {
 	}
 }
 
+func TestDefaultReasoningEffortOnlyReplacesModelDefault(t *testing.T) {
+	req := providers.NewRequest("system", types.Message{Role: types.RoleUser, Content: "hello"})
+	providers.SetRequestDefaultReasoningEffort(req, providers.ReasoningEffortHigh)
+
+	configured := &client{model: Model{Name: "gpt-test", ReasoningEffort: providers.ReasoningEffortNone}, host: "https://api.minimax.chat/v1"}
+	if got := configured.reasoningEffort(req); got != providers.ReasoningEffortNone {
+		t.Fatalf("configured effort = %q, want none", got)
+	}
+	if opts := configured.reasoningOpts(configured.reasoningEffort(req)); len(opts) != 1 {
+		t.Fatalf("configured none should disable thinking, got %d opts", len(opts))
+	}
+
+	defaulted := &client{model: Model{Name: "gpt-test", ReasoningEffort: providers.ReasoningEffortDefault}}
+	raw, err := json.Marshal(defaulted.chatCompletionNewParams(req))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if got := decoded["reasoning_effort"]; got != "high" {
+		t.Fatalf("default effort not applied: params=%v", decoded)
+	}
+}
+
 // The MiniMax-style reasoning_split / thinking fields must only be attached
 // for third-party hosts; api.openai.com rejects unknown top-level fields.
 func TestReasoningOptsGatedByHost(t *testing.T) {

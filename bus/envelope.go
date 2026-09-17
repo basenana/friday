@@ -49,9 +49,9 @@ type Envelope struct {
 	ActorID string `json:"actorId,omitempty"`
 	// From identifies the sender: "user.<id>" or "agent.<sid>".
 	From string `json:"from,omitempty"`
-	// Seq is a per-actor monotonically increasing sequence assigned by
-	// the OutBridge's single goroutine. It resets when an actor is
-	// re-created; treat status.created as the epoch boundary.
+	// Seq is a per-actor monotonically increasing sequence assigned before
+	// publication to the actor stream. It resets when an actor is re-created;
+	// treat status.created as the epoch boundary.
 	Seq uint64 `json:"seq"`
 	// TS is a hybrid logical timestamp giving a total order across senders
 	// within one process.

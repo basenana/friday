@@ -37,6 +37,8 @@ type ToolTraceEvent struct {
 	IsSystemError       bool          // true when handler returned Go error (not result.IsError)
 	ExitCode            *int
 	Cancelled           bool
+	TimedOut            bool
+	TimeoutKind         tools.TimeoutKind
 	OccurredAt          time.Time
 }
 
@@ -51,6 +53,17 @@ type ToolInvocationEvidence struct {
 	RetryOfInvocationID string
 	Required            *bool
 	RequiredSource      string
+}
+
+func toolTraceMiddleware(trace func(ToolTraceEvent)) tools.InvocationMiddleware {
+	return func(tool *tools.Tool, next tools.ToolHandlerFunc) tools.ToolHandlerFunc {
+		if trace == nil || tool == nil || next == nil {
+			return next
+		}
+		clone := *tool
+		clone.Handler = next
+		return wrapToolsWithTrace([]*tools.Tool{&clone}, trace)[0].Handler
+	}
 }
 
 func WithToolInvocationEvidence(ctx context.Context, evidence ToolInvocationEvidence) context.Context {
@@ -153,8 +166,16 @@ func wrapToolsWithTrace(toolList []*tools.Tool, trace func(ToolTraceEvent)) []*t
 				duration := time.Since(start)
 				finishedAt := time.Now().UTC()
 				var resultExitCode *int
+				var timedOut bool
+				var timeoutKind tools.TimeoutKind
 				if result != nil {
 					resultExitCode = result.ExitCode
+					timedOut = result.TimedOut
+					timeoutKind = result.TimeoutKind
+				}
+				if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+					timedOut = true
+					timeoutKind = tools.ContextTimeoutKind(ctx)
 				}
 
 				if err != nil {
@@ -173,6 +194,8 @@ func wrapToolsWithTrace(toolList []*tools.Tool, trace func(ToolTraceEvent)) []*t
 						Duration:            duration,
 						IsSystemError:       true,
 						Cancelled:           cancelled,
+						TimedOut:            timedOut,
+						TimeoutKind:         timeoutKind,
 						OccurredAt:          finishedAt,
 					})
 					return result, err
@@ -193,6 +216,8 @@ func wrapToolsWithTrace(toolList []*tools.Tool, trace func(ToolTraceEvent)) []*t
 						IsSystemError:       false,
 						ExitCode:            resultExitCode,
 						Cancelled:           result.Cancelled,
+						TimedOut:            timedOut,
+						TimeoutKind:         timeoutKind,
 						OccurredAt:          finishedAt,
 					})
 				} else {
@@ -335,6 +360,8 @@ func toolTraceLoggerSink(l logger.Logger) func(ToolTraceEvent) {
 			"error", evt.Error,
 			"duration_ms", evt.Duration.Milliseconds(),
 			"cancelled", evt.Cancelled,
+			"timed_out", evt.TimedOut,
+			"timeout_kind", evt.TimeoutKind,
 		)
 	}
 }

@@ -10,6 +10,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/basenana/friday/bus"
+	coderagents "github.com/basenana/friday/coder/agents"
 	codercmds "github.com/basenana/friday/coder/commands"
 	"github.com/basenana/friday/core/collaboration"
 	"github.com/basenana/friday/core/planning"
@@ -24,6 +25,9 @@ func (m *model) handleSlash(text string) (tea.Model, tea.Cmd) {
 	}
 	cmd, found := m.cmdRegistry.Lookup(name)
 	if !found {
+		if agent, agentFound := m.resolveSlashAgent(name); agentFound {
+			return m.triggerSlashAgent(strings.TrimSpace(text), rawArgs, agent)
+		}
 		skill, skillFound, err := m.resolveSlashSkill(name, true)
 		if err != nil {
 			m.appendBlock(chatBlock{kind: blockError, content: "refresh skills: " + err.Error()})
@@ -56,6 +60,42 @@ func (m *model) handleSlash(text string) (tea.Model, tea.Cmd) {
 	return m.applyResult(result)
 }
 
+func (m *model) triggerSlashAgent(displayText, rawTask string, agent *coderagents.AgentSpec) (tea.Model, tea.Cmd) {
+	task := strings.TrimSpace(rawTask)
+	if task == "" {
+		m.appendBlock(chatBlock{kind: blockError, content: "usage: /" + agent.Name + " <task>"})
+		return m.dispatchIfIdle()
+	}
+	m.logInfo("slash agent triggered", "agent", agent.Name, "task_bytes", len(task))
+	return m.startUserTurnWithMetadata(task, displayText, nil, bus.DeliveryNormal, map[string]any{
+		coderagents.RouteMetadataKey: agent.Name,
+	})
+}
+
+func (m *model) resolveSlashAgent(name string) (*coderagents.AgentSpec, bool) {
+	if m.agentRegistry == nil {
+		return nil, false
+	}
+	return m.agentRegistry.Get(name)
+}
+
+func (m *model) slashAgents() []*coderagents.AgentSpec {
+	if m.agentRegistry == nil {
+		return nil
+	}
+	result := make([]*coderagents.AgentSpec, 0)
+	for _, agent := range m.agentRegistry.List() {
+		if agent == nil || !validSlashSkillName(agent.Name) {
+			continue
+		}
+		if _, conflict := m.cmdRegistry.Lookup(agent.Name); conflict {
+			continue
+		}
+		result = append(result, agent)
+	}
+	return result
+}
+
 func (m *model) triggerSlashSkill(displayText, rawArgs string, skill *skills.Skill) (tea.Model, tea.Cmd) {
 	instructions := strings.TrimSpace(skill.Instructions)
 	payload := instructions
@@ -77,11 +117,9 @@ func (m *model) resolveSlashSkill(name string, refresh bool) (*skills.Skill, boo
 	if m.skillRegistry == nil {
 		return nil, false, nil
 	}
-	if refresh {
-		if err := m.skillRegistry.Refresh(); err != nil {
-			return nil, false, err
-		}
-	}
+	// The catalog owns mtime-based refresh. Keep the parameter for call-site
+	// compatibility while avoiding a TUI-only forced reload path.
+	_ = refresh
 	for _, skill := range m.slashSkills() {
 		if strings.EqualFold(skill.Name, name) {
 			return skill, true, nil
@@ -100,6 +138,9 @@ func (m *model) slashSkills() []*skills.Skill {
 			continue
 		}
 		if _, conflict := m.cmdRegistry.Lookup(skill.Name); conflict {
+			continue
+		}
+		if _, conflict := m.resolveSlashAgent(skill.Name); conflict {
 			continue
 		}
 		name := strings.ToLower(skill.Name)
@@ -347,6 +388,12 @@ func (m *model) applyModelAction(action codercmds.Action) (bool, tea.Cmd) {
 		}
 		_, cmd := m.applyModel(model)
 		return true, cmd
+	case codercmds.OpenEffortAction:
+		m.openEffortSelector()
+		return true, nil
+	case codercmds.SetEffortAction:
+		_, cmd := m.applyEffort(action.Effort)
+		return true, cmd
 	case codercmds.ShowStatusAction:
 		m.showStatus()
 		return true, nil
@@ -408,7 +455,7 @@ func (m *model) dispatchIfIdle() (tea.Model, tea.Cmd) {
 }
 
 func (m *model) canDispatchQueued() bool {
-	return !m.running && !m.planCompacting && !m.manualCompacting && len(m.queued) > 0 && m.form == nil && m.planHandoff == nil &&
+	return !m.running && !m.reconciling && !m.planCompacting && !m.manualCompacting && len(m.queued) > 0 && m.form == nil && m.planHandoff == nil &&
 		m.commandConfirm == nil && m.selector == nil && m.detail == nil && m.confirm == nil
 }
 
@@ -460,7 +507,6 @@ func (m *model) switchSession(newID string) (cmd tea.Cmd, err error) {
 		if runtimeErr != nil {
 			return nil, sessionSwitchError(fmt.Errorf("load current session runtime: %w", runtimeErr), rollbackCreated())
 		}
-		oldRuntime.Mode = collaboration.ModeDefault
 		if err := m.runtime.UpdateMeta(newID, sessions.SessionMetaPatch{Runtime: &oldRuntime}); err != nil {
 			return nil, sessionSwitchError(fmt.Errorf("initialize session runtime: %w", err), rollbackCreated())
 		}
@@ -500,6 +546,7 @@ func (m *model) switchSession(newID string) (cmd tea.Cmd, err error) {
 	oldFeed := m.feed
 	m.loopManager.Detach(oldID)
 	m.sessionID, m.feed = newID, newFeed
+	m.resetEventTracking()
 	m.attachments = nil
 	m.composerGeneration++
 	m.mode = m.runtime.CollaborationMode(newID)
@@ -547,7 +594,6 @@ func (m *model) createProjectRoot(inheritRuntime bool) (string, error) {
 		_ = m.projectMgr.DeleteRoot(id)
 		return "", err
 	}
-	runtimeState.Mode = collaboration.ModeDefault
 	if err := m.runtime.UpdateMeta(id, sessions.SessionMetaPatch{Runtime: &runtimeState}); err != nil {
 		_ = m.projectMgr.DeleteRoot(id)
 		return "", err
@@ -580,11 +626,6 @@ func (m *model) refreshMenu() {
 		}
 		return
 	}
-	if m.menu.mode != menuCommands && m.skillRegistry != nil {
-		if err := m.skillRegistry.Refresh(); err != nil {
-			m.logWarn("failed to refresh slash skills", "error", boundedTUILogText(err.Error()))
-		}
-	}
 	query := strings.ToLower(strings.TrimPrefix(value, "/"))
 	var items []menuItem
 	for _, cmd := range m.cmdRegistry.List() {
@@ -592,6 +633,13 @@ func (m *model) refreshMenu() {
 		search := label + " " + cmd.Description() + " " + strings.Join(cmd.Aliases(), " ")
 		if query == "" || strings.Contains(strings.ToLower(search), query) {
 			items = append(items, menuItem{value: label, label: label, description: cmd.Description()})
+		}
+	}
+	for _, agent := range m.slashAgents() {
+		label := "/" + agent.Name
+		search := label + " " + agent.Description
+		if query == "" || strings.Contains(strings.ToLower(search), query) {
+			items = append(items, menuItem{value: label, label: label, description: agent.Description})
 		}
 	}
 	for _, skill := range m.slashSkills() {

@@ -20,10 +20,11 @@ import (
 )
 
 type react struct {
-	llm    providers.Client
-	tools  []*tools.Tool
-	option Option
-	logger logger.Logger
+	llm     providers.Client
+	tools   []*tools.Tool
+	invoker *tools.Invoker
+	option  Option
+	logger  logger.Logger
 }
 
 func cloneMetadata(metadata map[string]string) map[string]string {
@@ -38,9 +39,10 @@ func cloneMetadata(metadata map[string]string) map[string]string {
 }
 
 type toolCallOutcome struct {
-	msg     string
-	success bool
-	err     error
+	msg        string
+	success    bool
+	toolResult *tools.Result
+	err        error
 }
 
 func (a *react) Chat(ctx context.Context, req *api.Request) *api.Response {
@@ -230,12 +232,15 @@ func (a *react) doAct(ctx context.Context, sess *session.Session, resp *api.Resp
 			}
 		}
 		sess.PublishEvent(types.Event{Type: types.EventModelRetry, Data: map[string]string{
-			"provider":     event.Provider,
-			"model":        event.Model,
-			"attempt":      strconv.Itoa(event.Attempt),
-			"max_attempts": strconv.Itoa(event.MaxAttempts),
-			"backoff_ms":   strconv.FormatInt(event.Backoff.Milliseconds(), 10),
-			"error":        errorText,
+			"provider":           event.Provider,
+			"model":              event.Model,
+			"model_key":          event.ModelKey,
+			"previous_model":     event.PreviousModel,
+			"previous_model_key": event.PreviousModelKey,
+			"attempt":            strconv.Itoa(event.Attempt),
+			"max_attempts":       strconv.Itoa(event.MaxAttempts),
+			"backoff_ms":         strconv.FormatInt(event.Backoff.Milliseconds(), 10),
+			"error":              errorText,
 		}})
 	})
 	callStart := time.Now()
@@ -641,8 +646,8 @@ func (a *react) tryToolCall(ctx context.Context, sess *session.Session, use prov
 	a.logger.Infow("using tool", "tool", toolUse.Name, "args", toolUse.Arguments, "session", sess.ID)
 	done := make(chan toolCallOutcome, 1)
 	go func() {
-		msg, isSucceed, err := toolCall(ctx, sess, toolUse, td)
-		done <- toolCallOutcome{msg: msg, success: isSucceed, err: err}
+		msg, isSucceed, toolResult, err := executeToolCall(ctx, sess, toolUse, td, a.invoker)
+		done <- toolCallOutcome{msg: msg, success: isSucceed, toolResult: toolResult, err: err}
 	}()
 
 	handleOutcome := func(outcome toolCallOutcome) []*types.Message {
@@ -665,12 +670,14 @@ func (a *react) tryToolCall(ctx context.Context, sess *session.Session, use prov
 			span.SetStatus(tracing.StatusError, "tool returned an error")
 		}
 
-		result = append(result, &types.Message{Role: types.RoleTool, Metadata: cloneMetadata(metadata), ToolResult: &types.ToolResult{CallID: toolUse.ID(), Content: outcome.msg, Success: outcome.success}})
+		messageResult := sessionToolResult(toolUse.ID(), outcome.msg, outcome.success, outcome.toolResult)
+		result = append(result, &types.Message{Role: types.RoleTool, Metadata: cloneMetadata(metadata), ToolResult: messageResult})
 		// Intentionally forward the full tool result for audit use cases.
 		// External subscribers must enforce their own security controls.
+		eventData := toolFinishEventData(use, outcome.msg, outcome.success, outcome.toolResult)
 		sess.PublishEvent(types.Event{
 			Type: types.EventToolFinish,
-			Data: map[string]string{"id": use.ID, "tool": use.Name, "success": strconv.FormatBool(outcome.success), "output": outcome.msg},
+			Data: eventData,
 		})
 		return result
 	}
@@ -684,17 +691,51 @@ func (a *react) tryToolCall(ctx context.Context, sess *session.Session, use prov
 		err = context.Canceled
 	}
 	msg := interruptedToolResultMessage(err)
+	interrupted := &tools.Result{IsError: true, Status: tools.ResultStatusCancelled, Cancelled: true, ErrorCode: "tool_cancelled"}
+	if errors.Is(err, context.DeadlineExceeded) {
+		interrupted.Status = tools.ResultStatusTimedOut
+		interrupted.TimedOut = true
+		interrupted.Cancelled = false
+		interrupted.ErrorCode = "tool_timeout"
+		interrupted.TimeoutKind = tools.TimeoutKindParentDeadline
+	}
 	span.RecordError(err)
 	span.SetStatus(tracing.StatusError, msg)
-	result = append(result, &types.Message{Role: types.RoleTool, Metadata: cloneMetadata(metadata), ToolResult: &types.ToolResult{CallID: toolUse.ID(), Content: msg}})
+	result = append(result, &types.Message{Role: types.RoleTool, Metadata: cloneMetadata(metadata), ToolResult: sessionToolResult(toolUse.ID(), msg, false, interrupted)})
 	a.logger.Warnw("tool execution interrupted", "tool", use.Name, "error", err, "session", sess.ID)
 	// Intentionally forward the full tool result for audit use cases.
 	// External subscribers must enforce their own security controls.
 	sess.PublishEvent(types.Event{
 		Type: types.EventToolFinish,
-		Data: map[string]string{"id": use.ID, "tool": use.Name, "success": "false", "output": msg},
+		Data: toolFinishEventData(use, msg, false, interrupted),
 	})
 	return result
+}
+
+func sessionToolResult(callID, content string, success bool, result *tools.Result) *types.ToolResult {
+	message := &types.ToolResult{CallID: callID, Content: content, Success: success}
+	if result == nil {
+		return message
+	}
+	message.Status = string(result.Status)
+	message.ErrorCode = result.ErrorCode
+	message.TimeoutKind = string(result.TimeoutKind)
+	message.TimeoutMs = result.TimeoutMs
+	message.ElapsedMs = result.ElapsedMs
+	return message
+}
+
+func toolFinishEventData(use providers.ToolCall, output string, success bool, result *tools.Result) map[string]string {
+	data := map[string]string{"id": use.ID, "tool": use.Name, "success": strconv.FormatBool(success), "output": output}
+	if result == nil {
+		return data
+	}
+	data["status"] = string(result.Status)
+	data["error_code"] = result.ErrorCode
+	data["timeout_kind"] = string(result.TimeoutKind)
+	data["timeout_ms"] = strconv.FormatInt(result.TimeoutMs, 10)
+	data["elapsed_ms"] = strconv.FormatInt(result.ElapsedMs, 10)
+	return data
 }
 
 func toolExecutionErrorMessage(toolName string, err error) string {
@@ -786,10 +827,14 @@ func New(llm providers.Client, option Option) Agent {
 	}
 
 	agt := &react{
-		llm:    llm,
-		tools:  option.Tools,
-		option: option,
-		logger: logger.New("react"),
+		llm:     llm,
+		tools:   option.Tools,
+		invoker: option.Invoker,
+		option:  option,
+		logger:  logger.New("react"),
+	}
+	if agt.invoker == nil {
+		agt.invoker = tools.NewInvoker()
 	}
 
 	return agt
@@ -806,7 +851,8 @@ type Option struct {
 	// On idle timeout the loop retries (up to MaxLoopTimes).
 	StreamIdleTimeout time.Duration
 
-	Tools []*tools.Tool
+	Tools   []*tools.Tool
+	Invoker *tools.Invoker
 }
 
 // StreamIdleTimeoutError is returned when the LLM stream produces no data for

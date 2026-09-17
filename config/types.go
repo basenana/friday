@@ -3,22 +3,22 @@ package config
 import "github.com/basenana/friday/sandbox"
 
 type Config struct {
-	Model         ModelConfig            `yaml:"model" json:"model"`
-	Models        []ModelConfig          `yaml:"models" json:"models"`
-	ImageModel    ModelConfig            `yaml:"image_model" json:"image_model"`
-	Agents        map[string]ModelConfig `yaml:"agents" json:"agents"`
-	DataDir       string                 `yaml:"data_dir" json:"data_dir"`
-	Workspace     string                 `yaml:"workspace" json:"workspace"`
-	Memory        MemoryConfig           `yaml:"memory" json:"memory"`
-	Session       SessionConfig          `yaml:"session" json:"session"`
-	Log           LogConfig              `yaml:"log" json:"log"`
-	Sandbox       *sandbox.Config        `yaml:"sandbox" json:"sandbox"`
-	TUI           TUIConfig              `yaml:"tui" json:"tui"`
-	Collaboration CollaborationConfig    `yaml:"collaboration" json:"collaboration"`
+	Model         *ModelConfig        `yaml:"model" json:"model"`
+	Models        []ModelConfig       `yaml:"models" json:"models"`
+	ImageModel    *ModelConfig        `yaml:"image_model" json:"image_model"`
+	DataDir       string              `yaml:"data_dir" json:"data_dir"`
+	Workspace     string              `yaml:"workspace" json:"workspace"`
+	Memory        MemoryConfig        `yaml:"memory" json:"memory"`
+	Session       SessionConfig       `yaml:"session" json:"session"`
+	Log           LogConfig           `yaml:"log" json:"log"`
+	Sandbox       *sandbox.Config     `yaml:"sandbox" json:"sandbox"`
+	TUI           TUIConfig           `yaml:"tui" json:"tui"`
+	Collaboration CollaborationConfig `yaml:"collaboration" json:"collaboration"`
 
 	// Runtime-only workspace layering metadata. These fields are populated by
 	// LoadForDir and intentionally stay out of serialized configuration files.
 	workspaceFallbacks []string
+	agentPaths         []string
 	projectScope       bool
 	configPath         string
 }
@@ -68,18 +68,10 @@ type SessionConfig struct {
 
 func DefaultConfig() *Config {
 	return &Config{
-		Model: ModelConfig{
-			Provider:      "openai",
-			BaseURL:       "",
-			Key:           "",
-			Model:         "gpt-4o",
-			ContextWindow: 128000,
-			MaxTokens:     4096,
-			Temperature:   0.7,
-			QPM:           60,
-		},
-		DataDir:   "~/.friday",
-		Workspace: "~/.friday/workspace",
+		Model:      DefaultModelConfig(),
+		ImageModel: DefaultImageModelConfig(),
+		DataDir:    "~/.friday",
+		Workspace:  "~/.friday/workspace",
 		Memory: MemoryConfig{
 			Enabled: true,
 		},
@@ -89,6 +81,31 @@ func DefaultConfig() *Config {
 		TUI:           TUIConfig{AlternateScreen: "auto"},
 		Collaboration: CollaborationConfig{Plan: PlanModeConfig{ReasoningEffort: "medium"}},
 		Sandbox:       sandbox.DefaultConfig(),
+	}
+}
+
+// DefaultModelConfig returns the usable chat model written by friday init.
+func DefaultModelConfig() *ModelConfig {
+	return &ModelConfig{
+		Provider:      "openai",
+		Model:         "gpt-4o",
+		ContextWindow: 128000,
+		MaxTokens:     4096,
+		Temperature:   0.7,
+		QPM:           60,
+	}
+}
+
+// DefaultImageModelConfig returns an inactive, editable image model template.
+// Only numeric tuning defaults are populated so it is not considered
+// configured until the user supplies a model name. Keeping the pointer non-nil
+// makes friday init emit the fields instead of an unhelpful JSON null.
+func DefaultImageModelConfig() *ModelConfig {
+	return &ModelConfig{
+		ContextWindow: 128000,
+		MaxTokens:     4096,
+		Temperature:   0.7,
+		QPM:           60,
 	}
 }
 

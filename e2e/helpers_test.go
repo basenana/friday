@@ -79,7 +79,7 @@ func fridayConfig(t *testing.T, cfg *E2EConfig, modelName string) *config.Config
 	c := config.DefaultConfig()
 	c.Model = m
 	if img, ok := cfg.Models["image"]; ok && img.IsConfigured() {
-		c.ImageModel = img
+		c.ImageModel = &img
 	}
 	c.Sandbox = sandboxConfig(cfg)
 	c.DataDir = t.TempDir()

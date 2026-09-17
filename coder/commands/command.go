@@ -36,6 +36,8 @@ type ArchiveSessionAction struct{ Target string }
 type DeleteSessionAction struct{ Target string }
 type OpenModelAction struct{}
 type SetModelAction struct{ Target string }
+type OpenEffortAction struct{}
+type SetEffortAction struct{ Effort string }
 type ShowStatusAction struct{}
 type ShowContextAction struct{}
 type MCPAction struct {
@@ -66,6 +68,8 @@ func (ArchiveSessionAction) commandAction() {}
 func (DeleteSessionAction) commandAction()  {}
 func (OpenModelAction) commandAction()      {}
 func (SetModelAction) commandAction()       {}
+func (OpenEffortAction) commandAction()     {}
+func (SetEffortAction) commandAction()      {}
 func (ShowStatusAction) commandAction()     {}
 func (ShowContextAction) commandAction()    {}
 func (MCPAction) commandAction()            {}

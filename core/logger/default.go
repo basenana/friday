@@ -3,7 +3,6 @@ package logger
 import (
 	"fmt"
 	"io"
-	"os"
 	"strings"
 )
 
@@ -13,7 +12,7 @@ type defaultLogger struct {
 }
 
 func newDefault(name string) Logger {
-	return &defaultLogger{name: name, w: os.Stdout}
+	return &defaultLogger{name: name, w: io.Discard}
 }
 
 func (l *defaultLogger) Named(name string) Logger {

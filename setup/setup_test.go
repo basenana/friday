@@ -5,12 +5,16 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	coderagents "github.com/basenana/friday/coder/agents"
+	"github.com/basenana/friday/coder/configtools"
 	"github.com/basenana/friday/config"
 	"github.com/basenana/friday/core/api"
 	"github.com/basenana/friday/core/providers"
+	"github.com/basenana/friday/core/providers/fallback"
 	coresession "github.com/basenana/friday/core/session"
 	"github.com/basenana/friday/core/tools"
 	"github.com/basenana/friday/core/types"
@@ -18,6 +22,36 @@ import (
 	"github.com/basenana/friday/sessions/file"
 	"github.com/basenana/friday/workspace"
 )
+
+type recordingProviderClient struct {
+	mu       sync.Mutex
+	requests []providers.Request
+}
+
+func (c *recordingProviderClient) Completion(_ context.Context, req providers.Request) providers.Response {
+	c.mu.Lock()
+	c.requests = append(c.requests, req)
+	c.mu.Unlock()
+	resp := providers.NewCommonResponse()
+	resp.Stream <- providers.Delta{Content: "done"}
+	close(resp.Stream)
+	close(resp.Err)
+	return resp
+}
+
+func (c *recordingProviderClient) CompletionNonStreaming(_ context.Context, _ providers.Request) (string, error) {
+	return "done", nil
+}
+
+func (c *recordingProviderClient) StructuredPredict(_ context.Context, _ providers.Request, _ any) error {
+	return nil
+}
+
+func (c *recordingProviderClient) snapshot() []providers.Request {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]providers.Request(nil), c.requests...)
+}
 
 func TestAppendImageRefsToMessage(t *testing.T) {
 	message := appendImageRefsToMessage("What is in this image?", []string{"/tmp/example.png"})
@@ -55,6 +89,147 @@ func TestWorkspaceLoadProvidesSystemPrompt(t *testing.T) {
 
 	if !strings.Contains(systemPrompt, strings.TrimSpace(agentsPrompt)) {
 		t.Fatalf("expected composed system prompt to include AGENTS.md, got %q", systemPrompt)
+	}
+}
+
+func TestDiskAgentReusesPrimaryClientPromptAndRunTaskRegistration(t *testing.T) {
+	base := t.TempDir()
+	cfg := config.DefaultConfig()
+	cfg.DataDir = filepath.Join(base, "data")
+	cfg.Workspace = filepath.Join(base, "workspace")
+	cfg.Memory.Enabled = false
+	cfg.Sandbox.Sandbox.Enabled = false
+	ws := workspace.NewWorkspace(cfg.WorkspacePath(), cfg.MemoryPath())
+	if _, err := ws.InitWithParams(nil); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := ws.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspacePrompt := workspace.ComposeSystemPrompt(loaded)
+
+	agentRegistry := coderagents.NewRegistry()
+	agentRegistry.Register(&coderagents.AgentSpec{
+		Name: "reviewer", Description: "Review work", SystemPrompt: "AGENT ONLY PROMPT", MaxLoopTimes: 7,
+	})
+	store := file.NewFileSessionStore(cfg.SessionsPath())
+	mgr := sessions.NewManager(store, filepath.Join(cfg.DataDirPath(), "current"), "")
+	client := &recordingProviderClient{}
+	pool := fallback.NewModelPool([]fallback.ModelEntry{{Client: client, Name: "recording"}})
+	agentCtx, err := NewAgent(mgr, cfg, WithModelPool(pool), WithAgentRegistry(agentRegistry))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer agentCtx.Close()
+
+	content, err := api.ReadAllContent(context.Background(), agentCtx.Agent.Chat(context.Background(), &api.Request{
+		Session: agentCtx.Session, UserMessage: "review this", Metadata: map[string]string{coderagents.RouteMetadataKey: "reviewer"},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if content != "done" {
+		t.Fatalf("content = %q", content)
+	}
+	requests := client.snapshot()
+	if len(requests) != 1 {
+		t.Fatalf("primary client calls = %d, want 1", len(requests))
+	}
+	systemPrompt := requests[0].SystemPrompt()
+	wantStablePrefix := coderagents.ComposeSystemPrompt(workspacePrompt, "AGENT ONLY PROMPT")
+	if !strings.HasPrefix(strings.TrimSpace(systemPrompt), wantStablePrefix) {
+		t.Fatalf("system prompt does not start with workspace + agent prompt:\n%s", systemPrompt)
+	}
+	foundRunTask := false
+	for _, tool := range requests[0].ToolDefines() {
+		if tool.GetName() != "run_task" {
+			continue
+		}
+		foundRunTask = true
+		tasks := tool.GetParameters()["properties"].(map[string]interface{})["tasks"].(map[string]interface{})
+		items := tasks["items"].(map[string]interface{})
+		properties := items["properties"].(map[string]interface{})
+		enum := properties["agent_name"].(map[string]interface{})["enum"].([]string)
+		if len(enum) != 1 || enum[0] != "reviewer" {
+			t.Fatalf("run_task agent enum = %#v", enum)
+		}
+	}
+	if !foundRunTask {
+		t.Fatal("run_task tool was not registered")
+	}
+}
+
+func TestConfigToolsAreExplicitlyEnabled(t *testing.T) {
+	base := t.TempDir()
+	cfg := config.DefaultConfig()
+	cfg.DataDir = filepath.Join(base, "data")
+	cfg.Workspace = filepath.Join(base, "workspace")
+	cfg.Memory.Enabled = false
+	cfg.Sandbox.Sandbox.Enabled = false
+	store := file.NewFileSessionStore(cfg.SessionsPath())
+	mgr := sessions.NewManager(store, filepath.Join(cfg.DataDirPath(), "current"), "")
+	client := &recordingProviderClient{}
+	pool := fallback.NewModelPool([]fallback.ModelEntry{{Client: client, Name: "recording"}})
+	agentCtx, err := NewAgent(mgr, cfg, WithModelPool(pool), WithTemporary(true), WithConfigTools(true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer agentCtx.Close()
+	req := &api.Request{}
+	if err := agentCtx.Session.RunHooks(context.Background(), types.SessionHookBeforeAgent, coresession.HookPayload{AgentRequest: req}); err != nil {
+		t.Fatal(err)
+	}
+	found := make(map[string]bool)
+	for _, tool := range req.Tools {
+		found[tool.Name] = true
+	}
+	for _, name := range []string{configtools.AgentToolName, configtools.MCPToolName} {
+		if !found[name] {
+			t.Fatalf("missing explicitly enabled tool %q in %#v", name, found)
+		}
+	}
+}
+
+func TestNewAgentRestoresRuntimeIntoProvidedClientPolicy(t *testing.T) {
+	base := t.TempDir()
+	cfg := config.DefaultConfig()
+	cfg.DataDir = filepath.Join(base, "data")
+	cfg.Workspace = filepath.Join(base, "workspace")
+	cfg.Memory.Enabled = false
+	cfg.Sandbox.Sandbox.Enabled = false
+	cfg.Models = append(cfg.Models, config.ModelConfig{Provider: "openai", Model: "alternate"})
+
+	store := file.NewFileSessionStore(cfg.SessionsPath())
+	sess, err := store.Create("restored", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess.Close()
+	mgr := sessions.NewManager(store, filepath.Join(cfg.DataDirPath(), "current"), "")
+	if err := mgr.SetModel("restored", sessions.ModelSelection{Model: "alternate"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.SetEffort("restored", "high"); err != nil {
+		t.Fatal(err)
+	}
+
+	pool, err := CreateModelPool(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := fallback.NewSessionPolicy(providers.ClientPolicy{})
+	client := pool.NewClient(policy, providers.ClientPolicy{})
+	agentCtx, err := NewAgent(mgr, cfg, WithSessionID("restored"), WithProviderClient(client))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer agentCtx.Close()
+	if agentCtx.Policy != policy {
+		t.Fatal("AgentContext did not reuse the provided client policy")
+	}
+	if got := policy.Snapshot(); got != (providers.ClientPolicy{PreferredModel: "alternate", Effort: "high"}) {
+		t.Fatalf("restored policy = %+v", got)
 	}
 }
 
@@ -137,7 +312,7 @@ func TestGetOrCreateManagedSessionInstallsHooks(t *testing.T) {
 	store := file.NewFileSessionStore(filepath.Join(tmpDir, "sessions"))
 	sessionMgr := sessions.NewManager(store, filepath.Join(tmpDir, "current"), "")
 
-	sess, _, err := getOrCreateManagedSession(sessionMgr, "proposal-1", []coresession.Hook{&hookToolAppender{}})
+	sess, _, err := getOrCreateManagedSession(sessionMgr, "managed-1", []coresession.Hook{&hookToolAppender{}})
 	if err != nil {
 		t.Fatalf("getOrCreateManagedSession failed: %v", err)
 	}

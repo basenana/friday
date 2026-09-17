@@ -1,7 +1,7 @@
 package logger
 
 import (
-	"os"
+	"io"
 	"sync"
 )
 
@@ -18,7 +18,7 @@ func Root() Logger {
 	rootLoggerMu.Lock()
 	defer rootLoggerMu.Unlock()
 	if rootLoggerInstance == nil {
-		rootLoggerInstance = &defaultLogger{name: "default", w: os.Stdout}
+		rootLoggerInstance = &defaultLogger{name: "default", w: io.Discard}
 	}
 	return rootLoggerInstance
 }

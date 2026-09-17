@@ -26,7 +26,7 @@ type Artifact struct {
 // Repository is implemented by the embedding session store.
 type Repository interface {
 	// ProposePlan commits a new latest version. Implementations assign Version
-	// while serializing concurrent proposals for the same session.
+	// while serializing concurrent plan submissions for the same session.
 	ProposePlan(sessionID string, plan Artifact) (*Artifact, error)
 	SavePlan(sessionID string, plan Artifact) error
 	LoadPlan(sessionID, planID string) (*Artifact, error)

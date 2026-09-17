@@ -42,4 +42,20 @@ func TestReasoningEffortIsOptionalRequestCapability(t *testing.T) {
 	if SetRequestReasoningEffort(req, "high") {
 		t.Fatal("base request unexpectedly reported reasoning capability")
 	}
+	if got := RequestDefaultReasoningEffort(req); got != "" {
+		t.Fatalf("base request default effort = %q", got)
+	}
+	if SetRequestDefaultReasoningEffort(req, "medium") {
+		t.Fatal("base request unexpectedly reported default reasoning capability")
+	}
+}
+
+func TestCommonRequestSupportsDefaultReasoningEffort(t *testing.T) {
+	req := NewRequest("system")
+	if !SetRequestDefaultReasoningEffort(req, "medium") {
+		t.Fatal("common request does not support default reasoning effort")
+	}
+	if got := RequestDefaultReasoningEffort(req); got != "medium" {
+		t.Fatalf("default effort = %q, want medium", got)
+	}
 }

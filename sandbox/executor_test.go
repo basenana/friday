@@ -2,7 +2,12 @@ package sandbox
 
 import (
 	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -68,6 +73,93 @@ func TestExecuteTimeout(t *testing.T) {
 	if result.ExitCode != 124 {
 		t.Errorf("ExitCode = %d, want 124 (timeout)", result.ExitCode)
 	}
+}
+
+func TestExecuteTimeoutKillsProcessGroupHoldingOutputPipe(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.DisableIsolation()
+	exec := NewExecutor(cfg)
+	pidFile := filepath.Join(t.TempDir(), "child.pid")
+	command := fmt.Sprintf("sh -c 'sleep 30 & echo $! > %q' | cat", pidFile)
+
+	started := time.Now()
+	result, err := exec.Run(context.Background(), command, ExecOptions{
+		Timeout: 500 * time.Millisecond,
+	})
+	elapsed := time.Since(started)
+
+	if err != nil {
+		t.Fatalf("Executor.Run error = %v", err)
+	}
+	if !result.TimedOut || result.ExitCode != 124 {
+		t.Fatalf("result = %+v, want timed out with exit code 124", result)
+	}
+	if elapsed > 3*time.Second {
+		t.Fatalf("timeout returned after %s, want <= 3s", elapsed)
+	}
+
+	pid := readPIDFile(t, pidFile)
+	waitForPIDExit(t, pid, 2*time.Second)
+}
+
+func TestExecuteCancellationKillsProcessGroup(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.DisableIsolation()
+	exec := NewExecutor(cfg)
+	pidFile := filepath.Join(t.TempDir(), "child.pid")
+	command := fmt.Sprintf("sh -c 'sleep 30 & echo $! > %q' | cat", pidFile)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	time.AfterFunc(500*time.Millisecond, cancel)
+	started := time.Now()
+	result, err := exec.Run(ctx, command, ExecOptions{Timeout: 30 * time.Second})
+	elapsed := time.Since(started)
+
+	if err != nil {
+		t.Fatalf("Executor.Run error = %v", err)
+	}
+	if result.TimedOut {
+		t.Fatalf("result = %+v, cancellation must not be reported as timeout", result)
+	}
+	if result.ExitCode == 0 {
+		t.Fatalf("result = %+v, want non-zero exit code after cancellation", result)
+	}
+	if elapsed > 3*time.Second {
+		t.Fatalf("cancellation returned after %s, want <= 3s", elapsed)
+	}
+
+	pid := readPIDFile(t, pidFile)
+	waitForPIDExit(t, pid, 2*time.Second)
+}
+
+func readPIDFile(t *testing.T, path string) int {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read pid file: %v", err)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil {
+		t.Fatalf("parse pid file %q: %v", data, err)
+	}
+	return pid
+}
+
+func waitForPIDExit(t *testing.T, pid int, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		err := syscall.Kill(pid, 0)
+		if err == syscall.ESRCH {
+			return
+		}
+		if err != nil {
+			t.Fatalf("probe process %d: %v", pid, err)
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	t.Fatalf("process %d still exists after %s", pid, timeout)
 }
 
 func TestExecutePermissionDenied(t *testing.T) {

@@ -60,6 +60,17 @@ type retryableToolError interface {
 	Retryable() bool
 }
 
+func toolInvocationRetryMiddleware(resolve ToolInvocationPolicyResolver) tools.InvocationMiddleware {
+	return func(tool *tools.Tool, next tools.ToolHandlerFunc) tools.ToolHandlerFunc {
+		if resolve == nil || tool == nil || next == nil {
+			return next
+		}
+		clone := *tool
+		clone.Handler = next
+		return wrapToolsWithInvocationRetry([]*tools.Tool{&clone}, resolve)[0].Handler
+	}
+}
+
 func wrapToolsWithInvocationRetry(toolList []*tools.Tool, resolve ToolInvocationPolicyResolver) []*tools.Tool {
 	if resolve == nil || len(toolList) == 0 {
 		return toolList

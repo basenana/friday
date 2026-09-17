@@ -58,6 +58,15 @@ func (t *ToolUse) ID() string {
 }
 
 func toolCall(ctx context.Context, sess *session.Session, use *ToolUse, td *tools.Tool) (_ string, _ bool, retErr error) {
+	return toolCallWithInvoker(ctx, sess, use, td, tools.NewInvoker())
+}
+
+func toolCallWithInvoker(ctx context.Context, sess *session.Session, use *ToolUse, td *tools.Tool, invoker *tools.Invoker) (_ string, _ bool, retErr error) {
+	msg, success, _, err := executeToolCall(ctx, sess, use, td, invoker)
+	return msg, success, err
+}
+
+func executeToolCall(ctx context.Context, sess *session.Session, use *ToolUse, td *tools.Tool, invoker *tools.Invoker) (_ string, _ bool, _ *tools.Result, retErr error) {
 	ctx, span := tracing.Start(ctx, "tools.handler",
 		tracing.WithAttributes(
 			tracing.String("tool.name", use.Name),
@@ -72,7 +81,7 @@ func toolCall(ctx context.Context, sess *session.Session, use *ToolUse, td *tool
 	req := &tools.Request{SessionID: sess.ID, SessionRecords: sess}
 	args, ok := common.ParseToolUseArguments(use.Arguments)
 	if !ok {
-		return "", false, fmt.Errorf("%s", common.FormatToolUseArgumentsError(use.Name, use.Arguments))
+		return "", false, nil, fmt.Errorf("%s", common.FormatToolUseArgumentsError(use.Name, use.Arguments))
 	}
 	req.Arguments = args
 	// Validate the complete advertised schema so handlers only need to enforce
@@ -83,22 +92,22 @@ func toolCall(ctx context.Context, sess *session.Session, use *ToolUse, td *tool
 		result := tools.NewToolResultError(fmt.Sprintf("tool %s: %s", use.Name, msg))
 		content, err := marshalToolResultForModel(result)
 		if err != nil {
-			return "", false, fmt.Errorf("marshal tool %s result failed: %s", use.Name, err)
+			return "", false, nil, fmt.Errorf("marshal tool %s result failed: %s", use.Name, err)
 		}
-		return content, false, nil
+		return content, false, result, nil
 	}
 
-	if td.Handler == nil {
-		return "", false, fmt.Errorf("tool %s has no handler configured", use.Name)
+	if invoker == nil {
+		invoker = tools.NewInvoker()
 	}
-	result, err := td.Handler(ctx, req)
+	result, err := invoker.Invoke(ctx, td, req)
 	if err != nil {
-		return "", false, err
+		return "", false, result, err
 	}
 
 	content, err := marshalToolResultForModel(result)
 	if err != nil {
-		return "", false, fmt.Errorf("marshal tool %s result failed: %s", use.Name, err)
+		return "", false, result, fmt.Errorf("marshal tool %s result failed: %s", use.Name, err)
 	}
 
 	msg := truncateToolResult(sess, content)
@@ -106,7 +115,7 @@ func toolCall(ctx context.Context, sess *session.Session, use *ToolUse, td *tool
 	if result.IsError {
 		span.SetStatus(tracing.StatusError, "tool returned an error")
 	}
-	return msg, !result.IsError, nil
+	return msg, !result.IsError, result, nil
 }
 
 // modelToolResult is the reduced view of tools.Result that is serialized into

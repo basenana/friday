@@ -20,3 +20,10 @@ type Provider interface {
 	// filePath is relative to the skill root.
 	ReadFile(skillName, filePath string) ([]byte, error)
 }
+
+// Catalog is the complete capability consumed by the skills hook. Caching and
+// hot reload are responsibilities of its implementation, not of the hook.
+type Catalog interface {
+	Provider
+	Locations() []string
+}

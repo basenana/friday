@@ -28,6 +28,45 @@ type Client interface {
 	StructuredPredict(ctx context.Context, request Request, model any) error
 }
 
+// ClientPolicy describes request-routing defaults applied by a forkable
+// multi-model client. PreferredModel is a model name, not an endpoint ID, so
+// every configured endpoint exposing that name is promoted together.
+type ClientPolicy struct {
+	PreferredModel string
+	Effort         string
+}
+
+// ForkableClient creates a lightweight policy view while sharing the same
+// underlying provider clients and rate limiters.
+type ForkableClient interface {
+	Fork(ClientPolicy) Client
+}
+
+// ClientRuntimeInfo is a consistent snapshot of the model candidate selected
+// by a client view. Actual is false when the values are derived from current
+// routing policy before that policy has made a physical model request.
+type ClientRuntimeInfo struct {
+	Model       string
+	EndpointKey string
+	Effort      string
+	Actual      bool
+}
+
+// ClientRuntimeInfoProvider exposes request-routing state for observability.
+// Each forked client view owns its own snapshot so subagent calls cannot
+// overwrite the primary Session client's state.
+type ClientRuntimeInfoProvider interface {
+	RuntimeInfo() ClientRuntimeInfo
+}
+
+func RuntimeInfo(client Client) (ClientRuntimeInfo, bool) {
+	provider, ok := client.(ClientRuntimeInfoProvider)
+	if !ok {
+		return ClientRuntimeInfo{}, false
+	}
+	return provider.RuntimeInfo(), true
+}
+
 type ContextWindowProvider interface {
 	ContextWindow() int64
 }
@@ -73,6 +112,17 @@ type ReasoningEffortRequest interface {
 	SetReasoningEffort(string)
 }
 
+// DefaultReasoningEffortRequest is an optional request capability carrying a
+// fallback effort. Providers use it only when the normally resolved request or
+// model effort is empty or "default". Keeping it separate from
+// ReasoningEffortRequest lets callers such as Plan Mode provide default
+// behavior without overriding explicit request, Session, Agent, or model
+// configuration.
+type DefaultReasoningEffortRequest interface {
+	DefaultReasoningEffort() string
+	SetDefaultReasoningEffort(string)
+}
+
 func RequestReasoningEffort(req Request) string {
 	if capable, ok := req.(ReasoningEffortRequest); ok {
 		return capable.ReasoningEffort()
@@ -83,6 +133,21 @@ func RequestReasoningEffort(req Request) string {
 func SetRequestReasoningEffort(req Request, effort string) bool {
 	if capable, ok := req.(ReasoningEffortRequest); ok {
 		capable.SetReasoningEffort(effort)
+		return true
+	}
+	return false
+}
+
+func RequestDefaultReasoningEffort(req Request) string {
+	if capable, ok := req.(DefaultReasoningEffortRequest); ok {
+		return capable.DefaultReasoningEffort()
+	}
+	return ""
+}
+
+func SetRequestDefaultReasoningEffort(req Request, effort string) bool {
+	if capable, ok := req.(DefaultReasoningEffortRequest); ok {
+		capable.SetDefaultReasoningEffort(effort)
 		return true
 	}
 	return false

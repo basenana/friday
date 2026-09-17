@@ -17,6 +17,173 @@ func TestModelConfigHasInput(t *testing.T) {
 	}
 }
 
+func TestModelConfigRequiresModelName(t *testing.T) {
+	unnamed := ModelConfig{
+		Provider: "openai",
+		BaseURL:  "https://example.com/v1",
+		Key:      "secret",
+		Input:    "text,image",
+	}
+	if unnamed.IsConfigured() {
+		t.Fatalf("unnamed model unexpectedly configured: %#v", unnamed)
+	}
+	unnamed.Model = "named"
+	if !unnamed.IsConfigured() {
+		t.Fatalf("named model unexpectedly unconfigured: %#v", unnamed)
+	}
+}
+
+func TestChatModelsDeduplicatesEndpointButKeepsSameNameAcrossServers(t *testing.T) {
+	cfg := &Config{
+		Model: &ModelConfig{Provider: "openai", BaseURL: "https://A.example/v1/", Model: "model-1"},
+		Models: []ModelConfig{
+			{Provider: "", BaseURL: "https://a.example/v1", Model: "model-1"},
+			{Provider: "openai", BaseURL: "https://b.example/v1", Model: "model-1"},
+			{Provider: "openai", BaseURL: "https://a.example/v1", Model: "model-2"},
+		},
+	}
+	models := cfg.ChatModels()
+	if len(models) != 3 {
+		t.Fatalf("ChatModels = %#v, want three unique endpoints", models)
+	}
+	if got := cfg.ModelNames(); len(got) != 2 || got[0] != "model-1" || got[1] != "model-2" {
+		t.Fatalf("ModelNames = %#v", got)
+	}
+}
+
+func TestChatModelsAllowsNilPrimaryModel(t *testing.T) {
+	cfg := &Config{
+		Model: nil,
+		Models: []ModelConfig{
+			{Provider: "anthropic", Model: "claude-sonnet"},
+			{Provider: "openai", Model: "gpt-4.1"},
+		},
+	}
+
+	models := cfg.ChatModels()
+	if len(models) != 2 || models[0].Model != "claude-sonnet" || models[1].Model != "gpt-4.1" {
+		t.Fatalf("ChatModels() = %#v", models)
+	}
+	if got := cfg.PrimaryModel(); got.Model != "claude-sonnet" {
+		t.Fatalf("PrimaryModel() = %#v", got)
+	}
+}
+
+func TestLoadHonorsNullPrimaryModel(t *testing.T) {
+	t.Setenv("IS_SANDBOX", "")
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	data := []byte(`{"model":null,"models":[{"provider":"anthropic","model":"claude-sonnet"}]}`)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Model != nil {
+		t.Fatalf("Model = %#v, want nil", cfg.Model)
+	}
+	models := cfg.ChatModels()
+	if len(models) != 1 || models[0].Model != "claude-sonnet" {
+		t.Fatalf("ChatModels() = %#v", models)
+	}
+}
+
+func TestLoadTreatsMissingAndUnnamedOptionalModelsAsNull(t *testing.T) {
+	t.Setenv("IS_SANDBOX", "")
+	t.Setenv("EMPTY_MODEL_NAME", "")
+	tests := []struct {
+		name     string
+		filename string
+		data     string
+	}{
+		{
+			name:     "json fields absent",
+			filename: "config.json",
+			data:     `{"models":[{"provider":"anthropic","model":"fallback"}]}`,
+		},
+		{
+			name:     "json objects have no names",
+			filename: "config.json",
+			data:     `{"model":{"provider":"openai","key":"secret"},"image_model":{"provider":"openai","input":"image"},"models":[{"provider":"anthropic","model":"fallback"}]}`,
+		},
+		{
+			name:     "yaml fields absent",
+			filename: "friday.yaml",
+			data:     "models:\n  - provider: anthropic\n    model: fallback\n",
+		},
+		{
+			name:     "yaml names expand to empty",
+			filename: "friday.yaml",
+			data:     "model:\n  provider: openai\n  model: $EMPTY_MODEL_NAME\nimage_model:\n  provider: openai\n  model: '   '\nmodels:\n  - provider: anthropic\n    model: fallback\n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), tt.filename)
+			if err := os.WriteFile(path, []byte(tt.data), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			cfg, err := Load(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.Model != nil {
+				t.Fatalf("Model = %#v, want nil", cfg.Model)
+			}
+			if cfg.ImageModel != nil {
+				t.Fatalf("ImageModel = %#v, want nil", cfg.ImageModel)
+			}
+			if got := cfg.PrimaryModel().Model; got != "fallback" {
+				t.Fatalf("PrimaryModel().Model = %q, want fallback", got)
+			}
+		})
+	}
+}
+
+func TestLoadNamedOptionalModelsKeepFieldDefaults(t *testing.T) {
+	t.Setenv("IS_SANDBOX", "")
+	path := filepath.Join(t.TempDir(), "config.json")
+	data := []byte(`{"model":{"model":"chat"},"image_model":{"model":"vision"}}`)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Model == nil || cfg.Model.Model != "chat" || cfg.Model.ContextWindow == 0 || cfg.Model.MaxTokens == 0 {
+		t.Fatalf("named Model did not retain defaults: %#v", cfg.Model)
+	}
+	if cfg.ImageModel == nil || cfg.ImageModel.Model != "vision" || cfg.ImageModel.ContextWindow == 0 || cfg.ImageModel.MaxTokens == 0 {
+		t.Fatalf("named ImageModel did not retain defaults: %#v", cfg.ImageModel)
+	}
+}
+
+func TestPreferModelStablePartitionsAllMatchingEndpoints(t *testing.T) {
+	cfg := &Config{
+		Model: &ModelConfig{Provider: "openai", BaseURL: "https://a.example", Model: "one"},
+		Models: []ModelConfig{
+			{Provider: "openai", BaseURL: "https://a.example", Model: "two"},
+			{Provider: "openai", BaseURL: "https://b.example", Model: "one"},
+			{Provider: "openai", BaseURL: "https://a.example", Model: "three"},
+		},
+	}
+	got := cfg.PreferModel("one")
+	wantServers := []string{"https://a.example", "https://b.example", "https://a.example", "https://a.example"}
+	wantNames := []string{"one", "one", "two", "three"}
+	for i := range wantNames {
+		if got[i].Model != wantNames[i] || got[i].BaseURL != wantServers[i] {
+			t.Fatalf("PreferModel[%d] = %+v", i, got[i])
+		}
+	}
+}
+
 func TestTUIAlternateScreenValidation(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "friday.yaml")
@@ -60,12 +227,12 @@ func TestResolveImageModel(t *testing.T) {
 		{
 			name: "prefer image model and inherit connection settings",
 			cfg: &Config{
-				Model: ModelConfig{
+				Model: &ModelConfig{
 					Provider: "openai",
 					Key:      "main-key",
 					Model:    "gpt-4.1",
 				},
-				ImageModel: ModelConfig{
+				ImageModel: &ModelConfig{
 					Model: "gpt-4.1-mini-vision",
 				},
 			},
@@ -76,7 +243,7 @@ func TestResolveImageModel(t *testing.T) {
 		{
 			name: "fallback to multimodal primary model",
 			cfg: &Config{
-				Model: ModelConfig{
+				Model: &ModelConfig{
 					Provider: "anthropic",
 					Key:      "main-key",
 					Model:    "claude-sonnet",
@@ -88,14 +255,33 @@ func TestResolveImageModel(t *testing.T) {
 			wantKey:      "main-key",
 		},
 		{
+			name: "ignore unnamed image model and fallback to multimodal primary",
+			cfg: &Config{
+				Model: &ModelConfig{
+					Provider: "anthropic",
+					Key:      "main-key",
+					Model:    "claude-sonnet",
+					Input:    "text,image",
+				},
+				ImageModel: &ModelConfig{
+					Provider: "openai",
+					Key:      "image-key",
+					Input:    "image",
+				},
+			},
+			wantModel:    "claude-sonnet",
+			wantProvider: "anthropic",
+			wantKey:      "main-key",
+		},
+		{
 			name: "allow per-call model override",
 			cfg: &Config{
-				Model: ModelConfig{
+				Model: &ModelConfig{
 					Provider: "openai",
 					Key:      "main-key",
 					Model:    "gpt-4.1",
 				},
-				ImageModel: ModelConfig{
+				ImageModel: &ModelConfig{
 					Model: "gpt-4.1-mini-vision",
 				},
 			},
@@ -107,7 +293,7 @@ func TestResolveImageModel(t *testing.T) {
 		{
 			name: "error when no image-capable model exists",
 			cfg: &Config{
-				Model: ModelConfig{
+				Model: &ModelConfig{
 					Provider: "openai",
 					Model:    "gpt-4.1",
 				},
@@ -141,9 +327,9 @@ func TestResolveImageModel(t *testing.T) {
 	}
 }
 
-func TestResolveImageModelPrefersPrimaryModelFromModelsList(t *testing.T) {
+func TestResolveImageModelInheritsConfiguredPrimaryModel(t *testing.T) {
 	cfg := DefaultConfig()
-	cfg.Model = ModelConfig{
+	cfg.Model = &ModelConfig{
 		Provider: "openai",
 		Key:      "default-key",
 		Model:    "default-model",
@@ -156,7 +342,7 @@ func TestResolveImageModelPrefersPrimaryModelFromModelsList(t *testing.T) {
 			Input:    "text,image",
 		},
 	}
-	cfg.ImageModel = ModelConfig{
+	cfg.ImageModel = &ModelConfig{
 		Model: "claude-vision",
 	}
 
@@ -164,11 +350,11 @@ func TestResolveImageModelPrefersPrimaryModelFromModelsList(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolveImageModel() error = %v", err)
 	}
-	if got.Provider != "anthropic" {
-		t.Fatalf("ResolveImageModel() provider = %q, want %q", got.Provider, "anthropic")
+	if got.Provider != "openai" {
+		t.Fatalf("ResolveImageModel() provider = %q, want %q", got.Provider, "openai")
 	}
-	if got.Key != "models-key" {
-		t.Fatalf("ResolveImageModel() key = %q, want %q", got.Key, "models-key")
+	if got.Key != "default-key" {
+		t.Fatalf("ResolveImageModel() key = %q, want %q", got.Key, "default-key")
 	}
 	if got.Model != "claude-vision" {
 		t.Fatalf("ResolveImageModel() model = %q, want %q", got.Model, "claude-vision")
@@ -181,7 +367,7 @@ func TestExpandEnvIncludesImageModel(t *testing.T) {
 	t.Setenv("FRIDAY_IMAGE_MODEL", "vision-model")
 
 	cfg := &Config{
-		ImageModel: ModelConfig{
+		ImageModel: &ModelConfig{
 			Key:     "$FRIDAY_IMAGE_KEY",
 			BaseURL: "$FRIDAY_IMAGE_BASE",
 			Model:   "$FRIDAY_IMAGE_MODEL",
@@ -198,6 +384,43 @@ func TestExpandEnvIncludesImageModel(t *testing.T) {
 	}
 	if cfg.ImageModel.Model != "vision-model" {
 		t.Fatalf("image_model.model not expanded, got %q", cfg.ImageModel.Model)
+	}
+}
+
+func TestImageModelAllowsNilAndDefaultConfigProvidesInitTemplate(t *testing.T) {
+	cfg := &Config{
+		Model: &ModelConfig{Provider: "openai", Model: "text-only"},
+	}
+	if _, err := cfg.ResolveImageModel(""); err == nil {
+		t.Fatal("nil image model unexpectedly resolved for a text-only primary model")
+	}
+
+	defaults := DefaultConfig()
+	if defaults.ImageModel == nil {
+		t.Fatal("DefaultConfig image model template is nil")
+	}
+	if defaults.ImageModel.IsConfigured() {
+		t.Fatalf("default image model template unexpectedly active: %#v", defaults.ImageModel)
+	}
+	if defaults.ImageModel.ContextWindow == 0 || defaults.ImageModel.MaxTokens == 0 || defaults.ImageModel.QPM == 0 {
+		t.Fatalf("default image model template lacks tuning defaults: %#v", defaults.ImageModel)
+	}
+}
+
+func TestLoadHonorsNullImageModel(t *testing.T) {
+	t.Setenv("IS_SANDBOX", "")
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	if err := os.WriteFile(path, []byte(`{"image_model":null}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ImageModel != nil {
+		t.Fatalf("ImageModel = %#v, want nil", cfg.ImageModel)
 	}
 }
 

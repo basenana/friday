@@ -10,7 +10,6 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/basenana/friday/core/logger"
@@ -132,7 +131,7 @@ func (tm *TaskManager) Start(command, workdir string) (*Task, error) {
 	cmd := exec.Command("bash", "-c", wrappedCmd)
 	cmd.Dir = dir
 	cmd.Env = tm.exec.buildCommandEnv(nil, "")
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	configureProcessGroup(cmd)
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -147,10 +146,7 @@ func (tm *TaskManager) Start(command, workdir string) (*Task, error) {
 		return nil, fmt.Errorf("failed to start command: %w", err)
 	}
 
-	pgid, err := syscall.Getpgid(cmd.Process.Pid)
-	if err != nil {
-		pgid = cmd.Process.Pid
-	}
+	pgid := commandProcessGroupID(cmd)
 
 	task := &managedTask{
 		Task: Task{
@@ -181,9 +177,9 @@ func (tm *TaskManager) Start(command, workdir string) (*Task, error) {
 	go collectOutput(stderr, collector, &readers)
 
 	if err := tm.persist(snapshotTask(task)); err != nil {
-		_ = signalTaskGroup(task.PGID, syscall.SIGKILL)
-		_ = cmd.Wait()
+		_ = terminateProcessGroup(task.PGID, true)
 		readers.Wait()
+		_ = cmd.Wait()
 		if cleanup != nil {
 			cleanup()
 		}
@@ -199,8 +195,8 @@ func (tm *TaskManager) Start(command, workdir string) (*Task, error) {
 			defer cleanup()
 		}
 
-		waitErr := cmd.Wait()
 		readers.Wait()
+		waitErr := cmd.Wait()
 		output := collector.Output()
 
 		tm.mu.Lock()
@@ -336,7 +332,7 @@ func (tm *TaskManager) Kill(id string) error {
 	tm.mu.Unlock()
 	persistErr := tm.persist(snapshot)
 
-	_ = signalTaskGroup(task.PGID, syscall.SIGTERM)
+	_ = terminateProcessGroup(task.PGID, false)
 
 	select {
 	case <-task.done:
@@ -344,7 +340,7 @@ func (tm *TaskManager) Kill(id string) error {
 	case <-time.After(2 * time.Second):
 	}
 
-	_ = signalTaskGroup(task.PGID, syscall.SIGKILL)
+	_ = terminateProcessGroup(task.PGID, true)
 
 	select {
 	case <-task.done:
@@ -352,13 +348,6 @@ func (tm *TaskManager) Kill(id string) error {
 	}
 
 	return persistErr
-}
-
-func signalTaskGroup(pgid int, sig syscall.Signal) error {
-	if pgid <= 0 {
-		return fmt.Errorf("invalid pgid: %d", pgid)
-	}
-	return syscall.Kill(-pgid, sig)
 }
 
 func exitCodeFromCmd(cmd *exec.Cmd, waitErr error) int {
@@ -374,7 +363,7 @@ func exitCodeFromCmd(cmd *exec.Cmd, waitErr error) int {
 	return 0
 }
 
-func (tm *TaskManager) Wait(id string, timeout time.Duration) (*Task, error) {
+func (tm *TaskManager) Wait(ctx context.Context, id string) (*Task, error) {
 	task, ok := tm.taskByID(id)
 	if !ok {
 		return nil, fmt.Errorf("task not found: %s", id)
@@ -392,8 +381,8 @@ func (tm *TaskManager) Wait(id string, timeout time.Duration) (*Task, error) {
 	case <-task.done:
 		snapshot, _ := tm.Get(id)
 		return snapshot, nil
-	case <-time.After(timeout):
-		return nil, fmt.Errorf("timeout waiting for task %s", id)
+	case <-ctx.Done():
+		return nil, fmt.Errorf("wait for task %s: %w", id, ctx.Err())
 	}
 }
 
@@ -532,7 +521,8 @@ func newWaitTaskTool(tm *TaskManager) *tools.Tool {
 
 Returns immediately if the task is not running. Default timeout is 60s.`),
 		tools.WithString("task_id", tools.Required(), tools.Description("The task ID to wait for")),
-		tools.WithString("timeout", tools.Description("Timeout duration (e.g., '30s', '5m'). Default is 60s.")),
+		tools.WithString("timeout", tools.Description("Timeout duration (e.g., '30s', '5m'), up to 15m. Default is 60s.")),
+		tools.WithToolTimeout(60*time.Second, "timeout"),
 		tools.WithToolHandler(waitTaskHandler(tm)),
 	)
 }
@@ -544,18 +534,12 @@ func waitTaskHandler(tm *TaskManager) tools.ToolHandlerFunc {
 			return tools.NewToolResultActionableError("task_id is required and must be a non-empty string", "call list_tasks, then provide one returned task ID"), nil
 		}
 
-		timeout := 60 * time.Second
-		if t, ok := req.Arguments["timeout"].(string); ok && t != "" {
-			d, err := parseDuration(t)
-			if err != nil {
-				return tools.NewToolResultActionableError(fmt.Sprintf("invalid timeout: %v", err), "use a positive duration such as 30s or 5m and retry"), nil
-			}
-			timeout = d
-		}
-
-		task, err := tm.Wait(taskID, timeout)
+		task, err := tm.Wait(ctx, taskID)
 		if err != nil {
-			return tools.NewToolResultActionableError(err.Error(), "call list_tasks to verify the task ID; increase timeout if the task is still running"), nil
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			return tools.NewToolResultActionableError(err.Error(), "call list_tasks to verify the task ID before retrying"), nil
 		}
 
 		var sb strings.Builder

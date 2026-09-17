@@ -11,11 +11,9 @@ import (
 
 	coderagents "github.com/basenana/friday/coder/agents"
 	codercmds "github.com/basenana/friday/coder/commands"
-	"github.com/basenana/friday/config"
 	"github.com/basenana/friday/core/agents"
 	"github.com/basenana/friday/core/api"
 	"github.com/basenana/friday/core/subagents"
-	"github.com/basenana/friday/setup"
 )
 
 // TestCoder_CommandRegistry verifies the command registry registers and
@@ -24,7 +22,7 @@ func TestCoder_CommandRegistry(t *testing.T) {
 	reg := codercmds.NewRegistry()
 	codercmds.RegisterAll(reg)
 
-	expected := []string{"archive", "clear", "compact", "context", "copy", "delete", "diff", "help", "loop", "model", "open", "plan", "quit", "rename", "resume", "show", "status", "stop", "tasks"}
+	expected := []string{"archive", "clear", "compact", "context", "copy", "delete", "diff", "effort", "help", "loop", "model", "open", "plan", "quit", "rename", "resume", "show", "status", "stop", "tasks"}
 	for _, name := range expected {
 		if _, ok := reg.Lookup(name); !ok {
 			t.Errorf("expected command %q to be registered", name)
@@ -73,7 +71,7 @@ func TestCoder_ToolPolicy_ExplorerIsolation(t *testing.T) {
 	workdir := t.TempDir()
 	allTools := newBashFsTools(t, exec, workdir)
 
-	spec := coderagents.ExplorerSpec(config.ModelConfig{})
+	spec := coderagents.ExplorerSpec()
 	filtered := spec.ToolPolicy.Apply(allTools)
 
 	for _, tool := range filtered {
@@ -102,10 +100,10 @@ func TestCoder_ExplorerReadOnlyE2E(t *testing.T) {
 		}
 
 		// Build explorer with deny-listed tools (no write/bash).
-		explorerSpec := coderagents.ExplorerSpec(config.ModelConfig{})
+		explorerSpec := coderagents.ExplorerSpec()
 		explorerTools := explorerSpec.ToolPolicy.Apply(newBashFsTools(t, exec, workdir))
 
-		factory := coderagents.NewClientFactory(client, config.ModelConfig{}, setup.CreateProviderClientFromModel)
+		factory := coderagents.NewClientFactory(client)
 		explorerAgent, err := factory.BuildAgent(explorerSpec, explorerTools)
 		if err != nil {
 			return err
@@ -146,40 +144,4 @@ func TestCoder_ExplorerReadOnlyE2E(t *testing.T) {
 		}
 		return nil
 	})
-}
-
-// TestCoder_AgentModelOverride verifies that the AgentModel config overlay
-// correctly merges per-agent model settings over the primary model.
-func TestCoder_AgentModelOverride(t *testing.T) {
-	base := config.ModelConfig{
-		Provider: "openai",
-		Model:    "gpt-4o",
-		Key:      "primary-key",
-	}
-	cfg := &config.Config{
-		Model: base,
-		Agents: map[string]config.ModelConfig{
-			"explorer": {Model: "gpt-4o-mini"},
-		},
-	}
-
-	primary := cfg.PrimaryModel()
-	if primary.Model != "gpt-4o" {
-		t.Fatalf("primary model = %q, want gpt-4o", primary.Model)
-	}
-
-	explorer := cfg.AgentModel("explorer")
-	if explorer.Model != "gpt-4o-mini" {
-		t.Errorf("explorer model = %q, want gpt-4o-mini", explorer.Model)
-	}
-	// Overlay should preserve the primary key.
-	if explorer.Key != "primary-key" {
-		t.Errorf("explorer key = %q, want primary-key (overlay should inherit)", explorer.Key)
-	}
-
-	// Unconfigured agent falls back to primary.
-	unknown := cfg.AgentModel("nonexistent")
-	if unknown.Model != "gpt-4o" {
-		t.Errorf("unknown agent model = %q, want gpt-4o (fallback)", unknown.Model)
-	}
 }

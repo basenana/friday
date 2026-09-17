@@ -114,11 +114,22 @@ func LoadForDir(explicitPath, cwd string) (*Config, error) {
 	}
 	cfg.projectScope = true
 	cfg.workspaceFallbacks = []string{homeCfg.WorkspacePath()}
+	cfg.agentPaths = append(homeCfg.AgentPaths(), filepath.Join(activeDir, "agents"))
 	return cfg, nil
 }
 
 func loadFile(configPath string, missingOK, projectDefaults bool) (*Config, error) {
 	cfg := DefaultConfig()
+	// Model defaults are useful when a model object is present (for example,
+	// they fill context_window and max_tokens), but the default model name must
+	// not make an omitted model field look configured. Clearing the names before
+	// decoding also makes an object without a model name equivalent to null.
+	if cfg.Model != nil {
+		cfg.Model.Model = ""
+	}
+	if cfg.ImageModel != nil {
+		cfg.ImageModel.Model = ""
+	}
 	if projectDefaults {
 		cfg.Workspace = "workspace"
 	}
@@ -144,6 +155,7 @@ func loadFile(configPath string, missingOK, projectDefaults bool) (*Config, erro
 	}
 
 	cfg.expandEnv()
+	cfg.normalizeOptionalModels()
 	cfg.resolveRelativePaths(filepath.Dir(configPath))
 	cfg.applyRuntimeDefaults()
 	cfg.configPath = configPath
@@ -199,8 +211,10 @@ func (c *Config) validate() error {
 	default:
 		return fmt.Errorf("invalid tui.alternate_screen %q: must be auto, always, or never", c.TUI.AlternateScreen)
 	}
-	if e := c.Model.ReasoningEffort; e != "" && !providers.IsValidReasoningEffort(e) {
-		return fmt.Errorf("invalid model.reasoning_effort %q: must be one of default, none, low, medium, high, xhigh, max", e)
+	if c.Model != nil {
+		if e := c.Model.ReasoningEffort; e != "" && !providers.IsValidReasoningEffort(e) {
+			return fmt.Errorf("invalid model.reasoning_effort %q: must be one of default, none, low, medium, high, xhigh, max", e)
+		}
 	}
 	for _, m := range c.Models {
 		if e := m.ReasoningEffort; e != "" && !providers.IsValidReasoningEffort(e) {
@@ -214,13 +228,13 @@ func (c *Config) validate() error {
 }
 
 func (c *Config) expandEnv() {
-	expandModelEnv(&c.Model)
+	expandModelEnv(c.Model)
 	for i := range c.Models {
 		expandModelEnv(&c.Models[i])
 	}
 	c.DataDir = expandEnvStr(c.DataDir)
 	c.Workspace = expandEnvStr(c.Workspace)
-	expandModelEnv(&c.ImageModel)
+	expandModelEnv(c.ImageModel)
 }
 
 func (c *Config) resolveRelativePaths(baseDir string) {
@@ -295,6 +309,16 @@ func (c *Config) WorkspaceFallbackPaths() []string {
 	return append([]string(nil), c.workspaceFallbacks...)
 }
 
+// AgentPaths returns agent definition directories from lowest to highest
+// priority. HOME definitions are loaded first and project definitions replace
+// agents with the same normalized name.
+func (c *Config) AgentPaths() []string {
+	if len(c.agentPaths) > 0 {
+		return append([]string(nil), c.agentPaths...)
+	}
+	return []string{filepath.Join(c.DataDirPath(), "agents")}
+}
+
 // ProjectScoped reports whether a non-HOME configuration is active.
 func (c *Config) ProjectScoped() bool { return c.projectScope }
 
@@ -321,14 +345,6 @@ func (c *Config) StatePath() string {
 // CachesPath is the root for reusable namespaced caches.
 func (c *Config) CachesPath() string {
 	return filepath.Join(c.DataDirPath(), "caches")
-}
-
-func (c *Config) TeamsPath() string {
-	return filepath.Join(c.DataDirPath(), "teams")
-}
-
-func (c *Config) ProposalsPath() string {
-	return filepath.Join(c.DataDirPath(), "proposals")
 }
 
 func LogPath() string {

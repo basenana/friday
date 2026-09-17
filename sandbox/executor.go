@@ -3,6 +3,7 @@ package sandbox
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -13,16 +14,22 @@ import (
 	"time"
 
 	"github.com/basenana/friday/core/logger"
+	coretools "github.com/basenana/friday/core/tools"
 )
 
 const (
 	// DefaultTimeout is the default command timeout
 	DefaultTimeout = 5 * time.Minute
+	// commandWaitDelay bounds the time spent waiting for descendant processes
+	// that outlive the command and keep its output pipes open.
+	commandWaitDelay = time.Second
 	// MaxOutputLines is the maximum number of output lines to keep
 	MaxOutputLines = 300
 	// MaxOutputBytes is the maximum output size in bytes
 	MaxOutputBytes = 512 * 1024 // 512KB
 )
+
+var ErrTimeoutOutOfRange = errors.New("command timeout must be greater than zero and no more than 15m")
 
 // Executor handles command execution with sandboxing
 type Executor struct {
@@ -75,6 +82,9 @@ func (e *Executor) Run(ctx context.Context, cmd string, opts ExecOptions) (*Resu
 	if opts.Timeout == 0 {
 		opts.Timeout = e.parseTimeout()
 	}
+	if opts.Timeout <= 0 || opts.Timeout > coretools.MaxDeclaredToolTimeout {
+		return &Result{ExitCode: 1, Stderr: ErrTimeoutOutOfRange.Error()}, ErrTimeoutOutOfRange
+	}
 
 	// 3. Create context with timeout
 	ctx, cancel := context.WithTimeout(ctx, opts.Timeout)
@@ -114,6 +124,14 @@ func (e *Executor) Run(ctx context.Context, cmd string, opts ExecOptions) (*Resu
 func (e *Executor) execute(ctx context.Context, cmdStr string, opts ExecOptions) (*Result, error) {
 	// Use bash -c to handle complex commands
 	cmd := exec.CommandContext(ctx, "bash", "-c", cmdStr)
+	configureProcessGroup(cmd)
+	cmd.Cancel = func() error {
+		if cmd.Process == nil {
+			return os.ErrProcessDone
+		}
+		return terminateProcessGroup(commandProcessGroupID(cmd), true)
+	}
+	cmd.WaitDelay = commandWaitDelay
 
 	// Set working directory
 	if opts.Workdir != "" {

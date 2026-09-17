@@ -63,7 +63,7 @@ Remember: Skills make you more capable and consistent. When in doubt, check if a
 </skills_system>
 `
 
-func builtSkillsSystemPrompt(registry *Registry, skills []*Skill) string {
+func builtSkillsSystemPrompt(catalog Catalog, skills []*Skill) string {
 	if len(skills) == 0 {
 		return ""
 	}
@@ -76,8 +76,9 @@ func builtSkillsSystemPrompt(registry *Registry, skills []*Skill) string {
 	var (
 		content = SKILL_SYSTEM_PROMPT
 		buf     = &bytes.Buffer{}
-		los     = registry.Locations()
+		los     = append([]string(nil), catalog.Locations()...)
 	)
+	sort.Strings(los)
 
 	buf.WriteString("<skills_locations>\n")
 	for _, loc := range los {

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"net"
 	"net/http"
 	"regexp"
@@ -17,6 +16,7 @@ import (
 	"github.com/basenana/friday/bus"
 	coreactor "github.com/basenana/friday/core/actor"
 	"github.com/basenana/friday/core/actor/events"
+	"github.com/basenana/friday/core/logger"
 )
 
 const defaultPort = 8999
@@ -87,7 +87,7 @@ func (s *Server) Start() error {
 	if err != nil {
 		return fmt.Errorf("listen on %s: %w", addr, err)
 	}
-	slog.Info("daemon listening", "url", "ws://"+addr+"/ws")
+	logger.New("daemon").Infow("daemon listening", "url", "ws://"+addr+"/ws")
 	err = s.http.Serve(listener)
 	if errors.Is(err, http.ErrServerClosed) {
 		return nil

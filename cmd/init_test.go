@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -29,6 +30,9 @@ func TestRunInitCreatesMinimalProjectWorkspace(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(fridayDir, "workspace", "mcp")); err != nil {
 		t.Fatalf("project MCP directory missing: %v", err)
 	}
+	if _, err := os.Stat(filepath.Join(fridayDir, "agents")); err != nil {
+		t.Fatalf("project agents directory missing: %v", err)
+	}
 	for name := range workspace.DefaultContents {
 		if _, err := os.Stat(filepath.Join(fridayDir, "workspace", name)); !os.IsNotExist(err) {
 			t.Fatalf("project init unexpectedly generated %s", name)
@@ -44,6 +48,22 @@ func TestRunInitCreatesMinimalProjectWorkspace(t *testing.T) {
 	}
 	if cfg.DataDirPath() != filepath.Join(home, ".friday") {
 		t.Fatalf("DataDirPath() = %q", cfg.DataDirPath())
+	}
+	if cfg.Model == nil || cfg.Model.Provider == "" || cfg.Model.Model == "" {
+		t.Fatalf("generated model defaults are incomplete: %#v", cfg.Model)
+	}
+	var generated config.Config
+	if err := json.Unmarshal(before, &generated); err != nil {
+		t.Fatalf("decode generated config: %v", err)
+	}
+	if generated.ImageModel == nil || generated.ImageModel.ContextWindow == 0 || generated.ImageModel.MaxTokens == 0 || generated.ImageModel.QPM == 0 {
+		t.Fatalf("generated image_model template is incomplete: %#v", generated.ImageModel)
+	}
+	if generated.ImageModel.IsConfigured() {
+		t.Fatalf("generated image_model template should remain inactive until filled: %#v", generated.ImageModel)
+	}
+	if cfg.ImageModel != nil {
+		t.Fatalf("unnamed runtime image_model = %#v, want nil", cfg.ImageModel)
 	}
 
 	if err := runInit(project); err != nil {
@@ -66,6 +86,9 @@ func TestRunInitAtHomeCreatesDefaultWorkspaceFiles(t *testing.T) {
 		t.Fatalf("runInit(HOME) error = %v", err)
 	}
 	workspaceDir := filepath.Join(home, ".friday", "workspace")
+	if _, err := os.Stat(filepath.Join(home, ".friday", "agents")); err != nil {
+		t.Fatalf("HOME agents directory missing: %v", err)
+	}
 	if _, err := os.Stat(filepath.Join(workspaceDir, "mcp")); err != nil {
 		t.Fatalf("HOME MCP directory missing: %v", err)
 	}

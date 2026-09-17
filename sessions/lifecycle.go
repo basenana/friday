@@ -18,7 +18,7 @@ var ErrLifecycleClosed = errors.New("session lifecycle is closed")
 
 // AssociatedSpec identifies a persisted session private to this root's
 // lifecycle. ResumeID is only for adopting an ID recovered from trusted
-// application state such as proposal metadata.
+// trusted application state.
 type AssociatedSpec struct {
 	Key      string
 	ResumeID string
@@ -147,7 +147,7 @@ func (l *lifecycle) GetOrCreateAssociated(ctx context.Context, spec AssociatedSp
 		}
 	}
 
-	// A trusted resume ID lets existing proposal metadata be adopted without
+	// A trusted resume ID lets existing application metadata be adopted without
 	// changing the persisted SessionMeta schema.
 	if resumeID := strings.TrimSpace(spec.ResumeID); resumeID != "" {
 		if child, loadErr := l.store.Load(resumeID, l.client, opts...); loadErr == nil {

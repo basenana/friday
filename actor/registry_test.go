@@ -12,16 +12,57 @@ import (
 	"github.com/basenana/friday/config"
 	coreactor "github.com/basenana/friday/core/actor"
 	"github.com/basenana/friday/core/actor/events"
+	"github.com/basenana/friday/core/providers"
 	"github.com/basenana/friday/sandbox"
 	"github.com/basenana/friday/sessions"
 	"github.com/basenana/friday/sessions/file"
 	"github.com/basenana/friday/setup"
 )
 
-func TestCountRunningTasks(t *testing.T) {
-	tasks := []*sandbox.Task{nil, {Status: sandbox.TaskRunning}, {Status: sandbox.TaskCompleted}, {Status: sandbox.TaskRunning}}
-	if got := countRunningTasks(tasks); got != 2 {
-		t.Fatalf("countRunningTasks = %d, want 2", got)
+func TestNewRegistryRejectsMalformedAgentSpec(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.DataDir = t.TempDir()
+	cfg.Workspace = filepath.Join(cfg.DataDir, "workspace")
+	agentDir := filepath.Join(cfg.DataDirPath(), "agents", "broken")
+	if err := os.MkdirAll(agentDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(agentDir, "AGENT-SPEC.md"), []byte("---\nname: [\n---\nprompt"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store := file.NewFileSessionStore(cfg.SessionsPath())
+	mgr := sessions.NewManager(store, filepath.Join(cfg.DataDir, "current"), "")
+	registry, err := NewRegistry(mgr, cfg, DefaultRegistryConfig())
+	if err == nil {
+		registry.ShutdownAll()
+		t.Fatal("expected malformed agent spec to fail startup")
+	}
+	if !strings.Contains(err.Error(), "load agents") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestNewRegistryRejectsAgentWithUnknownModel(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.DataDir = t.TempDir()
+	cfg.Workspace = filepath.Join(cfg.DataDir, "workspace")
+	agentDir := filepath.Join(cfg.DataDirPath(), "agents", "reviewer")
+	if err := os.MkdirAll(agentDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	content := "---\nmodel: missing-model\n---\nReview carefully.\n"
+	if err := os.WriteFile(filepath.Join(agentDir, "AGENT-SPEC.md"), []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store := file.NewFileSessionStore(cfg.SessionsPath())
+	mgr := sessions.NewManager(store, filepath.Join(cfg.DataDir, "current"), "")
+	registry, err := NewRegistry(mgr, cfg, DefaultRegistryConfig())
+	if err == nil {
+		registry.ShutdownAll()
+		t.Fatal("expected unknown agent model to fail startup")
+	}
+	if !strings.Contains(err.Error(), "missing-model") || !strings.Contains(err.Error(), "AGENT-SPEC.md") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
@@ -41,7 +82,11 @@ func newTestRegistry(t *testing.T, cfgMod func(*RegistryConfig)) *Registry {
 	if cfgMod != nil {
 		cfgMod(&rcfg)
 	}
-	return NewRegistry(sessMgr, cfg, rcfg)
+	registry, err := NewRegistry(sessMgr, cfg, rcfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return registry
 }
 
 func TestRegistry_GetOrCreateIdempotent(t *testing.T) {
@@ -61,6 +106,29 @@ func TestRegistry_GetOrCreateIdempotent(t *testing.T) {
 	}
 	if got, ok := r.Get("sess-1"); !ok || got != a1 {
 		t.Fatalf("Get mismatch")
+	}
+}
+
+func TestRegistryRefreshSessionPolicyUpdatesLiveActor(t *testing.T) {
+	r := newTestRegistry(t, nil)
+	defer r.ShutdownAll()
+	if _, err := r.GetOrCreate("sess-policy"); err != nil {
+		t.Fatal(err)
+	}
+	mgr := r.sessMgr.(*sessions.Manager)
+	if err := mgr.SetEffort("sess-policy", "default"); err != nil {
+		t.Fatal(err)
+	}
+	r.RefreshSessionPolicy("sess-policy")
+	r.mu.Lock()
+	got := r.entries["sess-policy"].agentCtx.Policy.Snapshot()
+	r.mu.Unlock()
+	if got.Effort != "default" {
+		t.Fatalf("live policy = %+v", got)
+	}
+	info, ok := r.SessionClientRuntime("sess-policy")
+	if !ok || info.Model == "" || info.Effort != providers.ReasoningEffortDefault || info.Actual {
+		t.Fatalf("session client runtime = %+v, ok=%v", info, ok)
 	}
 }
 
@@ -319,7 +387,9 @@ func TestRegistryRestoresCompletedBackgroundTasksAfterRebuild(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	completed, err := tasks.Wait(task.ID, 5*time.Second)
+	waitCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	completed, err := tasks.Wait(waitCtx, task.ID)
 	if err != nil || completed.Status != sandbox.TaskCompleted {
 		t.Fatalf("completed task = %+v, err = %v", completed, err)
 	}

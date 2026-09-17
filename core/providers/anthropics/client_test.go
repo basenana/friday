@@ -1353,6 +1353,24 @@ func TestRequestReasoningEffortOverridesModel(t *testing.T) {
 	}
 }
 
+func TestDefaultReasoningEffortOnlyReplacesModelDefault(t *testing.T) {
+	req := providers.NewRequest("summarize this conversation")
+	providers.SetRequestDefaultReasoningEffort(req, providers.ReasoningEffortHigh)
+
+	configured := &client{model: Model{Name: "claude-test", ReasoningEffort: providers.ReasoningEffortNone}, host: "https://open.bigmodel.cn/api/anthropic"}
+	if got := configured.reasoningEffort(req); got != providers.ReasoningEffortNone {
+		t.Fatalf("configured effort = %q, want none", got)
+	}
+	if opts := configured.reasoningOpts(configured.reasoningEffort(req)); len(opts) != 1 {
+		t.Fatalf("configured none should disable reasoning, got %d opts", len(opts))
+	}
+
+	defaulted := &client{model: Model{Name: "claude-test", ReasoningEffort: providers.ReasoningEffortDefault}}
+	if got := defaulted.messageCreateParams(req).OutputConfig.Effort; got != anthropic.OutputConfigEffortHigh {
+		t.Fatalf("default effort = %q, want high", got)
+	}
+}
+
 func messageHasCacheControl(msg anthropic.MessageParam) bool {
 	for _, block := range msg.Content {
 		if contentBlockHasCacheControl(block) {

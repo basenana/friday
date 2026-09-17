@@ -80,7 +80,7 @@ func (h *Hook) BeforeModel(_ context.Context, sess *session.Session, req provide
 	}))
 	req.AppendSystemPrompt(PlanInstructions)
 	if h.effort != "" {
-		providers.SetRequestReasoningEffort(req, h.effort)
+		providers.SetRequestDefaultReasoningEffort(req, h.effort)
 	}
 	return nil
 }

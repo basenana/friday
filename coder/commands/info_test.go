@@ -39,3 +39,22 @@ func TestResumeCmdCarriesTargetWithoutCreatingSession(t *testing.T) {
 		t.Fatal("missing session should not have been created")
 	}
 }
+
+func TestEffortCommandOpensSelectorOrSetsValue(t *testing.T) {
+	result, err := (effortCmd{}).Execute(&Context{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	actionAt[OpenEffortAction](t, result, 0)
+
+	result, err = (effortCmd{}).Execute(&Context{Args: []string{"HIGH"}, RawArgs: "HIGH"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := actionAt[SetEffortAction](t, result, 0).Effort; got != "high" {
+		t.Fatalf("effort = %q, want high", got)
+	}
+	if _, err := (effortCmd{}).Execute(&Context{Args: []string{"turbo"}}); err == nil {
+		t.Fatal("invalid effort was accepted")
+	}
+}

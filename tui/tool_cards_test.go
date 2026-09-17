@@ -21,13 +21,12 @@ func TestBuiltinToolCardPresentations(t *testing.T) {
 		{"fs_mkdir", `{"path":"build"}`, "Create directory", "build"},
 		{"fs_delete", `{"path":"old.txt"}`, "Delete", "old.txt"},
 		{"bash", `{"command":"go test ./tui","workdir":"/repo","timeout":"30s"}`, "Run command", "go test ./tui"},
-		{"poll_wait", `{"command":"curl localhost","interval":"2s","max_timeout":"1m"}`, "Poll command", "max timeout · 1m"},
 		{"background_task", `{"command":"make serve"}`, "Start background task", "make serve"},
 		{"list_tasks", `{}`, "List background tasks", "status · all"},
 		{"wait_task", `{"task_id":"abc"}`, "Wait for task", "timeout · 60s"},
 		{"kill_task", `{"task_id":"abc"}`, "Stop task", "task · abc"},
-		{"explore", `{"task":"inspect the TUI"}`, "Explore", "inspect the TUI"},
-		{"run_task", `{"agent_name":"analyst","task":"analyze changes"}`, "Delegate to analyst", "analyze changes"},
+		{"explore", `{"tasks":["inspect the TUI","inspect events"]}`, "Explore 2 tasks", "2. inspect events"},
+		{"run_task", `{"tasks":[{"agent_name":"analyst","task":"analyze changes"},{"agent_name":"writer","task":"document changes"}]}`, "Delegate 2 tasks", "writer · document changes"},
 		{"run_blocking_subagents", `{"tasks":["inspect UI","inspect events"]}`, "Run 2 subagents", "2. inspect events"},
 	}
 	for _, test := range tests {
@@ -46,11 +45,11 @@ func TestSpecializedToolCardsHideOutputAndKeepDetails(t *testing.T) {
 	m := &model{width: 80}
 	block := &chatBlock{
 		id: "call-specialized", kind: blockToolCall, toolName: "run_task",
-		toolArgs: `{"agent_name":"analyst","task":"analyze this patch"}`, toolArgsComplete: true,
+		toolArgs: `{"tasks":[{"agent_name":"analyst","task":"analyze this patch"}]}`, toolArgsComplete: true,
 		toolOutput: "SECRET LONG SUBAGENT REPORT", success: true,
 	}
 	card := terminalSafe(m.renderToolCard(block))
-	if !strings.Contains(card, "Delegate to analyst") || !strings.Contains(card, "analyze this patch") {
+	if !strings.Contains(card, "Delegate 1 task") || !strings.Contains(card, "analyst · analyze this patch") {
 		t.Fatalf("card = %q", card)
 	}
 	if strings.Contains(card, "SECRET") {
@@ -140,7 +139,7 @@ func TestShowCommandRevealsSpecializedToolDetails(t *testing.T) {
 	m.width, m.height = 80, 30
 	m.messages = []chatBlock{{
 		id: "call-specialized", kind: blockToolCall, toolName: "explore",
-		toolArgs: `{"task":"inspect events"}`, toolArgsComplete: true,
+		toolArgs: `{"tasks":["inspect events"]}`, toolArgsComplete: true,
 		toolOutput: "full exploration report", success: true,
 	}}
 	m.handleShowCommand([]string{"call-spe"})
@@ -163,6 +162,22 @@ func TestSpecializedFailureShowsArgumentsAndErrorWithoutShowHint(t *testing.T) {
 	}
 }
 
+func TestTimedOutToolCardUsesDedicatedState(t *testing.T) {
+	configureTheme(true)
+	m := &model{width: 80}
+	block := &chatBlock{
+		toolName: "bash", toolArgs: `{"command":"go test ./..."}`, toolArgsComplete: true,
+		toolOutput: "Error: tool bash timed out", timedOut: true, timeoutKind: "hard_limit",
+	}
+	card := terminalSafe(m.renderToolCard(block))
+	if !strings.Contains(card, "timed out · hard limit") || !strings.Contains(card, "◷") {
+		t.Fatalf("timed-out card = %q", card)
+	}
+	if strings.Contains(card, "↳ interrupted") {
+		t.Fatalf("timed-out card used interrupted state: %q", card)
+	}
+}
+
 func TestFailedReadFileKeepsPathBeforeError(t *testing.T) {
 	configureTheme(true)
 	m := &model{width: 100}
@@ -182,11 +197,11 @@ func TestFailedExploreKeepsTaskBeforeError(t *testing.T) {
 	configureTheme(true)
 	m := &model{width: 120}
 	block := &chatBlock{
-		toolName: "explore", toolArgs: `{"task":"inspect the TUI tool card rendering"}`, toolArgsComplete: true,
+		toolName: "explore", toolArgs: `{"tasks":["inspect the TUI tool card rendering"]}`, toolArgsComplete: true,
 		toolOutput: "Error: Subagent mode active: nested subagent creation is not supported.\nSuggestion: complete the assigned task directly.",
 	}
 	card := terminalSafe(m.renderToolCard(block))
-	taskIndex := strings.Index(card, "task · inspect the TUI tool card rendering")
+	taskIndex := strings.Index(card, "1. inspect the TUI tool card rendering")
 	errorIndex := strings.Index(card, "Error")
 	if taskIndex < 0 || errorIndex < 0 || taskIndex > errorIndex {
 		t.Fatalf("failed explore card should show its task before the error: %q", card)

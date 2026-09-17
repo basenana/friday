@@ -6,14 +6,18 @@ import (
 )
 
 // RetryEvent describes a physical model request that will be retried. Attempt
-// is the 1-based number of the request about to be sent.
+// is the 1-based number of the request about to be sent. Fallback transitions
+// additionally populate the previous and endpoint-key fields.
 type RetryEvent struct {
-	Provider    string
-	Model       string
-	Attempt     int
-	MaxAttempts int
-	Error       error
-	Backoff     time.Duration
+	Provider         string
+	Model            string
+	ModelKey         string
+	PreviousModel    string
+	PreviousModelKey string
+	Attempt          int
+	MaxAttempts      int
+	Error            error
+	Backoff          time.Duration
 }
 
 type retryObserverKey struct{}

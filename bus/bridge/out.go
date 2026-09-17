@@ -9,10 +9,9 @@ import (
 	coreactor "github.com/basenana/friday/core/actor"
 )
 
-// OutBridge forwards an actor's event stream to the bus, translating
-// each event to its topic via RouteEvent. Its single goroutine is the
-// only Seq assigner for the session's outbound envelopes, which keeps
-// cross-topic ordering stable for consumers.
+// OutBridge forwards an actor's event stream to the bus, translating each
+// event to its topic via RouteEvent. The actor assigns Seq before this bridge
+// so consumers can detect loss in both the actor stream and downstream bus.
 type OutBridge struct {
 	bus     *eventbus.Bus
 	session string
@@ -20,7 +19,6 @@ type OutBridge struct {
 	sub     *coreactor.Subscription
 	tracker *ToolCallTracker
 
-	seq  uint64 // guarded by the single loop goroutine
 	done chan struct{}
 	once sync.Once
 }
@@ -47,14 +45,13 @@ func (o *OutBridge) loop() {
 		if !ok {
 			continue
 		}
-		o.seq++
 		o.bus.Publish(topic, bus.Envelope{
 			Event:   evt,
 			Topic:   topic,
 			Session: o.session,
 			ActorID: evt.ActorID,
 			From:    "actor",
-			Seq:     o.seq,
+			Seq:     uint64(evt.Seq),
 			TS:      bus.NextTS(),
 		})
 	}

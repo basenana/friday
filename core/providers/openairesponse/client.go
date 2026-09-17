@@ -233,10 +233,7 @@ func (c *client) responseNewParams(request providers.Request) responses.Response
 	if key := request.PromptCacheKey(); key != "" {
 		p.PromptCacheKey = param.NewOpt(key)
 	}
-	effort := providers.RequestReasoningEffort(request)
-	if effort == "" {
-		effort = c.model.ReasoningEffort
-	}
+	effort := providers.ResolveReasoningEffort(request, c.model.ReasoningEffort)
 	if effort != "" && effort != providers.ReasoningEffortDefault && effort != providers.ReasoningEffortNone {
 		p.Reasoning.Effort = shared.ReasoningEffort(effort)
 		p.Reasoning.Summary = shared.ReasoningSummaryAuto

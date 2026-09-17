@@ -44,7 +44,13 @@ func (m *model) renderToolCard(block *chatBlock) string {
 	if body != "" {
 		lines = append(lines, body)
 	}
-	if block.interrupted {
+	if block.timedOut {
+		detail := "timed out"
+		if block.timeoutKind != "" {
+			detail += " · " + strings.ReplaceAll(block.timeoutKind, "_", " ")
+		}
+		lines = append(lines, mutedStyle.Render("↳ "+detail))
+	} else if block.interrupted {
 		lines = append(lines, mutedStyle.Render("↳ interrupted"))
 	} else if block.id != "" && truncated {
 		lines = append(lines, mutedStyle.Render("/show "+shortID(block.id)+" · full details"))
@@ -85,6 +91,8 @@ func toolErrorText(output string) string {
 func toolStatusStyle(block *chatBlock) (style lipgloss.Style, icon string) {
 	base := toolBoxStyle.Copy()
 	switch {
+	case block.timedOut:
+		return base.BorderForeground(themeError), "◷"
 	case block.interrupted:
 		return base.BorderForeground(themeMuted), "■"
 	case block.pending:
@@ -180,14 +188,6 @@ func (m *model) presentBuiltinTool(block *chatBlock, args map[string]any) (toolP
 	case "bash":
 		p := command("Run command", labeledValue("workdir", value("workdir")), labeledValue("timeout", value("timeout")))
 		return p, true
-	case "poll_wait":
-		p := command("Poll command",
-			labeledValue("workdir", value("workdir")),
-			labeledValue("interval", value("interval")),
-			labeledValue("attempt timeout", value("attempt_timeout")),
-			labeledValue("max timeout", value("max_timeout")),
-		)
-		return p, true
 	case "background_task":
 		p := command("Start background task", labeledValue("workdir", value("workdir")))
 		return p, true
@@ -206,13 +206,25 @@ func (m *model) presentBuiltinTool(block *chatBlock, args map[string]any) (toolP
 	case "kill_task":
 		return toolPresentation{title: "Stop task", body: labeledValue("task", value("task_id")), specialized: true}, true
 	case "explore":
-		return toolPresentation{title: "Explore", body: labeledValue("task", value("task")), specialized: true}, true
-	case "run_task":
-		title := "Delegate task"
-		if agent := value("agent_name"); agent != "" {
-			title = "Delegate to " + agent
+		tasks, _ := args["tasks"].([]any)
+		lines := make([]string, 0, len(tasks))
+		for i, task := range tasks {
+			lines = append(lines, fmt.Sprintf("%d. %s", i+1, terminalSafe(stringValue(task))))
 		}
-		return toolPresentation{title: title, body: labeledValue("task", value("task")), specialized: true}, true
+		return toolPresentation{title: taskCountTitle("Explore", len(tasks)), body: strings.Join(lines, "\n"), specialized: true}, true
+	case "run_task":
+		tasks, _ := args["tasks"].([]any)
+		lines := make([]string, 0, len(tasks))
+		for i, raw := range tasks {
+			item, _ := raw.(map[string]any)
+			agent := strings.TrimSpace(stringValue(item["agent_name"]))
+			task := strings.TrimSpace(stringValue(item["task"]))
+			if agent != "" {
+				task = agent + " · " + task
+			}
+			lines = append(lines, fmt.Sprintf("%d. %s", i+1, terminalSafe(task)))
+		}
+		return toolPresentation{title: taskCountTitle("Delegate", len(tasks)), body: strings.Join(lines, "\n"), specialized: true}, true
 	case "run_blocking_subagents":
 		tasks, _ := args["tasks"].([]any)
 		lines := make([]string, 0, len(tasks))
@@ -223,6 +235,14 @@ func (m *model) presentBuiltinTool(block *chatBlock, args map[string]any) (toolP
 	default:
 		return toolPresentation{}, false
 	}
+}
+
+func taskCountTitle(action string, count int) string {
+	noun := "tasks"
+	if count == 1 {
+		noun = "task"
+	}
+	return fmt.Sprintf("%s %d %s", action, count, noun)
 }
 
 type loadSkillResult struct {

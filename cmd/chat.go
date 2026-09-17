@@ -99,6 +99,7 @@ Message can be provided as:
 		if chatVerbose {
 			opts = append(opts, setup.WithVerbose(true))
 		}
+		opts = append(opts, setup.WithConfigTools(true))
 
 		agentCtx, err := setup.NewAgent(sessMgr, cfg, opts...)
 		if err != nil {
