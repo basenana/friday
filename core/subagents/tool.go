@@ -423,8 +423,22 @@ func cancellationSuggestion(err error) string {
 	return ""
 }
 
+const subagentModePrompt = `<subagent_execution>
+You are operating in delegated subagent mode. The parent agent assigned you one focused task, and your responsibility is to complete that task directly and return a thorough, useful result.
+
+- Focus exclusively on the assigned task and its stated scope.
+- Work independently using the tools already available to you.
+- Do not call run_task or explore, and do not delegate or dispatch nested subtasks.
+- Perform the investigation, implementation, and verification permitted by your current tools and permissions.
+- Do not stop at a plan or a description of what could be done; complete as much of the task as possible.
+- Return a detailed, evidence-based result. Include important findings, actions taken, files involved, verification performed, remaining risks, and blockers the parent agent needs to know.
+- If information is incomplete, make reasonable scoped assumptions and state them clearly instead of abandoning the task.
+</subagent_execution>`
+
 func injectExploreReportRequest(task string) string {
 	return strings.TrimSpace(task) + `
+
+` + subagentModePrompt + `
 
 Return a single final report with these exact sections:
 - Task (what was asked)
@@ -433,11 +447,13 @@ Return a single final report with these exact sections:
 - Open Questions (things that remain unclear or need further investigation)
 - Recommended Next Step (what the caller should do with these findings)
 
-Keep the report concise but specific. Focus on facts and evidence, not speculation.`
+Make the report thorough and specific while avoiding irrelevant narration. Focus on facts and evidence, not speculation.`
 }
 
 func injectStructuredReportRequest(task string) string {
 	return strings.TrimSpace(task) + `
+
+` + subagentModePrompt + `
 
 Return a single final report with these exact sections:
 - Task
@@ -447,5 +463,5 @@ Return a single final report with these exact sections:
 - Open Questions
 - Recommended Next Step
 
-Keep the report concise but specific.`
+Make the report thorough and specific while avoiding irrelevant narration.`
 }

@@ -132,6 +132,52 @@ func TestPromptsRequireImmediateBatchedParallelism(t *testing.T) {
 	}
 }
 
+func TestSubagentTaskPromptsDefineDelegatedExecution(t *testing.T) {
+	for name, tc := range map[string]struct {
+		task         string
+		prompt       string
+		reportMarker string
+	}{
+		"explore": {
+			task:         "investigate the parser",
+			prompt:       injectExploreReportRequest("investigate the parser"),
+			reportMarker: "- Findings (key discoveries, organized by topic)",
+		},
+		"run_task": {
+			task:         "fix the parser",
+			prompt:       injectStructuredReportRequest("fix the parser"),
+			reportMarker: "- What Changed",
+		},
+	} {
+		if !strings.HasPrefix(tc.prompt, tc.task+"\n\n") {
+			t.Fatalf("%s task prompt does not preserve the assigned task first:\n%s", name, tc.prompt)
+		}
+		modeIndex := strings.Index(tc.prompt, "<subagent_execution>")
+		reportIndex := strings.Index(tc.prompt, tc.reportMarker)
+		if modeIndex < 0 || reportIndex < 0 || modeIndex >= reportIndex {
+			t.Fatalf("%s task prompt must put delegated execution guidance before the report contract:\n%s", name, tc.prompt)
+		}
+
+		lower := strings.ToLower(tc.prompt)
+		for _, phrase := range []string{
+			"delegated subagent mode",
+			"focus exclusively on the assigned task",
+			"work independently using the tools already available",
+			"do not call run_task or explore",
+			"do not delegate or dispatch nested subtasks",
+			"do not stop at a plan",
+			"detailed, evidence-based result",
+			"verification performed",
+			"reasonable scoped assumptions",
+			"thorough and specific while avoiding irrelevant narration",
+		} {
+			if !strings.Contains(lower, phrase) {
+				t.Fatalf("%s task prompt does not clearly require %q:\n%s", name, phrase, tc.prompt)
+			}
+		}
+	}
+}
+
 func TestRunBatchSaturatesLimitQueuesWorkAndPreservesOrder(t *testing.T) {
 	const (
 		taskCount = 11
