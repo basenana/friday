@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -37,6 +38,8 @@ type Task struct {
 	FinishedAt *time.Time `json:"finished_at,omitempty"`
 	ExitCode   int        `json:"exit_code"`
 	Output     string     `json:"output,omitempty"`
+	Stdout     string     `json:"stdout,omitempty"`
+	Stderr     string     `json:"stderr,omitempty"`
 }
 
 type managedTask struct {
@@ -127,6 +130,12 @@ func (tm *TaskManager) Start(command, workdir string) (*Task, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to wrap command: %w", err)
 	}
+	cleanupOwned := true
+	defer func() {
+		if cleanupOwned && cleanup != nil {
+			cleanup()
+		}
+	}()
 
 	cmd := exec.Command("bash", "-c", wrappedCmd)
 	cmd.Dir = dir
@@ -171,24 +180,23 @@ func (tm *TaskManager) Start(command, workdir string) (*Task, error) {
 	tm.mu.Unlock()
 
 	var readers sync.WaitGroup
-	collector := &outputCollector{}
+	stdoutCollector := &outputCollector{}
+	stderrCollector := &outputCollector{}
 	readers.Add(2)
-	go collectOutput(stdout, collector, &readers)
-	go collectOutput(stderr, collector, &readers)
+	go collectOutput(stdout, stdoutCollector, &readers)
+	go collectOutput(stderr, stderrCollector, &readers)
 
 	if err := tm.persist(snapshotTask(task)); err != nil {
 		_ = terminateProcessGroup(task.PGID, true)
 		readers.Wait()
 		_ = cmd.Wait()
-		if cleanup != nil {
-			cleanup()
-		}
 		tm.mu.Lock()
 		delete(tm.tasks, task.ID)
 		tm.mu.Unlock()
 		return nil, fmt.Errorf("persist background task: %w", err)
 	}
 
+	cleanupOwned = false
 	go func() {
 		defer close(task.done)
 		if cleanup != nil {
@@ -197,11 +205,14 @@ func (tm *TaskManager) Start(command, workdir string) (*Task, error) {
 
 		readers.Wait()
 		waitErr := cmd.Wait()
-		output := collector.Output()
+		stdoutOutput := stdoutCollector.Output()
+		stderrOutput := stderrCollector.Output()
 
 		tm.mu.Lock()
 
-		task.Output = output
+		task.Stdout = stdoutOutput
+		task.Stderr = stderrOutput
+		task.Output = formatBackgroundOutput(stdoutOutput, stderrOutput)
 		task.ExitCode = exitCodeFromCmd(cmd, waitErr)
 		now := time.Now()
 		if task.FinishedAt == nil {
@@ -229,8 +240,9 @@ func (tm *TaskManager) Start(command, workdir string) (*Task, error) {
 }
 
 type outputCollector struct {
-	mu    sync.Mutex
-	lines []string
+	mu        sync.Mutex
+	lines     []string
+	truncated bool
 }
 
 func (c *outputCollector) appendLine(line string) {
@@ -240,13 +252,34 @@ func (c *outputCollector) appendLine(line string) {
 	c.lines = append(c.lines, line)
 	if len(c.lines) > MaxOutputLines {
 		c.lines = c.lines[1:]
+		c.truncated = true
 	}
 }
 
 func (c *outputCollector) Output() string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return truncateOutput(strings.Join(c.lines, "\n"))
+	output := truncateOutput(strings.Join(c.lines, "\n"))
+	if c.truncated {
+		output = "[output truncated; showing the most recent lines]\n" + output
+	}
+	return output
+}
+
+func formatBackgroundOutput(stdout, stderr string) string {
+	var result strings.Builder
+	if stdout != "" {
+		result.WriteString("stdout:\n")
+		result.WriteString(stdout)
+	}
+	if stderr != "" {
+		if result.Len() > 0 {
+			result.WriteString("\n")
+		}
+		result.WriteString("stderr:\n")
+		result.WriteString(stderr)
+	}
+	return result.String()
 }
 
 func collectOutput(reader io.Reader, collector *outputCollector, wg *sync.WaitGroup) {
@@ -281,6 +314,12 @@ func (tm *TaskManager) List(status string) []*Task {
 			result = append(result, snapshotTask(t))
 		}
 	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].StartedAt.Equal(result[j].StartedAt) {
+			return result[i].ID < result[j].ID
+		}
+		return result[i].StartedAt.Before(result[j].StartedAt)
+	})
 	return result
 }
 
@@ -412,18 +451,19 @@ func NewBackgroundTaskTools(tm *TaskManager, workdir string) []*tools.Tool {
 
 func newBackgroundTaskTool(tm *TaskManager, workdir string) *tools.Tool {
 	return tools.NewTool("background_task",
-		tools.WithDescription(fmt.Sprintf(`Run a command in the background and return immediately with a task ID.
+		tools.WithDescription(fmt.Sprintf(`Start a long-running non-interactive shell command and return immediately with a task ID.
 
 Current working directory: %s
 
-The command runs asynchronously. Use list_tasks to check status, wait_task to get output, or kill_task to terminate.
+Use this only when a command should outlive a normal synchronous bash call. Pass raw shell text without an outer bash -c. Use list_tasks to check status, wait_task to wait for output, or kill_task to terminate it. Relative workdir values are resolved from the agent working directory.
 
 Commands are executed with the same safety restrictions as the bash tool:
 - Commands must be in the allow list
 - Dangerous commands are blocked
 - File system and network access may be restricted`, workdir)),
-		tools.WithString("command", tools.Required(), tools.Description("The shell command to execute")),
-		tools.WithString("workdir", tools.Description("Working directory for the command")),
+		tools.WithString("command", tools.Required(), tools.MinLength(1), tools.Description("Raw non-interactive shell command to run in the background.")),
+		tools.WithString("workdir", tools.Description("Working directory, relative to the agent root or an allowed absolute path. Defaults to the agent root.")),
+		tools.WithExample(map[string]interface{}{"command": "go run ./cmd/server", "workdir": "."}),
 		tools.WithToolHandler(backgroundTaskHandler(tm, workdir)),
 	)
 }
@@ -435,9 +475,9 @@ func backgroundTaskHandler(tm *TaskManager, defaultWorkdir string) tools.ToolHan
 			return tools.NewToolResultActionableError("command is required and must be a non-empty string", "provide the background command and retry"), nil
 		}
 
-		workdir := defaultWorkdir
-		if w, ok := req.Arguments["workdir"].(string); ok && w != "" {
-			workdir = w
+		workdir, err := resolveExecutorToolWorkdir(tm.exec, defaultWorkdir, req.Arguments)
+		if err != nil {
+			return tools.NewToolResultActionableError(err.Error(), "use an existing directory inside the agent workdir and retry"), nil
 		}
 
 		task, err := tm.Start(command, workdir)
@@ -454,10 +494,11 @@ func backgroundTaskHandler(tm *TaskManager, defaultWorkdir string) tools.ToolHan
 
 func newListTasksTool(tm *TaskManager) *tools.Tool {
 	return tools.NewTool("list_tasks",
-		tools.WithDescription(`List all background tasks with their status.
+		tools.WithDescription(`List background task IDs and status without waiting for completion or returning full output.
 
-Returns a table showing task ID, status, command, PID, and duration.`),
+Use wait_task with a returned task ID to retrieve its final output. Returns a table showing task ID, status, command, PID, and duration.`),
 		tools.WithString("status", tools.Description("Filter by status: running, completed, failed, killed, interrupted"), tools.Enum("running", "completed", "failed", "killed", "interrupted")),
+		tools.WithExample(map[string]interface{}{"status": "running"}),
 		tools.WithToolHandler(listTasksHandler(tm)),
 	)
 }
@@ -494,8 +535,9 @@ func listTasksHandler(tm *TaskManager) tools.ToolHandlerFunc {
 
 func newKillTaskTool(tm *TaskManager) *tools.Tool {
 	return tools.NewTool("kill_task",
-		tools.WithDescription("Kill a running background task. Sends SIGTERM, then SIGKILL after 2 seconds if still running."),
-		tools.WithString("task_id", tools.Required(), tools.Description("The task ID to kill")),
+		tools.WithDescription("Terminate one running background task. Use a task ID returned by background_task or list_tasks. Sends SIGTERM, then SIGKILL after 2 seconds if still running."),
+		tools.WithString("task_id", tools.Required(), tools.MinLength(1), tools.Description("Running task ID returned by background_task or list_tasks.")),
+		tools.WithExample(map[string]interface{}{"task_id": "0123456789abcdef"}),
 		tools.WithToolHandler(killTaskHandler(tm)),
 	)
 }
@@ -519,9 +561,10 @@ func newWaitTaskTool(tm *TaskManager) *tools.Tool {
 	return tools.NewTool("wait_task",
 		tools.WithDescription(`Wait for a background task to complete and return its output.
 
-Returns immediately if the task is not running. Default timeout is 60s.`),
-		tools.WithString("task_id", tools.Required(), tools.Description("The task ID to wait for")),
+Returns immediately if the task is already terminal. A wait timeout does not terminate the background task; call wait_task again or kill_task explicitly. Default timeout is 60s.`),
+		tools.WithString("task_id", tools.Required(), tools.MinLength(1), tools.Description("Task ID returned by background_task or list_tasks.")),
 		tools.WithString("timeout", tools.Description("Timeout duration (e.g., '30s', '5m'), up to 15m. Default is 60s.")),
+		tools.WithExample(map[string]interface{}{"task_id": "0123456789abcdef", "timeout": "60s"}),
 		tools.WithToolTimeout(60*time.Second, "timeout"),
 		tools.WithToolHandler(waitTaskHandler(tm)),
 	)

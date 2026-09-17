@@ -19,7 +19,6 @@ import (
 	"charm.land/lipgloss/v2"
 	fridaymcp "github.com/basenana/friday/mcp"
 
-	"github.com/basenana/friday/bus"
 	"github.com/basenana/friday/config"
 	"github.com/basenana/friday/core/collaboration"
 	"github.com/basenana/friday/core/planning"
@@ -1030,7 +1029,7 @@ func (m *model) finishPlanApproval(msg planCompactFinishedMsg) (tea.Model, tea.C
 
 	m.mode = collaboration.ModeDefault
 	m.appendBlock(chatBlock{kind: blockDivider, content: "context compacted · implementing approved plan"})
-	return m.startUserTurn("Implement the approved plan. Re-read relevant files as needed and verify the result.", nil, bus.DeliveryNormal)
+	return m.startUserTurn("Implement the approved plan. Re-read relevant files as needed and verify the result.", nil)
 }
 
 func (m *model) persistPlanStatus(status planning.ArtifactStatus) error {

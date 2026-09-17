@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 
@@ -95,29 +97,43 @@ func (s *Seatbelt) generateProfile(workdir string, homeDir string) string {
 	sb.WriteString("(version 1)\n")
 	sb.WriteString("(allow default)\n")
 
-	// Deny reading sensitive paths
-	for _, path := range s.config.Sandbox.Filesystem.Deny {
-		expanded := expandPath(path, workdir, homeDir)
-		sb.WriteString(fmt.Sprintf("(deny file-read* (subpath %q))\n", expanded))
+	// Keep host reads available for normal developer tooling, but make writes
+	// allow-list based. A single conditional deny avoids relying on rule order:
+	// protected/read-only rules below can still narrow these roots further.
+	writeRoots := make([]string, 0, len(s.config.Sandbox.Filesystem.Write)+1)
+	if strings.TrimSpace(workdir) != "" {
+		writeRoots = append(writeRoots, canonicalSandboxPath(expandPath(workdir, workdir, homeDir)))
+	}
+	for _, path := range s.config.Sandbox.Filesystem.Write {
+		writeRoots = append(writeRoots, canonicalSandboxPath(expandPath(path, workdir, homeDir)))
+	}
+	if len(writeRoots) == 0 {
+		sb.WriteString("(deny file-write*)\n")
+	} else {
+		sb.WriteString("(deny file-write* (require-not (require-any")
+		for _, root := range writeRoots {
+			sb.WriteString(fmt.Sprintf(" (subpath %q)", filepath.Clean(root)))
+		}
+		sb.WriteString(")))\n")
 	}
 
-	// Allow writing to specified paths
-	for _, path := range s.config.Sandbox.Filesystem.Write {
-		expanded := expandPath(path, workdir, homeDir)
-		sb.WriteString(fmt.Sprintf("(allow file-write* (subpath %q))\n", expanded))
+	// Deny reading sensitive paths
+	for _, path := range s.config.Sandbox.Filesystem.Deny {
+		expanded := canonicalSandboxPath(expandPath(path, workdir, homeDir))
+		writeSeatbeltPathRule(&sb, "deny", "file-read*", expanded)
 	}
 
 	// Deny writing to protected paths (even if in write list)
 	for _, path := range s.config.Sandbox.Filesystem.Protected {
-		expanded := expandPath(path, workdir, homeDir)
-		sb.WriteString(fmt.Sprintf("(deny file-write* (subpath %q))\n", expanded))
+		expanded := canonicalSandboxPath(expandPath(path, workdir, homeDir))
+		writeSeatbeltPathRule(&sb, "deny", "file-write*", expanded)
 	}
 
 	// Mount readonly paths as read-only
 	for _, path := range s.config.Sandbox.Filesystem.ReadOnly {
-		expanded := expandPath(path, workdir, homeDir)
-		sb.WriteString(fmt.Sprintf("(allow file-read* (subpath %q))\n", expanded))
-		sb.WriteString(fmt.Sprintf("(deny file-write* (subpath %q))\n", expanded))
+		expanded := canonicalSandboxPath(expandPath(path, workdir, homeDir))
+		writeSeatbeltPathRule(&sb, "allow", "file-read*", expanded)
+		writeSeatbeltPathRule(&sb, "deny", "file-write*", expanded)
 	}
 
 	// Network restrictions: deny everything by default and only allow
@@ -133,4 +149,25 @@ func (s *Seatbelt) generateProfile(workdir string, homeDir string) string {
 	}
 
 	return sb.String()
+}
+
+func canonicalSandboxPath(path string) string {
+	if strings.ContainsAny(path, "*?[]") {
+		return canonicalizePolicyPattern(path)
+	}
+	if resolved, err := resolveSymlinkedPath(path); err == nil {
+		return filepath.Clean(resolved)
+	}
+	return filepath.Clean(path)
+}
+
+func writeSeatbeltPathRule(sb *strings.Builder, decision, operation, path string) {
+	if !strings.ContainsAny(path, "*?[]") {
+		sb.WriteString(fmt.Sprintf("(%s %s (subpath %q))\n", decision, operation, path))
+		return
+	}
+	pattern := regexp.QuoteMeta(filepath.ToSlash(path))
+	pattern = strings.ReplaceAll(pattern, `\*`, `[^/]*`)
+	pattern = strings.ReplaceAll(pattern, `\?`, `[^/]`)
+	sb.WriteString(fmt.Sprintf("(%s %s (regex #%q))\n", decision, operation, "^"+pattern+"$"))
 }

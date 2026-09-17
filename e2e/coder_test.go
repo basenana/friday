@@ -76,7 +76,7 @@ func TestCoder_ToolPolicy_ExplorerIsolation(t *testing.T) {
 
 	for _, tool := range filtered {
 		switch tool.Name {
-		case "fs_write", "fs_edit", "fs_delete", "fs_mkdir", "bash":
+		case "fs_write", "fs_edit", "fs_delete", "bash":
 			t.Errorf("explorer policy should not allow %q", tool.Name)
 		}
 	}

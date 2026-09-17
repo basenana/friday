@@ -120,6 +120,20 @@ func mergeTimeoutResult(timeout, original *Result) *Result {
 		return timeout
 	}
 	timeout.ExitCode = original.ExitCode
+	if len(original.Content) > 0 {
+		if len(timeout.Content) == 1 {
+			base, baseOK := timeout.Content[0].(TextContent)
+			partial, partialOK := original.Content[0].(TextContent)
+			if baseOK && partialOK {
+				base.Text += "\n\nPartial output captured before timeout:\n" + partial.Text
+				timeout.Content[0] = base
+			} else {
+				timeout.Content = append(timeout.Content, original.Content...)
+			}
+		} else {
+			timeout.Content = append(timeout.Content, original.Content...)
+		}
+	}
 	if strings.TrimSpace(original.FYI) != "" {
 		timeout.FYI = original.FYI
 	}

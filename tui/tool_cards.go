@@ -159,6 +159,12 @@ func (m *model) presentBuiltinTool(block *chatBlock, args map[string]any) (toolP
 			path = "."
 		}
 		return toolPresentation{title: "List directory", body: labeledValue("path", path), specialized: true}, true
+	case "fs_search":
+		return toolPresentation{
+			title:       "Search files",
+			body:        fields(labeledValue("directory", value("directory")), labeledValue("regex", value("regex"))),
+			specialized: true,
+		}, true
 	case "fs_write":
 		body := labeledValue("path", value("path"))
 		if content, ok := args["content"].(string); ok {
@@ -166,25 +172,24 @@ func (m *model) presentBuiltinTool(block *chatBlock, args map[string]any) (toolP
 		}
 		return toolPresentation{title: "Write file", body: body, specialized: true}, true
 	case "fs_edit":
-		scope := value("occurrences")
-		if scope == "" {
-			scope = "first"
+		scope := "unique"
+		if replaceAll, _ := args["replace_all"].(bool); replaceAll {
+			scope = "all"
 		}
-		replace, replacePresent := args["replace_string"].(string)
+		replace, replacePresent := args["new_text"].(string)
 		if replacePresent && replace == "" {
 			replace = "(empty)"
 		}
 		body := fields(
 			labeledValue("path", value("path")),
-			previewEditValue("search", value("search_string"), max(m.width-16, 20)),
+			previewEditValue("search", value("old_text"), max(m.width-16, 20)),
 			previewEditValue("replace", replace, max(m.width-16, 20)),
 			labeledValue("scope", scope),
 		)
 		return toolPresentation{title: "Edit file", body: body, specialized: true}, true
-	case "fs_mkdir":
-		return toolPresentation{title: "Create directory", body: labeledValue("path", value("path")), specialized: true}, true
 	case "fs_delete":
-		return toolPresentation{title: "Delete", body: labeledValue("path", value("path")), specialized: true}, true
+		recursive, _ := args["recursive"].(bool)
+		return toolPresentation{title: "Delete", body: fields(labeledValue("path", value("path")), labeledValue("recursive", fmt.Sprint(recursive))), specialized: true}, true
 	case "bash":
 		p := command("Run command", labeledValue("workdir", value("workdir")), labeledValue("timeout", value("timeout")))
 		return p, true

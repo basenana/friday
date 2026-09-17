@@ -221,7 +221,6 @@ type model struct {
 	runStartedAt    time.Time
 	runActivity     string
 	cancelling      bool
-	steeringPending bool
 	textBlock       int
 	reasonBlock     int
 	toolCalls       map[string]int
@@ -1009,18 +1008,9 @@ func (m *model) submitComposer() (tea.Model, tea.Cmd) {
 	m.attachments = nil
 	m.composerGeneration++
 	if m.running {
-		activeLoop, err := m.isLoopActive()
-		if err != nil {
-			m.appendBlock(chatBlock{kind: blockError, content: "read loop state: " + err.Error()})
-			activeLoop = m.loopActive
-		}
-		if activeLoop {
-			m.loopActive = true
-			return m.sendLoopInbox(text, images)
-		}
-		return m.startUserTurn(text, images, bus.DeliverySteer)
+		return m.sendRunningInbox(text, images)
 	}
-	return m.startUserTurn(text, images, bus.DeliveryNormal)
+	return m.startUserTurn(text, images)
 }
 
 func (m *model) queueComposer() (tea.Model, tea.Cmd) {
@@ -1039,7 +1029,7 @@ func (m *model) queueComposer() (tea.Model, tea.Cmd) {
 		m.attachments = nil
 		m.menu = menuState{}
 		m.loopActive = true
-		return m.sendLoopInbox(text, images)
+		return m.sendRunningInbox(text, images)
 	}
 	m.queued = append(m.queued, pendingInput{text: text, images: images})
 	m.textarea.Reset()
@@ -1049,12 +1039,12 @@ func (m *model) queueComposer() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m *model) sendLoopInbox(text string, images []types.ImageContent) (tea.Model, tea.Cmd) {
+func (m *model) sendRunningInbox(text string, images []types.ImageContent) (tea.Model, tea.Cmd) {
 	turnID := types.NewID()
-	m.appendBlock(chatBlock{kind: blockUser, id: turnID, content: userInputDisplay(text, images)})
+	m.appendBlockPreservingStream(chatBlock{kind: blockUser, id: turnID, content: userInputDisplay(text, images)})
 	m.seenInputs[turnID] = true
-	if err := m.sendUserText(text, images, bus.DeliveryNormal, turnID); err != nil {
-		m.appendBlock(chatBlock{kind: blockError, content: err.Error()})
+	if err := m.sendUserText(text, images, turnID); err != nil {
+		m.appendBlockPreservingStream(chatBlock{kind: blockError, content: err.Error()})
 		return m, nil
 	}
 	m.layout()
@@ -1070,47 +1060,40 @@ func (m *model) dispatchNextQueued() (tea.Model, tea.Cmd) {
 	if strings.HasPrefix(strings.TrimSpace(next.text), "/") {
 		return m.handleSlash(next.text)
 	}
-	return m.startUserTurn(next.text, next.images, bus.DeliveryNormal)
+	return m.startUserTurn(next.text, next.images)
 }
 
-func (m *model) startUserTurn(text string, images []types.ImageContent, delivery bus.InputDelivery) (tea.Model, tea.Cmd) {
-	return m.startUserTurnWithDisplay(text, "", images, delivery)
+func (m *model) startUserTurn(text string, images []types.ImageContent) (tea.Model, tea.Cmd) {
+	return m.startUserTurnWithDisplay(text, "", images)
 }
 
-func (m *model) startUserTurnWithDisplay(text, displayText string, images []types.ImageContent, delivery bus.InputDelivery) (tea.Model, tea.Cmd) {
-	return m.startUserTurnWithMetadata(text, displayText, images, delivery, nil)
+func (m *model) startUserTurnWithDisplay(text, displayText string, images []types.ImageContent) (tea.Model, tea.Cmd) {
+	return m.startUserTurnWithMetadata(text, displayText, images, nil)
 }
 
-func (m *model) startUserTurnWithMetadata(text, displayText string, images []types.ImageContent, delivery bus.InputDelivery, metadata map[string]any) (tea.Model, tea.Cmd) {
+func (m *model) startUserTurnWithMetadata(text, displayText string, images []types.ImageContent, metadata map[string]any) (tea.Model, tea.Cmd) {
 	turnID := types.NewID()
 	renderText := displayText
 	if renderText == "" {
 		renderText = userInputDisplay(text, images)
 	}
-	if delivery == bus.DeliverySteer {
-		// Steering is an explicit interruption of an autonomous Loop. Persist
-		// cancellation before publishing the preempting input.
-		m.cancelActiveLoop()
-		m.flushStreaming(true)
-	}
 	m.appendBlock(chatBlock{kind: blockUser, id: turnID, content: renderText})
 	m.seenInputs[turnID] = true
-	if err := m.sendUserTextWithMetadata(text, displayText, images, delivery, turnID, metadata); err != nil {
+	if err := m.sendUserTextWithMetadata(text, displayText, images, turnID, metadata); err != nil {
 		m.appendBlock(chatBlock{kind: blockError, content: err.Error()})
 		return m, nil
 	}
-	if delivery == bus.DeliverySteer {
-		m.steeringPending = true
-	} else {
-		m.running = true
-		m.runStartedAt = m.nowTime()
-		m.runActivity = "working"
-	}
+	m.running = true
+	m.runStartedAt = m.nowTime()
+	m.runActivity = "working"
 	m.resetStreaming()
 	return m, m.spinner.Tick
 }
 
 func (m *model) cancelRun() (tea.Model, tea.Cmd) {
+	if m.cancelling {
+		return m, nil
+	}
 	m.cancelActiveLoop()
 	if err := m.registry.DispatchPreempt(bus.NewScopedPreempt(m.sessionID, "user.local", "user cancelled", bus.PreemptCurrent)); err != nil {
 		m.appendBlock(chatBlock{kind: blockError, content: "cancel: " + err.Error()})
@@ -1208,28 +1191,24 @@ func (m *model) acquireCurrentSession() (*coresession.Session, func(), error) {
 	return sess, release, nil
 }
 
-func (m *model) sendUserText(text string, images []types.ImageContent, delivery bus.InputDelivery, turnID string) error {
-	return m.sendUserTextWithDisplay(text, "", images, delivery, turnID)
+func (m *model) sendUserText(text string, images []types.ImageContent, turnID string) error {
+	return m.sendUserTextWithDisplay(text, "", images, turnID)
 }
 
-func (m *model) sendUserTextWithDisplay(text, displayText string, images []types.ImageContent, delivery bus.InputDelivery, turnID string) error {
-	return m.sendUserTextWithMetadata(text, displayText, images, delivery, turnID, nil)
+func (m *model) sendUserTextWithDisplay(text, displayText string, images []types.ImageContent, turnID string) error {
+	return m.sendUserTextWithMetadata(text, displayText, images, turnID, nil)
 }
 
-func (m *model) sendUserTextWithMetadata(text, displayText string, images []types.ImageContent, delivery bus.InputDelivery, turnID string, metadata map[string]any) error {
+func (m *model) sendUserTextWithMetadata(text, displayText string, images []types.ImageContent, turnID string, metadata map[string]any) error {
 	if err := m.registry.DispatchInput(bus.NewUserInput(m.sessionID, "user.local", bus.UserTextInput{
-		Text: text, DisplayText: displayText, TurnID: turnID, Delivery: delivery,
+		Text: text, DisplayText: displayText, TurnID: turnID,
 		Images: append([]types.ImageContent(nil), images...), Metadata: metadata,
 	})); err != nil {
-		m.logError("failed to prepare actor before publishing user input", err,
-			"turn_id", turnID,
-			"delivery", delivery,
-		)
+		m.logError("failed to prepare actor before publishing user input", err, "turn_id", turnID)
 		return err
 	}
 	m.logInfo("user input published",
 		"turn_id", turnID,
-		"delivery", delivery,
 		"text_bytes", len(text),
 		"queued_count", len(m.queued),
 	)
@@ -1268,7 +1247,6 @@ func (m *model) handleActorEvent(evt events.Event) tea.Cmd {
 		m.currentRunID = evt.RunID
 		m.runActivity = "working"
 		m.cancelling = false
-		m.steeringPending = false
 		if !m.replaying {
 			m.logInfo("agent run started", "run_id", evt.RunID)
 		}
@@ -1288,6 +1266,7 @@ func (m *model) handleActorEvent(evt events.Event) tea.Cmd {
 			m.currentRunID = ""
 			m.runStartedAt = time.Time{}
 			m.runActivity = ""
+			m.cancelling = false
 			if d.StopReason == "error" && m.loopActive {
 				m.appendBlock(chatBlock{kind: blockDivider, content: "loop · suspended · send a message or reopen to resume"})
 			}
@@ -1305,7 +1284,6 @@ func (m *model) handleActorEvent(evt events.Event) tea.Cmd {
 				"iteration", m.iteration,
 			)
 		}
-		m.cancelling = false
 		if !m.replaying && userTurn && d.StopReason == "end_turn" {
 			if m.transcriptDesynced {
 				m.resumeAfterReconcile = true
@@ -1748,6 +1726,10 @@ func (m *model) breakStreamSegments() {
 
 func (m *model) appendBlock(b chatBlock) {
 	m.breakStreamSegments()
+	m.appendBlockPreservingStream(b)
+}
+
+func (m *model) appendBlockPreservingStream(b chatBlock) {
 	m.messages = append(m.messages, b)
 	if b.kind == blockError && !m.replaying {
 		m.logWarn("error displayed in TUI", "error", boundedTUILogText(b.content))

@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -248,7 +249,7 @@ func (s *unavailableTestSandbox) WrapCommand(string, ExecOptions) (string, func(
 func (*unavailableTestSandbox) IsAvailable() bool { return false }
 func (*unavailableTestSandbox) Name() string      { return "test-unavailable" }
 
-func TestUnavailableSandboxFallsBackToDirectExecution(t *testing.T) {
+func TestUnavailableSandboxFailsClosed(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.Sandbox.Enabled = true
 	exec := NewExecutor(cfg)
@@ -256,14 +257,14 @@ func TestUnavailableSandboxFallsBackToDirectExecution(t *testing.T) {
 	exec.sandbox = backend
 
 	result, err := exec.Run(context.Background(), "echo fallback-ok", ExecOptions{})
-	if err != nil {
-		t.Fatal(err)
+	if !errors.Is(err, ErrSandboxUnavailable) {
+		t.Fatalf("error = %v, want ErrSandboxUnavailable", err)
 	}
 	if backend.called {
 		t.Fatal("unavailable sandbox backend was still used")
 	}
-	if result.ExitCode != 0 || !strings.Contains(result.Stdout, "fallback-ok") {
-		t.Fatalf("fallback result = %+v", result)
+	if result == nil || result.ExitCode == 0 || !strings.Contains(result.Stderr, "sandbox") {
+		t.Fatalf("fail-closed result = %+v", result)
 	}
 }
 

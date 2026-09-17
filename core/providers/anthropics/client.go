@@ -434,12 +434,26 @@ func (c *client) messageCreateParams(request providers.Request) *anthropic.Messa
 		}
 
 		inputSchema := anthropic.ToolInputSchemaParam{
-			Properties: properties,
-			Required:   required,
-			Type:       "object",
+			Properties:  properties,
+			Required:    required,
+			Type:        "object",
+			ExtraFields: make(map[string]any),
+		}
+		for key, value := range paramsMap {
+			switch key {
+			case "type", "properties", "required":
+				continue
+			default:
+				inputSchema.ExtraFields[key] = value
+			}
 		}
 		toolUnion := anthropic.ToolUnionParamOfTool(inputSchema, t.GetName())
 		toolUnion.OfTool.Description = anthropic.String(t.GetDescription())
+		if withExamples, ok := t.(interface {
+			GetExamples() []map[string]interface{}
+		}); ok {
+			toolUnion.OfTool.InputExamples = withExamples.GetExamples()
+		}
 		params.Tools = append(params.Tools, toolUnion)
 	}
 

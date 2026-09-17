@@ -67,7 +67,7 @@ func (m *model) triggerSlashAgent(displayText, rawTask string, agent *coderagent
 		return m.dispatchIfIdle()
 	}
 	m.logInfo("slash agent triggered", "agent", agent.Name, "task_bytes", len(task))
-	return m.startUserTurnWithMetadata(task, displayText, nil, bus.DeliveryNormal, map[string]any{
+	return m.startUserTurnWithMetadata(task, displayText, nil, map[string]any{
 		coderagents.RouteMetadataKey: agent.Name,
 	})
 }
@@ -110,7 +110,7 @@ func (m *model) triggerSlashSkill(displayText, rawArgs string, skill *skills.Ski
 		return m.dispatchIfIdle()
 	}
 	m.logInfo("slash skill triggered", "skill", skill.Name, "arg_bytes", len(rawArgs), "instruction_bytes", len(instructions))
-	return m.startUserTurnWithDisplay(payload, displayText, nil, bus.DeliveryNormal)
+	return m.startUserTurnWithDisplay(payload, displayText, nil)
 }
 
 func (m *model) resolveSlashSkill(name string, refresh bool) (*skills.Skill, bool, error) {
@@ -416,7 +416,7 @@ func (m *model) applyCollaborationAction(action codercmds.Action) (bool, tea.Cmd
 		m.mode = mode
 		m.appendBlock(chatBlock{kind: blockDivider, content: "mode · " + string(mode)})
 		if action.Prompt != "" {
-			_, cmd := m.startUserTurn(action.Prompt, nil, bus.DeliveryNormal)
+			_, cmd := m.startUserTurn(action.Prompt, nil)
 			return true, cmd
 		}
 		return true, nil
@@ -554,7 +554,7 @@ func (m *model) switchSession(newID string) (cmd tea.Cmd, err error) {
 	m.activeModel = activeModel
 	m.subscriptionToken++
 	m.tokenCount, m.iteration = 0, 0
-	m.running, m.cancelling, m.steeringPending = false, false, false
+	m.running, m.cancelling = false, false
 	m.loopActive = false
 	m.runStartedAt = time.Time{}
 	m.runActivity = ""
@@ -627,29 +627,77 @@ func (m *model) refreshMenu() {
 		return
 	}
 	query := strings.ToLower(strings.TrimPrefix(value, "/"))
-	var items []menuItem
+	type rankedItem struct {
+		item menuItem
+		rank int
+	}
+	const (
+		rankExact = iota
+		rankNamePrefix
+		rankAliasPrefix
+	)
+	nameRank := func(name string) (int, bool) {
+		if strings.EqualFold(name, query) {
+			return rankExact, true
+		}
+		if strings.HasPrefix(strings.ToLower(name), query) {
+			return rankNamePrefix, true
+		}
+		return 0, false
+	}
+
+	var ranked []rankedItem
 	for _, cmd := range m.cmdRegistry.List() {
-		label := "/" + cmd.Name()
-		search := label + " " + cmd.Description() + " " + strings.Join(cmd.Aliases(), " ")
-		if query == "" || strings.Contains(strings.ToLower(search), query) {
-			items = append(items, menuItem{value: label, label: label, description: cmd.Description()})
+		rank, matched := nameRank(cmd.Name())
+		if !matched {
+			for _, alias := range cmd.Aliases() {
+				if strings.HasPrefix(strings.ToLower(alias), query) {
+					rank, matched = rankAliasPrefix, true
+					break
+				}
+			}
+		}
+		if matched {
+			label := "/" + cmd.Name()
+			ranked = append(ranked, rankedItem{
+				item: menuItem{value: label, label: label, description: cmd.Description()},
+				rank: rank,
+			})
 		}
 	}
 	for _, agent := range m.slashAgents() {
-		label := "/" + agent.Name
-		search := label + " " + agent.Description
-		if query == "" || strings.Contains(strings.ToLower(search), query) {
-			items = append(items, menuItem{value: label, label: label, description: agent.Description})
+		if rank, matched := nameRank(agent.Name); matched {
+			label := "/" + agent.Name
+			ranked = append(ranked, rankedItem{
+				item: menuItem{value: label, label: label, description: agent.Description},
+				rank: rank,
+			})
 		}
 	}
 	for _, skill := range m.slashSkills() {
-		label := "/" + skill.Name
-		search := label + " " + skill.Description
-		if query == "" || strings.Contains(strings.ToLower(search), query) {
-			items = append(items, menuItem{value: label, label: label, description: skill.Description})
+		if rank, matched := nameRank(skill.Name); matched {
+			label := "/" + skill.Name
+			ranked = append(ranked, rankedItem{
+				item: menuItem{value: label, label: label, description: skill.Description},
+				rank: rank,
+			})
 		}
 	}
-	sort.Slice(items, func(i, j int) bool { return items[i].label < items[j].label })
+	sort.Slice(ranked, func(i, j int) bool {
+		if ranked[i].rank != ranked[j].rank {
+			return ranked[i].rank < ranked[j].rank
+		}
+		left := strings.ToLower(ranked[i].item.label)
+		right := strings.ToLower(ranked[j].item.label)
+		if left != right {
+			return left < right
+		}
+		return ranked[i].item.label < ranked[j].item.label
+	})
+	items := make([]menuItem, len(ranked))
+	for i, candidate := range ranked {
+		items[i] = candidate.item
+	}
 	selected := m.menu.selected
 	if selected >= len(items) {
 		selected = max(len(items)-1, 0)

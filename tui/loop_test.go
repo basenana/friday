@@ -182,7 +182,7 @@ func TestTUITabDuringLoopPublishesNormalActorInput(t *testing.T) {
 		if err := events.DecodePayload(env.Event, &body); err != nil {
 			t.Fatal(err)
 		}
-		if body.Text != "queued user correction" || body.Delivery != bus.DeliveryNormal {
+		if body.Text != "queued user correction" {
 			t.Fatalf("actor input = %+v", body)
 		}
 	case <-time.After(time.Second):
@@ -218,9 +218,6 @@ func TestTUIEnterDuringLoopAddsNormalInboxInputWithoutCancelling(t *testing.T) {
 	m.textarea.SetValue("stop changing the API; preserve compatibility")
 	got, _ := m.updateKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = got.(*model)
-	if m.steeringPending {
-		t.Fatal("Enter incorrectly marked Loop input as steering")
-	}
 	if state := readLoopState(t, sess); state != string(coderloop.StateActive) {
 		t.Fatalf("Loop state after user input = %q", state)
 	}
@@ -238,7 +235,7 @@ func TestTUIEnterDuringLoopAddsNormalInboxInputWithoutCancelling(t *testing.T) {
 		if err := events.DecodePayload(env.Event, &body); err != nil {
 			t.Fatal(err)
 		}
-		if body.Text != "stop changing the API; preserve compatibility" || body.Delivery != bus.DeliveryNormal {
+		if body.Text != "stop changing the API; preserve compatibility" {
 			t.Fatalf("Loop inbox input = %+v", body)
 		}
 	case <-time.After(time.Second):

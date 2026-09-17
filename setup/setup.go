@@ -385,7 +385,7 @@ func NewAgent(sessionMgr SessionManager, cfg *config.Config, opts ...Option) (*A
 		toolTraceMiddleware(toolTraceSinkForConfig(cfg)),
 	))
 
-	workspacePrompt := workspace.ComposeSystemPrompt(loaded)
+	workspacePrompt := coderagents.ComposeSystemPrompt(agents.DEFAULT_SYSTEM_PROMPT, workspace.ComposeSystemPrompt(loaded))
 	primaryAgent := agents.New(client, agents.Option{
 		SystemPrompt: workspacePrompt,
 		Tools:        allTools,

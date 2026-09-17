@@ -16,9 +16,9 @@ func TestBuiltinToolCardPresentations(t *testing.T) {
 		{"submit_plan", `{"markdown":"# Plan\\n\\nComplete plan"}`, "Submit plan", ""},
 		{"fs_read", `{"path":"main.go"}`, "Read file", "main.go"},
 		{"fs_list", `{}`, "List directory", "."},
+		{"fs_search", `{"directory":"core","regex":"func\\s+New"}`, "Search files", "func\\s+New"},
 		{"fs_write", `{"path":"out.txt","content":"hello"}`, "Write file", "5 bytes"},
-		{"fs_edit", `{"path":"main.go","search_string":"old","replace_string":"new","occurrences":"all"}`, "Edit file", "scope · all"},
-		{"fs_mkdir", `{"path":"build"}`, "Create directory", "build"},
+		{"fs_edit", `{"path":"main.go","old_text":"old","new_text":"new","replace_all":true}`, "Edit file", "scope · all"},
 		{"fs_delete", `{"path":"old.txt"}`, "Delete", "old.txt"},
 		{"bash", `{"command":"go test ./tui","workdir":"/repo","timeout":"30s"}`, "Run command", "go test ./tui"},
 		{"background_task", `{"command":"make serve"}`, "Start background task", "make serve"},
@@ -268,7 +268,7 @@ func TestFsWriteAndEditUseCompactArgumentPreviews(t *testing.T) {
 	if card := terminalSafe(m.renderToolCard(write)); strings.Contains(card, "do-not-render") || !strings.Contains(card, "13 bytes") {
 		t.Fatalf("write card = %q", card)
 	}
-	edit := &chatBlock{toolName: "fs_edit", toolArgs: `{"path":"main.go","search_string":"first\nsecond","replace_string":"next\nline"}`, toolArgsComplete: true, success: true}
+	edit := &chatBlock{toolName: "fs_edit", toolArgs: `{"path":"main.go","old_text":"first\nsecond","new_text":"next\nline"}`, toolArgsComplete: true, success: true}
 	card := terminalSafe(m.renderToolCard(edit))
 	if !strings.Contains(card, "first · +1 lines") || !strings.Contains(card, "next · +1 lines") {
 		t.Fatalf("edit card = %q", card)

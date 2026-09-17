@@ -154,28 +154,6 @@ func (p inputContent) image() (types.ImageContent, error) {
 	return types.ImageContent{}, errors.New("image source is required")
 }
 
-func (in RunAgentInput) delivery() (string, error) {
-	if len(in.ForwardedProps) == 0 || bytes.Equal(bytes.TrimSpace(in.ForwardedProps), []byte("null")) {
-		return "normal", nil
-	}
-	var props struct {
-		Friday struct {
-			Delivery string `json:"delivery"`
-		} `json:"friday"`
-	}
-	if err := json.Unmarshal(in.ForwardedProps, &props); err != nil {
-		return "", errors.New("forwardedProps must be an object")
-	}
-	delivery := props.Friday.Delivery
-	if delivery == "" {
-		return "normal", nil
-	}
-	if delivery != "normal" && delivery != "steer" {
-		return "", fmt.Errorf("unsupported delivery %q", delivery)
-	}
-	return delivery, nil
-}
-
 func nonEmptyJSON(raw json.RawMessage) bool {
 	trimmed := bytes.TrimSpace(raw)
 	return len(trimmed) > 0 && !bytes.Equal(trimmed, []byte("null")) &&

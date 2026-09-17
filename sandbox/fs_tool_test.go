@@ -1,7 +1,10 @@
 package sandbox
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,6 +12,285 @@ import (
 
 	"github.com/basenana/friday/core/tools"
 )
+
+func TestFsToolSurfaceIncludesSearchAndOmitsMkdir(t *testing.T) {
+	tools := NewFsTools(NewExecutor(DefaultConfig()), t.TempDir())
+	got := make(map[string]bool, len(tools))
+	for _, tool := range tools {
+		got[tool.Name] = true
+		if issues := tool.ValidateDefinition(2); len(issues) != 0 {
+			t.Fatalf("%s definition: %v", tool.Name, issues)
+		}
+	}
+	for _, name := range []string{"fs_list", "fs_search", "fs_read", "fs_write", "fs_edit", "fs_delete"} {
+		if !got[name] {
+			t.Fatalf("missing tool %q: %v", name, got)
+		}
+	}
+	if got["fs_mkdir"] {
+		t.Fatalf("fs_mkdir must not be model-visible: %v", got)
+	}
+}
+
+func TestFsListReturnsStructuredMetadata(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, ".hidden"), []byte("hello"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(root, "dir"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	result, err := fsListHandler(NewExecutor(DefaultConfig()), root)(context.Background(), &tools.Request{Arguments: map[string]any{"path": "."}})
+	if err != nil || result.IsError {
+		t.Fatalf("fs_list result=%+v err=%v", result, err)
+	}
+	var decoded fsListResult
+	if err := json.Unmarshal([]byte(textResult(t, result)), &decoded); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if decoded.Path != "." || len(decoded.Entries) != 2 || decoded.Entries[0].Name != ".hidden" || decoded.Entries[0].Mode == "" {
+		t.Fatalf("decoded list = %#v", decoded)
+	}
+}
+
+func TestFsSearchRecursesAndSkipsGitBinaryAndSymlinks(t *testing.T) {
+	root := t.TempDir()
+	files := map[string]string{
+		"main.go":            "package main\nfunc NewMain() {}\n",
+		"vendor/pkg/lib.go":  "func NewVendor() {}\n",
+		".hidden/config.txt": "func NewHidden() {}\n",
+		".git/ignored.txt":   "func NewIgnored() {}\n",
+	}
+	for name, content := range files {
+		path := filepath.Join(root, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(root, "binary.dat"), []byte{'x', 0, 'y'}, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(root, "main.go"), filepath.Join(root, "linked.go")); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	result, err := fsSearchHandler(NewExecutor(DefaultConfig()), root)(context.Background(), &tools.Request{Arguments: map[string]any{
+		"directory": ".", "regex": `func\s+New`,
+	}})
+	if err != nil || result.IsError {
+		t.Fatalf("fs_search result=%+v err=%v", result, err)
+	}
+	var decoded fsSearchResult
+	if err := json.Unmarshal([]byte(textResult(t, result)), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if len(decoded.Matches) != 3 || decoded.BinaryFilesSkipped != 1 {
+		t.Fatalf("search result = %#v", decoded)
+	}
+	for _, match := range decoded.Matches {
+		if strings.Contains(match.Path, ".git") || strings.Contains(match.Path, "linked.go") {
+			t.Fatalf("unexpected match: %#v", match)
+		}
+	}
+}
+
+func TestFsSearchReportsMatchLimit(t *testing.T) {
+	root := t.TempDir()
+	content := strings.Repeat("match\n", maxSearchMatches+5)
+	if err := os.WriteFile(filepath.Join(root, "many.txt"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	result, err := fsSearchHandler(NewExecutor(DefaultConfig()), root)(context.Background(), &tools.Request{Arguments: map[string]any{
+		"directory": ".", "regex": "match",
+	}})
+	if err != nil || result.IsError {
+		t.Fatalf("search result=%+v err=%v", result, err)
+	}
+	var decoded fsSearchResult
+	if err := json.Unmarshal([]byte(textResult(t, result)), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if !decoded.Truncated || decoded.StoppedReason != "match_limit" || len(decoded.Matches) != maxSearchMatches {
+		t.Fatalf("limited search = %#v", decoded)
+	}
+}
+
+func TestFsSearchHonorsSharedOutputBudgetWithValidJSON(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "many.txt"), []byte(strings.Repeat("match some long searchable text\n", 500)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	request := &tools.Request{Arguments: map[string]any{"directory": ".", "regex": "match"}, MaxOutputChars: 4096}
+	result, err := fsSearchHandler(NewExecutor(DefaultConfig()), root)(context.Background(), request)
+	if err != nil || result.IsError {
+		t.Fatalf("search result=%+v err=%v", result, err)
+	}
+	text := textResult(t, result)
+	if len([]rune(text)) > int(request.MaxOutputChars) {
+		t.Fatalf("result length = %d, budget = %d", len([]rune(text)), request.MaxOutputChars)
+	}
+	var decoded fsSearchResult
+	if err := json.Unmarshal([]byte(text), &decoded); err != nil {
+		t.Fatalf("budgeted result is invalid JSON: %v", err)
+	}
+	if !decoded.Truncated || decoded.StoppedReason != "output_size_limit" {
+		t.Fatalf("budgeted search = %#v", decoded)
+	}
+}
+
+func TestFsReadHasNoFilesystemSpecificTruncation(t *testing.T) {
+	root := t.TempDir()
+	var content strings.Builder
+	for i := 0; i < MaxOutputLines+20; i++ {
+		fmt.Fprintf(&content, "line-%03d\n", i)
+	}
+	path := filepath.Join(root, "large.txt")
+	if err := os.WriteFile(path, []byte(content.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	result, err := fsReadHandler(NewExecutor(DefaultConfig()), root)(context.Background(), &tools.Request{Arguments: map[string]any{"path": "large.txt"}})
+	if err != nil || result.IsError || textResult(t, result) != content.String() {
+		t.Fatalf("fs_read truncated content: result=%+v err=%v", result, err)
+	}
+}
+
+func TestFsReadUsesSharedOutputBudgetAndReportsTruncation(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "large.txt"), []byte(strings.Repeat("content\n", 2000)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	request := &tools.Request{Arguments: map[string]any{"path": "large.txt"}, MaxOutputChars: 4096}
+	result, err := fsReadHandler(NewExecutor(DefaultConfig()), root)(context.Background(), request)
+	if err != nil || result.IsError {
+		t.Fatalf("read result=%+v err=%v", result, err)
+	}
+	text := textResult(t, result)
+	if len([]rune(text)) > int(request.MaxOutputChars) || !strings.Contains(text, "File content truncated by shared tool-result budget") {
+		t.Fatalf("budgeted read length=%d text tail=%q", len([]rune(text)), text[len(text)-120:])
+	}
+}
+
+func TestFsEditRequiresUniqueMatchAndPreservesMode(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "script.sh")
+	if err := os.WriteFile(path, []byte("old\nold\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	handler := fsEditHandler(NewExecutor(DefaultConfig()), root)
+	ambiguous, err := handler(context.Background(), &tools.Request{Arguments: map[string]any{
+		"path": "script.sh", "old_text": "old", "new_text": "new",
+	}})
+	if err != nil || !ambiguous.IsError || !strings.Contains(textResult(t, ambiguous), "matches 2 locations") {
+		t.Fatalf("ambiguous edit result=%+v err=%v", ambiguous, err)
+	}
+	result, err := handler(context.Background(), &tools.Request{Arguments: map[string]any{
+		"path": "script.sh", "old_text": "old", "new_text": "new", "replace_all": true,
+	}})
+	if err != nil || result.IsError {
+		t.Fatalf("replace-all result=%+v err=%v", result, err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o755 {
+		t.Fatalf("mode = %o, want 755", info.Mode().Perm())
+	}
+}
+
+func TestFsEditMatchesAcrossStreamingChunkBoundary(t *testing.T) {
+	root := t.TempDir()
+	prefix := strings.Repeat("x", 64*1024-2)
+	path := filepath.Join(root, "large.txt")
+	if err := os.WriteFile(path, []byte(prefix+"needle"+strings.Repeat("y", 64*1024)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	result, err := fsEditHandler(NewExecutor(DefaultConfig()), root)(context.Background(), &tools.Request{Arguments: map[string]any{
+		"path": "large.txt", "old_text": "needle", "new_text": "found",
+	}})
+	if err != nil || result.IsError {
+		t.Fatalf("streaming edit result=%+v err=%v", result, err)
+	}
+	content, err := os.ReadFile(path)
+	if err != nil || !bytes.Contains(content, []byte("found")) || bytes.Contains(content, []byte("needle")) {
+		t.Fatalf("streaming edit content mismatch: err=%v", err)
+	}
+}
+
+func TestFsDeleteRequiresRecursiveAndProtectsRoot(t *testing.T) {
+	root := t.TempDir()
+	nested := filepath.Join(root, "nested")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(nested, "file.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	handler := fsDeleteHandler(NewExecutor(DefaultConfig()), root)
+	result, err := handler(context.Background(), &tools.Request{Arguments: map[string]any{"path": "nested"}})
+	if err != nil || !result.IsError {
+		t.Fatalf("non-recursive delete result=%+v err=%v", result, err)
+	}
+	result, err = handler(context.Background(), &tools.Request{Arguments: map[string]any{"path": "nested", "recursive": true}})
+	if err != nil || result.IsError {
+		t.Fatalf("recursive delete result=%+v err=%v", result, err)
+	}
+	if _, err := os.Stat(nested); !os.IsNotExist(err) {
+		t.Fatalf("nested directory still exists: %v", err)
+	}
+	result, err = handler(context.Background(), &tools.Request{Arguments: map[string]any{"path": ".", "recursive": true}})
+	if err != nil || !result.IsError {
+		t.Fatalf("root delete result=%+v err=%v", result, err)
+	}
+}
+
+func TestFsDeleteUnlinksSymlinkWithoutDeletingTarget(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "target.txt")
+	link := filepath.Join(root, "link.txt")
+	if err := os.WriteFile(target, []byte("keep"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	result, err := fsDeleteHandler(NewExecutor(DefaultConfig()), root)(context.Background(), &tools.Request{Arguments: map[string]any{"path": "link.txt"}})
+	if err != nil || result.IsError {
+		t.Fatalf("delete link result=%+v err=%v", result, err)
+	}
+	if _, err := os.Stat(target); err != nil {
+		t.Fatalf("target was deleted: %v", err)
+	}
+	if _, err := os.Lstat(link); !os.IsNotExist(err) {
+		t.Fatalf("link still exists: %v", err)
+	}
+}
+
+func TestFsReadMissingPathSuggestsExistingSibling(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "core", "actor"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "core", "actor", "inbox.go"), []byte("package actor"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	result, err := fsReadHandler(NewExecutor(DefaultConfig()), root)(context.Background(), &tools.Request{Arguments: map[string]any{
+		"path": "core/actor/inbox_test.go",
+	}})
+	if err != nil || !result.IsError {
+		t.Fatalf("missing read result=%+v err=%v", result, err)
+	}
+	text := textResult(t, result)
+	if !strings.Contains(text, "nearest existing directory") || !strings.Contains(text, "core/actor/inbox.go") {
+		t.Fatalf("missing path error lacks recovery details: %q", text)
+	}
+}
+
+func fsSearchHandler(exec *Executor, workdir string) tools.ToolHandlerFunc {
+	return fsSearchFileSystemHandler(NewLocalFileSystem(exec, workdir))
+}
 
 func textResult(t *testing.T, result *tools.Result) string {
 	t.Helper()
@@ -95,6 +377,27 @@ func TestFsWritePreservesSingleQuotes(t *testing.T) {
 	}
 	if string(data) != content {
 		t.Fatalf("content mismatch: got %q want %q", string(data), content)
+	}
+}
+
+func TestFsWritePreservesExistingMode(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "script.sh")
+	if err := os.WriteFile(path, []byte("old"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	result, err := fsWriteHandler(NewExecutor(DefaultConfig()), root)(context.Background(), &tools.Request{Arguments: map[string]any{
+		"path": "script.sh", "content": "new",
+	}})
+	if err != nil || result.IsError {
+		t.Fatalf("write result=%+v err=%v", result, err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o755 {
+		t.Fatalf("mode = %o, want 755", info.Mode().Perm())
 	}
 }
 
@@ -189,9 +492,9 @@ func TestFsHandlersUseSharedAccessRules(t *testing.T) {
 
 	editResult, err := fsEditHandler(exec, workdir)(context.Background(), &tools.Request{
 		Arguments: map[string]any{
-			"path":           filepath.Join(protectedRoot, "edit.txt"),
-			"search_string":  "hello",
-			"replace_string": "world",
+			"path":     filepath.Join(protectedRoot, "edit.txt"),
+			"old_text": "hello",
+			"new_text": "world",
 		},
 	})
 	if err != nil {
@@ -199,16 +502,6 @@ func TestFsHandlersUseSharedAccessRules(t *testing.T) {
 	}
 	if !editResult.IsError {
 		t.Fatal("expected protected edit to be rejected")
-	}
-
-	mkdirResult, err := fsMkdirHandler(exec, workdir)(context.Background(), &tools.Request{
-		Arguments: map[string]any{"path": filepath.Join(writeRoot, "nested")},
-	})
-	if err != nil {
-		t.Fatalf("fsMkdirHandler() error: %v", err)
-	}
-	if mkdirResult.IsError {
-		t.Fatalf("mkdir should be allowed: %s", textResult(t, mkdirResult))
 	}
 
 	listResult, err := fsListHandler(exec, workdir)(context.Background(), &tools.Request{
@@ -222,6 +515,9 @@ func TestFsHandlersUseSharedAccessRules(t *testing.T) {
 	}
 
 	deleteTarget := filepath.Join(writeRoot, "delete-me")
+	if err := os.MkdirAll(writeRoot, 0o755); err != nil {
+		t.Fatalf("os.MkdirAll() error: %v", err)
+	}
 	if err := os.WriteFile(deleteTarget, []byte("bye"), 0o644); err != nil {
 		t.Fatalf("os.WriteFile() error: %v", err)
 	}
@@ -295,6 +591,34 @@ func TestFsWriteRejectsSymlinkEscape(t *testing.T) {
 	}
 }
 
+func TestFsWriteDoesNotFollowParentChangedAfterResolve(t *testing.T) {
+	workdir := t.TempDir()
+	outside := t.TempDir()
+	parent := filepath.Join(workdir, "safe")
+	if err := os.Mkdir(parent, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	fs := NewLocalFileSystem(NewExecutor(DefaultConfig()), workdir)
+	resolved, err := fs.Resolve(context.Background(), "safe/file.txt", FileAccessWrite)
+	if err != nil {
+		t.Fatalf("resolve target: %v", err)
+	}
+	if err := os.Rename(parent, filepath.Join(workdir, "moved")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, parent); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+
+	if err := fs.WriteFile(context.Background(), resolved, []byte("blocked")); err == nil {
+		t.Fatal("expected rooted write to reject a parent symlink escaping the workdir")
+	}
+	if _, err := os.Stat(filepath.Join(outside, "file.txt")); !os.IsNotExist(err) {
+		t.Fatalf("outside file must not be created: %v", err)
+	}
+}
+
 func TestFsReadAllowsRegularNestedPath(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.Sandbox.Enabled = false
@@ -313,8 +637,12 @@ func TestFsReadAllowsRegularNestedPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolveToolPath() error = %v", err)
 	}
-	if got != nested {
-		t.Fatalf("resolveToolPath() = %q, want %q", got, nested)
+	want, err := filepath.EvalSymlinks(nested)
+	if err != nil {
+		t.Fatalf("filepath.EvalSymlinks() error = %v", err)
+	}
+	if got != want {
+		t.Fatalf("resolveToolPath() = %q, want %q", got, want)
 	}
 
 	result, err := fsReadHandler(exec, workdir)(context.Background(), &tools.Request{

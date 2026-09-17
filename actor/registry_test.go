@@ -349,7 +349,7 @@ func TestRegistryDispatchInputRecreatesEvictedActor(t *testing.T) {
 	}
 	r.Shutdown("sess-dispatch")
 	if err := r.DispatchInput(bus.NewUserInput("sess-dispatch", "test", bus.UserTextInput{
-		Text: "hello", Delivery: bus.InputDelivery("invalid-test-delivery"),
+		Text: "hello",
 	})); err != nil {
 		t.Fatal(err)
 	}

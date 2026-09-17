@@ -56,24 +56,11 @@ type UserTextMessage struct {
 	SourceEventID string
 	Priority      Priority
 	TurnID        string
-	// Delivery identifies how this input reached the actor. Empty means a
-	// normal turn; "steer" means the input interrupted an active turn.
-	Delivery string
-	Images   []types.ImageContent
-	Metadata map[string]any
+	Images        []types.ImageContent
+	Metadata      map[string]any
 }
 
 func (UserTextMessage) msgMarker() {}
-
-// SteerMessage is delivered on a dedicated priority lane. It interrupts the
-// active provider stream and becomes the next turn without discarding normal
-// messages that are already queued.
-type SteerMessage struct {
-	UserTextMessage
-	sequence uint64
-}
-
-func (SteerMessage) msgMarker() {}
 
 // FormSubmitMessage carries user-supplied values for a pending form.
 // It is routed to the corresponding pendingForm channel by FormID,
@@ -127,14 +114,10 @@ const (
 type Inbox struct {
 	ch       chan Message
 	preemptC chan PreemptMessage
-	steerC   chan SteerMessage
 
 	mu     sync.Mutex
 	closed bool
 	done   chan struct{}
-
-	steerMu       sync.Mutex
-	steerSequence uint64
 }
 
 // NewInbox builds an inbox with the given buffer sizes.
@@ -148,38 +131,8 @@ func NewInbox(buffer, preemptBuffer int) *Inbox {
 	return &Inbox{
 		ch:       make(chan Message, buffer),
 		preemptC: make(chan PreemptMessage, preemptBuffer),
-		steerC:   make(chan SteerMessage, preemptBuffer),
 		done:     make(chan struct{}),
 	}
-}
-
-// SendSteer enqueues a steering message on the high-priority lane.
-func (in *Inbox) SendSteer(ctx context.Context, msg SteerMessage) error {
-	in.steerMu.Lock()
-	defer in.steerMu.Unlock()
-	if in.isClosed() {
-		return errInboxClosed
-	}
-	msg.sequence = in.steerSequence + 1
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-in.done:
-		return errInboxClosed
-	case in.steerC <- msg:
-		in.steerSequence = msg.sequence
-		return nil
-	}
-}
-
-// IsLatestSteer reports whether msg is still the newest accepted steer. It is
-// used by the actor to close the small dequeue/start race: if another steer was
-// accepted after msg left the channel but before its turn started, the older
-// message must not start a provider request.
-func (in *Inbox) IsLatestSteer(msg SteerMessage) bool {
-	in.steerMu.Lock()
-	defer in.steerMu.Unlock()
-	return msg.sequence != 0 && msg.sequence == in.steerSequence
 }
 
 // Send enqueues a normal message. It blocks when the buffer is full.
@@ -246,24 +199,11 @@ func (in *Inbox) PollPreempt() (PreemptMessage, bool) {
 	}
 }
 
-// PollSteer returns a pending steering message without blocking.
-func (in *Inbox) PollSteer() (SteerMessage, bool) {
-	select {
-	case m := <-in.steerC:
-		return m, true
-	default:
-		return SteerMessage{}, false
-	}
-}
-
 // Wait blocks until at least one message is available, the context is
 // cancelled, or the inbox is closed. On close, returns nil, false.
 func (in *Inbox) Wait(ctx context.Context) (Message, bool) {
 	// Preserve control-lane priority for messages that were already buffered.
 	if m, ok := in.PollPreempt(); ok {
-		return m, true
-	}
-	if m, ok := in.PollSteer(); ok {
 		return m, true
 	}
 	select {
@@ -273,21 +213,8 @@ func (in *Inbox) Wait(ctx context.Context) (Message, bool) {
 		return nil, false
 	case m := <-in.preemptC:
 		return m, true
-	case m := <-in.steerC:
-		return m, true
 	case m := <-in.ch:
 		return m, true
-	}
-}
-
-// DrainSteers discards all currently buffered steering messages.
-func (in *Inbox) DrainSteers() {
-	for {
-		select {
-		case <-in.steerC:
-		default:
-			return
-		}
 	}
 }
 

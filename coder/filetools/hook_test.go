@@ -127,6 +127,36 @@ func TestConcurrentReadsClaimDirectoryOnce(t *testing.T) {
 	}
 }
 
+func TestMutationWaitsForNewNestedInstructions(t *testing.T) {
+	root := t.TempDir()
+	mustWrite(t, filepath.Join(root, "pkg", "AGENTS.md"), "do not guess")
+	path := filepath.Join(root, "pkg", "main.go")
+	mustWrite(t, path, "old")
+	hook := newTestHook(t, root)
+	sess := session.New("session-1", nil)
+	edit := findTool(t, hook.Tools(), sandbox.FsEditToolName)
+	req := &tools.Request{Arguments: map[string]any{
+		"path": "pkg/main.go", "old_text": "old", "new_text": "new",
+	}, SessionID: sess.ID, SessionRecords: sess}
+
+	first, err := edit.Handler(context.Background(), req)
+	if err != nil || first == nil || !first.IsError || first.ErrorCode != "project_instructions_required" || !strings.Contains(first.FYI, "do not guess") {
+		t.Fatalf("first mutation result=%#v err=%v", first, err)
+	}
+	content, err := os.ReadFile(path)
+	if err != nil || string(content) != "old" {
+		t.Fatalf("mutation ran before instructions: content=%q err=%v", content, err)
+	}
+	second, err := edit.Handler(context.Background(), req)
+	if err != nil || second == nil || second.IsError {
+		t.Fatalf("second mutation result=%#v err=%v", second, err)
+	}
+	content, err = os.ReadFile(path)
+	if err != nil || string(content) != "new" {
+		t.Fatalf("retry did not edit file: content=%q err=%v", content, err)
+	}
+}
+
 func TestInstructionAndFYILimits(t *testing.T) {
 	lines := make([]string, 101)
 	for i := range lines {
@@ -163,8 +193,12 @@ func TestBeforeModelMaintainsPersistentProjectInstructions(t *testing.T) {
 		t.Fatalf("history = %#v", history)
 	}
 	content := history[0].Content
-	rootIndex := strings.Index(content, "Contents of "+filepath.Join(root, "AGENTS.md"))
-	fridayIndex := strings.Index(content, "Contents of "+filepath.Join(root, ".friday", "CLAUDE.md"))
+	canonicalRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootIndex := strings.Index(content, "Contents of "+filepath.Join(canonicalRoot, "AGENTS.md"))
+	fridayIndex := strings.Index(content, "Contents of "+filepath.Join(canonicalRoot, ".friday", "CLAUDE.md"))
 	if rootIndex < 0 || fridayIndex <= rootIndex || !strings.Contains(content, "root agents") || !strings.Contains(content, "friday claude") {
 		t.Fatalf("persistent instructions = %q", content)
 	}

@@ -131,29 +131,15 @@ func (ib *InBridge) dispatchInbox(env bus.Envelope) {
 			ib.reportDrop(env, "bad payload: "+err.Error())
 			return
 		}
-		if in.Delivery != "" && in.Delivery != bus.DeliveryNormal && in.Delivery != bus.DeliverySteer {
-			ib.reportDrop(env, "unknown input delivery: "+string(in.Delivery))
-			return
-		}
-		user := coreactor.UserTextMessage{
+		msg = coreactor.UserTextMessage{
 			Text:          in.Text,
 			DisplayText:   in.DisplayText,
 			Source:        env.From,
 			SourceEventID: env.ID,
 			TurnID:        in.TurnID,
-			Delivery:      string(in.Delivery),
 			Images:        in.Images,
 			Metadata:      in.Metadata,
 		}
-		if in.Delivery == bus.DeliverySteer {
-			if err := ib.actor.SendSteer(ib.ctx, user); err != nil {
-				ib.reportDrop(env, err.Error())
-				return
-			}
-			ib.reportAccepted(env)
-			return
-		}
-		msg = user
 	case bus.InboxFormSubmit:
 		var in bus.FormSubmitInput
 		if err := events.DecodePayload(env.Event, &in); err != nil {

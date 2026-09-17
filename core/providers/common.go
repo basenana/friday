@@ -145,16 +145,17 @@ func (s *commonRequest) AppendHistory(messages ...types.Message) {
 }
 
 func (s *commonRequest) AppendToolDefines(tools ...ToolDefine) {
-	for i, t := range tools {
-		var exists bool
-		for _, existing := range s.tools {
+	for _, t := range tools {
+		matched := -1
+		for index, existing := range s.tools {
 			if existing.GetName() == t.GetName() {
-				exists = true
-				s.tools[i] = t
+				matched = index
 				break
 			}
 		}
-		if !exists {
+		if matched >= 0 {
+			s.tools[matched] = t
+		} else {
 			s.tools = append(s.tools, t)
 		}
 	}

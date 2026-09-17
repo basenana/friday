@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"reflect"
 	"testing"
 	"time"
 
@@ -35,6 +36,41 @@ func TestSlashPopupIncludesAgentsAndAgentHidesConflictingSkill(t *testing.T) {
 	}
 	if counts["/status"] != 1 || descriptions["/status"] == "Hidden slash route" {
 		t.Fatalf("built-in should own /status: %#v", m.menu.items)
+	}
+}
+
+func TestSlashAgentNamePrefixFiltering(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  []string
+	}{
+		{name: "case insensitive prefix", input: "/WRI", want: []string{"/writer"}},
+		{name: "middle substring", input: "/riter", want: nil},
+		{name: "description", input: "/specialized", want: nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m, _, _ := newTestModel(t)
+			registerTestAgent(m, "writer", "Specialized author")
+			m.textarea.SetValue(tt.input)
+			m.refreshMenu()
+			if got := menuLabels(m.menu.items); !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("labels for %q = %v, want %v", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSlashAgentNamePrefixRanksBeforeBuiltinAlias(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	registerTestAgent(m, "editor", "Edit text")
+	m.textarea.SetValue("/e")
+	m.refreshMenu()
+	agent := menuLabelIndex(m.menu.items, "/editor")
+	alias := menuLabelIndex(m.menu.items, "/quit")
+	if agent < 0 || alias < 0 || agent >= alias {
+		t.Fatalf("agent name prefix must precede builtin alias: %v", menuLabels(m.menu.items))
 	}
 }
 

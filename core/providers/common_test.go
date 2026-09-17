@@ -42,6 +42,19 @@ func TestNewRequestSkipsEmptySystemPrompt(t *testing.T) {
 	}
 }
 
+func TestAppendToolDefinesReplacesMatchedIndex(t *testing.T) {
+	req := NewRequest("")
+	req.SetToolDefines([]ToolDefine{
+		NewToolDefine("alpha", "old alpha", map[string]any{"type": "object"}),
+		NewToolDefine("beta", "old beta", map[string]any{"type": "object"}),
+	})
+	req.AppendToolDefines(NewToolDefine("beta", "new beta", map[string]any{"type": "object"}))
+	got := req.ToolDefines()
+	if len(got) != 2 || got[0].GetName() != "alpha" || got[1].GetName() != "beta" || got[1].GetDescription() != "new beta" {
+		t.Fatalf("tool definitions = %#v", got)
+	}
+}
+
 // TestCommonResponseTokensConcurrentAccess exercises the race fixed by
 // AddTokens/SetTokens: a streaming goroutine accumulates usage while readers
 // call Tokens() concurrently. Run with -race.

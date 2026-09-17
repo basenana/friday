@@ -18,16 +18,6 @@ const (
 	InboxCancelInput = "input.cancel"
 )
 
-// InputDelivery controls how user text is scheduled. Empty/normal preserves
-// the existing FIFO behavior; steer interrupts an active run and is processed
-// before queued normal input.
-type InputDelivery string
-
-const (
-	DeliveryNormal InputDelivery = "normal"
-	DeliverySteer  InputDelivery = "steer"
-)
-
 // Status events carried on the status topic.
 const (
 	StatusCreated        = "created"
@@ -158,7 +148,6 @@ type UserTextInput struct {
 	Text        string               `json:"text"`
 	DisplayText string               `json:"display_text,omitempty"`
 	TurnID      string               `json:"turn_id,omitempty"`
-	Delivery    InputDelivery        `json:"delivery,omitempty"`
 	Images      []types.ImageContent `json:"images,omitempty"`
 	Metadata    map[string]any       `json:"metadata,omitempty"`
 }

@@ -78,7 +78,7 @@ func executeToolCall(ctx context.Context, sess *session.Session, use *ToolUse, t
 	defer span.End()
 	defer func() { tracing.DeferStatus(span, &retErr) }()
 
-	req := &tools.Request{SessionID: sess.ID, SessionRecords: sess}
+	req := &tools.Request{SessionID: sess.ID, SessionRecords: sess, MaxOutputChars: toolResultLimit(sess)}
 	args, ok := common.ParseToolUseArguments(use.Arguments)
 	if !ok {
 		return "", false, nil, fmt.Errorf("%s", common.FormatToolUseArgumentsError(use.Name, use.Arguments))
@@ -166,6 +166,17 @@ func truncateToolArgs(s string) string {
 }
 
 func truncateToolResult(sess *session.Session, content string) string {
+	limit := toolResultLimit(sess)
+	runes := []rune(content)
+	if int64(len(runes)) <= limit {
+		return content
+	}
+	logger.New("tools").Warnw("tool output truncated", "showing", limit, "total", len(runes))
+	return fmt.Sprintf("%s\n[Tool output truncated: showing %d of %d chars]",
+		string(runes[:limit]), limit, int64(len(runes)))
+}
+
+func toolResultLimit(sess *session.Session) int64 {
 	limit := defaultMaxToolResultChars
 	if st := sess.EnsureContextState(); st.PromptBudget.ContextWindow > 0 {
 		remaining := st.PromptBudget.ContextWindow - sess.Tokens() - reservedTokensForSummary
@@ -178,13 +189,7 @@ func truncateToolResult(sess *session.Session, content string) string {
 	if limit > maxSingleToolResultChars {
 		limit = maxSingleToolResultChars
 	}
-	runes := []rune(content)
-	if int64(len(runes)) <= limit {
-		return content
-	}
-	logger.New("tools").Warnw("tool output truncated", "showing", limit, "total", len(runes))
-	return fmt.Sprintf("%s\n[Tool output truncated: showing %d of %d chars]",
-		string(runes[:limit]), limit, int64(len(runes)))
+	return limit
 }
 
 func newLLMRequest(systemMessage string, sess *session.Session, toolList []*tools.Tool) providers.Request {

@@ -1,11 +1,22 @@
 package sandbox
 
 import (
+	"bufio"
+	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"reflect"
+	"regexp"
+	"sort"
 	"strings"
+	"time"
+	"unicode/utf8"
 
 	"github.com/basenana/friday/core/tools"
 )
@@ -14,20 +25,20 @@ const (
 	toolFsRead   = "fs_read"
 	toolFsWrite  = "fs_write"
 	toolFsList   = "fs_list"
+	toolFsSearch = "fs_search"
 	toolFsDelete = "fs_delete"
-	toolFsMkdir  = "fs_mkdir"
 	toolFsEdit   = "fs_edit"
 
-	// maxEditFileSize is the maximum file size allowed for editing (10MB)
-	maxEditFileSize = 10 * 1024 * 1024
+	maxSearchMatches     = 1000
+	maxSearchOutputBytes = 512 * 1024
 )
 
 const (
 	FsReadToolName   = toolFsRead
 	FsWriteToolName  = toolFsWrite
 	FsListToolName   = toolFsList
+	FsSearchToolName = toolFsSearch
 	FsDeleteToolName = toolFsDelete
-	FsMkdirToolName  = toolFsMkdir
 	FsEditToolName   = toolFsEdit
 )
 
@@ -58,6 +69,31 @@ type FileSystem interface {
 	Mkdir(context.Context, string) error
 }
 
+type recursiveFileRemover interface {
+	RemoveAll(context.Context, string) error
+}
+
+type linkReader interface {
+	Readlink(context.Context, string) (string, error)
+}
+
+type linkStatter interface {
+	Lstat(context.Context, string) (os.FileInfo, error)
+}
+
+type fileOpener interface {
+	Open(context.Context, string) (io.ReadCloser, error)
+}
+
+type exactFileEditor interface {
+	EditExact(context.Context, string, string, string, bool) (int, error)
+}
+
+type deletePathResolver interface {
+	ResolveDelete(context.Context, string) (string, error)
+	ValidateDeleteTarget(string) error
+}
+
 type localFileSystem struct {
 	exec    *Executor
 	workdir string
@@ -65,6 +101,25 @@ type localFileSystem struct {
 
 func NewLocalFileSystem(exec *Executor, workdir string) FileSystem {
 	return &localFileSystem{exec: exec, workdir: workdir}
+}
+
+func (f *localFileSystem) openWorkdirRoot(path string) (*os.Root, string, bool, error) {
+	if f == nil || f.exec == nil || f.exec.config == nil || f.exec.config.IsolationDisabled() {
+		return nil, "", false, nil
+	}
+	rootPath, err := resolveSymlinkedPath(f.workdir)
+	if err != nil || !pathWithinRoot(path, rootPath) {
+		return nil, "", false, err
+	}
+	rel, err := filepath.Rel(rootPath, path)
+	if err != nil {
+		return nil, "", false, err
+	}
+	root, err := os.OpenRoot(rootPath)
+	if err != nil {
+		return nil, "", false, err
+	}
+	return root, rel, true, nil
 }
 
 func (f *localFileSystem) Resolve(ctx context.Context, path string, mode FileAccessMode) (string, error) {
@@ -82,6 +137,12 @@ func (f *localFileSystem) Stat(ctx context.Context, path string) (os.FileInfo, e
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	if root, rel, ok, err := f.openWorkdirRoot(path); err != nil {
+		return nil, err
+	} else if ok {
+		defer root.Close()
+		return root.Stat(rel)
+	}
 	return os.Stat(path)
 }
 
@@ -89,12 +150,46 @@ func (f *localFileSystem) ReadFile(ctx context.Context, path string) ([]byte, er
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	if root, rel, ok, err := f.openWorkdirRoot(path); err != nil {
+		return nil, err
+	} else if ok {
+		defer root.Close()
+		return root.ReadFile(rel)
+	}
 	return os.ReadFile(path)
+}
+
+func (f *localFileSystem) Open(ctx context.Context, path string) (io.ReadCloser, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if root, rel, ok, err := f.openWorkdirRoot(path); err != nil {
+		return nil, err
+	} else if ok {
+		file, openErr := root.Open(rel)
+		if openErr != nil {
+			root.Close()
+			return nil, openErr
+		}
+		return &rootedReadCloser{File: file, root: root}, nil
+	}
+	return os.Open(path)
 }
 
 func (f *localFileSystem) ReadDir(ctx context.Context, path string) ([]os.DirEntry, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
+	}
+	if root, rel, ok, err := f.openWorkdirRoot(path); err != nil {
+		return nil, err
+	} else if ok {
+		defer root.Close()
+		dir, openErr := root.Open(rel)
+		if openErr != nil {
+			return nil, openErr
+		}
+		defer dir.Close()
+		return dir.ReadDir(-1)
 	}
 	return os.ReadDir(path)
 }
@@ -103,21 +198,156 @@ func (f *localFileSystem) WriteFile(ctx context.Context, path string, content []
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	return writeFileAtomic(path, content, 0o644)
+	perm := os.FileMode(0o644)
+	if root, rel, ok, err := f.openWorkdirRoot(path); err != nil {
+		return err
+	} else if ok {
+		defer root.Close()
+		if info, statErr := root.Stat(rel); statErr == nil {
+			perm = info.Mode().Perm()
+		} else if !os.IsNotExist(statErr) {
+			return statErr
+		}
+		return writeFileAtomicRoot(root, rel, content, perm)
+	}
+	if info, err := os.Stat(path); err == nil {
+		perm = info.Mode().Perm()
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	return writeFileAtomic(path, content, perm)
+}
+
+func (f *localFileSystem) EditExact(ctx context.Context, path, oldText, newText string, replaceAll bool) (int, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	if root, rel, ok, err := f.openWorkdirRoot(path); err != nil {
+		return 0, err
+	} else if ok {
+		defer root.Close()
+		info, statErr := root.Stat(rel)
+		if statErr != nil {
+			return 0, statErr
+		}
+		return editFileAtomicExactRoot(ctx, root, rel, []byte(oldText), []byte(newText), replaceAll, info.Mode().Perm())
+	}
+	perm := os.FileMode(0o644)
+	if info, err := os.Stat(path); err == nil {
+		perm = info.Mode().Perm()
+	} else {
+		return 0, err
+	}
+	return editFileAtomicExact(ctx, path, []byte(oldText), []byte(newText), replaceAll, perm)
 }
 
 func (f *localFileSystem) Remove(ctx context.Context, path string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	if root, rel, ok, err := f.openWorkdirRoot(path); err != nil {
+		return err
+	} else if ok {
+		defer root.Close()
+		return root.Remove(rel)
+	}
+	return os.Remove(path)
+}
+
+func (f *localFileSystem) RemoveAll(ctx context.Context, path string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if root, rel, ok, err := f.openWorkdirRoot(path); err != nil {
+		return err
+	} else if ok {
+		defer root.Close()
+		return root.RemoveAll(rel)
+	}
 	return os.RemoveAll(path)
+}
+
+func (f *localFileSystem) Readlink(ctx context.Context, path string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	if root, rel, ok, err := f.openWorkdirRoot(path); err != nil {
+		return "", err
+	} else if ok {
+		defer root.Close()
+		return root.Readlink(rel)
+	}
+	return os.Readlink(path)
+}
+
+func (f *localFileSystem) Lstat(ctx context.Context, path string) (os.FileInfo, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if root, rel, ok, err := f.openWorkdirRoot(path); err != nil {
+		return nil, err
+	} else if ok {
+		defer root.Close()
+		return root.Lstat(rel)
+	}
+	return os.Lstat(path)
+}
+
+func (f *localFileSystem) ResolveDelete(ctx context.Context, path string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	absPath, err := resolveLocalFsPath(f.workdir, path)
+	if err != nil {
+		return "", err
+	}
+	parent, err := resolveSymlinkedPath(filepath.Dir(absPath))
+	if err != nil {
+		return "", err
+	}
+	resolved := filepath.Join(parent, filepath.Base(absPath))
+	if f.exec.config.IsolationDisabled() {
+		return resolved, nil
+	}
+	if err := validateResolvedToolPath(f.exec.config, f.workdir, resolved, fsAccessWrite); err != nil {
+		return "", err
+	}
+	return resolved, nil
+}
+
+func (f *localFileSystem) ValidateDeleteTarget(path string) error {
+	clean := filepath.Clean(path)
+	if filepath.Dir(clean) == clean || sameCanonicalPath(path, f.workdir) || isFilesystemPolicyRoot(f.exec.config, f.workdir, path) {
+		return fmt.Errorf("refusing to delete a filesystem authorization root")
+	}
+	return nil
 }
 
 func (f *localFileSystem) Mkdir(ctx context.Context, path string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	if root, rel, ok, err := f.openWorkdirRoot(path); err != nil {
+		return err
+	} else if ok {
+		defer root.Close()
+		return root.MkdirAll(rel, 0o755)
+	}
 	return os.MkdirAll(path, 0o755)
+}
+
+type rootedReadCloser struct {
+	*os.File
+	root *os.Root
+}
+
+func (r *rootedReadCloser) Close() error {
+	fileErr := r.File.Close()
+	rootErr := r.root.Close()
+	if fileErr != nil {
+		return fileErr
+	}
+	return rootErr
 }
 
 // NewFsTools creates file system tools that operate directly on the filesystem.
@@ -132,23 +362,23 @@ func NewFsToolsWithFileSystem(fs FileSystem, workdir string) []*tools.Tool {
 		newFsReadTool(fs, workdir),
 		newFsWriteTool(fs, workdir),
 		newFsListTool(fs, workdir),
+		newFsSearchTool(fs, workdir),
 		newFsDeleteTool(fs, workdir),
-		newFsMkdirTool(fs, workdir),
 		newFsEditTool(fs, workdir),
 	}
 }
 
 func newFsReadTool(fs FileSystem, workdir string) *tools.Tool {
-	desc := fmt.Sprintf(`Read the contents of a file.
+	desc := fmt.Sprintf(`Read one existing regular text file.
 
 Current working directory: %s
 
-Parameters:
-- path: relative to working directory, or absolute path`, workdir)
+Use this after confirming the path with fs_list or fs_search. Use fs_list for directories and fs_search to find text across files. The file is returned from the beginning and is only limited by the shared tool-result budget; any truncation is reported explicitly.`, workdir)
 
 	return tools.NewTool(toolFsRead,
 		tools.WithDescription(desc),
-		tools.WithString("path", tools.Description("The path to the file"), tools.Required()),
+		tools.WithString("path", tools.Description("Existing file path, relative to the current working directory or an allowed absolute path."), tools.MinLength(1), tools.Required()),
+		tools.WithExample(map[string]interface{}{"path": "core/actor/inbox.go"}),
 		tools.WithToolHandler(fsReadFileSystemHandler(fs)),
 	)
 }
@@ -171,34 +401,73 @@ func fsReadFileSystemHandler(fs FileSystem) tools.ToolHandlerFunc {
 
 		info, err := fs.Stat(ctx, absPath)
 		if err != nil {
+			if os.IsNotExist(err) {
+				return tools.NewToolResultActionableError(missingPathCause(ctx, fs, path, absPath), "use fs_list or fs_search from the nearest existing directory; do not repeat the same guessed path"), nil
+			}
 			return tools.NewToolResultActionableError(fmt.Sprintf("failed to inspect file %q: %s", path, err), "use fs_list to verify the path and then retry"), nil
 		}
 		if info.IsDir() {
 			return tools.NewToolResultActionableError(fmt.Sprintf("cannot read %q as a file because it is a directory", path), "use fs_list for directories or provide a file path"), nil
 		}
 
-		content, err := fs.ReadFile(ctx, absPath)
+		content, truncated, err := readFileWithinBudget(ctx, fs, absPath, info.Size(), req.MaxOutputChars)
 		if err != nil {
 			return tools.NewToolResultActionableError(fmt.Sprintf("failed to read file %q: %s", path, err), "verify that the file exists and is readable, then retry"), nil
 		}
-
-		return tools.NewToolResultText(truncateOutput(string(content))), nil
+		text := string(content)
+		if truncated {
+			text += fmt.Sprintf("\n[File content truncated by shared tool-result budget; file size is %d bytes]", info.Size())
+		}
+		return tools.NewToolResultText(text), nil
 	}
 }
 
+func readFileWithinBudget(ctx context.Context, fs FileSystem, path string, size, maxChars int64) ([]byte, bool, error) {
+	if maxChars <= 0 {
+		content, err := fs.ReadFile(ctx, path)
+		return content, false, err
+	}
+	const noticeReserve = int64(160)
+	visibleChars := maxChars - noticeReserve
+	if visibleChars < 1 {
+		visibleChars = 1
+	}
+	var content []byte
+	var err error
+	if opener, ok := fs.(fileOpener); ok {
+		reader, openErr := opener.Open(ctx, path)
+		if openErr != nil {
+			return nil, false, openErr
+		}
+		defer reader.Close()
+		content, err = io.ReadAll(io.LimitReader(reader, visibleChars*utf8.UTFMax+1))
+	} else {
+		content, err = fs.ReadFile(ctx, path)
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	runes := []rune(string(content))
+	truncated := int64(len(runes)) > visibleChars || size > int64(len(content))
+	if int64(len(runes)) > visibleChars {
+		runes = runes[:visibleChars]
+		content = []byte(string(runes))
+	}
+	return content, truncated, nil
+}
+
 func newFsWriteTool(fs FileSystem, workdir string) *tools.Tool {
-	desc := fmt.Sprintf(`Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Parent directories are created automatically.
+	desc := fmt.Sprintf(`Create a file or completely overwrite an existing file.
 
 Current working directory: %s
 
-Parameters:
-- path: relative to working directory, or absolute path
-- content: the content to write to the file`, workdir)
+Use fs_edit for a targeted change to an existing file. Parent directories are created automatically, existing permission bits are preserved, and an empty content string intentionally creates an empty file.`, workdir)
 
 	return tools.NewTool(toolFsWrite,
 		tools.WithDescription(desc),
-		tools.WithString("path", tools.Description("The path to the file"), tools.Required()),
-		tools.WithString("content", tools.Description("The content to write to the file"), tools.Required()),
+		tools.WithString("path", tools.Description("Destination file path, relative to the current working directory or an allowed absolute path."), tools.MinLength(1), tools.Required()),
+		tools.WithString("content", tools.Description("Complete replacement content. Use an empty string only to write an empty file."), tools.Required()),
+		tools.WithExample(map[string]interface{}{"path": "docs/notes.md", "content": "# Notes\n"}),
 		tools.WithToolHandler(fsWriteFileSystemHandler(fs)),
 	)
 }
@@ -232,16 +501,16 @@ func fsWriteFileSystemHandler(fs FileSystem) tools.ToolHandlerFunc {
 }
 
 func newFsListTool(fs FileSystem, workdir string) *tools.Tool {
-	desc := fmt.Sprintf(`List files and directories in a directory. Use '.' to list the current directory.
+	desc := fmt.Sprintf(`Inspect the direct children of one existing directory.
 
 Current working directory: %s
 
-Parameters:
-- path: the directory path to list. Use '.' for current directory.`, workdir)
+Use this before guessing a path or reading a file. This tool is not recursive; use fs_search to search text across a directory tree. Hidden entries are included. The result is a JSON string with stable, path-sorted entries and file metadata.`, workdir)
 
 	return tools.NewTool(toolFsList,
 		tools.WithDescription(desc),
-		tools.WithString("path", tools.DefaultString("."), tools.Description("Directory path. Defaults to the current directory.")),
+		tools.WithString("path", tools.DefaultString("."), tools.Description("Existing directory path. Defaults to the current working directory.")),
+		tools.WithExample(map[string]interface{}{"path": "core/actor"}),
 		tools.WithToolHandler(fsListFileSystemHandler(fs)),
 	)
 }
@@ -264,32 +533,407 @@ func fsListFileSystemHandler(fs FileSystem) tools.ToolHandlerFunc {
 
 		entries, err := fs.ReadDir(ctx, absPath)
 		if err != nil {
+			if os.IsNotExist(err) {
+				return tools.NewToolResultActionableError(missingPathCause(ctx, fs, path, absPath), "list the nearest existing directory or use fs_search; do not repeat the same guessed path"), nil
+			}
 			return tools.NewToolResultActionableError(fmt.Sprintf("failed to list directory %q: %s", path, err), "verify that the path exists and is a readable directory"), nil
 		}
-		if len(entries) == 0 {
-			return tools.NewToolResultText("Directory is empty"), nil
-		}
-
-		var names []string
+		result := fsListResult{Path: displayToolPath(fs, absPath), Entries: make([]fsListEntry, 0, len(entries))}
 		for _, entry := range entries {
-			names = append(names, entry.Name())
+			entryPath := filepath.Join(absPath, entry.Name())
+			info, infoErr := entry.Info()
+			if entry.Type()&os.ModeSymlink != 0 {
+				if statter, ok := fs.(linkStatter); ok {
+					info, infoErr = statter.Lstat(ctx, entryPath)
+				}
+			}
+			if infoErr != nil {
+				item := fsListEntry{
+					Name: entry.Name(), Path: displayToolPath(fs, entryPath), Type: "unknown", Error: infoErr.Error(),
+				}
+				if listResultWouldOverflow(result, item, req.MaxOutputChars) {
+					result.Truncated = true
+					break
+				}
+				result.Entries = append(result.Entries, item)
+				continue
+			}
+			item := fsListEntry{
+				Name: entry.Name(), Path: displayToolPath(fs, entryPath), Type: fileTypeName(info.Mode()),
+				Mode: info.Mode().String(), SizeBytes: info.Size(), ModifiedAt: info.ModTime().UTC().Format(time.RFC3339Nano),
+			}
+			item.UID, item.GID = fileOwnership(info)
+			if entry.Type()&os.ModeSymlink != 0 {
+				if reader, ok := fs.(linkReader); ok {
+					item.SymlinkTarget, _ = reader.Readlink(ctx, entryPath)
+				}
+			}
+			if listResultWouldOverflow(result, item, req.MaxOutputChars) {
+				result.Truncated = true
+				break
+			}
+			result.Entries = append(result.Entries, item)
 		}
-
-		return tools.NewToolResultText(strings.Join(names, "\n")), nil
+		sort.Slice(result.Entries, func(i, j int) bool { return result.Entries[i].Path < result.Entries[j].Path })
+		return jsonTextResult(result)
 	}
 }
 
-func newFsDeleteTool(fs FileSystem, workdir string) *tools.Tool {
-	desc := fmt.Sprintf(`Delete a file or directory. WARNING: This cannot be undone.
+type fsListResult struct {
+	Path      string        `json:"path"`
+	Entries   []fsListEntry `json:"entries"`
+	Truncated bool          `json:"truncated"`
+}
+
+type fsListEntry struct {
+	Name          string  `json:"name"`
+	Path          string  `json:"path"`
+	Type          string  `json:"type"`
+	Mode          string  `json:"mode,omitempty"`
+	SizeBytes     int64   `json:"size_bytes,omitempty"`
+	ModifiedAt    string  `json:"modified_at,omitempty"`
+	SymlinkTarget string  `json:"symlink_target,omitempty"`
+	UID           *uint64 `json:"uid,omitempty"`
+	GID           *uint64 `json:"gid,omitempty"`
+	Error         string  `json:"error,omitempty"`
+}
+
+func fileOwnership(info os.FileInfo) (*uint64, *uint64) {
+	if info == nil || info.Sys() == nil {
+		return nil, nil
+	}
+	value := reflect.ValueOf(info.Sys())
+	if value.Kind() == reflect.Pointer {
+		value = value.Elem()
+	}
+	if !value.IsValid() || value.Kind() != reflect.Struct {
+		return nil, nil
+	}
+	read := func(name string) *uint64 {
+		field := value.FieldByName(name)
+		if !field.IsValid() {
+			return nil
+		}
+		var number uint64
+		switch field.Kind() {
+		case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+			number = field.Uint()
+		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+			if field.Int() < 0 {
+				return nil
+			}
+			number = uint64(field.Int())
+		default:
+			return nil
+		}
+		return &number
+	}
+	return read("Uid"), read("Gid")
+}
+
+func listResultWouldOverflow(result fsListResult, item fsListEntry, maxChars int64) bool {
+	if maxChars <= 0 {
+		return false
+	}
+	result.Entries = append(append([]fsListEntry(nil), result.Entries...), item)
+	raw, _ := json.Marshal(result)
+	return int64(len(raw)) > maxChars-256
+}
+
+func fileTypeName(mode os.FileMode) string {
+	switch {
+	case mode&os.ModeSymlink != 0:
+		return "symlink"
+	case mode.IsDir():
+		return "directory"
+	case mode.IsRegular():
+		return "file"
+	default:
+		return "other"
+	}
+}
+
+func displayToolPath(fs FileSystem, path string) string {
+	if local, ok := fs.(*localFileSystem); ok {
+		root, err := resolveSymlinkedPath(local.workdir)
+		if err == nil {
+			if rel, relErr := filepath.Rel(root, path); relErr == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+				if rel == "." {
+					return "."
+				}
+				return filepath.ToSlash(rel)
+			}
+		}
+	}
+	return filepath.ToSlash(path)
+}
+
+func jsonTextResult(value interface{}) (*tools.Result, error) {
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return nil, err
+	}
+	return tools.NewToolResultText(string(raw)), nil
+}
+
+func newFsSearchTool(fs FileSystem, workdir string) *tools.Tool {
+	desc := fmt.Sprintf(`Recursively search regular text-file contents with a Go RE2 regular expression.
 
 Current working directory: %s
 
-Parameters:
-- path: the path to the file or directory to delete`, workdir)
+Use this for structured code or text search across a directory tree. It searches file contents, not file names; use fs_list to inspect names. Hidden files and vendor are included, while .git, binary files, and symbolic links are skipped. The result is a JSON string and stops after 1000 matching lines or 512 KiB with explicit truncation metadata.`, workdir)
+	return tools.NewTool(toolFsSearch,
+		tools.WithDescription(desc),
+		tools.WithString("directory", tools.Description("Existing directory whose readable text files will be searched recursively."), tools.MinLength(1), tools.Required()),
+		tools.WithString("regex", tools.Description("Go RE2 regular expression matched independently against each text line."), tools.MinLength(1), tools.Required()),
+		tools.WithExample(map[string]interface{}{"directory": "core/actor", "regex": `func\s+New[A-Za-z]+`}),
+		tools.WithToolHandler(fsSearchFileSystemHandler(fs)),
+	)
+}
+
+type fsSearchMatch struct {
+	Path   string `json:"path"`
+	Line   int    `json:"line"`
+	Column int    `json:"column"`
+	Text   string `json:"text"`
+}
+
+type fsSearchResult struct {
+	Directory          string          `json:"directory"`
+	Regex              string          `json:"regex"`
+	Matches            []fsSearchMatch `json:"matches"`
+	FilesScanned       int             `json:"files_scanned"`
+	BinaryFilesSkipped int             `json:"binary_files_skipped"`
+	ErrorsSkipped      int             `json:"errors_skipped"`
+	Truncated          bool            `json:"truncated"`
+	StoppedReason      string          `json:"stopped_reason,omitempty"`
+}
+
+func fsSearchFileSystemHandler(fs FileSystem) tools.ToolHandlerFunc {
+	return func(ctx context.Context, req *tools.Request) (*tools.Result, error) {
+		directory, ok := req.Arguments["directory"].(string)
+		if !ok || strings.TrimSpace(directory) == "" {
+			return tools.NewToolResultActionableError("directory is required and must be a non-empty string", "provide an existing readable directory"), nil
+		}
+		pattern, ok := req.Arguments["regex"].(string)
+		if !ok || strings.TrimSpace(pattern) == "" {
+			return tools.NewToolResultActionableError("regex is required and must be a non-empty string", "provide a valid Go RE2 regular expression"), nil
+		}
+		re, err := regexp.Compile(pattern)
+		if err != nil {
+			return tools.NewToolResultActionableError(fmt.Sprintf("invalid regex: %s", err), "correct the Go RE2 expression and retry"), nil
+		}
+		root, err := fs.Resolve(ctx, directory, FileAccessRead)
+		if err != nil {
+			return tools.NewToolResultActionableError(fmt.Sprintf("invalid directory: %s", err), "use fs_list to find a readable directory and retry"), nil
+		}
+		info, err := fs.Stat(ctx, root)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return tools.NewToolResultActionableError(missingPathCause(ctx, fs, directory, root), "use fs_list from the nearest existing directory; do not repeat the same guessed path"), nil
+			}
+			return tools.NewToolResultActionableError(fmt.Sprintf("failed to inspect directory %q: %s", directory, err), "use fs_list to verify the path and retry"), nil
+		}
+		if !info.IsDir() {
+			return tools.NewToolResultActionableError(fmt.Sprintf("cannot search %q because it is not a directory", directory), "provide a directory path"), nil
+		}
+
+		result := fsSearchResult{Directory: displayToolPath(fs, root), Regex: pattern, Matches: []fsSearchMatch{}}
+		outputLimit := maxSearchOutputBytes
+		if req.MaxOutputChars > 0 && int64(outputLimit) > req.MaxOutputChars-512 {
+			outputLimit = int(req.MaxOutputChars - 512)
+			if outputLimit < 1024 {
+				outputLimit = 1024
+			}
+		}
+		if err := searchDirectory(ctx, fs, root, re, &result, outputLimit); err != nil && err != errSearchLimit {
+			return tools.NewToolResultActionableError(fmt.Sprintf("search failed: %s", err), "narrow the directory or correct unreadable paths and retry"), nil
+		}
+		return jsonTextResult(result)
+	}
+}
+
+var errSearchLimit = fmt.Errorf("search result limit reached")
+
+func searchDirectory(ctx context.Context, fs FileSystem, dir string, re *regexp.Regexp, result *fsSearchResult, outputLimit int) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	entries, err := fs.ReadDir(ctx, dir)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if entry.Name() == ".git" && entry.IsDir() {
+			continue
+		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			continue
+		}
+		path := filepath.Join(dir, entry.Name())
+		if entry.IsDir() {
+			if err := searchDirectory(ctx, fs, path, re, result, outputLimit); err != nil {
+				if err == errSearchLimit {
+					return err
+				}
+				result.ErrorsSkipped++
+			}
+			continue
+		}
+		info, infoErr := entry.Info()
+		if infoErr != nil || !info.Mode().IsRegular() {
+			if infoErr != nil {
+				result.ErrorsSkipped++
+			}
+			continue
+		}
+		binary, scanErr := searchFile(ctx, fs, path, re, result, outputLimit)
+		if scanErr == errSearchLimit {
+			return scanErr
+		}
+		if scanErr != nil {
+			result.ErrorsSkipped++
+			continue
+		}
+		if binary {
+			result.BinaryFilesSkipped++
+			continue
+		}
+		result.FilesScanned++
+	}
+	return nil
+}
+
+func searchFile(ctx context.Context, fs FileSystem, path string, re *regexp.Regexp, result *fsSearchResult, outputLimit int) (bool, error) {
+	reader, err := openSearchFile(ctx, fs, path)
+	if err != nil {
+		return false, err
+	}
+	defer reader.Close()
+
+	buffered := bufio.NewReader(reader)
+	probe, err := buffered.Peek(8192)
+	if err != nil && err != io.EOF && err != bufio.ErrBufferFull {
+		return false, err
+	}
+	if bytes.IndexByte(probe, 0) >= 0 || (!utf8.Valid(probe) && len(probe) > 0) {
+		return true, nil
+	}
+
+	lineNumber := 0
+	for {
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
+		line, readErr := buffered.ReadString('\n')
+		if len(line) > 0 {
+			lineNumber++
+			line = strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r")
+			if location := re.FindStringIndex(line); location != nil {
+				match := fsSearchMatch{Path: displayToolPath(fs, path), Line: lineNumber, Column: location[0] + 1, Text: line}
+				encoded, _ := json.Marshal(match)
+				if len(result.Matches) >= maxSearchMatches || searchResultSize(result)+len(encoded) > outputLimit {
+					result.Truncated = true
+					if len(result.Matches) >= maxSearchMatches {
+						result.StoppedReason = "match_limit"
+					} else {
+						result.StoppedReason = "output_size_limit"
+					}
+					return false, errSearchLimit
+				}
+				result.Matches = append(result.Matches, match)
+			}
+		}
+		if readErr == io.EOF {
+			break
+		}
+		if readErr != nil {
+			return false, readErr
+		}
+	}
+	return false, nil
+}
+
+func openSearchFile(ctx context.Context, fs FileSystem, path string) (io.ReadCloser, error) {
+	if opener, ok := fs.(fileOpener); ok {
+		return opener.Open(ctx, path)
+	}
+	content, err := fs.ReadFile(ctx, path)
+	if err != nil {
+		return nil, err
+	}
+	return io.NopCloser(bytes.NewReader(content)), nil
+}
+
+func searchResultSize(result *fsSearchResult) int {
+	raw, _ := json.Marshal(result)
+	return len(raw)
+}
+
+func missingPathCause(ctx context.Context, fs FileSystem, requested, resolved string) string {
+	dir := filepath.Dir(resolved)
+	for {
+		if err := ctx.Err(); err != nil {
+			return fmt.Sprintf("path %q does not exist", requested)
+		}
+		info, err := fs.Stat(ctx, dir)
+		if err == nil && info.IsDir() {
+			cause := fmt.Sprintf("path %q does not exist; nearest existing directory is %q", requested, displayToolPath(fs, dir))
+			entries, readErr := fs.ReadDir(ctx, dir)
+			if readErr == nil {
+				stem := strings.TrimSuffix(filepath.Base(resolved), filepath.Ext(resolved))
+				stemKey := candidateStem(stem)
+				var candidates []string
+				for _, entry := range entries {
+					if stem == "" {
+						break
+					}
+					entryStem := strings.TrimSuffix(entry.Name(), filepath.Ext(entry.Name()))
+					if candidateStem(entryStem) == stemKey || strings.Contains(strings.ToLower(entry.Name()), strings.ToLower(stem)) {
+						candidates = append(candidates, displayToolPath(fs, filepath.Join(dir, entry.Name())))
+						if len(candidates) == 10 {
+							break
+						}
+					}
+				}
+				if len(candidates) > 0 {
+					cause += "; possible existing paths: " + strings.Join(candidates, ", ")
+				}
+			}
+			return cause
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+	return fmt.Sprintf("path %q does not exist", requested)
+}
+
+func candidateStem(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	value = strings.TrimPrefix(value, "test_")
+	value = strings.TrimSuffix(value, "_test")
+	value = strings.TrimSuffix(value, "_spec")
+	return value
+}
+
+func newFsDeleteTool(fs FileSystem, workdir string) *tools.Tool {
+	desc := fmt.Sprintf(`Permanently delete a file, symbolic link, or directory. This cannot be undone.
+
+Current working directory: %s
+
+Files, symbolic links, and empty directories do not require recursive mode. Set recursive=true explicitly for a non-empty directory. Filesystem roots, the current working directory, and configured authorization roots can never be deleted. A symbolic link is unlinked without deleting its target.`, workdir)
 
 	return tools.NewTool(toolFsDelete,
 		tools.WithDescription(desc),
-		tools.WithString("path", tools.Description("The path to the file or directory to delete"), tools.Required()),
+		tools.WithString("path", tools.Description("Existing file, symbolic link, or directory to delete."), tools.MinLength(1), tools.Required()),
+		tools.WithBoolean("recursive", tools.DefaultBool(false), tools.Description("Set true only to delete a non-empty directory tree.")),
+		tools.WithExample(map[string]interface{}{"path": "build/cache", "recursive": true}),
 		tools.WithToolHandler(fsDeleteFileSystemHandler(fs)),
 	)
 }
@@ -305,12 +949,42 @@ func fsDeleteFileSystemHandler(fs FileSystem) tools.ToolHandlerFunc {
 			return tools.NewToolResultActionableError("path is required and must be a non-empty string", "provide the file or directory path to delete"), nil
 		}
 
-		absPath, err := fs.Resolve(ctx, path, FileAccessWrite)
+		var absPath string
+		var err error
+		if resolver, ok := fs.(deletePathResolver); ok {
+			absPath, err = resolver.ResolveDelete(ctx, path)
+		} else {
+			absPath, err = fs.Resolve(ctx, path, FileAccessWrite)
+		}
 		if err != nil {
 			return tools.NewToolResultActionableError(fmt.Sprintf("invalid path: %s", err), "use a writable path inside the allowed workdir"), nil
 		}
+		if resolver, ok := fs.(deletePathResolver); ok {
+			if err := resolver.ValidateDeleteTarget(absPath); err != nil {
+				return tools.NewToolResultActionableError(err.Error(), "delete a child path instead; authorization roots cannot be deleted"), nil
+			}
+		}
+		var statErr error
+		if statter, ok := fs.(linkStatter); ok {
+			_, statErr = statter.Lstat(ctx, absPath)
+		} else {
+			_, statErr = fs.Stat(ctx, absPath)
+		}
+		if statErr != nil {
+			return tools.NewToolResultActionableError(fmt.Sprintf("failed to inspect delete target %q: %s", path, statErr), "use fs_list to verify the exact existing path before retrying"), nil
+		}
 
-		if err := fs.Remove(ctx, absPath); err != nil {
+		recursive, _ := req.Arguments["recursive"].(bool)
+		if recursive {
+			remover, ok := fs.(recursiveFileRemover)
+			if !ok {
+				return tools.NewToolResultActionableError("recursive deletion is not supported by this filesystem backend", "delete children separately or use a backend that supports recursive deletion"), nil
+			}
+			err = remover.RemoveAll(ctx, absPath)
+		} else {
+			err = fs.Remove(ctx, absPath)
+		}
+		if err != nil {
 			return tools.NewToolResultActionableError(fmt.Sprintf("failed to delete %q: %s", path, err), "verify the path with fs_list and ensure deletion is permitted"), nil
 		}
 
@@ -318,67 +992,20 @@ func fsDeleteFileSystemHandler(fs FileSystem) tools.ToolHandlerFunc {
 	}
 }
 
-func newFsMkdirTool(fs FileSystem, workdir string) *tools.Tool {
-	desc := fmt.Sprintf(`Create a directory. Parent directories are created automatically.
-
-Current working directory: %s
-
-Parameters:
-- path: the directory path to create`, workdir)
-
-	return tools.NewTool(toolFsMkdir,
-		tools.WithDescription(desc),
-		tools.WithString("path", tools.Description("The directory path to create"), tools.Required()),
-		tools.WithToolHandler(fsMkdirFileSystemHandler(fs)),
-	)
-}
-
-func fsMkdirHandler(exec *Executor, workdir string) tools.ToolHandlerFunc {
-	return fsMkdirFileSystemHandler(NewLocalFileSystem(exec, workdir))
-}
-
-func fsMkdirFileSystemHandler(fs FileSystem) tools.ToolHandlerFunc {
-	return func(ctx context.Context, req *tools.Request) (*tools.Result, error) {
-		path, ok := req.Arguments["path"].(string)
-		if !ok || path == "" {
-			return tools.NewToolResultActionableError("path is required and must be a non-empty string", "provide the directory path to create"), nil
-		}
-
-		absPath, err := fs.Resolve(ctx, path, FileAccessWrite)
-		if err != nil {
-			return tools.NewToolResultActionableError(fmt.Sprintf("invalid path: %s", err), "use a writable path inside the allowed workdir"), nil
-		}
-
-		if err := fs.Mkdir(ctx, absPath); err != nil {
-			return tools.NewToolResultActionableError(fmt.Sprintf("failed to create directory %q: %s", path, err), "verify the parent path and write permission, then retry"), nil
-		}
-
-		return tools.NewToolResultText(fmt.Sprintf("Successfully created directory %s", path)), nil
-	}
-}
-
 func newFsEditTool(fs FileSystem, workdir string) *tools.Tool {
-	desc := fmt.Sprintf(`Edit a file by searching and replacing text.
+	desc := fmt.Sprintf(`Edit one existing text file using an exact, non-regex text replacement.
 
 Current working directory: %s
 
-Parameters:
-- path: relative to working directory, or absolute path
-- search_string: the text to search for (must match exactly)
-- replace_string: the text to replace with
-- occurrences: "first" (default) to replace only the first match, "all" to replace all matches
-
-Usage notes:
-- The search_string must match EXACTLY, including whitespace and line breaks
-- If search_string is not found, the tool will return an error
-- By default, only the first match is replaced; use occurrences="all" to replace all matches`, workdir)
+Read the file first and copy old_text exactly, including whitespace and line breaks. By default old_text must occur exactly once; set replace_all=true only when every occurrence should change. Use new_text="" to delete the matched text, and use fs_write for a complete file replacement.`, workdir)
 
 	return tools.NewTool(toolFsEdit,
 		tools.WithDescription(desc),
-		tools.WithString("path", tools.Description("The path to the file"), tools.Required()),
-		tools.WithString("search_string", tools.Description("The text to search for"), tools.Required()),
-		tools.WithString("replace_string", tools.Description("The text to replace with"), tools.Required()),
-		tools.WithString("occurrences", tools.Description(`Replace scope: "first" (default) or "all"`), tools.Enum("first", "all")),
+		tools.WithString("path", tools.Description("Existing text file to edit."), tools.MinLength(1), tools.Required()),
+		tools.WithString("old_text", tools.Description("Exact current text to replace. It must be unique unless replace_all is true."), tools.MinLength(1), tools.Required()),
+		tools.WithString("new_text", tools.Description("Replacement text. Use an empty string to delete old_text."), tools.Required()),
+		tools.WithBoolean("replace_all", tools.DefaultBool(false), tools.Description("Replace every occurrence instead of requiring one unique occurrence.")),
+		tools.WithExample(map[string]interface{}{"path": "main.go", "old_text": "oldValue", "new_text": "newValue", "replace_all": false}),
 		tools.WithToolHandler(fsEditFileSystemHandler(fs)),
 	)
 }
@@ -394,22 +1021,17 @@ func fsEditFileSystemHandler(fs FileSystem) tools.ToolHandlerFunc {
 			return tools.NewToolResultActionableError("path is required and must be a non-empty string", "provide the file path to edit"), nil
 		}
 
-		searchString, ok := req.Arguments["search_string"].(string)
+		searchString, ok := req.Arguments["old_text"].(string)
 		if !ok || searchString == "" {
-			return tools.NewToolResultActionableError("search_string is required and must be a non-empty string", "provide text that exactly matches the current file contents"), nil
+			return tools.NewToolResultActionableError("old_text is required and must be a non-empty string", "provide text that exactly matches the current file contents"), nil
 		}
 
-		replaceString, ok := req.Arguments["replace_string"].(string)
+		replaceString, ok := req.Arguments["new_text"].(string)
 		if !ok {
-			return tools.NewToolResultActionableError("replace_string is required and must be a string", "provide replacement text; use an empty string to delete the match"), nil
+			return tools.NewToolResultActionableError("new_text is required and must be a string", "provide replacement text; use an empty string to delete the match"), nil
 		}
 
-		occurrences, ok := req.Arguments["occurrences"].(string)
-		if !ok {
-			occurrences = ""
-		}
-
-		replaceAll := occurrences == "all"
+		replaceAll, _ := req.Arguments["replace_all"].(bool)
 
 		absPath, err := fs.Resolve(ctx, path, FileAccessWrite)
 		if err != nil {
@@ -423,8 +1045,22 @@ func fsEditFileSystemHandler(fs FileSystem) tools.ToolHandlerFunc {
 		if fileInfo.IsDir() {
 			return tools.NewToolResultActionableError(fmt.Sprintf("cannot edit %q because it is a directory", path), "use fs_list for directories or provide a file path"), nil
 		}
-		if fileInfo.Size() > maxEditFileSize {
-			return tools.NewToolResultActionableError(fmt.Sprintf("file is too large to edit (%d bytes; maximum %d)", fileInfo.Size(), maxEditFileSize), "use bash with a targeted streaming edit or reduce the file size"), nil
+		if editor, ok := fs.(exactFileEditor); ok {
+			count, err := editor.EditExact(ctx, absPath, searchString, replaceString, replaceAll)
+			if err != nil {
+				return tools.NewToolResultActionableError(fmt.Sprintf("failed to edit file %q: %s", path, err), "verify write permission and retry after confirming the file is unchanged"), nil
+			}
+			if count == 0 {
+				return tools.NewToolResultActionableError(fmt.Sprintf("old_text was not found in %q: %q", path, truncateForError(searchString)), "call fs_read, copy the exact current text including whitespace, and retry"), nil
+			}
+			if count > 1 && !replaceAll {
+				return tools.NewToolResultActionableError(fmt.Sprintf("old_text matches %d locations in %q", count, path), "provide a larger unique old_text or set replace_all=true only when every match should change"), nil
+			}
+			replacedCount := 1
+			if replaceAll {
+				replacedCount = count
+			}
+			return tools.NewToolResultText(fmt.Sprintf("Successfully replaced %d occurrence(s) in %s", replacedCount, path)), nil
 		}
 
 		content, err := fs.ReadFile(ctx, absPath)
@@ -435,7 +1071,10 @@ func fsEditFileSystemHandler(fs FileSystem) tools.ToolHandlerFunc {
 		contentStr := string(content)
 		count := strings.Count(contentStr, searchString)
 		if count == 0 {
-			return tools.NewToolResultActionableError(fmt.Sprintf("search_string was not found in %q: %q", path, truncateForError(searchString)), "call fs_read, copy the exact current text including whitespace, and retry"), nil
+			return tools.NewToolResultActionableError(fmt.Sprintf("old_text was not found in %q: %q", path, truncateForError(searchString)), "call fs_read, copy the exact current text including whitespace, and retry"), nil
+		}
+		if count > 1 && !replaceAll {
+			return tools.NewToolResultActionableError(fmt.Sprintf("old_text matches %d locations in %q", count, path), "provide a larger unique old_text or set replace_all=true only when every match should change"), nil
 		}
 
 		var newContent string
@@ -448,19 +1087,11 @@ func fsEditFileSystemHandler(fs FileSystem) tools.ToolHandlerFunc {
 			replacedCount = 1
 		}
 
-		if len(newContent) > maxEditFileSize {
-			return tools.NewToolResultActionableError(fmt.Sprintf("edited file would be too large (%d bytes; maximum %d)", len(newContent), maxEditFileSize), "reduce the replacement size or use a different editing approach"), nil
-		}
-
 		if err := fs.WriteFile(ctx, absPath, []byte(newContent)); err != nil {
 			return tools.NewToolResultActionableError(fmt.Sprintf("failed to write edited file %q: %s", path, err), "verify write permission and retry after confirming the file is unchanged"), nil
 		}
 
 		msg := fmt.Sprintf("Successfully replaced %d occurrence(s) in %s", replacedCount, path)
-		if count > 1 && !replaceAll {
-			msg += fmt.Sprintf(" (of %d total matches)", count)
-		}
-
 		return tools.NewToolResultText(msg), nil
 	}
 }
@@ -485,6 +1116,13 @@ func resolveToolPath(cfg *Config, workdir, path string, mode fsAccessMode) (stri
 	if cfg.IsolationDisabled() {
 		return absPath, nil
 	}
+	if err := validateResolvedToolPath(cfg, workdir, absPath, mode); err != nil {
+		return "", err
+	}
+	return absPath, nil
+}
+
+func validateResolvedToolPath(cfg *Config, workdir, absPath string, mode fsAccessMode) error {
 	resolvedWorkdir := workdir
 	if strings.TrimSpace(workdir) != "" {
 		if resolved, err := resolveSymlinkedPath(workdir); err == nil {
@@ -498,24 +1136,23 @@ func resolveToolPath(cfg *Config, workdir, path string, mode fsAccessMode) (stri
 	inProtectedRoots := matchesAnyPath(cfg.Sandbox.Filesystem.Protected, resolvedWorkdir, absPath)
 
 	if matchesAnyPath(cfg.Sandbox.Filesystem.Deny, resolvedWorkdir, absPath) {
-		return "", fmt.Errorf("path is denied by sandbox rules")
+		return fmt.Errorf("path is denied by sandbox rules")
 	}
 
 	if mode == fsAccessWrite {
 		if inProtectedRoots || inReadOnlyRoots {
-			return "", fmt.Errorf("path is read-only")
+			return fmt.Errorf("path is read-only")
 		}
 		if !inWorkdir && !inWriteRoots {
-			return "", fmt.Errorf("path is outside writable roots")
+			return fmt.Errorf("path is outside writable roots")
 		}
-		return absPath, nil
+		return nil
 	}
 
 	if !inWorkdir && !inWriteRoots && !inReadOnlyRoots && !inProtectedRoots {
-		return "", fmt.Errorf("path is outside readable roots")
+		return fmt.Errorf("path is outside readable roots")
 	}
-
-	return absPath, nil
+	return nil
 }
 
 func resolveLocalFsPath(workdir, path string) (string, error) {
@@ -594,6 +1231,7 @@ func matchesAnyPath(patterns []string, workdir, absPath string) bool {
 				expanded = absPattern
 			}
 		}
+		expanded = canonicalizePolicyPattern(expanded)
 		if matchesDeniedPath(expanded, absPath) {
 			return true
 		}
@@ -604,10 +1242,76 @@ func matchesAnyPath(patterns []string, workdir, absPath string) bool {
 func pathWithinRoot(path, root string) bool {
 	path = filepath.Clean(path)
 	root = filepath.Clean(root)
-	if path == root {
-		return true
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return false
 	}
-	return strings.HasPrefix(path, root+string(os.PathSeparator))
+	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator)))
+}
+
+func canonicalizePolicyPattern(pattern string) string {
+	if pattern == "" {
+		return ""
+	}
+	if !strings.ContainsAny(pattern, "*?[]") {
+		if resolved, err := resolveSymlinkedPath(pattern); err == nil {
+			return filepath.Clean(resolved)
+		}
+		return filepath.Clean(pattern)
+	}
+	volume := filepath.VolumeName(pattern)
+	rest := strings.TrimPrefix(pattern, volume)
+	parts := strings.Split(rest, string(os.PathSeparator))
+	prefixParts := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if strings.ContainsAny(part, "*?[]") {
+			break
+		}
+		prefixParts = append(prefixParts, part)
+	}
+	prefix := volume + strings.Join(prefixParts, string(os.PathSeparator))
+	if prefix == "" || prefix == volume {
+		return filepath.Clean(pattern)
+	}
+	resolved, err := resolveSymlinkedPath(prefix)
+	if err != nil {
+		return filepath.Clean(pattern)
+	}
+	suffix := strings.TrimPrefix(pattern, prefix)
+	return filepath.Clean(resolved + suffix)
+}
+
+func sameCanonicalPath(left, right string) bool {
+	leftResolved, leftErr := resolveSymlinkedPath(left)
+	rightResolved, rightErr := resolveSymlinkedPath(right)
+	if leftErr != nil || rightErr != nil {
+		return filepath.Clean(left) == filepath.Clean(right)
+	}
+	return filepath.Clean(leftResolved) == filepath.Clean(rightResolved)
+}
+
+func isFilesystemPolicyRoot(cfg *Config, workdir, target string) bool {
+	if cfg == nil || cfg.IsolationDisabled() {
+		return false
+	}
+	all := [][]string{
+		cfg.Sandbox.Filesystem.Write,
+		cfg.Sandbox.Filesystem.ReadOnly,
+		cfg.Sandbox.Filesystem.Protected,
+		cfg.Sandbox.Filesystem.Deny,
+	}
+	for _, patterns := range all {
+		for _, pattern := range patterns {
+			expanded := expandPath(pattern, workdir, "")
+			if strings.ContainsAny(expanded, "*?[]") {
+				continue
+			}
+			if sameCanonicalPath(target, expanded) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
@@ -646,6 +1350,211 @@ func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
 
 	cleanup = false
 	return nil
+}
+
+func writeFileAtomicRoot(root *os.Root, path string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	if err := root.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+
+	tmpFile, tmpPath, err := createRootTemp(root, dir, "."+filepath.Base(path)+".tmp-")
+	if err != nil {
+		return err
+	}
+	cleanup := true
+	defer func() {
+		if cleanup {
+			_ = root.Remove(tmpPath)
+		}
+	}()
+
+	if _, err := tmpFile.Write(data); err != nil {
+		_ = tmpFile.Close()
+		return err
+	}
+	if err := tmpFile.Chmod(perm.Perm()); err != nil {
+		_ = tmpFile.Close()
+		return err
+	}
+	if err := tmpFile.Close(); err != nil {
+		return err
+	}
+	if err := root.Rename(tmpPath, path); err != nil {
+		return err
+	}
+
+	cleanup = false
+	return nil
+}
+
+func createRootTemp(root *os.Root, dir, prefix string) (*os.File, string, error) {
+	const attempts = 100
+	for range attempts {
+		var random [16]byte
+		if _, err := rand.Read(random[:]); err != nil {
+			return nil, "", err
+		}
+		name := filepath.Join(dir, prefix+hex.EncodeToString(random[:]))
+		file, err := root.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		if err == nil {
+			return file, name, nil
+		}
+		if !os.IsExist(err) {
+			return nil, "", err
+		}
+	}
+	return nil, "", fmt.Errorf("failed to create a unique temporary file")
+}
+
+func editFileAtomicExact(ctx context.Context, path string, oldText, newText []byte, replaceAll bool, perm os.FileMode) (int, error) {
+	input, err := os.Open(path)
+	if err != nil {
+		return 0, err
+	}
+	defer input.Close()
+
+	dir := filepath.Dir(path)
+	tmpFile, err := os.CreateTemp(dir, "."+filepath.Base(path)+".edit-*")
+	if err != nil {
+		return 0, err
+	}
+	tmpPath := tmpFile.Name()
+	committed := false
+	defer func() {
+		_ = tmpFile.Close()
+		if !committed {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+
+	count, err := replaceExactStream(ctx, input, tmpFile, oldText, newText, replaceAll)
+	if err != nil {
+		return 0, err
+	}
+	if count == 0 || (!replaceAll && count > 1) {
+		return count, nil
+	}
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	if err := tmpFile.Chmod(perm); err != nil {
+		return 0, err
+	}
+	if err := tmpFile.Close(); err != nil {
+		return 0, err
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return 0, err
+	}
+	committed = true
+	return count, nil
+}
+
+func editFileAtomicExactRoot(ctx context.Context, root *os.Root, path string, oldText, newText []byte, replaceAll bool, perm os.FileMode) (int, error) {
+	input, err := root.Open(path)
+	if err != nil {
+		return 0, err
+	}
+	defer input.Close()
+
+	dir := filepath.Dir(path)
+	tmpFile, tmpPath, err := createRootTemp(root, dir, "."+filepath.Base(path)+".edit-")
+	if err != nil {
+		return 0, err
+	}
+	committed := false
+	defer func() {
+		_ = tmpFile.Close()
+		if !committed {
+			_ = root.Remove(tmpPath)
+		}
+	}()
+
+	count, err := replaceExactStream(ctx, input, tmpFile, oldText, newText, replaceAll)
+	if err != nil {
+		return 0, err
+	}
+	if count == 0 || (!replaceAll && count > 1) {
+		return count, nil
+	}
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	if err := tmpFile.Chmod(perm.Perm()); err != nil {
+		return 0, err
+	}
+	if err := tmpFile.Close(); err != nil {
+		return 0, err
+	}
+	if err := root.Rename(tmpPath, path); err != nil {
+		return 0, err
+	}
+	committed = true
+	return count, nil
+}
+
+func replaceExactStream(ctx context.Context, input io.Reader, output io.Writer, oldText, newText []byte, replaceAll bool) (int, error) {
+	const chunkSize = 64 * 1024
+	chunk := make([]byte, chunkSize)
+	pending := make([]byte, 0, chunkSize+len(oldText))
+	count := 0
+	replaced := 0
+	writePending := func(eof bool) error {
+		for {
+			index := bytes.Index(pending, oldText)
+			if index < 0 {
+				keep := len(oldText) - 1
+				if eof {
+					keep = 0
+				}
+				flush := len(pending) - keep
+				if flush > 0 {
+					if _, err := output.Write(pending[:flush]); err != nil {
+						return err
+					}
+					pending = append(pending[:0], pending[flush:]...)
+				}
+				return nil
+			}
+			count++
+			if _, err := output.Write(pending[:index]); err != nil {
+				return err
+			}
+			if replaceAll || replaced == 0 {
+				if _, err := output.Write(newText); err != nil {
+					return err
+				}
+				replaced++
+			} else if _, err := output.Write(oldText); err != nil {
+				return err
+			}
+			pending = append(pending[:0], pending[index+len(oldText):]...)
+		}
+	}
+
+	for {
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
+		n, readErr := input.Read(chunk)
+		if n > 0 {
+			pending = append(pending, chunk[:n]...)
+			if err := writePending(false); err != nil {
+				return 0, err
+			}
+		}
+		if readErr == io.EOF {
+			break
+		}
+		if readErr != nil {
+			return 0, readErr
+		}
+	}
+	if err := writePending(true); err != nil {
+		return 0, err
+	}
+	return count, nil
 }
 
 // truncateForError truncates a long string for error messages (by runes to avoid breaking UTF-8)

@@ -367,11 +367,6 @@ func (c *connection) runAgent(frame ClientFrame) {
 		c.sendError(frame.RequestID, frame.ThreadID, "unsupported_feature", "state, tools, context, and resume are not supported in v1")
 		return
 	}
-	delivery, err := input.delivery()
-	if err != nil {
-		c.sendError(frame.RequestID, frame.ThreadID, "invalid_run_input", err.Error())
-		return
-	}
 	if _, err := c.server.registry.GetOrCreate(frame.ThreadID); err != nil {
 		c.sendError(frame.RequestID, frame.ThreadID, "actor_start_failed", err.Error())
 		return
@@ -406,7 +401,7 @@ func (c *connection) runAgent(frame ClientFrame) {
 	}
 	for i, item := range prepared {
 		env := bus.NewUserInput(frame.ThreadID, "user.ws", bus.UserTextInput{
-			Text: item.text, TurnID: input.RunID, Delivery: bus.InputDelivery(delivery), Images: item.images,
+			Text: item.text, TurnID: input.RunID, Images: item.images,
 			Metadata: map[string]any{"parentRunId": input.ParentRunID},
 		})
 		env.ID = item.message.ID

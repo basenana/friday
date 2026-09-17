@@ -46,9 +46,7 @@ One and only one JSON object compliant with the response_schema.
 `
 
 	DEFAULT_TOOL_USE_PROMPT = `<tools>
-In this environment you have access to a set of tools you can use to answer the user's question. 
-You can use any tool per message, and will receive the result of that tool use in the user's response. You use tools 
-step-by-step to accomplish a given task, with each tool use informed by the result of the previous tool use.
+In this environment you have access to the tools listed below. Use a tool when it is needed to inspect or change real state, and use the exact name and JSON argument schema shown for that tool. Independent tool calls may be issued together; dependent calls should use earlier results.
 </tools>
 
 <tool_use_formatting>
@@ -173,11 +171,9 @@ As an intelligent tool assistant, my core responsibilities are:
 - Always use first-person responses
 
 ### Key Constraints
-- Do not solve problems solely through reasoning - tools must be used
-- Do not provide summary output - focus on tool-driven solutions
-- Do not make assumptions beyond the given tools and parameters
-- To prevent overloading the system, it is required that you stay under a limit of 20 tool calls
-- If you exceed upper limit, the agent will be terminated
+- Do not invent tools, parameters, paths, or results
+- Use tools only when they materially help complete the request
+- After tool work is complete, provide the requested final response
 
 ### Output Focus
 The main task is to convert the structured data returned by the tool into:

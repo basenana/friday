@@ -20,6 +20,21 @@ func TestBashToolKeepsFunctionalOptions(t *testing.T) {
 	}
 }
 
+func TestCommandToolDefinitionsAreModelReady(t *testing.T) {
+	exec := NewExecutor(DefaultConfig())
+	manager := NewTaskManager(exec)
+	toolList := []*tools.Tool{NewBashTool(exec, t.TempDir())}
+	toolList = append(toolList, NewBackgroundTaskTools(manager, t.TempDir())...)
+	for _, tool := range toolList {
+		if issues := tool.ValidateDefinition(2); len(issues) != 0 {
+			t.Fatalf("%s definition: %v", tool.Name, issues)
+		}
+		if len(tool.Examples) == 0 {
+			t.Fatalf("%s has no model-facing example", tool.Name)
+		}
+	}
+}
+
 func TestResolveToolWorkdirInsideBaseIsAllowed(t *testing.T) {
 	base := t.TempDir()
 	nested := filepath.Join(base, "nested")
@@ -31,8 +46,43 @@ func TestResolveToolWorkdirInsideBaseIsAllowed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolveToolWorkdir() error = %v", err)
 	}
-	if got != nested {
-		t.Fatalf("resolveToolWorkdir() = %q, want %q", got, nested)
+	want, err := filepath.EvalSymlinks(nested)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("resolveToolWorkdir() = %q, want %q", got, want)
+	}
+}
+
+func TestResolveToolWorkdirResolvesRelativePathFromBase(t *testing.T) {
+	base := t.TempDir()
+	nested := filepath.Join(base, "nested")
+	if err := os.Mkdir(nested, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	got, err := resolveToolWorkdir(base, map[string]interface{}{"workdir": "nested"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := filepath.EvalSymlinks(nested)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("workdir = %q, want %q", got, want)
+	}
+}
+
+func TestResolveToolWorkdirRejectsSymlinkEscape(t *testing.T) {
+	base := t.TempDir()
+	outside := t.TempDir()
+	link := filepath.Join(base, "escape")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	if _, err := resolveToolWorkdir(base, map[string]interface{}{"workdir": "escape"}); err == nil {
+		t.Fatal("expected symlink escape to be rejected")
 	}
 }
 

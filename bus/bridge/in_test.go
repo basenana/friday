@@ -2,7 +2,6 @@ package bridge
 
 import (
 	"context"
-	"strings"
 	"testing"
 	"time"
 
@@ -60,34 +59,6 @@ func TestInBridgeReportsActorInboxSaturation(t *testing.T) {
 
 	ib.Close()
 	b.Unsubscribe(statusID)
-	b.Wait()
-	a.Stop()
-}
-
-func TestInBridgeRejectsUnknownInputDelivery(t *testing.T) {
-	b := eventbus.NewBus()
-	a := coreactor.New(nil, nil)
-	ib := NewInBridge(b, "s1", a)
-	drops := make(chan bus.InboxDropped, 1)
-	id := b.SubscribeSerial([]string{bus.TopicStatus("s1", bus.StatusInboxDropped)}, func(env bus.Envelope) {
-		var drop bus.InboxDropped
-		if events.DecodePayload(env.Event, &drop) == nil {
-			drops <- drop
-		}
-	}, eventbus.SerialConfig{Overflow: eventbus.OverflowBlock})
-	b.Publish(bus.TopicInbox("s1"), bus.NewUserInput("s1", "test", bus.UserTextInput{
-		Text: "hello", TurnID: "turn", Delivery: bus.InputDelivery("later"),
-	}))
-	select {
-	case drop := <-drops:
-		if !strings.Contains(drop.Reason, "unknown input delivery") {
-			t.Fatalf("drop = %+v", drop)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for delivery rejection")
-	}
-	ib.Close()
-	b.Unsubscribe(id)
 	b.Wait()
 	a.Stop()
 }

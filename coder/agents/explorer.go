@@ -17,7 +17,6 @@ func ExplorerSpec() *AgentSpec {
 			Deny: []string{
 				ToolFsWrite,
 				ToolFsEdit,
-				ToolFsMkdir,
 				ToolFsDelete,
 				ToolBash,
 				ToolBgTask,

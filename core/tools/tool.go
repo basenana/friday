@@ -83,6 +83,9 @@ func (t *Tool) GetDescription() string {
 	return description
 }
 func (t *Tool) GetParameters() map[string]any { return t.JsonSchema() }
+func (t *Tool) GetExamples() []map[string]interface{} {
+	return append([]map[string]interface{}(nil), t.Examples...)
+}
 
 func NewTool(name string, options ...ToolOption) *Tool {
 	t := &Tool{
@@ -106,6 +109,10 @@ type Request struct {
 	Arguments      map[string]interface{} `json:"arguments"`
 	SessionID      string                 `json:"sessionId"`
 	SessionRecords SessionRecords         `json:"-"`
+	// MaxOutputChars is the caller's current model-visible result budget. Tool
+	// handlers may use it to preserve structured output instead of relying on a
+	// later arbitrary truncation. Zero means the caller did not provide a hint.
+	MaxOutputChars int64 `json:"-"`
 }
 
 type Result struct {

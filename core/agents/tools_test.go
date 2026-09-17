@@ -166,6 +166,23 @@ func TestToolCallModelResultOmitsExecutionControlFields(t *testing.T) {
 	}
 }
 
+func TestToolCallPassesModelVisibleOutputBudget(t *testing.T) {
+	var got int64
+	tool := tools.NewTool("budget",
+		tools.WithToolHandler(func(_ context.Context, request *tools.Request) (*tools.Result, error) {
+			got = request.MaxOutputChars
+			return tools.NewToolResultText("ok"), nil
+		}),
+	)
+	sess := session.New("sess-tool-budget", nil)
+	if _, success, err := toolCall(context.Background(), sess, &ToolUse{Name: "budget", Arguments: `{}`}, tool); err != nil || !success {
+		t.Fatalf("toolCall success=%v err=%v", success, err)
+	}
+	if got != defaultMaxToolResultChars {
+		t.Fatalf("MaxOutputChars = %d, want %d", got, defaultMaxToolResultChars)
+	}
+}
+
 func TestTruncateToolArgsSlicesRunesNotBytes(t *testing.T) {
 	// 90 CJK characters: 270 bytes, so a byte-based slice would cut mid-rune.
 	long := strings.Repeat("世", 90)

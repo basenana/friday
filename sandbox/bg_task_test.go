@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -431,6 +432,42 @@ func TestTaskManagerWorkdir(t *testing.T) {
 	if !strings.Contains(task.Output, dir) {
 		t.Fatalf("expected output to contain %q, got %q", dir, task.Output)
 	}
+}
+
+func TestBackgroundTaskHandlerConfinesAndResolvesWorkdir(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Sandbox.Enabled = false
+	cfg.Permissions.Allow = append(cfg.Permissions.Allow, "printf")
+	exec := NewExecutor(cfg)
+	manager := NewTaskManager(exec)
+	root := t.TempDir()
+	nested := filepath.Join(root, "nested")
+	if err := os.Mkdir(nested, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	denied, err := backgroundTaskHandler(manager, root)(context.Background(), &tools.Request{Arguments: map[string]any{
+		"command": "printf nope", "workdir": t.TempDir(),
+	}})
+	if err != nil || !denied.IsError {
+		t.Fatalf("outside workdir result=%+v err=%v", denied, err)
+	}
+
+	started, err := backgroundTaskHandler(manager, root)(context.Background(), &tools.Request{Arguments: map[string]any{
+		"command": "pwd", "workdir": "nested",
+	}})
+	if err != nil || started.IsError {
+		t.Fatalf("relative workdir result=%+v err=%v", started, err)
+	}
+	tasks := manager.List("")
+	wantWorkdir, err := filepath.EvalSymlinks(nested)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != 1 || tasks[0].Workdir != wantWorkdir {
+		t.Fatalf("tasks = %#v, want workdir %q", tasks, wantWorkdir)
+	}
+	manager.KillAll()
 }
 
 func TestGenerateTaskID(t *testing.T) {

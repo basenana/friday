@@ -216,9 +216,7 @@ func (m *model) View() tea.View {
 		if m.form != nil {
 			label = "waiting for input"
 		}
-		if m.steeringPending {
-			label = "steering"
-		} else if m.cancelling {
+		if m.cancelling {
 			label = "cancelling"
 		}
 		blocks = append(blocks, accentStyle.Render(m.spinner.View()+" "+label+"… · "+formatElapsed(m.currentElapsed())))
@@ -391,11 +389,7 @@ func (m *model) renderStatus() string {
 		}
 	}
 	if m.running {
-		if m.loopActive {
-			parts = append(parts, "● running", "Enter/Tab send next", "Esc cancel")
-		} else {
-			parts = append(parts, "● running", "Enter interrupt", "Tab send next")
-		}
+		parts = append(parts, "● running", "Enter/Tab send next", "Esc cancel")
 	} else if m.planCompacting {
 		parts = append(parts, "● compacting plan context")
 	} else if m.manualCompacting {

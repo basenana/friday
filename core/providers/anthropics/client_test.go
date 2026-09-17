@@ -13,6 +13,7 @@ import (
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/basenana/friday/core/providers"
 	"github.com/basenana/friday/core/providers/common"
+	coretools "github.com/basenana/friday/core/tools"
 	"github.com/basenana/friday/core/types"
 )
 
@@ -522,6 +523,26 @@ func TestMessageCreateParamsPreservesRequiredStringSlice(t *testing.T) {
 	required := params.Tools[0].OfTool.InputSchema.Required
 	if len(required) != 1 || required[0] != "query" {
 		t.Fatalf("required = %v", required)
+	}
+}
+
+func TestMessageCreateParamsPreservesSchemaExtrasAndExamples(t *testing.T) {
+	cli := &client{model: Model{Name: "claude-test"}}
+	req := providers.NewRequest("")
+	tool := coretools.NewTool("search",
+		coretools.WithDescription("Search files."),
+		coretools.WithString("query", coretools.Required(), coretools.Description("Search query.")),
+		coretools.WithExample(map[string]interface{}{"query": "needle"}),
+	)
+	req.SetToolDefines([]providers.ToolDefine{tool})
+
+	params := cli.messageCreateParams(req)
+	got := params.Tools[0].OfTool
+	if got == nil || got.InputSchema.ExtraFields["additionalProperties"] != false {
+		t.Fatalf("input schema extras = %#v", got)
+	}
+	if len(got.InputExamples) != 1 || got.InputExamples[0]["query"] != "needle" {
+		t.Fatalf("input examples = %#v", got.InputExamples)
 	}
 }
 

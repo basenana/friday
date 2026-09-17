@@ -13,7 +13,10 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	eventbus "github.com/hyponet/eventbus/bus"
 
+	"github.com/basenana/friday/bus"
+	"github.com/basenana/friday/coder/commands"
 	"github.com/basenana/friday/config"
 	"github.com/basenana/friday/core/actor/events"
 	"github.com/basenana/friday/core/collaboration"
@@ -42,16 +45,147 @@ func TestTerminalSafeStripsControlSequences(t *testing.T) {
 	}
 }
 
+type menuTestCommand struct {
+	name        string
+	aliases     []string
+	description string
+}
+
+func (c menuTestCommand) Name() string        { return c.name }
+func (c menuTestCommand) Aliases() []string   { return c.aliases }
+func (c menuTestCommand) Description() string { return c.description }
+func (menuTestCommand) Execute(*commands.Context) (*commands.Result, error) {
+	return &commands.Result{}, nil
+}
+
+func menuLabels(items []menuItem) []string {
+	if len(items) == 0 {
+		return nil
+	}
+	labels := make([]string, len(items))
+	for i, item := range items {
+		labels[i] = item.label
+	}
+	return labels
+}
+
+func menuLabelIndex(items []menuItem, label string) int {
+	for i, item := range items {
+		if item.label == label {
+			return i
+		}
+	}
+	return -1
+}
+
 func TestSlashPopupFiltersAndCompletes(t *testing.T) {
+	for _, input := range []string{"/comp", "/COM"} {
+		t.Run(input, func(t *testing.T) {
+			m, _, _ := newTestModel(t)
+			m.textarea.SetValue(input)
+			m.refreshMenu()
+			if m.menu.mode != menuCommands || len(m.menu.items) != 1 || m.menu.items[0].label != "/compact" {
+				t.Fatalf("unexpected menu: %#v", m.menu)
+			}
+			m.acceptMenuSelection(false)
+			if got := m.textarea.Value(); got != "/compact " {
+				t.Fatalf("completion = %q", got)
+			}
+		})
+	}
+}
+
+func TestSlashPopupMatchesNamesAndAliasesByPrefixOnly(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  []string
+	}{
+		{name: "canonical middle substring", input: "/omp", want: nil},
+		{name: "description text", input: "/conversation", want: nil},
+		{name: "alias prefix", input: "/EXI", want: []string{"/quit"}},
+		{name: "alias middle substring", input: "/xit", want: nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m, _, _ := newTestModel(t)
+			m.textarea.SetValue(tt.input)
+			m.refreshMenu()
+			if got := menuLabels(m.menu.items); !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("labels for %q = %v, want %v", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSlashPopupRanksCanonicalMatchesBeforeAliasMatches(t *testing.T) {
 	m, _, _ := newTestModel(t)
-	m.textarea.SetValue("/compa")
+	m.textarea.SetValue("/e")
 	m.refreshMenu()
-	if m.menu.mode != menuCommands || len(m.menu.items) != 1 || m.menu.items[0].label != "/compact" {
-		t.Fatalf("unexpected menu: %#v", m.menu)
+	canonical := menuLabelIndex(m.menu.items, "/effort")
+	alias := menuLabelIndex(m.menu.items, "/quit")
+	if canonical < 0 || alias < 0 || canonical >= alias {
+		t.Fatalf("canonical prefix must precede alias prefix: %v", menuLabels(m.menu.items))
+	}
+}
+
+func TestSlashPopupRanksExactCanonicalMatchFirst(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	m.cmdRegistry.Register(menuTestCommand{name: "model-info"})
+	m.textarea.SetValue("/MODEL")
+	m.refreshMenu()
+	if got := menuLabels(m.menu.items); len(got) < 2 || got[0] != "/model" || got[1] != "/model-info" {
+		t.Fatalf("exact canonical match must be first: %v", got)
+	}
+}
+
+func TestSlashPopupSortsSameRankCaseInsensitively(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	for _, name := range []string{"zzBeta", "zzalpha", "ZZalpha"} {
+		m.cmdRegistry.Register(menuTestCommand{name: name})
+	}
+	m.textarea.SetValue("/zz")
+	m.refreshMenu()
+	want := []string{"/ZZalpha", "/zzalpha", "/zzBeta"}
+	if got := menuLabels(m.menu.items); !reflect.DeepEqual(got, want) {
+		t.Fatalf("same-rank labels = %v, want %v", got, want)
+	}
+}
+
+func TestSlashPopupDeduplicatesCanonicalAndAliasMatches(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	m.cmdRegistry.Register(menuTestCommand{name: "echo", aliases: []string{"echo-alias"}})
+	m.textarea.SetValue("/echo")
+	m.refreshMenu()
+	if got := menuLabels(m.menu.items); !reflect.DeepEqual(got, []string{"/echo"}) {
+		t.Fatalf("canonical and alias match produced duplicates: %v", got)
+	}
+}
+
+func TestSlashPopupEmptyQueryShowsCanonicalCommandsOnce(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	m.cmdRegistry.Register(menuTestCommand{name: "echo", aliases: []string{"echo-alias"}})
+	m.textarea.SetValue("/")
+	m.refreshMenu()
+	counts := make(map[string]int)
+	for _, item := range m.menu.items {
+		counts[item.label]++
+	}
+	if counts["/echo"] != 1 || counts["/echo-alias"] != 0 {
+		t.Fatalf("empty query expanded aliases: %v", menuLabels(m.menu.items))
+	}
+}
+
+func TestSlashPopupAliasCompletesCanonicalName(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	m.textarea.SetValue("/exit")
+	m.refreshMenu()
+	if got := menuLabels(m.menu.items); !reflect.DeepEqual(got, []string{"/quit"}) {
+		t.Fatalf("alias labels = %v", got)
 	}
 	m.acceptMenuSelection(false)
-	if got := m.textarea.Value(); got != "/compact " {
-		t.Fatalf("completion = %q", got)
+	if got := m.textarea.Value(); got != "/quit " {
+		t.Fatalf("alias completion = %q", got)
 	}
 }
 
@@ -69,14 +203,180 @@ func TestTabQueuesWhileRunning(t *testing.T) {
 	}
 }
 
+func TestRunningEnterQueuesActorInputWithoutInterruptingCurrentRun(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	inbox := make(chan bus.Envelope, 1)
+	preempts := make(chan bus.Envelope, 1)
+	inboxID := m.registry.Bus().SubscribeSerial([]string{bus.TopicInbox(m.sessionID)}, func(env bus.Envelope) {
+		if env.Name == bus.InboxUserText {
+			inbox <- env
+		}
+	}, eventbus.SerialConfig{Overflow: eventbus.OverflowBlock})
+	preemptID := m.registry.Bus().SubscribeSerial([]string{bus.TopicPreempt(m.sessionID)}, func(env bus.Envelope) {
+		preempts <- env
+	}, eventbus.SerialConfig{Overflow: eventbus.OverflowBlock})
+	defer m.registry.Bus().Unsubscribe(inboxID)
+	defer m.registry.Bus().Unsubscribe(preemptID)
+
+	startedAt := time.Unix(123, 0)
+	m.running = true
+	m.currentRunID = "run-a"
+	m.runStartedAt = startedAt
+	m.runActivity = "running tool-a"
+	m.messages = []chatBlock{
+		{kind: blockAssistant, content: "streaming"},
+		{kind: blockReasoning, content: "thinking"},
+		{kind: blockToolCall, id: "tool-a", toolName: "tool-a", pending: true},
+	}
+	m.textBlock = 0
+	m.reasonBlock = 1
+	m.toolCalls = map[string]int{"tool-a": 2}
+	m.textarea.SetValue("follow up")
+
+	got, cmd := m.submitComposer()
+	m = got.(*model)
+	if cmd == nil {
+		t.Fatal("running Enter returned no spinner command")
+	}
+	if len(m.queued) != 0 {
+		t.Fatalf("running Enter used local queue: %#v", m.queued)
+	}
+	if !m.running || m.currentRunID != "run-a" || !m.runStartedAt.Equal(startedAt) || m.runActivity != "running tool-a" {
+		t.Fatalf("current run state changed: running=%v run=%q started=%v activity=%q", m.running, m.currentRunID, m.runStartedAt, m.runActivity)
+	}
+	if m.textBlock != 0 || m.reasonBlock != 1 || !reflect.DeepEqual(m.toolCalls, map[string]int{"tool-a": 2}) {
+		t.Fatalf("stream trackers changed: text=%d reasoning=%d tools=%v", m.textBlock, m.reasonBlock, m.toolCalls)
+	}
+	for i := 0; i < 3; i++ {
+		if m.messages[i].interrupted {
+			t.Fatalf("current block %d was marked interrupted", i)
+		}
+	}
+	if !m.messages[2].pending {
+		t.Fatal("current tool block was no longer pending")
+	}
+	userCount := 0
+	for _, message := range m.messages {
+		if message.kind == blockUser && message.content == "follow up" {
+			userCount++
+		}
+	}
+	if userCount != 1 {
+		t.Fatalf("follow-up user blocks = %d, want 1", userCount)
+	}
+
+	select {
+	case env := <-inbox:
+		var body bus.UserTextInput
+		if err := events.DecodePayload(env.Event, &body); err != nil {
+			t.Fatal(err)
+		}
+		if body.Text != "follow up" || body.TurnID == "" {
+			t.Fatalf("actor input = %+v", body)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("running Enter did not publish Actor input")
+	}
+	select {
+	case env := <-preempts:
+		t.Fatalf("running Enter published preempt: %+v", env)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+func TestConsecutiveRunningEnterInputsHaveDistinctOrderedTurnIDs(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	inbox := make(chan bus.Envelope, 2)
+	id := m.registry.Bus().SubscribeSerial([]string{bus.TopicInbox(m.sessionID)}, func(env bus.Envelope) {
+		if env.Name == bus.InboxUserText {
+			inbox <- env
+		}
+	}, eventbus.SerialConfig{Buffer: 2, Overflow: eventbus.OverflowBlock})
+	defer m.registry.Bus().Unsubscribe(id)
+
+	m.running = true
+	for _, text := range []string{"second", "third"} {
+		m.textarea.SetValue(text)
+		got, _ := m.submitComposer()
+		m = got.(*model)
+	}
+
+	var inputs []bus.UserTextInput
+	for len(inputs) < 2 {
+		select {
+		case env := <-inbox:
+			var body bus.UserTextInput
+			if err := events.DecodePayload(env.Event, &body); err != nil {
+				t.Fatal(err)
+			}
+			inputs = append(inputs, body)
+		case <-time.After(time.Second):
+			t.Fatalf("timed out waiting for inputs: %+v", inputs)
+		}
+	}
+	if inputs[0].Text != "second" || inputs[1].Text != "third" {
+		t.Fatalf("input order = %+v", inputs)
+	}
+	if inputs[0].TurnID == "" || inputs[1].TurnID == "" || inputs[0].TurnID == inputs[1].TurnID {
+		t.Fatalf("turn ids = %q, %q", inputs[0].TurnID, inputs[1].TurnID)
+	}
+}
+
+func TestEscPreemptsCurrentRunOnceAndPreservesLocalInput(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	preempts := make(chan bus.Envelope, 2)
+	id := m.registry.Bus().SubscribeSerial([]string{bus.TopicPreempt(m.sessionID)}, func(env bus.Envelope) {
+		preempts <- env
+	}, eventbus.SerialConfig{Buffer: 2, Overflow: eventbus.OverflowBlock})
+	defer m.registry.Bus().Unsubscribe(id)
+
+	m.running = true
+	m.currentRunID = "run-a"
+	m.textarea.SetValue("not submitted")
+	m.queued = []pendingInput{{text: "/compact"}}
+	got, _ := m.updateKey(tea.KeyPressMsg{Code: tea.KeyEsc})
+	m = got.(*model)
+	if !m.running || !m.cancelling {
+		t.Fatalf("Esc state: running=%v cancelling=%v", m.running, m.cancelling)
+	}
+	if m.textarea.Value() != "not submitted" || len(m.queued) != 1 {
+		t.Fatalf("Esc cleared local input: composer=%q queue=%#v", m.textarea.Value(), m.queued)
+	}
+
+	select {
+	case env := <-preempts:
+		var body bus.PreemptInput
+		if err := events.DecodePayload(env.Event, &body); err != nil {
+			t.Fatal(err)
+		}
+		if body.Scope != string(bus.PreemptCurrent) {
+			t.Fatalf("preempt scope = %q, want %q", body.Scope, bus.PreemptCurrent)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Esc did not publish preempt")
+	}
+
+	m.handleActorEvent(events.NewEvent(events.KindRunFinished, "stale-run").WithPayload(events.RunFinishedData{StopReason: "end_turn"}))
+	if !m.cancelling {
+		t.Fatal("stale terminal event cleared current cancellation state")
+	}
+	got, _ = m.updateKey(tea.KeyPressMsg{Code: tea.KeyEsc})
+	m = got.(*model)
+	select {
+	case env := <-preempts:
+		t.Fatalf("repeated Esc published another preempt: %+v", env)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
 func TestRunningSlashCommandsRespectRunPolicy(t *testing.T) {
 	m, _, _ := newTestModel(t)
 	m.running = true
 	m.textarea.SetValue("/status")
 	got, _ := m.submitComposer()
 	m = got.(*model)
-	if len(m.queued) != 0 || m.steeringPending {
-		t.Fatalf("immediate status was queued or steered: queued=%v steering=%v", m.queued, m.steeringPending)
+	if len(m.queued) != 0 {
+		t.Fatalf("immediate status was queued: queued=%v", m.queued)
 	}
 	if len(m.messages) == 0 || !strings.Contains(m.messages[len(m.messages)-1].content, "Friday status") {
 		t.Fatalf("status did not execute immediately: %#v", m.messages)
@@ -202,19 +502,32 @@ func TestRunElapsedStatusAndCompletionMarker(t *testing.T) {
 	}
 }
 
-func TestStatusShowsLoopAsModeAndExplainsRunningKeys(t *testing.T) {
-	m, _, _ := newTestModel(t)
-	m.width = 120
-	m.loopActive = true
-	m.running = true
-	status := terminalSafe(m.renderStatus())
-	for _, want := range []string{"loop", "Enter/Tab send next", "Esc cancel"} {
-		if !strings.Contains(status, want) {
-			t.Fatalf("status missing %q: %q", want, status)
+func TestStatusExplainsRunningInboxAndCancelKeys(t *testing.T) {
+	for _, loopActive := range []bool{false, true} {
+		name := "normal"
+		if loopActive {
+			name = "loop"
 		}
-	}
-	if strings.Contains(status, "default") || strings.Contains(status, "Tab queue") {
-		t.Fatalf("status exposed the underlying mode or old queue wording: %q", status)
+		t.Run(name, func(t *testing.T) {
+			m, _, _ := newTestModel(t)
+			m.width = 120
+			m.loopActive = loopActive
+			m.running = true
+			status := terminalSafe(m.renderStatus())
+			for _, want := range []string{"Enter/Tab send next", "Esc cancel"} {
+				if !strings.Contains(status, want) {
+					t.Fatalf("status missing %q: %q", want, status)
+				}
+			}
+			for _, obsolete := range []string{"inter" + "rupt", "ste" + "er", "ste" + "ering"} {
+				if strings.Contains(strings.ToLower(status), obsolete) {
+					t.Fatalf("status contains obsolete %q wording: %q", obsolete, status)
+				}
+			}
+			if loopActive && (!strings.Contains(status, "loop") || strings.Contains(status, "default")) {
+				t.Fatalf("Loop status did not replace the underlying mode: %q", status)
+			}
+		})
 	}
 }
 

@@ -102,8 +102,10 @@ func (h *Hook) Tools() []*tools.Tool {
 	for _, tool := range base {
 		clone := *tool
 		switch clone.Name {
-		case sandbox.FsReadToolName, sandbox.FsListToolName:
+		case sandbox.FsReadToolName, sandbox.FsListToolName, sandbox.FsSearchToolName:
 			clone.Handler = h.withFYI(clone.Name, tool.Handler)
+		case sandbox.FsWriteToolName, sandbox.FsEditToolName, sandbox.FsDeleteToolName:
+			clone.Handler = h.withInstructionGuard(clone.Name, tool.Handler)
 		}
 		wrapped = append(wrapped, &clone)
 	}
@@ -143,7 +145,7 @@ func (h *Hook) withFYI(toolName string, next tools.ToolHandlerFunc) tools.ToolHa
 		if err != nil || result == nil {
 			return result, err
 		}
-		path, _ := req.Arguments["path"].(string)
+		path := toolPathArgument(toolName, req.Arguments)
 		if toolName == sandbox.FsListToolName && strings.TrimSpace(path) == "" {
 			path = "."
 		}
@@ -157,6 +159,34 @@ func (h *Hook) withFYI(toolName string, next tools.ToolHandlerFunc) tools.ToolHa
 	}
 }
 
+func (h *Hook) withInstructionGuard(toolName string, next tools.ToolHandlerFunc) tools.ToolHandlerFunc {
+	return func(ctx context.Context, req *tools.Request) (*tools.Result, error) {
+		path := toolPathArgument(toolName, req.Arguments)
+		fyi, err := h.discover(ctx, req, toolName, path)
+		if err != nil {
+			h.logger.Warnw("failed to discover project instructions before mutation", "session", req.SessionID, "path", path, "error", err)
+		} else if strings.TrimSpace(fyi) != "" {
+			result := tools.NewToolResultActionableError(
+				"new project instructions apply to this path; the mutation was not executed",
+				"read the FYI instructions below, then retry only if the mutation complies",
+			)
+			result.FYI = fyi
+			result.ErrorCode = "project_instructions_required"
+			return result, nil
+		}
+		return next(ctx, req)
+	}
+}
+
+func toolPathArgument(toolName string, arguments map[string]interface{}) string {
+	if toolName == sandbox.FsSearchToolName {
+		path, _ := arguments["directory"].(string)
+		return path
+	}
+	path, _ := arguments["path"].(string)
+	return path
+}
+
 func (h *Hook) discover(ctx context.Context, req *tools.Request, toolName, path string) (string, error) {
 	if strings.TrimSpace(path) == "" {
 		return "", nil
@@ -166,7 +196,7 @@ func (h *Hook) discover(ctx context.Context, req *tools.Request, toolName, path 
 		return "", nil
 	}
 	dir := resolved
-	if toolName == sandbox.FsReadToolName {
+	if toolName != sandbox.FsListToolName && toolName != sandbox.FsSearchToolName {
 		dir = filepath.Dir(resolved)
 	}
 	dir = h.nearestExistingDirectory(ctx, dir)

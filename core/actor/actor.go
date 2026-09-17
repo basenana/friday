@@ -214,24 +214,6 @@ func (a *Actor) SendPreemptScope(ctx context.Context, reason string, scope Preem
 	return nil
 }
 
-// SendSteer interrupts the current provider stream and schedules msg ahead of
-// the normal inbox. Normal queued turns are deliberately retained.
-func (a *Actor) SendSteer(ctx context.Context, msg UserTextMessage) error {
-	if a.stopped.Load() {
-		return ErrActorStopped
-	}
-	msg.Delivery = "steer"
-	cancel := a.snapshotTurnCancel()
-	if err := a.inbox.SendSteer(ctx, SteerMessage{UserTextMessage: msg}); err != nil {
-		if errors.Is(err, errInboxClosed) {
-			return ErrActorStopped
-		}
-		return err
-	}
-	a.preemptCapturedTurn(cancel)
-	return nil
-}
-
 // SubmitForm delivers values for a pending request_user_input call.
 func (a *Actor) SubmitForm(formID string, values map[string]any) error {
 	return a.ResolveForm(formID, FormOutcome{Values: values})
@@ -401,12 +383,7 @@ func (a *Actor) loop(ctx context.Context) {
 			if preempt.Scope != PreemptCurrent {
 				// Preserve the historical cancel-all behavior.
 				_, _ = a.inbox.Drain(false)
-				a.inbox.DrainSteers()
 			}
-			continue
-		}
-		if steer, ok := a.inbox.PollSteer(); ok {
-			a.runSteer(ctx, steer)
 			continue
 		}
 
@@ -422,11 +399,7 @@ func (a *Actor) loop(ctx context.Context) {
 		case PreemptMessage:
 			if control.Scope != PreemptCurrent {
 				_, _ = a.inbox.Drain(false)
-				a.inbox.DrainSteers()
 			}
-			continue
-		case SteerMessage:
-			a.runSteer(ctx, control)
 			continue
 		}
 
@@ -460,21 +433,10 @@ type batchContext struct {
 	text           string
 	displayText    string
 	turnID         string
-	delivery       string
 	sources        []string
-	steerSequence  uint64
 	images         []types.ImageContent
 	metadata       []map[string]any
 	sourceEventIDs []string
-}
-
-func (a *Actor) runSteer(ctx context.Context, steer SteerMessage) {
-	if !a.inbox.IsLatestSteer(steer) {
-		return
-	}
-	bctx := a.coalesceBatch([]Message{steer.UserTextMessage})
-	bctx.steerSequence = steer.sequence
-	a.runTurn(ctx, bctx, 1)
 }
 
 // splitTurnBatches preserves the inbox drain order while preventing
@@ -555,7 +517,6 @@ func (a *Actor) coalesceBatch(batch []Message) batchContext {
 	var images []types.ImageContent
 	var metadata []map[string]any
 	var turnID string
-	var delivery string
 	var sourceEventIDs []string
 	seenSourceEvents := make(map[string]struct{})
 	var sources []string
@@ -576,9 +537,6 @@ func (a *Actor) coalesceBatch(batch []Message) batchContext {
 			}
 			if v.TurnID != "" && turnID == "" {
 				turnID = v.TurnID
-			}
-			if v.Delivery != "" {
-				delivery = v.Delivery
 			}
 			if v.Source != "" {
 				if _, seen := seenSources[v.Source]; !seen {
@@ -607,7 +565,7 @@ func (a *Actor) coalesceBatch(batch []Message) batchContext {
 	if hasDisplayText {
 		displayText = strings.Join(displayParts, "\n\n")
 	}
-	return batchContext{text: text, displayText: displayText, turnID: turnID, delivery: delivery, sources: sources, images: images, metadata: metadata, sourceEventIDs: sourceEventIDs}
+	return batchContext{text: text, displayText: displayText, turnID: turnID, sources: sources, images: images, metadata: metadata, sourceEventIDs: sourceEventIDs}
 }
 
 // routeFormMessage dispatches a FormSubmitMessage / FormCancelMessage
@@ -650,10 +608,6 @@ func (a *Actor) runTurn(ctx context.Context, bctx batchContext, batchSize int) {
 		a.turnCancel = nil
 		a.turnMu.Unlock()
 	}()
-	if bctx.steerSequence != 0 && !a.inbox.IsLatestSteer(SteerMessage{sequence: bctx.steerSequence}) {
-		return
-	}
-
 	runID := bctx.turnID
 	if runID == "" {
 		runID = a.generateRunID()
@@ -736,7 +690,7 @@ func (a *Actor) runTurn(ctx context.Context, bctx batchContext, batchSize int) {
 		WithName(events.CustomInputAccepted).
 		WithPayload(events.InputAcceptedBody{
 			TurnID: runID, Text: bctx.text, DisplayText: bctx.displayText,
-			Delivery: bctx.delivery, Sources: bctx.sources,
+			Sources: bctx.sources,
 		}))
 
 	req := &api.Request{

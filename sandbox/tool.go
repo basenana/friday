@@ -1,10 +1,11 @@
 package sandbox
 
 import (
-	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/basenana/friday/core/tools"
@@ -12,9 +13,9 @@ import (
 
 const (
 	bashToolName        = "bash"
-	bashToolDescription = `Execute bash commands in a sandboxed environment.
+	bashToolDescription = `Execute a non-interactive shell command in a sandboxed environment.
 
-IMPORTANT: Always use this tool for bash commands, even if you think you could answer directly.
+Use this for builds, tests, Git, grep, pipelines, and shell workflows that the native filesystem tools do not express. Prefer fs_list, fs_search, fs_read, fs_write, fs_edit, and fs_delete for file operations because they provide structured results and stronger path checks.
 Commands are executed with safety restrictions:
 - Commands must be in the allow list
 - Dangerous commands are blocked
@@ -22,39 +23,21 @@ Commands are executed with safety restrictions:
 - Commands have a timeout of at most 15 minutes; use background_task for longer work
 
 Usage notes:
-- Execute commands using bash -c, so you can use pipes, redirects, and compound commands
+- Pass the raw shell text in command; do not wrap it in another bash -c
+- Pipes, redirects, and compound commands are supported
 - Avoid using bash commands that require interactive input
 - If a command fails, analyze the error and try a different approach
-- Use absolute paths when possible for reliability`
+- Relative workdir values are resolved from the agent working directory`
 )
 
 // NewBashTool creates a new bash tool
 func NewBashTool(exec *Executor, workdir string) *tools.Tool {
-	permissionBuf := bytes.NewBuffer(nil)
-
-	if len(exec.config.Permissions.Allow) > 0 {
-		permissionBuf.WriteString("Allowed commands:\n")
-		for _, cmd := range exec.config.Permissions.Allow {
-			permissionBuf.WriteString("- " + cmd + "\n")
-		}
-	}
-	if len(exec.config.Permissions.Deny) > 0 {
-		permissionBuf.WriteString("Denied commands:\n")
-		for _, cmd := range exec.config.Permissions.Deny {
-			permissionBuf.WriteString("- " + cmd + "\n")
-		}
-	}
-
-	desc := bashToolDescription
-	if permissionBuf.Len() > 0 {
-		desc = bashToolDescription + "\n\n" + permissionBuf.String()
-	}
-
 	return tools.NewTool(bashToolName,
-		tools.WithDescription(desc),
-		tools.WithString("command", tools.Required(), tools.Description("The bash command to execute")),
+		tools.WithDescription(bashToolDescription),
+		tools.WithString("command", tools.Required(), tools.MinLength(1), tools.Description("Raw shell command text. Do not add an outer bash -c wrapper.")),
 		tools.WithString("timeout", tools.Description("Timeout duration (e.g. '30s', '5m'), up to 15m. Default is from config.")),
-		tools.WithString("workdir", tools.Description("Working directory. Default is current directory.")),
+		tools.WithString("workdir", tools.Description("Working directory, relative to the agent root or an allowed absolute path. Defaults to the agent root.")),
+		tools.WithExample(map[string]interface{}{"command": "go test ./core/actor", "workdir": ".", "timeout": "5m"}),
 		tools.WithToolTimeout(exec.parseTimeout(), "timeout"),
 		tools.WithToolHandler(bashToolHandler(exec, workdir)),
 	)
@@ -87,6 +70,9 @@ func bashToolHandler(exec *Executor, baseWorkdir string) tools.ToolHandlerFunc {
 		// Execute command
 		result, err := exec.Run(ctx, command, opts)
 		if err != nil {
+			if errors.Is(err, ErrSandboxUnavailable) {
+				return tools.NewToolResultActionableError(err.Error(), "enable a supported OS sandbox or explicitly run Friday inside a trusted outer sandbox"), nil
+			}
 			if IsDenied(err) {
 				cause := err.Error()
 				if result != nil && strings.TrimSpace(result.Stderr) != "" {
@@ -101,6 +87,9 @@ func bashToolHandler(exec *Executor, baseWorkdir string) tools.ToolHandlerFunc {
 		var output strings.Builder
 		if result.Stdout != "" {
 			output.WriteString(result.Stdout)
+			if result.StdoutTruncated {
+				output.WriteString("\n[stdout truncated by capture limits]")
+			}
 		}
 		if result.Stderr != "" {
 			if output.Len() > 0 {
@@ -108,6 +97,9 @@ func bashToolHandler(exec *Executor, baseWorkdir string) tools.ToolHandlerFunc {
 			}
 			output.WriteString("stderr:\n")
 			output.WriteString(result.Stderr)
+			if result.StderrTruncated {
+				output.WriteString("\n[stderr truncated by capture limits]")
+			}
 		}
 
 		if result.TimedOut {
@@ -160,6 +152,10 @@ func resolveToolWorkdirWithPolicy(base string, args map[string]interface{}, isol
 
 	workdir := baseAbs
 	if raw, ok := args["workdir"].(string); ok && strings.TrimSpace(raw) != "" {
+		raw = strings.TrimSpace(raw)
+		if !filepath.IsAbs(expandPath(raw, "", "")) {
+			raw = filepath.Join(baseAbs, raw)
+		}
 		validated, err := ValidateWorkdir(raw)
 		if err != nil {
 			return "", fmt.Errorf("invalid workdir: %w", err)
@@ -171,43 +167,4 @@ func resolveToolWorkdirWithPolicy(base string, args map[string]interface{}, isol
 		return "", fmt.Errorf("invalid workdir: %q is outside the agent workdir %q", workdir, baseAbs)
 	}
 	return workdir, nil
-}
-
-func buildPermissionDescription(exec *Executor) string {
-	permissionBuf := bytes.NewBuffer(nil)
-
-	if len(exec.config.Permissions.Allow) > 0 {
-		permissionBuf.WriteString("Allowed commands:\n")
-		for _, cmd := range exec.config.Permissions.Allow {
-			permissionBuf.WriteString("- " + cmd + "\n")
-		}
-	}
-	if len(exec.config.Permissions.Deny) > 0 {
-		permissionBuf.WriteString("Denied commands:\n")
-		for _, cmd := range exec.config.Permissions.Deny {
-			permissionBuf.WriteString("- " + cmd + "\n")
-		}
-	}
-
-	return permissionBuf.String()
-}
-
-func buildCommandOutput(result *Result) string {
-	if result == nil {
-		return ""
-	}
-
-	var output strings.Builder
-	if result.Stdout != "" {
-		output.WriteString(result.Stdout)
-	}
-	if result.Stderr != "" {
-		if output.Len() > 0 {
-			output.WriteString("\n")
-		}
-		output.WriteString("stderr:\n")
-		output.WriteString(result.Stderr)
-	}
-
-	return output.String()
 }

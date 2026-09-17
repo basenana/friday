@@ -29,7 +29,10 @@ const (
 	MaxOutputBytes = 512 * 1024 // 512KB
 )
 
-var ErrTimeoutOutOfRange = errors.New("command timeout must be greater than zero and no more than 15m")
+var (
+	ErrTimeoutOutOfRange  = errors.New("command timeout must be greater than zero and no more than 15m")
+	ErrSandboxUnavailable = errors.New("configured OS sandbox is unavailable")
+)
 
 // Executor handles command execution with sandboxing
 type Executor struct {
@@ -91,19 +94,15 @@ func (e *Executor) Run(ctx context.Context, cmd string, opts ExecOptions) (*Resu
 	defer cancel()
 
 	// 4. Wrap command with sandbox
-	runner := e.sandbox
 	if e.config.Sandbox.Enabled && !e.sandbox.IsAvailable() {
 		e.warnUnsandboxedOnce.Do(func() {
-			logger.New("sandbox").Warnw("sandbox is unavailable; commands will run without isolation",
+			logger.New("sandbox").Warnw("sandbox is unavailable; command execution is disabled",
 				"sandbox", e.sandbox.Name(),
 			)
 		})
-		// Match the documented fallback above. Wrapping with an unavailable
-		// backend would only defer the failure until command execution and can
-		// make an agent retry an impossible command indefinitely.
-		runner = &NoSandbox{}
+		return &Result{ExitCode: 1, Stderr: ErrSandboxUnavailable.Error()}, fmt.Errorf("%w: %s", ErrSandboxUnavailable, e.sandbox.Name())
 	}
-	wrappedCmd, cleanup, err := runner.WrapCommand(cmd, opts)
+	wrappedCmd, cleanup, err := e.sandbox.WrapCommand(cmd, opts)
 	if cleanup != nil {
 		defer cleanup()
 	}
@@ -174,8 +173,11 @@ func (e *Executor) execute(ctx context.Context, cmdStr string, opts ExecOptions)
 		if ctx.Err() == context.DeadlineExceeded {
 			result.ExitCode = 124 // Standard timeout exit code
 			result.TimedOut = true
-			result.Stderr = "Command timed out"
-			result.StderrTruncated = false
+			if strings.TrimSpace(result.Stderr) == "" {
+				result.Stderr = "Command timed out"
+			} else {
+				result.Stderr = "Command timed out\n" + result.Stderr
+			}
 		} else if exitErr, ok := err.(*exec.ExitError); ok {
 			result.ExitCode = exitErr.ExitCode()
 		} else {
@@ -370,6 +372,9 @@ func GetOSInfo() string {
 // WrapCommand wraps a command with sandbox isolation.
 // Returns the wrapped command string, a cleanup function, and any error.
 func (e *Executor) WrapCommand(cmd string, opts ExecOptions) (string, func(), error) {
+	if e.config.Sandbox.Enabled && !e.sandbox.IsAvailable() {
+		return "", nil, fmt.Errorf("%w: %s", ErrSandboxUnavailable, e.sandbox.Name())
+	}
 	return e.sandbox.WrapCommand(cmd, opts)
 }
 
@@ -396,6 +401,9 @@ func ValidateWorkdir(workdir string) (string, error) {
 	if !info.IsDir() {
 		return "", fmt.Errorf("%s is not a directory", absPath)
 	}
-
-	return absPath, nil
+	resolved, err := filepath.EvalSymlinks(absPath)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Clean(resolved), nil
 }

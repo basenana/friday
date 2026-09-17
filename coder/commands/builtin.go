@@ -94,8 +94,8 @@ func buildHelpText(reg *Registry) string {
 		b.WriteString(fmt.Sprintf("- `%s` — %s · `%s`\n", name, cmd.Description(), meta.Usage))
 	}
 	b.WriteString("\n## Keys\n\n")
-	b.WriteString("- `Enter` — Send; during Loop, send after the current task; otherwise steer the active task\n")
-	b.WriteString("- `Tab` — Complete a command; while running, send input after the current task\n")
+	b.WriteString("- `Enter` — Send; while running, send after the current task\n")
+	b.WriteString("- `Tab` — Complete a command; while running, send after the current task\n")
 	b.WriteString("- `Ctrl+J` — Insert a newline\n")
 	b.WriteString("- `Ctrl+G` — Edit the prompt with `VISUAL`/`EDITOR`\n")
 	b.WriteString("- `Ctrl+P` — Attach an image from the system clipboard\n")
@@ -104,7 +104,7 @@ func buildHelpText(reg *Registry) string {
 	b.WriteString("- `Shift+Tab` — Toggle Default/Plan Mode while idle\n")
 	b.WriteString("- `Ctrl+L` — Clear the terminal view, keeping the session\n")
 	b.WriteString("- `Ctrl+C` — Quit\n")
-	b.WriteString("- `Esc` — Cancel current task or close the active popup\n")
+	b.WriteString("- `Esc` — Cancel the current task; queued input continues\n")
 	b.WriteString("- `PgUp`/`PgDn`, `Ctrl+U`/`Ctrl+D` — Scroll history\n")
 	return b.String()
 }

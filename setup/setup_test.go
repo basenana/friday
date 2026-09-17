@@ -12,6 +12,7 @@ import (
 	coderagents "github.com/basenana/friday/coder/agents"
 	"github.com/basenana/friday/coder/configtools"
 	"github.com/basenana/friday/config"
+	coreagents "github.com/basenana/friday/core/agents"
 	"github.com/basenana/friday/core/api"
 	"github.com/basenana/friday/core/providers"
 	"github.com/basenana/friday/core/providers/fallback"
@@ -137,7 +138,10 @@ func TestDiskAgentReusesPrimaryClientPromptAndRunTaskRegistration(t *testing.T) 
 		t.Fatalf("primary client calls = %d, want 1", len(requests))
 	}
 	systemPrompt := requests[0].SystemPrompt()
-	wantStablePrefix := coderagents.ComposeSystemPrompt(workspacePrompt, "AGENT ONLY PROMPT")
+	wantStablePrefix := coderagents.ComposeSystemPrompt(
+		coderagents.ComposeSystemPrompt(coreagents.DEFAULT_SYSTEM_PROMPT, workspacePrompt),
+		"AGENT ONLY PROMPT",
+	)
 	if !strings.HasPrefix(strings.TrimSpace(systemPrompt), wantStablePrefix) {
 		t.Fatalf("system prompt does not start with workspace + agent prompt:\n%s", systemPrompt)
 	}

@@ -3,6 +3,7 @@ package tui
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -57,6 +58,41 @@ func TestSlashPopupIncludesSkillsAndHidesBuiltinConflicts(t *testing.T) {
 	m.refreshMenu()
 	if len(m.menu.items) != 1 || m.menu.items[0].label != "/late-skill" {
 		t.Fatalf("newly installed skill was not refreshed: %#v", m.menu.items)
+	}
+}
+
+func TestSlashSkillNamePrefixFiltering(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  []string
+	}{
+		{name: "case insensitive prefix", input: "/WRI", want: []string{"/writer"}},
+		{name: "middle substring", input: "/riter", want: nil},
+		{name: "description", input: "/drafting", want: nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m, _, _ := newTestModel(t)
+			writeTestSkill(t, m, "writer", "writer", "Drafting assistant", "Write clearly.")
+			m.textarea.SetValue(tt.input)
+			m.refreshMenu()
+			if got := menuLabels(m.menu.items); !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("labels for %q = %v, want %v", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSlashSkillNamePrefixRanksBeforeBuiltinAlias(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	writeTestSkill(t, m, "editor", "editor", "Edit text", "Edit carefully.")
+	m.textarea.SetValue("/e")
+	m.refreshMenu()
+	skill := menuLabelIndex(m.menu.items, "/editor")
+	alias := menuLabelIndex(m.menu.items, "/quit")
+	if skill < 0 || alias < 0 || skill >= alias {
+		t.Fatalf("skill name prefix must precede builtin alias: %v", menuLabels(m.menu.items))
 	}
 }
 

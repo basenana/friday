@@ -59,6 +59,19 @@ func TestHelpCmd(t *testing.T) {
 	if !strings.Contains(message, "/clear") {
 		t.Errorf("help message should list /clear; got: %q", message)
 	}
+	for _, want := range []string{
+		"`Enter` — Send; while running, send after the current task",
+		"`Esc` — Cancel the current task; queued input continues",
+	} {
+		if !strings.Contains(message, want) {
+			t.Errorf("help message missing %q; got: %q", want, message)
+		}
+	}
+	for _, obsolete := range []string{"steer", "interrupt"} {
+		if strings.Contains(strings.ToLower(message), obsolete) {
+			t.Errorf("help message contains obsolete %q wording; got: %q", obsolete, message)
+		}
+	}
 }
 
 func TestPlanCmd_NoArgsEntersPlanMode(t *testing.T) {

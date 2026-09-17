@@ -262,7 +262,6 @@ func TestRunConsumesOnlyUnseenUserTailAndIsIdempotent(t *testing.T) {
 				map[string]any{"type": "image", "source": map[string]any{"type": "url", "value": "https://example.test/image.png"}},
 			})},
 		},
-		ForwardedProps: rawPayload(t, map[string]any{"friday": map[string]any{"delivery": "steer"}}),
 	}
 	frame := ClientFrame{Version: ProtocolVersion, Type: TypeRun, RequestID: "run-request", ThreadID: "thread-run", Payload: rawPayload(t, input)}
 	writeClientFrame(t, conn, frame)
@@ -279,7 +278,7 @@ func TestRunConsumesOnlyUnseenUserTailAndIsIdempotent(t *testing.T) {
 		if err := events.DecodePayload(env.Event, &payload); err != nil {
 			t.Fatal(err)
 		}
-		if payload.Text != "new" || payload.TurnID != "run-1" || payload.Delivery != bus.DeliverySteer || len(payload.Images) != 1 {
+		if payload.Text != "new" || payload.TurnID != "run-1" || len(payload.Images) != 1 {
 			t.Fatalf("input payload = %+v", payload)
 		}
 	case <-time.After(3 * time.Second):
