@@ -152,27 +152,39 @@ func (m *model) renderBlock(b *chatBlock) string {
 	if b.interrupted {
 		suffix = "\n" + mutedStyle.Render("↳ interrupted")
 	}
+	// Blocks are soft-wrapped to the conversation width so long lines fold
+	// instead of being cut off at the viewport edge. lipgloss.Wrap re-applies
+	// ANSI styles across inserted line breaks, so it is safe on already
+	// rendered (colored) content such as markdown output.
+	wrapWidth := m.conversationWidth()
 	switch b.kind {
 	case blockUser:
-		b.rendered = userStyle.Render("› ") + strings.TrimRight(terminalSafe(b.content), "\n")
+		b.rendered = lipgloss.Wrap(userStyle.Render("› ")+strings.TrimRight(terminalSafe(b.content), "\n"), wrapWidth, "")
 	case blockAssistant:
-		b.rendered = m.markdown(b.content) + suffix
+		b.rendered = lipgloss.Wrap(m.markdown(b.content)+suffix, wrapWidth, "")
 	case blockReasoning:
-		b.rendered = mutedStyle.Render("thinking") + "\n" + reasoningStyle.Render(truncateLines(terminalSafe(b.content), 12)) + suffix
+		content := lipgloss.Wrap(truncateLines(terminalSafe(b.content), 12), max(wrapWidth-2, 18), "")
+		b.rendered = mutedStyle.Render("thinking") + "\n" + reasoningStyle.Render(content) + suffix
 	case blockToolCall:
 		b.rendered = m.renderToolCard(b)
 	case blockError:
-		b.rendered = errorStyle.Render("✗ " + terminalSafe(b.content))
+		b.rendered = lipgloss.Wrap(errorStyle.Render("✗ "+terminalSafe(b.content)), wrapWidth, "")
 	case blockCard:
 		b.rendered = m.renderCard(b.card)
 	case blockPlan:
 		header := accentStyle.Copy().Bold(true).Render(b.toolName)
 		b.rendered = menuStyle.Width(max(m.width-4, 20)).Render(header + "\n" + m.markdown(b.content))
 	case blockDivider:
-		lineWidth := max(m.width-lipgloss.Width(b.content)-5, 3)
-		b.rendered = mutedStyle.Render("── " + terminalSafe(b.content) + " " + strings.Repeat("─", lineWidth))
+		label := truncateWidth(terminalSafe(b.content), max(m.width-8, 4))
+		lineWidth := max(m.width-lipgloss.Width(label)-5, 3)
+		b.rendered = mutedStyle.Render("── " + label + " " + strings.Repeat("─", lineWidth))
 	}
 	return b.rendered
+}
+
+// conversationWidth is the column budget transcript blocks must fit into.
+func (m *model) conversationWidth() int {
+	return max(m.width, 20)
 }
 
 func terminalSafe(s string) string {

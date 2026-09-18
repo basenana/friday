@@ -273,6 +273,14 @@ func loadingModelAt(sessMgr *sessions.Manager, registry *actor.Registry, cmdRegi
 	return m
 }
 
+// newConversationViewport builds the transcript viewport. SoftWrap folds any
+// line wider than the terminal instead of cutting it off at the right edge.
+func newConversationViewport() viewport.Model {
+	vp := viewport.New(viewport.WithWidth(80), viewport.WithHeight(20))
+	vp.SoftWrap = true
+	return vp
+}
+
 func baseModel(sessMgr *sessions.Manager, registry *actor.Registry, cmdRegistry *codercmds.Registry, cfg *config.Config, sessionID string) *model {
 	return baseModelAt(sessMgr, registry, cmdRegistry, cfg, sessionID, "")
 }
@@ -293,7 +301,7 @@ func baseModelAt(sessMgr *sessions.Manager, registry *actor.Registry, cmdRegistr
 	m := &model{
 		sessMgr: sessMgr, runtime: sessMgr, registry: registry, cmdRegistry: cmdRegistry, cfg: cfg,
 		agentRegistry: registry.AgentRegistry(), skillRegistry: registry.SkillRegistry(),
-		sessionID: sessionID, textarea: ta, viewport: viewport.New(viewport.WithWidth(80), viewport.WithHeight(20)),
+		sessionID: sessionID, textarea: ta, viewport: newConversationViewport(),
 		spinner:   spinner.New(spinner.WithSpinner(spinner.Dot), spinner.WithStyle(accentStyle)),
 		toolCalls: make(map[string]int), seenInputs: make(map[string]bool),
 		cards:        make(map[string]*cardState),
