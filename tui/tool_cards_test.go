@@ -15,6 +15,7 @@ func TestBuiltinToolCardPresentations(t *testing.T) {
 		{"request_user_input", `{"question_1":"Which scope?","options_1":["Small","Large"]}`, "Ask user", ""},
 		{"submit_plan", `{"markdown":"# Plan\\n\\nComplete plan"}`, "Submit plan", ""},
 		{"fs_read", `{"path":"main.go"}`, "Read file", "main.go"},
+		{"fs_read", `{"path":"main.go","start_line":10,"end_line":20}`, "Read file", "lines · 10–20"},
 		{"fs_list", `{}`, "List directory", "."},
 		{"fs_search", `{"directory":"core","regex":"func\\s+New"}`, "Search files", "func\\s+New"},
 		{"fs_write", `{"path":"out.txt","content":"hello"}`, "Write file", "5 bytes"},
@@ -35,6 +36,36 @@ func TestBuiltinToolCardPresentations(t *testing.T) {
 			got := m.presentTool(block)
 			if !got.specialized || got.title != test.wantTitle || !strings.Contains(terminalSafe(got.body), test.wantBody) {
 				t.Fatalf("presentation = %#v", got)
+			}
+		})
+	}
+}
+
+func TestFsReadToolCardLineRanges(t *testing.T) {
+	configureTheme(true)
+	m := &model{width: 100}
+	tests := []struct {
+		name string
+		args string
+		want string
+	}{
+		{name: "full file", args: `{"path":"main.go"}`, want: ""},
+		{name: "closed range", args: `{"path":"main.go","start_line":10,"end_line":20}`, want: "lines · 10–20"},
+		{name: "through EOF", args: `{"path":"main.go","start_line":10}`, want: "lines · 10–EOF"},
+		{name: "from beginning", args: `{"path":"main.go","end_line":20}`, want: "lines · 1–20"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			block := &chatBlock{toolName: "fs_read", toolArgs: test.args, toolArgsComplete: true}
+			body := terminalSafe(m.presentTool(block).body)
+			if test.want == "" {
+				if strings.Contains(body, "lines ·") {
+					t.Fatalf("unexpected range in body %q", body)
+				}
+				return
+			}
+			if !strings.Contains(body, test.want) {
+				t.Fatalf("body = %q, want %q", body, test.want)
 			}
 		})
 	}

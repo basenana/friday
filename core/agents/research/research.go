@@ -44,10 +44,11 @@ func (a *Agent) Chat(ctx context.Context, req *api.Request) *api.Response {
 		mergedTools = append(mergedTools, t)
 	}
 
+	inputRole, inputMessage := req.InputMessage()
 	leader := newResearchLeader(a, req.Session, mergedTools)
 	go func() {
 		defer resp.Close()
-		if err := a.doResearch(ctx, leader, req.UserMessage, sess, resp); err != nil {
+		if err := a.doResearch(ctx, leader, inputRole, inputMessage, sess, resp); err != nil {
 			a.logger.Warnw("run task failed, skip and next", "err", err)
 		}
 	}()
@@ -55,7 +56,7 @@ func (a *Agent) Chat(ctx context.Context, req *api.Request) *api.Response {
 	return resp
 }
 
-func (a *Agent) doResearch(ctx context.Context, leader agents.Agent, task string, sess *session.Session, resp *api.Response) error {
+func (a *Agent) doResearch(ctx context.Context, leader agents.Agent, inputRole types.MessageRole, task string, sess *session.Session, resp *api.Response) error {
 	var (
 		contentBuf = &bytes.Buffer{}
 		startAt    = time.Now()
@@ -63,7 +64,13 @@ func (a *Agent) doResearch(ctx context.Context, leader agents.Agent, task string
 	)
 	a.logger.Infow("run research", "task", task)
 
-	stream := leader.Chat(ctx, &api.Request{Session: sess, UserMessage: task})
+	leaderRequest := &api.Request{Session: sess}
+	if inputRole == types.RoleAgent {
+		leaderRequest.AgentMessage = task
+	} else {
+		leaderRequest.UserMessage = task
+	}
+	stream := leader.Chat(ctx, leaderRequest)
 Waiting:
 	for {
 		select {

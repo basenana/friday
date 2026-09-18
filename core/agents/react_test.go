@@ -511,6 +511,78 @@ func TestReactChatPropagatesTurnMetadata(t *testing.T) {
 	}
 }
 
+type rewriteAgentInputHook struct{}
+
+func (rewriteAgentInputHook) BeforeAgent(_ context.Context, _ *session.Session, req session.AgentRequest) error {
+	if req.GetAgentMessage() == "internal prompt" {
+		req.SetAgentMessage("rewritten internal prompt")
+	}
+	return nil
+}
+
+func TestReactChatAppliesHooksToAgentInput(t *testing.T) {
+	llm := &fakeLLMClient{completions: [][]providers.Delta{{{Content: "ack"}}}}
+	sess := session.New("session-agent-hook", llm, session.WithHooks(rewriteAgentInputHook{}))
+
+	response := New(llm, Option{MaxLoopTimes: 1}).Chat(context.Background(), &api.Request{
+		Session:      sess,
+		AgentMessage: "internal prompt",
+	})
+	if _, err := api.ReadAllContent(context.Background(), response); err != nil {
+		t.Fatalf("ReadAllContent() error = %v", err)
+	}
+
+	history := sess.GetHistory()
+	if len(history) != 2 || history[0].Role != types.RoleAgent || history[0].Content != "rewritten internal prompt" {
+		t.Fatalf("history = %#v", history)
+	}
+}
+
+func TestReactChatPersistsAgentInputRoleAndEnvelope(t *testing.T) {
+	llm := &fakeLLMClient{completions: [][]providers.Delta{{{Content: "ack"}}}}
+	sess := session.New("session-agent-input", llm)
+	legacyImage := &types.ImageContent{Type: types.ImageTypeURL, URL: "https://example.test/legacy.png"}
+	images := []types.ImageContent{{
+		Type:      types.ImageTypeBase64,
+		MediaType: "image/png",
+		Data:      "aW1hZ2U=",
+	}}
+	metadata := map[string]string{"session_turn_id": "turn-agent-123"}
+
+	response := New(llm, Option{MaxLoopTimes: 1}).Chat(context.Background(), &api.Request{
+		Session:      sess,
+		UserMessage:  "must not win",
+		AgentMessage: "internal prompt",
+		Image:        legacyImage,
+		Images:       images,
+		Metadata:     metadata,
+	})
+	if _, err := api.ReadAllContent(context.Background(), response); err != nil {
+		t.Fatalf("ReadAllContent() error = %v", err)
+	}
+
+	history := sess.GetHistory()
+	if len(history) != 2 {
+		t.Fatalf("expected agent and assistant messages, got %d", len(history))
+	}
+	input := history[0]
+	if input.Role != types.RoleAgent {
+		t.Fatalf("input role = %q, want %q", input.Role, types.RoleAgent)
+	}
+	if input.Content != "internal prompt" {
+		t.Fatalf("input content = %q, want %q", input.Content, "internal prompt")
+	}
+	if input.Image == nil || input.Image.URL != legacyImage.URL {
+		t.Fatalf("legacy image = %#v, want %#v", input.Image, legacyImage)
+	}
+	if len(input.Images) != 1 || input.Images[0].Data != images[0].Data {
+		t.Fatalf("images = %#v, want %#v", input.Images, images)
+	}
+	if input.Metadata["session_turn_id"] != "turn-agent-123" {
+		t.Fatalf("metadata = %#v", input.Metadata)
+	}
+}
+
 func TestTryToolCallReturnsInterruptedToolResultWhenContextCanceled(t *testing.T) {
 	waitTool := tools.NewTool("wait_tool",
 		tools.WithToolHandler(func(ctx context.Context, request *tools.Request) (*tools.Result, error) {
@@ -765,6 +837,20 @@ type namedFakeLLM struct {
 
 func (f *namedFakeLLM) ModelName() string { return "test-model-x" }
 
+type runtimeInfoFakeLLM struct {
+	*calibratingFakeLLM
+}
+
+func (f *runtimeInfoFakeLLM) ModelName() string { return "configured-model" }
+
+func (f *runtimeInfoFakeLLM) Completion(ctx context.Context, req providers.Request) providers.Response {
+	resp := f.calibratingFakeLLM.Completion(ctx, req)
+	resp.(*providers.CommonResponse).SetRuntimeInfo(providers.ClientRuntimeInfo{
+		Model: "actual-model", EndpointKey: "actual-endpoint", Effort: "high", Actual: true,
+	})
+	return resp
+}
+
 func TestReactFiresAfterModelCallOnSuccess(t *testing.T) {
 	llm := &namedFakeLLM{&calibratingFakeLLM{
 		completions:      [][]providers.Delta{{{Content: "Hello back."}}},
@@ -800,6 +886,22 @@ func TestReactFiresAfterModelCallOnSuccess(t *testing.T) {
 	}
 	if st.DurationMs < 0 {
 		t.Fatalf("expected non-negative duration, got %d", st.DurationMs)
+	}
+}
+
+func TestReactModelCallUsesResponseRuntimeInfo(t *testing.T) {
+	llm := &runtimeInfoFakeLLM{&calibratingFakeLLM{
+		completions: [][]providers.Delta{{{Content: "ok"}}},
+	}}
+	recorder := &modelCallRecorder{}
+	sess := session.New("sess-response-runtime", llm, session.WithHooks(recorder))
+	resp := New(llm, Option{MaxLoopTimes: 1}).Chat(context.Background(), &api.Request{Session: sess, UserMessage: "hello"})
+	if _, err := api.ReadAllContent(context.Background(), resp); err != nil {
+		t.Fatal(err)
+	}
+	calls := recorder.recorded()
+	if len(calls) != 1 || calls[0].Model != "actual-model" || calls[0].EndpointKey != "actual-endpoint" || calls[0].Effort != "high" {
+		t.Fatalf("model call stats = %#v", calls)
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -373,12 +374,15 @@ func newFsReadTool(fs FileSystem, workdir string) *tools.Tool {
 
 Current working directory: %s
 
-Use this after confirming the path with fs_list or fs_search. Use fs_list for directories and fs_search to find text across files. The file is returned from the beginning and is only limited by the shared tool-result budget; any truncation is reported explicitly.`, workdir)
+Use this after confirming the path with fs_list or fs_search. Use fs_list for directories and fs_search to find text across files. By default the complete file is returned. Set the optional 1-based inclusive start_line and end_line fields to read only part of a file. Output is limited only by the shared tool-result budget; any truncation is reported explicitly.`, workdir)
 
 	return tools.NewTool(toolFsRead,
 		tools.WithDescription(desc),
 		tools.WithString("path", tools.Description("Existing file path, relative to the current working directory or an allowed absolute path."), tools.MinLength(1), tools.Required()),
+		tools.WithInteger("start_line", tools.Description("Optional 1-based first line to return, inclusive."), tools.Min(1)),
+		tools.WithInteger("end_line", tools.Description("Optional 1-based last line to return, inclusive."), tools.Min(1)),
 		tools.WithExample(map[string]interface{}{"path": "core/actor/inbox.go"}),
+		tools.WithExample(map[string]interface{}{"path": "core/actor/inbox.go", "start_line": 120, "end_line": 180}),
 		tools.WithToolHandler(fsReadFileSystemHandler(fs)),
 	)
 }
@@ -392,6 +396,17 @@ func fsReadFileSystemHandler(fs FileSystem) tools.ToolHandlerFunc {
 		path, ok := req.Arguments["path"].(string)
 		if !ok || path == "" {
 			return tools.NewToolResultActionableError("path is required and must be a non-empty string", "provide a file path relative to the workdir or an allowed absolute path"), nil
+		}
+		startLine, hasStart, err := optionalPositiveLineArgument(req.Arguments, "start_line")
+		if err != nil {
+			return tools.NewToolResultActionableError(err.Error(), "provide a positive integer line number"), nil
+		}
+		endLine, hasEnd, err := optionalPositiveLineArgument(req.Arguments, "end_line")
+		if err != nil {
+			return tools.NewToolResultActionableError(err.Error(), "provide a positive integer line number"), nil
+		}
+		if hasStart && hasEnd && startLine > endLine {
+			return tools.NewToolResultActionableError("start_line must be less than or equal to end_line", "swap the line bounds or omit one of them"), nil
 		}
 
 		absPath, err := fs.Resolve(ctx, path, FileAccessRead)
@@ -410,7 +425,20 @@ func fsReadFileSystemHandler(fs FileSystem) tools.ToolHandlerFunc {
 			return tools.NewToolResultActionableError(fmt.Sprintf("cannot read %q as a file because it is a directory", path), "use fs_list for directories or provide a file path"), nil
 		}
 
-		content, truncated, err := readFileWithinBudget(ctx, fs, absPath, info.Size(), req.MaxOutputChars)
+		var content []byte
+		var truncated bool
+		if hasStart || hasEnd {
+			var linesRead int
+			content, truncated, linesRead, err = readFileLineRangeWithinBudget(ctx, fs, absPath, startLine, hasStart, endLine, hasEnd, req.MaxOutputChars)
+			if err == nil && hasStart && linesRead < startLine {
+				return tools.NewToolResultActionableError(
+					fmt.Sprintf("start_line %d exceeds the file's %d lines", startLine, linesRead),
+					"choose a start_line within the file or omit the line range",
+				), nil
+			}
+		} else {
+			content, truncated, err = readFileWithinBudget(ctx, fs, absPath, info.Size(), req.MaxOutputChars)
+		}
 		if err != nil {
 			return tools.NewToolResultActionableError(fmt.Sprintf("failed to read file %q: %s", path, err), "verify that the file exists and is readable, then retry"), nil
 		}
@@ -420,6 +448,92 @@ func fsReadFileSystemHandler(fs FileSystem) tools.ToolHandlerFunc {
 		}
 		return tools.NewToolResultText(text), nil
 	}
+}
+
+func optionalPositiveLineArgument(arguments map[string]interface{}, name string) (int, bool, error) {
+	raw, ok := arguments[name]
+	if !ok || raw == nil {
+		return 0, false, nil
+	}
+
+	maxInt := uint64(^uint(0) >> 1)
+	value := reflect.ValueOf(raw)
+	switch value.Kind() {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		number := value.Int()
+		if number >= 1 && uint64(number) <= maxInt {
+			return int(number), true, nil
+		}
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		number := value.Uint()
+		if number >= 1 && number <= maxInt {
+			return int(number), true, nil
+		}
+	case reflect.Float32, reflect.Float64:
+		number := value.Float()
+		if !math.IsNaN(number) && !math.IsInf(number, 0) && number >= 1 && math.Trunc(number) == number {
+			converted := int(number)
+			if converted >= 1 && float64(converted) == number {
+				return converted, true, nil
+			}
+		}
+	}
+	return 0, false, fmt.Errorf("%s must be a positive integer", name)
+}
+
+func readFileLineRangeWithinBudget(ctx context.Context, fs FileSystem, path string, startLine int, hasStart bool, endLine int, hasEnd bool, maxChars int64) ([]byte, bool, int, error) {
+	reader, err := openSearchFile(ctx, fs, path)
+	if err != nil {
+		return nil, false, 0, err
+	}
+	defer reader.Close()
+
+	if !hasStart {
+		startLine = 1
+	}
+	const noticeReserve = int64(160)
+	visibleChars := maxChars
+	if visibleChars > 0 {
+		visibleChars -= noticeReserve
+		if visibleChars < 1 {
+			visibleChars = 1
+		}
+	}
+
+	buffered := bufio.NewReader(reader)
+	var content strings.Builder
+	var contentRunes int64
+	lineNumber := 0
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, false, lineNumber, err
+		}
+		line, readErr := buffered.ReadString('\n')
+		if len(line) > 0 {
+			lineNumber++
+			if lineNumber >= startLine && (!hasEnd || lineNumber <= endLine) {
+				if visibleChars <= 0 {
+					content.WriteString(line)
+				} else {
+					lineRunes := []rune(line)
+					remaining := visibleChars - contentRunes
+					if int64(len(lineRunes)) > remaining {
+						content.WriteString(string(lineRunes[:remaining]))
+						return []byte(content.String()), true, lineNumber, nil
+					}
+					content.WriteString(line)
+					contentRunes += int64(len(lineRunes))
+				}
+			}
+		}
+		if readErr == io.EOF || (hasEnd && lineNumber >= endLine) {
+			break
+		}
+		if readErr != nil {
+			return nil, false, lineNumber, readErr
+		}
+	}
+	return []byte(content.String()), false, lineNumber, nil
 }
 
 func readFileWithinBudget(ctx context.Context, fs FileSystem, path string, size, maxChars int64) ([]byte, bool, error) {
@@ -707,6 +821,7 @@ type fsSearchResult struct {
 	ErrorsSkipped      int             `json:"errors_skipped"`
 	Truncated          bool            `json:"truncated"`
 	StoppedReason      string          `json:"stopped_reason,omitempty"`
+	encodedSize        int             `json:"-"`
 }
 
 func fsSearchFileSystemHandler(fs FileSystem) tools.ToolHandlerFunc {
@@ -739,6 +854,7 @@ func fsSearchFileSystemHandler(fs FileSystem) tools.ToolHandlerFunc {
 		}
 
 		result := fsSearchResult{Directory: displayToolPath(fs, root), Regex: pattern, Matches: []fsSearchMatch{}}
+		result.encodedSize = searchResultSize(&result)
 		outputLimit := maxSearchOutputBytes
 		if req.MaxOutputChars > 0 && int64(outputLimit) > req.MaxOutputChars-512 {
 			outputLimit = int(req.MaxOutputChars - 512)
@@ -763,6 +879,7 @@ func searchDirectory(ctx context.Context, fs FileSystem, dir string, re *regexp.
 	if err != nil {
 		return err
 	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
 	for _, entry := range entries {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -792,6 +909,7 @@ func searchDirectory(ctx context.Context, fs FileSystem, dir string, re *regexp.
 		}
 		binary, scanErr := searchFile(ctx, fs, path, re, result, outputLimit)
 		if scanErr == errSearchLimit {
+			result.FilesScanned++
 			return scanErr
 		}
 		if scanErr != nil {
@@ -833,9 +951,17 @@ func searchFile(ctx context.Context, fs FileSystem, path string, re *regexp.Rege
 			lineNumber++
 			line = strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r")
 			if location := re.FindStringIndex(line); location != nil {
-				match := fsSearchMatch{Path: displayToolPath(fs, path), Line: lineNumber, Column: location[0] + 1, Text: line}
+				match := fsSearchMatch{
+					Path: displayToolPath(fs, path), Line: lineNumber,
+					Column: utf8.RuneCountInString(line[:location[0]]) + 1, Text: line,
+				}
 				encoded, _ := json.Marshal(match)
-				if len(result.Matches) >= maxSearchMatches || searchResultSize(result)+len(encoded) > outputLimit {
+				separatorBytes := 0
+				if len(result.Matches) > 0 {
+					separatorBytes = 1
+				}
+				const finalMetadataReserve = 256
+				if len(result.Matches) >= maxSearchMatches || result.encodedSize+separatorBytes+len(encoded)+finalMetadataReserve > outputLimit {
 					result.Truncated = true
 					if len(result.Matches) >= maxSearchMatches {
 						result.StoppedReason = "match_limit"
@@ -845,6 +971,7 @@ func searchFile(ctx context.Context, fs FileSystem, path string, re *regexp.Rege
 					return false, errSearchLimit
 				}
 				result.Matches = append(result.Matches, match)
+				result.encodedSize += separatorBytes + len(encoded)
 			}
 		}
 		if readErr == io.EOF {

@@ -8,7 +8,7 @@ type RunStartedData struct {
 	ActorID string `json:"actorId,omitempty"`
 	// Batch is the number of inbox messages coalesced into this run.
 	Batch int `json:"batch,omitempty"`
-	// Preview is a short preview of the coalesced user message.
+	// Preview is a short preview of the coalesced turn-starting input.
 	Preview string `json:"preview,omitempty"`
 }
 

@@ -59,13 +59,14 @@ func (a *react) Chat(ctx context.Context, req *api.Request) *api.Response {
 		return resp
 	}
 
+	inputRole, inputMessage := req.InputMessage()
 	requestMetadata := cloneMetadata(req.Metadata)
-	sess.AppendMessage(&types.Message{Role: types.RoleUser, Content: req.UserMessage, Image: req.Image, Images: req.Images, Metadata: requestMetadata})
+	sess.AppendMessage(&types.Message{Role: inputRole, Content: inputMessage, Image: req.Image, Images: req.Images, Metadata: requestMetadata})
 	sess.PublishEvent(types.Event{
 		Type: types.EventAgentStart,
-		Data: map[string]string{"message": logger.FirstLine(req.UserMessage)},
+		Data: map[string]string{"message": logger.FirstLine(inputMessage)},
 	})
-	a.logger.Infow("handle request", "message", logger.FirstLine(req.UserMessage), "session", sess.ID)
+	a.logger.Infow("handle request", "message", logger.FirstLine(inputMessage), "session", sess.ID)
 	go a.reactLoop(ctx, sess, resp, req.Tools, requestMetadata)
 	return resp
 }
@@ -254,14 +255,26 @@ func (a *react) doAct(ctx context.Context, sess *session.Session, resp *api.Resp
 	// cancellation-detached context so they still fire when the model call
 	// was aborted by ctx cancellation.
 	fireModelCall := func(callErr error) {
+		modelName := modelNameOf(a.llm)
+		endpointKey := ""
+		effort := ""
+		if runtimeInfo, ok := providers.ResponseRuntimeInfo(stream); ok {
+			if runtimeInfo.Model != "" {
+				modelName = runtimeInfo.Model
+			}
+			endpointKey = runtimeInfo.EndpointKey
+			effort = runtimeInfo.Effort
+		}
 		stats := &session.ModelCallStats{
-			Model:      modelNameOf(a.llm),
-			Tokens:     stream.Tokens(),
-			StartAt:    callStart,
-			DurationMs: time.Since(callStart).Milliseconds(),
-			Content:    acc.content,
-			Reasoning:  acc.reasoning,
-			ToolCalls:  acc.toolUse,
+			Model:       modelName,
+			EndpointKey: endpointKey,
+			Effort:      effort,
+			Tokens:      stream.Tokens(),
+			StartAt:     callStart,
+			DurationMs:  time.Since(callStart).Milliseconds(),
+			Content:     acc.content,
+			Reasoning:   acc.reasoning,
+			ToolCalls:   acc.toolUse,
 		}
 		if callErr != nil {
 			stats.Err = callErr.Error()

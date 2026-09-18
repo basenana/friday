@@ -22,9 +22,11 @@ import (
 	"github.com/basenana/friday/core/collaboration"
 	"github.com/basenana/friday/core/planning"
 	"github.com/basenana/friday/core/providers"
+	coresession "github.com/basenana/friday/core/session"
 	"github.com/basenana/friday/core/types"
 	"github.com/basenana/friday/sessions"
 	sessionfile "github.com/basenana/friday/sessions/file"
+	sessionusage "github.com/basenana/friday/sessions/usage"
 )
 
 func TestAlternateScreenMode(t *testing.T) {
@@ -556,6 +558,47 @@ func TestStatusShowsSessionClientEndpoint(t *testing.T) {
 	}
 	if strings.Contains(status, "Reasoning:") {
 		t.Fatalf("status retained duplicate reasoning line: %q", status)
+	}
+}
+
+func TestStatusShowsPersistedModelAndTurnUsage(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	sess, release, err := m.acquireCurrentSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stats := &coresession.ModelCallStats{
+		Model:       "gpt-usage",
+		EndpointKey: "openai.usage",
+		Tokens: providers.Tokens{
+			PromptTokens: 1_250, CachedPromptTokens: 1_000,
+			CacheCreationTokens: 50, CompletionTokens: 250,
+		},
+	}
+	if err := (sessionusage.Hook{}).AfterModelCall(context.Background(), sess, nil, stats); err != nil {
+		release()
+		t.Fatal(err)
+	}
+	if err := sessionusage.RecordTurn(context.Background(), sess, "end_turn", 90_000); err != nil {
+		release()
+		t.Fatal(err)
+	}
+	release()
+
+	m.running = true
+	m.runStartedAt = m.nowTime().Add(-5 * time.Second)
+	m.showStatus()
+	status := m.messages[len(m.messages)-1].content
+	for _, want := range []string{
+		"- Turns: 1 · total 1m 30s · avg 1m 30s",
+		"- Current turn: running 5s",
+		"### Model usage",
+		"`gpt-usage` via `openai.usage`: 1 calls",
+		"input 1.2K · cached 1K (80.0%) · cache write 50 · output 250 · total 1.5K",
+	} {
+		if !strings.Contains(status, want) {
+			t.Fatalf("status missing %q: %q", want, status)
+		}
 	}
 }
 

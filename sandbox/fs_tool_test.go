@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -96,6 +97,194 @@ func TestFsSearchRecursesAndSkipsGitBinaryAndSymlinks(t *testing.T) {
 	}
 }
 
+func TestFsSearchRealWorldPatternsReturnPathsAndLineNumbers(t *testing.T) {
+	root := t.TempDir()
+	files := map[string]string{
+		"internal/pipeline/publish.go": strings.Join([]string{
+			"package pipeline",
+			"// publish with pipeline_publish_draft",
+			"// pipeline_publish_draft 完成",
+		}, "\n"),
+		"internal/systemagent/scope.go": strings.Join([]string{
+			"package systemagent",
+			"var operation = MutationScopeOperationPipelineImport",
+			"scope := MutationScope{}",
+			"scope = NewMutationScope(operation)",
+		}, "\n"),
+		"internal/systemagent/hpcasset/tools.go": strings.Join([]string{
+			"package hpcasset",
+			"// keeps only the read-only surface",
+		}, "\n"),
+		"internal/worker/jobs.go": strings.Join([]string{
+			"package worker",
+			"func syncJobRecord() {}",
+			"func applyJobRecordMetadata() {}",
+			`metadata["attempt"] = job.Attempt`,
+			`metadata["submission_invocation_id"] = invocationID`,
+			"if job.Required { return }",
+		}, "\n"),
+		"internal/docs/mutation.txt": strings.Join([]string{
+			"MutationScope is the machine-verifiable boundary",
+			"write operations are excluded from the toolset entirely",
+		}, "\n"),
+		"bioclaw/retry.go": strings.Join([]string{
+			"package bioclaw",
+			`const submission = "submission_invocation_id"`,
+			`const retry = "retry_of_submission_invocation_id"`,
+		}, "\n"),
+	}
+	for name, content := range files {
+		path := filepath.Join(root, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	tests := []struct {
+		name      string
+		directory string
+		pattern   string
+		want      []fsSearchMatch
+	}{
+		{
+			name: "publish alternatives with Chinese text", directory: "internal",
+			pattern: `publish with pipeline_publish_draft|pipeline_publish_draft 完成|publish_draft 完成`,
+			want: []fsSearchMatch{
+				{Path: "internal/pipeline/publish.go", Line: 2, Column: 4, Text: "// publish with pipeline_publish_draft"},
+				{Path: "internal/pipeline/publish.go", Line: 3, Column: 4, Text: "// pipeline_publish_draft 完成"},
+			},
+		},
+		{
+			name: "operation name", directory: "internal/systemagent",
+			pattern: `MutationScopeOperationPipelineImport`,
+			want:    []fsSearchMatch{{Path: "internal/systemagent/scope.go", Line: 2, Column: 17, Text: "var operation = MutationScopeOperationPipelineImport"}},
+		},
+		{
+			name: "worker functions and metadata", directory: filepath.Join(root, "internal", "worker"),
+			pattern: `func syncJobRecord|func applyJobRecordMetadata|metadata\["(attempt|required|retry_of_submission_invocation_id|submission_invocation_id|required_source|exit_code)"\]|job\.Attempt|job\.Required\b`,
+			want: []fsSearchMatch{
+				{Path: "internal/worker/jobs.go", Line: 2, Column: 1, Text: "func syncJobRecord() {}"},
+				{Path: "internal/worker/jobs.go", Line: 3, Column: 1, Text: "func applyJobRecordMetadata() {}"},
+				{Path: "internal/worker/jobs.go", Line: 4, Column: 1, Text: `metadata["attempt"] = job.Attempt`},
+				{Path: "internal/worker/jobs.go", Line: 5, Column: 1, Text: `metadata["submission_invocation_id"] = invocationID`},
+				{Path: "internal/worker/jobs.go", Line: 6, Column: 4, Text: "if job.Required { return }"},
+			},
+		},
+		{
+			name: "mutation scope constructors", directory: "internal",
+			pattern: `MutationScope\{|NewMutationScope|MutationScopeOperation`,
+			want: []fsSearchMatch{
+				{Path: "internal/systemagent/scope.go", Line: 2, Column: 17, Text: "var operation = MutationScopeOperationPipelineImport"},
+				{Path: "internal/systemagent/scope.go", Line: 3, Column: 10, Text: "scope := MutationScope{}"},
+				{Path: "internal/systemagent/scope.go", Line: 4, Column: 9, Text: "scope = NewMutationScope(operation)"},
+			},
+		},
+		{
+			name: "documentation phrases", directory: "internal",
+			pattern: `MutationScope is the machine-verifiable|excluded from the toolset entirely`,
+			want: []fsSearchMatch{
+				{Path: "internal/docs/mutation.txt", Line: 1, Column: 1, Text: "MutationScope is the machine-verifiable boundary"},
+				{Path: "internal/docs/mutation.txt", Line: 2, Column: 22, Text: "write operations are excluded from the toolset entirely"},
+			},
+		},
+		{
+			name: "read-only surface", directory: "internal/systemagent/hpcasset",
+			pattern: `keeps only the read-only surface`,
+			want:    []fsSearchMatch{{Path: "internal/systemagent/hpcasset/tools.go", Line: 2, Column: 4, Text: "// keeps only the read-only surface"}},
+		},
+		{
+			name: "submission identifiers", directory: filepath.Join(root, "bioclaw"),
+			pattern: `submission_invocation_id|retry_of_submission_invocation_id`,
+			want: []fsSearchMatch{
+				{Path: "bioclaw/retry.go", Line: 2, Column: 21, Text: `const submission = "submission_invocation_id"`},
+				{Path: "bioclaw/retry.go", Line: 3, Column: 16, Text: `const retry = "retry_of_submission_invocation_id"`},
+			},
+		},
+	}
+
+	handler := fsSearchHandler(NewExecutor(DefaultConfig()), root)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result, err := handler(context.Background(), &tools.Request{Arguments: map[string]any{
+				"directory": test.directory, "regex": test.pattern,
+			}})
+			if err != nil || result.IsError {
+				t.Fatalf("fs_search result=%+v err=%v", result, err)
+			}
+			var decoded fsSearchResult
+			if err := json.Unmarshal([]byte(textResult(t, result)), &decoded); err != nil {
+				t.Fatal(err)
+			}
+			if fmt.Sprint(decoded.Matches) != fmt.Sprint(test.want) {
+				t.Fatalf("matches = %#v, want %#v", decoded.Matches, test.want)
+			}
+		})
+	}
+}
+
+func TestFsSearchUsesUnicodeColumnsAndStablePathOrder(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{"z/result.txt", "a/result.txt"} {
+		path := filepath.Join(root, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("前缀 match\r\nlast match"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	result, err := fsSearchHandler(NewExecutor(DefaultConfig()), root)(context.Background(), &tools.Request{Arguments: map[string]any{
+		"directory": ".", "regex": "match",
+	}})
+	if err != nil || result.IsError {
+		t.Fatalf("fs_search result=%+v err=%v", result, err)
+	}
+	var decoded fsSearchResult
+	if err := json.Unmarshal([]byte(textResult(t, result)), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	wantPaths := []string{"a/result.txt", "a/result.txt", "z/result.txt", "z/result.txt"}
+	for i, match := range decoded.Matches {
+		if match.Path != wantPaths[i] {
+			t.Fatalf("match[%d].Path = %q, want %q", i, match.Path, wantPaths[i])
+		}
+		if match.Line == 1 && match.Column != 4 {
+			t.Fatalf("Unicode column = %d, want 4", match.Column)
+		}
+	}
+}
+
+func TestFsSearchOutsideWorkdirReturnsAbsolutePaths(t *testing.T) {
+	workdir := t.TempDir()
+	outside := t.TempDir()
+	path := filepath.Join(outside, "nested", "result.txt")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("needle\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := DefaultConfig()
+	cfg.DisableIsolation()
+	result, err := fsSearchHandler(NewExecutor(cfg), workdir)(context.Background(), &tools.Request{Arguments: map[string]any{
+		"directory": outside, "regex": "needle",
+	}})
+	if err != nil || result.IsError {
+		t.Fatalf("fs_search result=%+v err=%v", result, err)
+	}
+	var decoded fsSearchResult
+	if err := json.Unmarshal([]byte(textResult(t, result)), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.ToSlash(path)
+	if len(decoded.Matches) != 1 || decoded.Matches[0].Path != want {
+		t.Fatalf("matches = %#v, want path %q", decoded.Matches, want)
+	}
+}
+
 func TestFsSearchReportsMatchLimit(t *testing.T) {
 	root := t.TempDir()
 	content := strings.Repeat("match\n", maxSearchMatches+5)
@@ -169,6 +358,171 @@ func TestFsReadUsesSharedOutputBudgetAndReportsTruncation(t *testing.T) {
 	text := textResult(t, result)
 	if len([]rune(text)) > int(request.MaxOutputChars) || !strings.Contains(text, "File content truncated by shared tool-result budget") {
 		t.Fatalf("budgeted read length=%d text tail=%q", len([]rune(text)), text[len(text)-120:])
+	}
+}
+
+func TestFsReadLineRangeSchemaIsOptional(t *testing.T) {
+	tool := newFsReadTool(nil, ".")
+	for _, name := range []string{"start_line", "end_line"} {
+		property, ok := tool.InputSchema.Properties[name].(map[string]any)
+		if !ok || property["type"] != "integer" || property["minimum"] != float64(1) {
+			t.Fatalf("%s schema = %#v", name, property)
+		}
+		for _, required := range tool.InputSchema.Required {
+			if required == name {
+				t.Fatalf("%s must be optional", name)
+			}
+		}
+	}
+}
+
+func TestFsReadSupportsInclusiveLineRanges(t *testing.T) {
+	root := t.TempDir()
+	content := "one\n二号\r\nthree\nfour"
+	if err := os.WriteFile(filepath.Join(root, "lines.txt"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	handler := fsReadHandler(NewExecutor(DefaultConfig()), root)
+	tests := []struct {
+		name      string
+		arguments map[string]any
+		want      string
+	}{
+		{name: "full file by default", arguments: map[string]any{}, want: content},
+		{name: "closed range", arguments: map[string]any{"start_line": float64(2), "end_line": float64(3)}, want: "二号\r\nthree\n"},
+		{name: "from start through EOF", arguments: map[string]any{"start_line": float64(3)}, want: "three\nfour"},
+		{name: "from beginning through end", arguments: map[string]any{"end_line": float64(2)}, want: "one\n二号\r\n"},
+		{name: "single final line", arguments: map[string]any{"start_line": float64(4), "end_line": float64(4)}, want: "four"},
+		{name: "end beyond EOF", arguments: map[string]any{"end_line": float64(99)}, want: content},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			test.arguments["path"] = "lines.txt"
+			result, err := handler(context.Background(), &tools.Request{Arguments: test.arguments})
+			if err != nil || result.IsError {
+				t.Fatalf("fs_read result=%+v err=%v", result, err)
+			}
+			if got := textResult(t, result); got != test.want {
+				t.Fatalf("content = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestFsReadRejectsInvalidOrOutOfRangeLines(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "lines.txt"), []byte("one\ntwo\nthree\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	handler := fsReadHandler(NewExecutor(DefaultConfig()), root)
+	tests := []struct {
+		name      string
+		arguments map[string]any
+		want      string
+	}{
+		{name: "zero", arguments: map[string]any{"start_line": float64(0)}, want: "start_line must be a positive integer"},
+		{name: "negative", arguments: map[string]any{"end_line": float64(-1)}, want: "end_line must be a positive integer"},
+		{name: "fraction", arguments: map[string]any{"start_line": 1.5}, want: "start_line must be a positive integer"},
+		{name: "wrong type", arguments: map[string]any{"end_line": "2"}, want: "end_line must be a positive integer"},
+		{name: "reversed", arguments: map[string]any{"start_line": float64(3), "end_line": float64(2)}, want: "start_line must be less than or equal to end_line"},
+		{name: "past EOF", arguments: map[string]any{"start_line": float64(4)}, want: "start_line 4 exceeds the file's 3 lines"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			test.arguments["path"] = "lines.txt"
+			result, err := handler(context.Background(), &tools.Request{Arguments: test.arguments})
+			if err != nil || !result.IsError {
+				t.Fatalf("fs_read result=%+v err=%v", result, err)
+			}
+			if got := textResult(t, result); !strings.Contains(got, test.want) {
+				t.Fatalf("error = %q, want substring %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestFsReadLineRangeHandlesEmptyAndLongFiles(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "empty.txt"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	longLine := strings.Repeat("界", 70*1024)
+	if err := os.WriteFile(filepath.Join(root, "long.txt"), []byte("first\n"+longLine+"\nlast"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	handler := fsReadHandler(NewExecutor(DefaultConfig()), root)
+
+	empty, err := handler(context.Background(), &tools.Request{Arguments: map[string]any{
+		"path": "empty.txt", "end_line": float64(10),
+	}})
+	if err != nil || empty.IsError || textResult(t, empty) != "" {
+		t.Fatalf("empty range result=%+v err=%v", empty, err)
+	}
+	pastEmpty, err := handler(context.Background(), &tools.Request{Arguments: map[string]any{
+		"path": "empty.txt", "start_line": float64(1),
+	}})
+	if err != nil || !pastEmpty.IsError || !strings.Contains(textResult(t, pastEmpty), "file's 0 lines") {
+		t.Fatalf("empty start result=%+v err=%v", pastEmpty, err)
+	}
+	long, err := handler(context.Background(), &tools.Request{Arguments: map[string]any{
+		"path": "long.txt", "start_line": float64(2), "end_line": float64(2),
+	}})
+	if err != nil || long.IsError || textResult(t, long) != longLine+"\n" {
+		t.Fatalf("long-line result length=%d error=%v tool_error=%v", len(textResult(t, long)), err, long.IsError)
+	}
+}
+
+func TestFsReadLineRangeHonorsSharedOutputBudget(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "unicode.txt"), []byte("skip\n"+strings.Repeat("界", 1000)+"\nafter\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	request := &tools.Request{
+		Arguments:      map[string]any{"path": "unicode.txt", "start_line": float64(2)},
+		MaxOutputChars: 300,
+	}
+	result, err := fsReadHandler(NewExecutor(DefaultConfig()), root)(context.Background(), request)
+	if err != nil || result.IsError {
+		t.Fatalf("fs_read result=%+v err=%v", result, err)
+	}
+	text := textResult(t, result)
+	if len([]rune(text)) > int(request.MaxOutputChars) || !strings.Contains(text, "File content truncated by shared tool-result budget") {
+		t.Fatalf("budgeted line range length=%d text=%q", len([]rune(text)), text)
+	}
+}
+
+type countingReadCloser struct {
+	reader *strings.Reader
+	read   int
+}
+
+func (r *countingReadCloser) Read(buffer []byte) (int, error) {
+	n, err := r.reader.Read(buffer)
+	r.read += n
+	return n, err
+}
+
+func (r *countingReadCloser) Close() error { return nil }
+
+type trackingOpenFileSystem struct {
+	FileSystem
+	reader io.ReadCloser
+}
+
+func (f trackingOpenFileSystem) Open(context.Context, string) (io.ReadCloser, error) {
+	return f.reader, nil
+}
+
+func TestFsReadLineRangeStopsAfterRequestedEnd(t *testing.T) {
+	content := "first\n" + strings.Repeat("unrequested trailing data\n", 1000)
+	reader := &countingReadCloser{reader: strings.NewReader(content)}
+	fs := trackingOpenFileSystem{reader: reader}
+	got, truncated, linesRead, err := readFileLineRangeWithinBudget(context.Background(), fs, "unused", 1, true, 1, true, 0)
+	if err != nil || truncated || linesRead != 1 || string(got) != "first\n" {
+		t.Fatalf("range result=%q truncated=%v lines=%d err=%v", got, truncated, linesRead, err)
+	}
+	if reader.read >= len(content) {
+		t.Fatalf("range reader consumed the complete file: %d bytes", reader.read)
 	}
 }
 

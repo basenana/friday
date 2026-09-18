@@ -13,9 +13,11 @@ import (
 	coreactor "github.com/basenana/friday/core/actor"
 	"github.com/basenana/friday/core/actor/events"
 	"github.com/basenana/friday/core/providers"
+	coresession "github.com/basenana/friday/core/session"
 	"github.com/basenana/friday/sandbox"
 	"github.com/basenana/friday/sessions"
 	"github.com/basenana/friday/sessions/file"
+	sessionusage "github.com/basenana/friday/sessions/usage"
 	"github.com/basenana/friday/setup"
 )
 
@@ -312,6 +314,21 @@ func TestRegistryActiveTurnPreventsIdleEviction(t *testing.T) {
 	}
 }
 
+func TestManagedActorRecordsFinishedTurnUsage(t *testing.T) {
+	sess := coresession.New("turn-usage", nil)
+	entry := &managedActor{agentCtx: &setup.AgentContext{Session: sess}}
+	entry.OnTurnEvent(context.Background(), "run-1", events.NewEvent(events.KindRunFinished, "run-1").
+		WithPayload(events.RunFinishedData{StopReason: "cancelled", DurationMs: 1_250}))
+
+	snapshot, err := sessionusage.Read(context.Background(), sess)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Turns.Count != 1 || snapshot.Turns.Cancelled != 1 || snapshot.Turns.DurationMs != 1_250 {
+		t.Fatalf("turn usage = %#v", snapshot.Turns)
+	}
+}
+
 func TestRegistryRunningBackgroundTaskPreventsIdleEviction(t *testing.T) {
 	sandboxCfg := sandbox.DefaultConfig()
 	sandboxCfg.Sandbox.Enabled = false
@@ -356,6 +373,25 @@ func TestRegistryDispatchInputRecreatesEvictedActor(t *testing.T) {
 	rebuilt, ok := r.Get("sess-dispatch")
 	if !ok || rebuilt == old {
 		t.Fatalf("user input did not rebuild actor: old=%p rebuilt=%p live=%v", old, rebuilt, ok)
+	}
+}
+
+func TestRegistryDispatchAgentInputRecreatesEvictedActor(t *testing.T) {
+	r := newTestRegistry(t, nil)
+	defer r.ShutdownAll()
+	old, err := r.GetOrCreate("sess-agent-dispatch")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Shutdown("sess-agent-dispatch")
+	if err := r.DispatchInput(bus.NewAgentInput("sess-agent-dispatch", "loop", bus.AgentTextInput{
+		Text: "continue",
+	})); err != nil {
+		t.Fatal(err)
+	}
+	rebuilt, ok := r.Get("sess-agent-dispatch")
+	if !ok || rebuilt == old {
+		t.Fatalf("agent input did not rebuild actor: old=%p rebuilt=%p live=%v", old, rebuilt, ok)
 	}
 }
 

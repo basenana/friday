@@ -10,8 +10,9 @@ type CommonResponse struct {
 	Stream chan Delta
 	Err    chan error
 
-	tokenMu sync.Mutex
-	Token   Tokens
+	tokenMu     sync.Mutex
+	Token       Tokens
+	runtimeInfo ClientRuntimeInfo
 }
 
 func (r *CommonResponse) Message() <-chan Delta { return r.Stream }
@@ -42,6 +43,22 @@ func (r *CommonResponse) SetTokens(t Tokens) {
 	r.tokenMu.Lock()
 	defer r.tokenMu.Unlock()
 	r.Token = t
+}
+
+// SetRuntimeInfo attaches concrete, response-scoped model metadata. It is safe
+// to call while another goroutine consumes the response.
+func (r *CommonResponse) SetRuntimeInfo(info ClientRuntimeInfo) {
+	r.tokenMu.Lock()
+	defer r.tokenMu.Unlock()
+	r.runtimeInfo = info
+}
+
+// RuntimeInfo returns a snapshot of the concrete model metadata for this
+// response. It implements ResponseRuntimeInfoProvider.
+func (r *CommonResponse) RuntimeInfo() ClientRuntimeInfo {
+	r.tokenMu.Lock()
+	defer r.tokenMu.Unlock()
+	return r.runtimeInfo
 }
 
 func NewCommonResponse() *CommonResponse {

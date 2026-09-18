@@ -155,6 +155,115 @@ func TestActor_MultiMessageDrain(t *testing.T) {
 	}
 }
 
+func TestActor_AgentTextStartsAgentAttributedTurn(t *testing.T) {
+	mock := newMockAgent(chatScript{deltas: []types.Delta{{Content: "done"}}})
+	a, _ := newTestActor(mock)
+	sub := a.Subscribe()
+	if err := a.Send(context.Background(), AgentTextMessage{
+		Text:          "internal prompt",
+		Source:        "loop",
+		SourceEventID: "loop-input-1",
+		TurnID:        "agent-turn-1",
+		Metadata:      map[string]any{"session_turn_id": "agent-turn-1"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	a.Start(context.Background())
+	defer a.Stop()
+
+	seen := collectEvents(t, sub, hasRunFinished)
+	requests := mock.requestSnapshot()
+	if len(requests) != 1 {
+		t.Fatalf("agent requests = %d, want 1", len(requests))
+	}
+	if requests[0].AgentMessage != "internal prompt" || requests[0].UserMessage != "" {
+		t.Fatalf("request input = user %q agent %q", requests[0].UserMessage, requests[0].AgentMessage)
+	}
+	if requests[0].Metadata["session_turn_id"] != "agent-turn-1" {
+		t.Fatalf("request metadata = %#v", requests[0].Metadata)
+	}
+
+	var accepted events.InputAcceptedBody
+	var found bool
+	for _, evt := range seen {
+		if evt.Name != events.CustomInputAccepted {
+			continue
+		}
+		if err := events.DecodePayload(evt, &accepted); err != nil {
+			t.Fatal(err)
+		}
+		found = true
+	}
+	if !found {
+		t.Fatal("input.accepted event not found")
+	}
+	if accepted.Role != types.RoleAgent || accepted.TurnID != "agent-turn-1" {
+		t.Fatalf("input.accepted = %#v", accepted)
+	}
+	if !reflect.DeepEqual(accepted.Sources, []string{"loop"}) {
+		t.Fatalf("input sources = %v", accepted.Sources)
+	}
+}
+
+func TestActor_SplitsAdjacentUserAndAgentInputs(t *testing.T) {
+	mock := newMockAgent(
+		chatScript{deltas: []types.Delta{{Content: "first"}}},
+		chatScript{deltas: []types.Delta{{Content: "second"}}},
+		chatScript{deltas: []types.Delta{{Content: "third"}}},
+	)
+	a, _ := newTestActor(mock)
+	sub := a.Subscribe()
+	for _, msg := range []Message{
+		UserTextMessage{Text: "user one"},
+		AgentTextMessage{Text: "agent two"},
+		UserTextMessage{Text: "user three"},
+	} {
+		if err := a.Send(context.Background(), msg); err != nil {
+			t.Fatal(err)
+		}
+	}
+	a.Start(context.Background())
+	defer a.Stop()
+
+	seen := collectEvents(t, sub, func(seen []events.Event) bool {
+		finished := 0
+		for _, evt := range seen {
+			if evt.Type == events.KindRunFinished {
+				finished++
+			}
+		}
+		return finished == 3
+	})
+	requests := mock.requestSnapshot()
+	if len(requests) != 3 {
+		t.Fatalf("agent requests = %d, want 3", len(requests))
+	}
+	gotInputs := [][2]string{
+		{requests[0].UserMessage, requests[0].AgentMessage},
+		{requests[1].UserMessage, requests[1].AgentMessage},
+		{requests[2].UserMessage, requests[2].AgentMessage},
+	}
+	wantInputs := [][2]string{{"user one", ""}, {"", "agent two"}, {"user three", ""}}
+	if !reflect.DeepEqual(gotInputs, wantInputs) {
+		t.Fatalf("request inputs = %#v, want %#v", gotInputs, wantInputs)
+	}
+
+	var roles []types.MessageRole
+	for _, evt := range seen {
+		if evt.Name != events.CustomInputAccepted {
+			continue
+		}
+		var body events.InputAcceptedBody
+		if err := events.DecodePayload(evt, &body); err != nil {
+			t.Fatal(err)
+		}
+		roles = append(roles, body.Role)
+	}
+	if want := []types.MessageRole{types.RoleUser, types.RoleAgent, types.RoleUser}; !reflect.DeepEqual(roles, want) {
+		t.Fatalf("accepted roles = %v, want %v", roles, want)
+	}
+}
+
 func TestActor_EventsCarryAllCoalescedInputCauses(t *testing.T) {
 	mock := newMockAgent(chatScript{deltas: []types.Delta{{Content: "done"}}})
 	a, _ := newTestActor(mock)
@@ -179,6 +288,71 @@ func TestActor_EventsCarryAllCoalescedInputCauses(t *testing.T) {
 		}
 		if !reflect.DeepEqual(evt.CausedBy, want) {
 			t.Fatalf("event %s causes = %v, want %v", evt.Type, evt.CausedBy, want)
+		}
+	}
+}
+
+func TestActor_CancelInputSkipsQueuedAgentSourceEvent(t *testing.T) {
+	mock := newMockAgent(chatScript{})
+	a, _ := newTestActor(mock)
+	sub := a.Subscribe()
+	if err := a.Send(context.Background(), AgentTextMessage{Text: "do not run", SourceEventID: "cancel-agent"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.CancelInput("cancel-agent"); err != nil {
+		t.Fatal(err)
+	}
+	a.Start(context.Background())
+	defer a.Stop()
+	seen := collectEvents(t, sub, func(seen []events.Event) bool {
+		for _, evt := range seen {
+			if evt.Name == events.CustomInputCancelled {
+				return true
+			}
+		}
+		return false
+	})
+	last := seen[len(seen)-1]
+	if !reflect.DeepEqual(last.CausedBy, []string{"cancel-agent"}) {
+		t.Fatalf("cancel causes = %v", last.CausedBy)
+	}
+	if calls := len(mock.requestSnapshot()); calls != 0 {
+		t.Fatalf("agent calls = %d, want 0", calls)
+	}
+}
+
+func TestActor_CancelInputPreemptsActiveAgentSourceEvent(t *testing.T) {
+	blocked := make(chan struct{})
+	mock := newMockAgent(chatScript{blockUntil: blocked})
+	a, _ := newTestActor(mock)
+	sub := a.Subscribe()
+	a.Start(context.Background())
+	defer a.Stop()
+
+	if err := a.Send(context.Background(), AgentTextMessage{
+		Text: "long internal task", SourceEventID: "active-agent-input", TurnID: "active-agent-turn",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	waitForRunStart(t, sub, "active-agent-turn")
+	if err := a.CancelInput("active-agent-input"); err != nil {
+		t.Fatal(err)
+	}
+
+	seen := collectEvents(t, sub, hasRunFinished)
+	for _, evt := range seen {
+		if evt.Type == events.KindRunError {
+			t.Fatalf("active agent cancellation emitted RUN_ERROR: %+v", evt)
+		}
+		if evt.Type != events.KindRunFinished {
+			continue
+		}
+		var body events.RunFinishedData
+		if err := events.DecodePayload(evt, &body); err != nil {
+			t.Fatal(err)
+		}
+		if body.StopReason != "cancelled" {
+			t.Fatalf("stop reason = %q, want cancelled", body.StopReason)
 		}
 	}
 }

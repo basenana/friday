@@ -10,6 +10,8 @@ import (
 	"github.com/basenana/friday/bus/bridge"
 	coreactor "github.com/basenana/friday/core/actor"
 	"github.com/basenana/friday/core/actor/events"
+	"github.com/basenana/friday/core/logger"
+	sessionusage "github.com/basenana/friday/sessions/usage"
 	"github.com/basenana/friday/setup"
 )
 
@@ -88,8 +90,21 @@ func (e *managedActor) OnTurnStart(_ context.Context, _ coreactor.TurnStartInfo)
 	return nil
 }
 
-func (e *managedActor) OnTurnEvent(_ context.Context, _ string, _ events.Event) {
+func (e *managedActor) OnTurnEvent(ctx context.Context, _ string, evt events.Event) {
 	e.touch()
+	if evt.Type != events.KindRunFinished || e.agentCtx == nil || e.agentCtx.Session == nil {
+		return
+	}
+	var data events.RunFinishedData
+	if err := events.DecodePayload(evt, &data); err != nil {
+		logger.New("actor.usage").Errorw("failed to decode finished turn usage",
+			"session_id", e.agentCtx.Session.ID, "run_id", evt.RunID, "error", err)
+		return
+	}
+	if err := sessionusage.RecordTurn(context.WithoutCancel(ctx), e.agentCtx.Session, data.StopReason, data.DurationMs); err != nil {
+		logger.New("actor.usage").Errorw("failed to persist finished turn usage",
+			"session_id", e.agentCtx.Session.ID, "run_id", evt.RunID, "error", err)
+	}
 }
 
 func (e *managedActor) OnTurnFinalize(_ context.Context, _ string) error {

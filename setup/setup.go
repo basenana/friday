@@ -27,6 +27,7 @@ import (
 	"github.com/basenana/friday/memory"
 	"github.com/basenana/friday/sandbox"
 	"github.com/basenana/friday/sessions"
+	sessionusage "github.com/basenana/friday/sessions/usage"
 	"github.com/basenana/friday/skills"
 	"github.com/basenana/friday/workspace"
 )
@@ -419,6 +420,7 @@ func NewAgent(sessionMgr SessionManager, cfg *config.Config, opts ...Option) (*A
 	routedAgent := coderagents.NewDynamicRouter(primaryAgent, expertProvider)
 
 	sharedHooks := []coreSession.Hook{
+		sessionusage.Hook{},
 		planningHook,
 		fridaymcp.NewHook(mcpManager),
 		skillHook,

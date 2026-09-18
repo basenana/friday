@@ -19,9 +19,9 @@ type Agent struct {
 }
 
 func (a *Agent) Chat(ctx context.Context, req *api.Request) *api.Response {
-	userMessage := req.UserMessage
-	if userMessage == "" {
-		userMessage = DEFAULT_USER_MESSAGE
+	inputRole, inputMessage := req.InputMessage()
+	if inputMessage == "" {
+		inputMessage = DEFAULT_USER_MESSAGE
 	}
 
 	sess := req.Session
@@ -29,10 +29,13 @@ func (a *Agent) Chat(ctx context.Context, req *api.Request) *api.Response {
 		sess = session.New(types.NewID(), a.llm)
 	}
 
-	return a.react.Chat(ctx, &api.Request{
-		Session:     sess,
-		UserMessage: userMessage,
-	})
+	forwarded := &api.Request{Session: sess}
+	if inputRole == types.RoleAgent {
+		forwarded.AgentMessage = inputMessage
+	} else {
+		forwarded.UserMessage = inputMessage
+	}
+	return a.react.Chat(ctx, forwarded)
 }
 
 func New(llm providers.Client, option Option) *Agent {

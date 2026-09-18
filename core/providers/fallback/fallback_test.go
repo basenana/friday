@@ -119,6 +119,24 @@ func collect(t *testing.T, ctx context.Context, resp providers.Response) (string
 	return content, nil
 }
 
+func TestSessionPolicyVersionChangesOnlyWhenPolicyChanges(t *testing.T) {
+	initial := providers.ClientPolicy{PreferredModel: "a", Effort: providers.ReasoningEffortHigh}
+	policy := NewSessionPolicy(initial)
+	_, firstVersion := policy.snapshot()
+
+	policy.Update(initial)
+	_, sameVersion := policy.snapshot()
+	if sameVersion != firstVersion {
+		t.Fatalf("same policy advanced version: first=%d same=%d", firstVersion, sameVersion)
+	}
+
+	policy.Update(providers.ClientPolicy{PreferredModel: "b", Effort: providers.ReasoningEffortHigh})
+	_, changedVersion := policy.snapshot()
+	if changedVersion <= firstVersion {
+		t.Fatalf("changed policy did not advance version: first=%d changed=%d", firstVersion, changedVersion)
+	}
+}
+
 func TestFallback_FirstModelSucceeds(t *testing.T) {
 	ok1 := &fakeClient{name: "ok1", streamContent: []string{"hello"}, contextWindow: 100_000}
 	ok2 := &fakeClient{name: "ok2", streamContent: []string{"world"}, contextWindow: 100_000}
@@ -170,7 +188,8 @@ func TestFallback_FallsToSecondModel(t *testing.T) {
 	defer cancel()
 	var retries []providers.RetryEvent
 	ctx = providers.WithRetryObserver(ctx, func(event providers.RetryEvent) { retries = append(retries, event) })
-	content, err := collect(t, ctx, fc.Completion(ctx, providers.NewRequest("sys")))
+	resp := fc.Completion(ctx, providers.NewRequest("sys"))
+	content, err := collect(t, ctx, resp)
 	if err != nil {
 		t.Fatalf("expected fallback success, got error: %v", err)
 	}
@@ -182,6 +201,141 @@ func TestFallback_FallsToSecondModel(t *testing.T) {
 	}
 	if retries[0].PreviousModel != "broken" || retries[0].PreviousModelKey != "a/broken" || retries[0].ModelKey != "b/ok" {
 		t.Fatalf("fallback transition = %#v", retries[0])
+	}
+	runtimeInfo, hasRuntimeInfo := providers.ResponseRuntimeInfo(resp)
+	if !hasRuntimeInfo || runtimeInfo.Model != "ok" || runtimeInfo.EndpointKey != "b/ok" || !runtimeInfo.Actual {
+		t.Fatalf("response runtime info = %#v, ok=%v", runtimeInfo, hasRuntimeInfo)
+	}
+}
+
+func TestFallbackStreamingRemembersSuccessfulEndpoint(t *testing.T) {
+	primary := &fakeClient{name: "primary", completionErrs: []error{errors.New("unavailable")}, streamContent: []string{"primary"}}
+	fallback := &fakeClient{name: "fallback", streamContent: []string{"fallback"}}
+	client := NewFallbackClient([]ModelEntry{
+		{Client: primary, Name: "primary"},
+		{Client: fallback, Name: "fallback"},
+	})
+
+	for call := 0; call < 2; call++ {
+		content, err := collect(t, context.Background(), client.Completion(context.Background(), providers.NewRequest("sys")))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if content != "fallback" {
+			t.Fatalf("call %d content = %q, want fallback", call+1, content)
+		}
+	}
+	if primary.callCount() != 1 || fallback.callCount() != 2 {
+		t.Fatalf("sticky streaming route calls: primary=%d fallback=%d", primary.callCount(), fallback.callCount())
+	}
+}
+
+func TestPartialStreamingFailureDoesNotChangeActiveRoute(t *testing.T) {
+	primary := &stubCountingClient{completion: func(context.Context, providers.Request) providers.Response {
+		resp := providers.NewCommonResponse()
+		go func() {
+			defer close(resp.Stream)
+			defer close(resp.Err)
+			resp.Stream <- providers.Delta{Content: "partial"}
+			resp.Err <- errors.New("stream interrupted")
+		}()
+		return resp
+	}}
+	fallbackClient := &fakeClient{name: "fallback", streamContent: []string{"fallback"}}
+	client := NewFallbackClient([]ModelEntry{
+		{Client: primary, Name: "primary"},
+		{Client: fallbackClient, Name: "fallback"},
+	})
+
+	content, err := collect(t, context.Background(), client.Completion(context.Background(), providers.NewRequest("sys")))
+	if err == nil || content != "partial" {
+		t.Fatalf("partial stream result: content=%q err=%v", content, err)
+	}
+	if fallbackClient.callCount() != 0 {
+		t.Fatalf("partial stream unexpectedly fell back: calls=%d", fallbackClient.callCount())
+	}
+	if got := client.RuntimeInfo(); got.Model != "primary" || got.Actual {
+		t.Fatalf("partial stream changed active route: %+v", got)
+	}
+}
+
+func TestFallbackNonStreamingRemembersSuccessfulEndpoint(t *testing.T) {
+	primary := &fakeClient{name: "primary", nonStreamErrs: []error{errors.New("unavailable")}}
+	fallback := &fakeClient{name: "fallback"}
+	client := NewFallbackClient([]ModelEntry{
+		{Client: primary, Name: "primary"},
+		{Client: fallback, Name: "fallback"},
+	})
+
+	for call := 0; call < 2; call++ {
+		if _, err := client.CompletionNonStreaming(context.Background(), providers.NewRequest("sys")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if primary.callCount() != 1 || fallback.callCount() != 2 {
+		t.Fatalf("sticky non-streaming route calls: primary=%d fallback=%d", primary.callCount(), fallback.callCount())
+	}
+}
+
+func TestFallbackStructuredPredictRemembersSuccessfulEndpoint(t *testing.T) {
+	primary := &fakeClient{name: "primary", structuredErrs: []error{errors.New("unavailable")}}
+	fallback := &fakeClient{name: "fallback"}
+	client := NewFallbackClient([]ModelEntry{
+		{Client: primary, Name: "primary"},
+		{Client: fallback, Name: "fallback"},
+	})
+
+	for call := 0; call < 2; call++ {
+		if err := client.StructuredPredict(context.Background(), providers.NewRequest("sys"), &struct{}{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if primary.callCount() != 1 || fallback.callCount() != 2 {
+		t.Fatalf("sticky structured route calls: primary=%d fallback=%d", primary.callCount(), fallback.callCount())
+	}
+}
+
+func TestFallbackContinuesForwardFromStickyEndpoint(t *testing.T) {
+	a := &fakeClient{name: "a", nonStreamErrs: []error{errors.New("a unavailable")}}
+	b := &fakeClient{name: "b", nonStreamErrs: []error{nil, errors.New("b unavailable")}}
+	c := &fakeClient{name: "c"}
+	client := NewFallbackClient([]ModelEntry{
+		{Client: a, Name: "a"},
+		{Client: b, Name: "b"},
+		{Client: c, Name: "c"},
+	})
+
+	if _, err := client.CompletionNonStreaming(context.Background(), providers.NewRequest("first")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.CompletionNonStreaming(context.Background(), providers.NewRequest("second")); err != nil {
+		t.Fatal(err)
+	}
+	if a.callCount() != 1 || b.callCount() != 2 || c.callCount() != 1 {
+		t.Fatalf("forward rotation calls: a=%d b=%d c=%d", a.callCount(), b.callCount(), c.callCount())
+	}
+
+	if _, err := client.CompletionNonStreaming(context.Background(), providers.NewRequest("third")); err != nil {
+		t.Fatal(err)
+	}
+	if c.callCount() != 2 {
+		t.Fatalf("third request did not start from c: calls=%d", c.callCount())
+	}
+}
+
+func TestFallbackExhaustionKeepsLastSuccessfulRoute(t *testing.T) {
+	a := &fakeClient{name: "a", nonStreamErrs: []error{errors.New("a1"), errors.New("a2")}}
+	b := &fakeClient{name: "b", nonStreamErrs: []error{nil, errors.New("b2")}}
+	client := NewFallbackClient([]ModelEntry{{Client: a, Name: "a"}, {Client: b, Name: "b"}})
+
+	if _, err := client.CompletionNonStreaming(context.Background(), providers.NewRequest("first")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.CompletionNonStreaming(context.Background(), providers.NewRequest("second")); err == nil {
+		t.Fatal("expected second request to exhaust all candidates")
+	}
+	if got := client.RuntimeInfo(); got.Model != "b" || !got.Actual {
+		t.Fatalf("exhaustion replaced successful route: %+v", got)
 	}
 }
 
@@ -353,10 +507,122 @@ func TestRuntimeInfoTracksFallbackAndInvalidatesWithSessionPolicy(t *testing.T) 
 	if got := root.RuntimeInfo(); got != (providers.ClientRuntimeInfo{Model: "shared", EndpointKey: "b.example/shared", Effort: providers.ReasoningEffortNone, Actual: true}) {
 		t.Fatalf("actual runtime = %+v", got)
 	}
+	if _, err := root.CompletionNonStreaming(context.Background(), providers.NewRequest("sticky")); err != nil {
+		t.Fatal(err)
+	}
+	if first.callCount() != 1 || second.callCount() != 2 {
+		t.Fatalf("same-name endpoint was not sticky: first=%d second=%d", first.callCount(), second.callCount())
+	}
 
 	policy.Update(providers.ClientPolicy{Effort: providers.ReasoningEffortLow})
 	if got := root.RuntimeInfo(); got != (providers.ClientRuntimeInfo{Model: "shared", EndpointKey: "a.example/shared", Effort: providers.ReasoningEffortLow}) {
 		t.Fatalf("runtime after policy update = %+v", got)
+	}
+}
+
+func TestSameSessionPolicyDoesNotResetStickyRoute(t *testing.T) {
+	primary := &fakeClient{name: "primary", nonStreamErrs: []error{errors.New("unavailable")}}
+	fallbackClient := &fakeClient{name: "fallback"}
+	policyValue := providers.ClientPolicy{PreferredModel: "primary"}
+	policy := NewSessionPolicy(policyValue)
+	client := NewModelPool([]ModelEntry{
+		{Client: primary, Name: "primary"},
+		{Client: fallbackClient, Name: "fallback"},
+	}).NewClient(policy, providers.ClientPolicy{})
+
+	if _, err := client.CompletionNonStreaming(context.Background(), providers.NewRequest("first")); err != nil {
+		t.Fatal(err)
+	}
+	policy.Update(policyValue)
+	if _, err := client.CompletionNonStreaming(context.Background(), providers.NewRequest("second")); err != nil {
+		t.Fatal(err)
+	}
+	if primary.callCount() != 1 || fallbackClient.callCount() != 2 {
+		t.Fatalf("same policy reset sticky route: primary=%d fallback=%d", primary.callCount(), fallbackClient.callCount())
+	}
+}
+
+func TestNewClientViewStartsFromPolicyPreference(t *testing.T) {
+	primary := &fakeClient{name: "primary", nonStreamErrs: []error{errors.New("temporary")}}
+	fallbackClient := &fakeClient{name: "fallback"}
+	pool := NewModelPool([]ModelEntry{
+		{Client: primary, Name: "primary"},
+		{Client: fallbackClient, Name: "fallback"},
+	})
+	policyValue := providers.ClientPolicy{PreferredModel: "primary"}
+	first := pool.NewClient(NewSessionPolicy(policyValue), providers.ClientPolicy{})
+	if _, err := first.CompletionNonStreaming(context.Background(), providers.NewRequest("first view")); err != nil {
+		t.Fatal(err)
+	}
+
+	second := pool.NewClient(NewSessionPolicy(policyValue), providers.ClientPolicy{})
+	if _, err := second.CompletionNonStreaming(context.Background(), providers.NewRequest("second view")); err != nil {
+		t.Fatal(err)
+	}
+	if primary.callCount() != 2 || fallbackClient.callCount() != 1 {
+		t.Fatalf("new view inherited sticky route: primary=%d fallback=%d", primary.callCount(), fallbackClient.callCount())
+	}
+}
+
+func TestOldPolicyRequestCannotCommitFallbackRoute(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	primary := &stubCountingClient{nonStreaming: func(context.Context, providers.Request) (string, error) {
+		close(started)
+		<-release
+		return "", errors.New("primary unavailable")
+	}}
+	fallbackClient := &stubCountingClient{}
+	preferredAfterUpdate := &stubCountingClient{}
+	policy := NewSessionPolicy(providers.ClientPolicy{PreferredModel: "primary"})
+	client := NewModelPool([]ModelEntry{
+		{Client: primary, Name: "primary"},
+		{Client: fallbackClient, Name: "fallback"},
+		{Client: preferredAfterUpdate, Name: "new-primary"},
+	}).NewClient(policy, providers.ClientPolicy{})
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := client.CompletionNonStreaming(context.Background(), providers.NewRequest("old policy"))
+		done <- err
+	}()
+	<-started
+	policy.Update(providers.ClientPolicy{PreferredModel: "new-primary"})
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+
+	if got := client.RuntimeInfo(); got.Model != "new-primary" || got.Actual {
+		t.Fatalf("old request committed into new policy: %+v", got)
+	}
+	if _, err := client.CompletionNonStreaming(context.Background(), providers.NewRequest("new policy")); err != nil {
+		t.Fatal(err)
+	}
+	if got := client.RuntimeInfo(); got.Model != "new-primary" || !got.Actual {
+		t.Fatalf("new policy route was not confirmed: %+v", got)
+	}
+}
+
+func TestOldPolicyCannotReplaceNewerPublishedRoute(t *testing.T) {
+	policy := NewSessionPolicy(providers.ClientPolicy{PreferredModel: "a"})
+	client := NewModelPool([]ModelEntry{
+		{Client: &fakeClient{}, Name: "a"},
+		{Client: &fakeClient{}, Name: "b"},
+	}).NewClient(policy, providers.ClientPolicy{})
+	oldPolicy, oldVersion := client.effectivePolicyState()
+
+	policy.Update(providers.ClientPolicy{PreferredModel: "b"})
+	if got := client.RuntimeInfo(); got.Model != "b" {
+		t.Fatalf("new policy route = %+v", got)
+	}
+	newState := client.route.Load()
+	staleState := client.ensureRouteState(oldPolicy, oldVersion)
+	if staleState.policyVersion != oldVersion {
+		t.Fatalf("stale request lost its local ordering state: %#v", staleState)
+	}
+	if got := client.route.Load(); got != newState {
+		t.Fatalf("stale policy replaced newer route: new=%p current=%p", newState, got)
 	}
 }
 
@@ -383,11 +649,15 @@ func TestRuntimeInfoRecordedForStreamingAndStructuredCalls(t *testing.T) {
 	}})
 	streamReq := providers.NewRequest("stream")
 	providers.SetRequestDefaultReasoningEffort(streamReq, providers.ReasoningEffortMedium)
-	if _, err := collect(t, context.Background(), streaming.Completion(context.Background(), streamReq)); err != nil {
+	streamResp := streaming.Completion(context.Background(), streamReq)
+	if _, err := collect(t, context.Background(), streamResp); err != nil {
 		t.Fatal(err)
 	}
-	if got := streaming.RuntimeInfo(); got.Model != "stream" || got.Effort != providers.ReasoningEffortMedium || !got.Actual {
+	if got := streaming.RuntimeInfo(); got.Model != "stream" || got.Effort != providers.ReasoningEffortDefault || !got.Actual {
 		t.Fatalf("streaming runtime = %+v", got)
+	}
+	if got, ok := providers.ResponseRuntimeInfo(streamResp); !ok || got.Model != "stream" || got.Effort != providers.ReasoningEffortMedium || !got.Actual {
+		t.Fatalf("stream response runtime = %+v, ok=%v", got, ok)
 	}
 
 	structured := NewFallbackClient([]ModelEntry{{
@@ -656,6 +926,91 @@ func TestFallbackImageRequestFallsBackToStrippedTextModel(t *testing.T) {
 	}
 	if vision.callCount() == 0 {
 		t.Fatal("expected vision model to be tried first")
+	}
+}
+
+func TestFallbackKeepsIndependentTextAndImageRoutes(t *testing.T) {
+	vision := &fakeClient{name: "vision", nonStreamErrs: []error{errors.New("vision unavailable")}}
+	text := &fakeClient{name: "text"}
+	client := NewFallbackClient([]ModelEntry{
+		{Client: vision, Name: "vision", Capabilities: ModelCapabilities{SupportsImage: true}},
+		{Client: text, Name: "text"},
+	})
+	imageRequest := func() providers.Request {
+		return providers.NewRequest("", types.Message{
+			Role: types.RoleUser, Content: "describe",
+			Image: &types.ImageContent{Type: types.ImageTypeURL, URL: "https://example.com/i.png"},
+		})
+	}
+
+	if _, err := client.CompletionNonStreaming(context.Background(), imageRequest()); err != nil {
+		t.Fatal(err)
+	}
+	if vision.callCount() != 1 || text.callCount() != 1 {
+		t.Fatalf("first image route calls: vision=%d text=%d", vision.callCount(), text.callCount())
+	}
+
+	// Normal text routing remains on the policy preference even though the
+	// image route fell back to the stripped text-only endpoint.
+	if _, err := client.CompletionNonStreaming(context.Background(), providers.NewRequest("text")); err != nil {
+		t.Fatal(err)
+	}
+	if vision.callCount() != 2 || text.callCount() != 1 {
+		t.Fatalf("image fallback polluted text route: vision=%d text=%d", vision.callCount(), text.callCount())
+	}
+
+	// The next image request remembers its own degraded fallback route.
+	if _, err := client.CompletionNonStreaming(context.Background(), imageRequest()); err != nil {
+		t.Fatal(err)
+	}
+	if vision.callCount() != 2 || text.callCount() != 2 {
+		t.Fatalf("image route was not sticky: vision=%d text=%d", vision.callCount(), text.callCount())
+	}
+}
+
+func TestConcurrentTextAndImageSuccessesConfirmBothRoutes(t *testing.T) {
+	started := make(chan struct{}, 2)
+	release := make(chan struct{})
+	blockingSuccess := func(context.Context, providers.Request) (string, error) {
+		started <- struct{}{}
+		<-release
+		return "ok", nil
+	}
+	text := &stubCountingClient{nonStreaming: blockingSuccess}
+	vision := &stubCountingClient{nonStreaming: blockingSuccess}
+	client := NewModelPool([]ModelEntry{
+		{Client: text, Name: "text"},
+		{Client: vision, Name: "vision", Capabilities: ModelCapabilities{SupportsImage: true}},
+	}).NewClient(NewSessionPolicy(providers.ClientPolicy{PreferredModel: "text"}), providers.ClientPolicy{})
+
+	imageReq := providers.NewRequest("", types.Message{
+		Role: types.RoleUser, Content: "describe",
+		Image: &types.ImageContent{Type: types.ImageTypeURL, URL: "https://example.com/i.png"},
+	})
+	errs := make(chan error, 2)
+	go func() {
+		_, err := client.CompletionNonStreaming(context.Background(), providers.NewRequest("text"))
+		errs <- err
+	}()
+	go func() {
+		_, err := client.CompletionNonStreaming(context.Background(), imageReq)
+		errs <- err
+	}()
+	<-started
+	<-started
+	close(release)
+	for i := 0; i < 2; i++ {
+		if err := <-errs; err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	state := client.route.Load()
+	if state == nil || !state.text.confirmed || state.text.poolIndex != 0 {
+		t.Fatalf("text route was not confirmed: %#v", state)
+	}
+	if !state.image.confirmed || state.image.poolIndex != 1 {
+		t.Fatalf("image route was not confirmed: %#v", state)
 	}
 }
 

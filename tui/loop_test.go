@@ -264,7 +264,7 @@ func TestTUISuccessfulUserTurnResumesSuspendedLoop(t *testing.T) {
 
 	inbox := make(chan bus.Envelope, 1)
 	id := m.registry.Bus().SubscribeSerial([]string{bus.TopicInbox(m.sessionID)}, func(env bus.Envelope) {
-		if env.Name == bus.InboxUserText {
+		if env.Name == bus.InboxAgentText {
 			inbox <- env
 		}
 	}, eventbus.SerialConfig{Overflow: eventbus.OverflowBlock})
@@ -279,7 +279,7 @@ func TestTUISuccessfulUserTurnResumesSuspendedLoop(t *testing.T) {
 
 	select {
 	case env := <-inbox:
-		var body bus.UserTextInput
+		var body bus.AgentTextInput
 		if err := events.DecodePayload(env.Event, &body); err != nil {
 			t.Fatal(err)
 		}
@@ -311,7 +311,7 @@ func TestTUIFailedUserTurnRemainsSuspended(t *testing.T) {
 
 	inbox := make(chan bus.Envelope, 1)
 	id := m.registry.Bus().SubscribeSerial([]string{bus.TopicInbox(m.sessionID)}, func(env bus.Envelope) {
-		if env.Name == bus.InboxUserText {
+		if env.Name == bus.InboxAgentText {
 			inbox <- env
 		}
 	}, eventbus.SerialConfig{Overflow: eventbus.OverflowBlock})
@@ -353,7 +353,7 @@ func TestTUIShowsLoopPhaseButNotDriverPrompt(t *testing.T) {
 	evt := events.NewEvent(events.KindCustom, "loop-run").
 		WithName(events.CustomInputAccepted).
 		WithPayload(events.InputAcceptedBody{
-			TurnID: "loop-run", Text: coderloop.BootstrapPrompt, Sources: []string{"loop"},
+			TurnID: "loop-run", Text: coderloop.BootstrapPrompt, Role: types.RoleAgent, Sources: []string{"loop"},
 		})
 	m.handleActorEvent(evt)
 	if len(m.messages) != before+1 || m.messages[before].kind != blockDivider || m.messages[before].content != "loop · bootstrap" {
@@ -366,11 +366,21 @@ func TestTUIShowsLoopPhaseButNotDriverPrompt(t *testing.T) {
 	userEvt := events.NewEvent(events.KindCustom, "user-run").
 		WithName(events.CustomInputAccepted).
 		WithPayload(events.InputAcceptedBody{
-			TurnID: "user-run", Text: "visible correction", Sources: []string{"user.local"},
+			TurnID: "user-run", Text: "visible correction", Role: types.RoleUser, Sources: []string{"user.local"},
 		})
 	m.handleActorEvent(userEvt)
 	if len(m.messages) != before+2 || m.messages[before+1].content != "visible correction" {
 		t.Fatalf("user input was not rendered: %#v", m.messages[before:])
+	}
+
+	internalEvt := events.NewEvent(events.KindCustom, "internal-run").
+		WithName(events.CustomInputAccepted).
+		WithPayload(events.InputAcceptedBody{
+			TurnID: "internal-run", Text: "hidden internal prompt", Role: types.RoleAgent, Sources: []string{"scheduler"},
+		})
+	m.handleActorEvent(internalEvt)
+	if len(m.messages) != before+2 {
+		t.Fatalf("internal agent input rendered as user content: %#v", m.messages[before:])
 	}
 }
 

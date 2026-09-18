@@ -415,7 +415,7 @@ func (m *Manager) dispatch(ctx context.Context, c *controller, prompt string) (s
 	}, eventbus.SerialConfig{Buffer: 256, Overflow: eventbus.OverflowBlock})
 	defer bus.UnsubscribeAll(m.bus, ids...)
 
-	env := bus.NewUserInput(c.session.ID, "loop", bus.UserTextInput{Text: prompt})
+	env := bus.NewAgentInput(c.session.ID, "loop", bus.AgentTextInput{Text: prompt})
 	c.mu.Lock()
 	c.currentInputEventID = env.ID
 	c.mu.Unlock()

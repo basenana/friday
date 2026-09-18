@@ -425,11 +425,11 @@ func (a *Actor) loop(ctx context.Context) {
 	}
 }
 
-// batchContext carries the data extracted from a coalesced inbox
-// batch that the turn needs to know about: the merged user message,
-// the externally-provided turn id (if any), and the union of image
-// content across messages.
+// batchContext carries the data extracted from a coalesced inbox batch that
+// the turn needs to know about: its input role, merged text, externally
+// provided turn id (if any), and the union of user image content.
 type batchContext struct {
+	role           types.MessageRole
 	text           string
 	displayText    string
 	turnID         string
@@ -439,9 +439,9 @@ type batchContext struct {
 	sourceEventIDs []string
 }
 
-// splitTurnBatches preserves the inbox drain order while preventing
-// messages with explicit external turn ids from being silently merged
-// into unrelated turns. Contiguous untagged messages still coalesce.
+// splitTurnBatches preserves inbox order while preventing different input
+// roles or explicit external turn ids from being merged into one turn.
+// Contiguous untagged messages with the same role still coalesce.
 func (a *Actor) splitTurnBatches(batch []Message) [][]Message {
 	if len(batch) == 0 {
 		return nil
@@ -450,6 +450,7 @@ func (a *Actor) splitTurnBatches(batch []Message) [][]Message {
 	var (
 		out           [][]Message
 		current       []Message
+		currentRole   types.MessageRole
 		currentTurnID string
 		currentTagged bool
 	)
@@ -462,40 +463,35 @@ func (a *Actor) splitTurnBatches(batch []Message) [][]Message {
 		copy(group, current)
 		out = append(out, group)
 		current = nil
+		currentRole = ""
 		currentTurnID = ""
 		currentTagged = false
 	}
 
 	for _, m := range batch {
-		user, ok := m.(UserTextMessage)
-		if !ok {
+		role, turnID, isTextInput := textInputIdentity(m)
+		if !isTextInput {
 			if len(current) > 0 {
 				current = append(current, m)
 			}
 			continue
 		}
 
-		nextTagged := user.TurnID != ""
+		nextTagged := turnID != ""
 		if len(current) == 0 {
 			current = append(current, m)
-			currentTurnID = user.TurnID
+			currentRole = role
+			currentTurnID = turnID
 			currentTagged = nextTagged
 			continue
 		}
 
-		if currentTagged {
-			if !nextTagged || user.TurnID != currentTurnID {
-				flush()
-				current = append(current, m)
-				currentTurnID = user.TurnID
-				currentTagged = nextTagged
-				continue
-			}
-		} else if nextTagged {
+		if role != currentRole || currentTagged != nextTagged || (currentTagged && turnID != currentTurnID) {
 			flush()
 			current = append(current, m)
-			currentTurnID = user.TurnID
-			currentTagged = true
+			currentRole = role
+			currentTurnID = turnID
+			currentTagged = nextTagged
 			continue
 		}
 
@@ -506,27 +502,58 @@ func (a *Actor) splitTurnBatches(batch []Message) [][]Message {
 	return out
 }
 
-// coalesceBatch merges a batch of inbox messages into a single
-// batchContext. UserTextMessage entries contribute their text,
-// images, and metadata; SignalMessage entries are ignored for turn
-// composition.
+func textInputIdentity(msg Message) (types.MessageRole, string, bool) {
+	switch input := msg.(type) {
+	case UserTextMessage:
+		return types.RoleUser, input.TurnID, true
+	case AgentTextMessage:
+		return types.RoleAgent, input.TurnID, true
+	default:
+		return "", "", false
+	}
+}
+
+// coalesceBatch merges one same-role text batch into a batchContext.
+// SignalMessage entries are ignored for turn composition.
 func (a *Actor) coalesceBatch(batch []Message) batchContext {
+	var result batchContext
 	var parts []string
 	var displayParts []string
 	var hasDisplayText bool
-	var images []types.ImageContent
-	var metadata []map[string]any
-	var turnID string
-	var sourceEventIDs []string
 	seenSourceEvents := make(map[string]struct{})
-	var sources []string
 	seenSources := make(map[string]struct{})
+
+	addCommon := func(role types.MessageRole, text, source, sourceEventID, turnID string, metadata map[string]any) {
+		if result.role == "" {
+			result.role = role
+		}
+		if text != "" {
+			parts = append(parts, text)
+		}
+		if result.turnID == "" && turnID != "" {
+			result.turnID = turnID
+		}
+		if source != "" {
+			if _, seen := seenSources[source]; !seen {
+				seenSources[source] = struct{}{}
+				result.sources = append(result.sources, source)
+			}
+		}
+		if len(metadata) > 0 {
+			result.metadata = append(result.metadata, cloneMetadata(metadata))
+		}
+		if sourceEventID != "" {
+			if _, seen := seenSourceEvents[sourceEventID]; !seen {
+				seenSourceEvents[sourceEventID] = struct{}{}
+				result.sourceEventIDs = append(result.sourceEventIDs, sourceEventID)
+			}
+		}
+	}
+
 	for _, m := range batch {
 		switch v := m.(type) {
 		case UserTextMessage:
-			if v.Text != "" {
-				parts = append(parts, v.Text)
-			}
+			addCommon(types.RoleUser, v.Text, v.Source, v.SourceEventID, v.TurnID, v.Metadata)
 			display := v.Text
 			if v.DisplayText != "" {
 				display = v.DisplayText
@@ -535,37 +562,18 @@ func (a *Actor) coalesceBatch(batch []Message) batchContext {
 			if display != "" {
 				displayParts = append(displayParts, display)
 			}
-			if v.TurnID != "" && turnID == "" {
-				turnID = v.TurnID
-			}
-			if v.Source != "" {
-				if _, seen := seenSources[v.Source]; !seen {
-					seenSources[v.Source] = struct{}{}
-					sources = append(sources, v.Source)
-				}
-			}
-			if len(v.Images) > 0 {
-				images = append(images, v.Images...)
-			}
-			if len(v.Metadata) > 0 {
-				metadata = append(metadata, cloneMetadata(v.Metadata))
-			}
-			if v.SourceEventID != "" {
-				if _, seen := seenSourceEvents[v.SourceEventID]; !seen {
-					seenSourceEvents[v.SourceEventID] = struct{}{}
-					sourceEventIDs = append(sourceEventIDs, v.SourceEventID)
-				}
-			}
+			result.images = append(result.images, v.Images...)
+		case AgentTextMessage:
+			addCommon(types.RoleAgent, v.Text, v.Source, v.SourceEventID, v.TurnID, v.Metadata)
 		case SignalMessage:
 			// Signals do not contribute to the prompt in the MVP.
 		}
 	}
-	text := strings.Join(parts, "\n\n")
-	displayText := ""
+	result.text = strings.Join(parts, "\n\n")
 	if hasDisplayText {
-		displayText = strings.Join(displayParts, "\n\n")
+		result.displayText = strings.Join(displayParts, "\n\n")
 	}
-	return batchContext{text: text, displayText: displayText, turnID: turnID, sources: sources, images: images, metadata: metadata, sourceEventIDs: sourceEventIDs}
+	return result
 }
 
 // routeFormMessage dispatches a FormSubmitMessage / FormCancelMessage
@@ -690,13 +698,17 @@ func (a *Actor) runTurn(ctx context.Context, bctx batchContext, batchSize int) {
 		WithName(events.CustomInputAccepted).
 		WithPayload(events.InputAcceptedBody{
 			TurnID: runID, Text: bctx.text, DisplayText: bctx.displayText,
-			Sources: bctx.sources,
+			Role: bctx.role, Sources: bctx.sources,
 		}))
 
 	req := &api.Request{
-		Session:     a.session,
-		UserMessage: bctx.text,
-		Tools:       a.assembleRequestTools(),
+		Session: a.session,
+		Tools:   a.assembleRequestTools(),
+	}
+	if bctx.role == types.RoleAgent {
+		req.AgentMessage = bctx.text
+	} else {
+		req.UserMessage = bctx.text
 	}
 	for _, metadata := range bctx.metadata {
 		for key, value := range metadata {
@@ -783,20 +795,31 @@ func (a *Actor) consumeCancelledCauses(ids []string) bool {
 func (a *Actor) filterCancelledInputs(batch []Message) []Message {
 	kept := batch[:0]
 	for _, msg := range batch {
-		user, ok := msg.(UserTextMessage)
-		if !ok || user.SourceEventID == "" {
+		sourceEventID := textInputSourceEventID(msg)
+		if sourceEventID == "" {
 			kept = append(kept, msg)
 			continue
 		}
-		if _, cancelled := a.cancelledInputs.LoadAndDelete(user.SourceEventID); !cancelled {
+		if _, cancelled := a.cancelledInputs.LoadAndDelete(sourceEventID); !cancelled {
 			kept = append(kept, msg)
 			continue
 		}
 		evt := events.NewEvent(events.KindCustom, "").WithName(events.CustomInputCancelled)
-		evt.CausedBy = []string{user.SourceEventID}
+		evt.CausedBy = []string{sourceEventID}
 		a.publish(context.Background(), evt)
 	}
 	return kept
+}
+
+func textInputSourceEventID(msg Message) string {
+	switch input := msg.(type) {
+	case UserTextMessage:
+		return input.SourceEventID
+	case AgentTextMessage:
+		return input.SourceEventID
+	default:
+		return ""
+	}
 }
 
 // deriveTurnCtx wraps the loop context with a per-turn cancel. When
@@ -878,8 +901,10 @@ func (a *Actor) pumpResponse(ctx context.Context, runID string, resp *api.Respon
 	wg.Wait()
 
 	if err := a.responseError(ctx, resp); err != nil {
-		a.publish(ctx, events.NewEvent(events.KindRunError, runID).
-			WithPayload(events.RunErrorData{Message: err.Error()}))
+		if !errors.Is(err, context.Canceled) {
+			a.publish(ctx, events.NewEvent(events.KindRunError, runID).
+				WithPayload(events.RunErrorData{Message: err.Error()}))
+		}
 		return err
 	}
 	return nil

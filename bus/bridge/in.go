@@ -140,6 +140,19 @@ func (ib *InBridge) dispatchInbox(env bus.Envelope) {
 			Images:        in.Images,
 			Metadata:      in.Metadata,
 		}
+	case bus.InboxAgentText:
+		var in bus.AgentTextInput
+		if err := events.DecodePayload(env.Event, &in); err != nil {
+			ib.reportDrop(env, "bad payload: "+err.Error())
+			return
+		}
+		msg = coreactor.AgentTextMessage{
+			Text:          in.Text,
+			Source:        env.From,
+			SourceEventID: env.ID,
+			TurnID:        in.TurnID,
+			Metadata:      in.Metadata,
+		}
 	case bus.InboxFormSubmit:
 		var in bus.FormSubmitInput
 		if err := events.DecodePayload(env.Event, &in); err != nil {
@@ -231,9 +244,17 @@ func formIDOf(env bus.Envelope) string {
 }
 
 func turnIDOf(env bus.Envelope) string {
-	var in bus.UserTextInput
-	if events.DecodePayload(env.Event, &in) == nil {
-		return in.TurnID
+	switch env.Name {
+	case bus.InboxUserText:
+		var in bus.UserTextInput
+		if events.DecodePayload(env.Event, &in) == nil {
+			return in.TurnID
+		}
+	case bus.InboxAgentText:
+		var in bus.AgentTextInput
+		if events.DecodePayload(env.Event, &in) == nil {
+			return in.TurnID
+		}
 	}
 	return ""
 }

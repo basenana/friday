@@ -1297,8 +1297,7 @@ func (m *model) handleActorEvent(evt events.Event) tea.Cmd {
 		}
 	case events.KindRunError:
 		var d events.RunErrorData
-		if m.decodeEventPayload(evt, &d) && d.Message != "" &&
-			!strings.Contains(strings.ToLower(d.Message), "context canceled") {
+		if m.decodeEventPayload(evt, &d) && d.Message != "" {
 			m.appendBlock(chatBlock{kind: blockError, content: d.Message})
 		}
 	case events.KindTextMessageStart:
@@ -1418,6 +1417,9 @@ func (m *model) handleCustomEvent(evt events.Event) tea.Cmd {
 			// phase makes every autonomous turn explicit while all agent output,
 			// reasoning and tool activity remains visible below it.
 			m.appendBlock(chatBlock{kind: blockDivider, content: "loop · " + loopPhase(d.Text)})
+			return nil
+		}
+		if d.Role == types.RoleAgent {
 			return nil
 		}
 		if !m.seenInputs[d.TurnID] {

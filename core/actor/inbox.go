@@ -62,6 +62,18 @@ type UserTextMessage struct {
 
 func (UserTextMessage) msgMarker() {}
 
+// AgentTextMessage is turn-starting text produced by an internal agent or
+// autonomous driver. It is persisted as an agent-attributed session message.
+type AgentTextMessage struct {
+	Text          string
+	Source        string
+	SourceEventID string
+	TurnID        string
+	Metadata      map[string]any
+}
+
+func (AgentTextMessage) msgMarker() {}
+
 // FormSubmitMessage carries user-supplied values for a pending form.
 // It is routed to the corresponding pendingForm channel by FormID,
 // not coalesced into a turn batch.

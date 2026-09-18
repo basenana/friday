@@ -27,6 +27,7 @@ import (
 	"github.com/basenana/friday/core/types"
 	"github.com/basenana/friday/sandbox"
 	"github.com/basenana/friday/sessions"
+	sessionusage "github.com/basenana/friday/sessions/usage"
 )
 
 type selectorKind string
@@ -421,12 +422,16 @@ func (m *model) requestSessionConfirmation(action, target string) {
 }
 
 func (m *model) showStatus() {
-	_, release, err := m.acquireCurrentSession()
+	sess, release, err := m.acquireCurrentSession()
 	if err != nil {
 		m.appendBlock(chatBlock{kind: blockError, content: "status: " + err.Error()})
 		return
 	}
 	defer release()
+	usageSnapshot, usageErr := sessionusage.Read(context.Background(), sess)
+	if usageErr != nil {
+		m.logError("failed to load session usage", usageErr)
+	}
 	meta, _ := m.runtime.GetStore().GetMeta(m.sessionID)
 	model := m.activeModel
 	name := "(unnamed)"
@@ -475,8 +480,117 @@ func (m *model) showStatus() {
 		"- MCP: "+mcpSummary,
 		fmt.Sprintf("- Background tasks: %d", len(m.registry.ListTasks(m.sessionID))),
 	)
+	lines = append(lines, formatUsageStatus(usageSnapshot, usageErr, m.running, m.currentElapsed())...)
 	msg := strings.Join(lines, "\n")
 	m.appendBlock(chatBlock{kind: blockAssistant, content: msg})
+}
+
+func formatUsageStatus(snapshot sessionusage.Snapshot, usageErr error, running bool, currentElapsed time.Duration) []string {
+	if usageErr != nil {
+		return []string{"- Usage: unavailable"}
+	}
+
+	turns := snapshot.Turns
+	turnLine := fmt.Sprintf("- Turns: %d · total %s", turns.Count, formatCumulativeElapsed(time.Duration(turns.DurationMs)*time.Millisecond))
+	if turns.Count > 0 {
+		turnLine += " · avg " + formatCumulativeElapsed(time.Duration(turns.DurationMs/turns.Count)*time.Millisecond)
+	}
+	if turns.Failed > 0 {
+		turnLine += fmt.Sprintf(" · %d failed", turns.Failed)
+	}
+	if turns.Cancelled > 0 {
+		turnLine += fmt.Sprintf(" · %d cancelled", turns.Cancelled)
+	}
+	lines := []string{turnLine}
+	if running {
+		lines = append(lines, "- Current turn: running "+formatElapsed(currentElapsed))
+	}
+	if !snapshot.TrackingSince.IsZero() {
+		lines = append(lines, "- Usage tracked since: "+snapshot.TrackingSince.UTC().Format("2006-01-02 15:04 UTC"))
+	}
+	if len(snapshot.Models) == 0 {
+		return append(lines, "- Model usage: no model calls recorded yet")
+	}
+
+	models := append([]sessionusage.ModelUsage(nil), snapshot.Models...)
+	sort.Slice(models, func(i, j int) bool {
+		iTotal := models[i].PromptTokens + models[i].CompletionTokens
+		jTotal := models[j].PromptTokens + models[j].CompletionTokens
+		if iTotal != jTotal {
+			return iTotal > jTotal
+		}
+		if models[i].Model != models[j].Model {
+			return models[i].Model < models[j].Model
+		}
+		return models[i].Endpoint < models[j].Endpoint
+	})
+	lines = append(lines, "", "### Model usage")
+	var total sessionusage.ModelUsage
+	for _, model := range models {
+		label := "`" + model.Model + "`"
+		if model.Endpoint != "" {
+			label += " via `" + model.Endpoint + "`"
+		}
+		line := fmt.Sprintf("- %s: %d calls", label, model.Calls)
+		if model.FailedCalls > 0 {
+			line += fmt.Sprintf(" (%d failed)", model.FailedCalls)
+		}
+		line += fmt.Sprintf(" · input %s · cached %s (%s) · cache write %s · output %s · total %s",
+			formatUsageTokens(model.PromptTokens),
+			formatUsageTokens(model.CachedPromptTokens),
+			formatCacheRate(model.CachedPromptTokens, model.PromptTokens),
+			formatUsageTokens(model.CacheCreationTokens),
+			formatUsageTokens(model.CompletionTokens),
+			formatUsageTokens(model.PromptTokens+model.CompletionTokens),
+		)
+		lines = append(lines, line)
+		total.Calls += model.Calls
+		total.FailedCalls += model.FailedCalls
+		total.PromptTokens += model.PromptTokens
+		total.CachedPromptTokens += model.CachedPromptTokens
+		total.CacheCreationTokens += model.CacheCreationTokens
+		total.CompletionTokens += model.CompletionTokens
+	}
+	totalLine := fmt.Sprintf("- Total: %d calls", total.Calls)
+	if total.FailedCalls > 0 {
+		totalLine += fmt.Sprintf(" (%d failed)", total.FailedCalls)
+	}
+	totalLine += fmt.Sprintf(" · input %s · cached %s (%s) · cache write %s · output %s · total %s",
+		formatUsageTokens(total.PromptTokens),
+		formatUsageTokens(total.CachedPromptTokens),
+		formatCacheRate(total.CachedPromptTokens, total.PromptTokens),
+		formatUsageTokens(total.CacheCreationTokens),
+		formatUsageTokens(total.CompletionTokens),
+		formatUsageTokens(total.PromptTokens+total.CompletionTokens),
+	)
+	lines = append(lines, totalLine)
+	return lines
+}
+
+func formatCumulativeElapsed(duration time.Duration) string {
+	if duration <= 0 {
+		return "0s"
+	}
+	return formatElapsed(duration)
+}
+
+func formatUsageTokens(tokens int64) string {
+	switch {
+	case tokens < 1_000:
+		return fmt.Sprintf("%d", tokens)
+	case tokens < 1_000_000:
+		return strings.TrimSuffix(fmt.Sprintf("%.1f", float64(tokens)/1_000), ".0") + "K"
+	default:
+		value := strings.TrimRight(fmt.Sprintf("%.2f", float64(tokens)/1_000_000), "0")
+		return strings.TrimSuffix(value, ".") + "M"
+	}
+}
+
+func formatCacheRate(cached, prompt int64) string {
+	if prompt <= 0 {
+		return "—"
+	}
+	return fmt.Sprintf("%.1f%%", float64(cached)/float64(prompt)*100)
 }
 
 type mcpOperationMsg struct {

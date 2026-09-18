@@ -122,8 +122,22 @@ preempt:
 	if err := a.SendPreempt(context.Background(), "user cancelled"); err != nil {
 		t.Fatalf("SendPreempt: %v", err)
 	}
-	if got := drainStopReason(t, sub); got != "cancelled" {
-		t.Fatalf("stop reason = %q, want cancelled", got)
+	seen := collectEvents(t, sub, hasRunFinished)
+	var stopReason string
+	for _, evt := range seen {
+		if evt.Type == events.KindRunError {
+			t.Fatalf("preempt emitted RUN_ERROR: %+v", evt)
+		}
+		if evt.Type == events.KindRunFinished {
+			var data events.RunFinishedData
+			if err := events.DecodePayload(evt, &data); err != nil {
+				t.Fatal(err)
+			}
+			stopReason = data.StopReason
+		}
+	}
+	if stopReason != "cancelled" {
+		t.Fatalf("stop reason = %q, want cancelled", stopReason)
 	}
 }
 

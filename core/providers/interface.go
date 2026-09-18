@@ -159,6 +159,23 @@ type Response interface {
 	Tokens() Tokens
 }
 
+// ResponseRuntimeInfoProvider exposes the concrete model selected for one
+// response. It is response-scoped so concurrent calls through the same client
+// cannot overwrite each other's attribution data.
+type ResponseRuntimeInfoProvider interface {
+	RuntimeInfo() ClientRuntimeInfo
+}
+
+// ResponseRuntimeInfo returns the concrete runtime metadata attached to resp.
+// The boolean is false when the response does not expose call-level metadata.
+func ResponseRuntimeInfo(resp Response) (ClientRuntimeInfo, bool) {
+	provider, ok := resp.(ResponseRuntimeInfoProvider)
+	if !ok {
+		return ClientRuntimeInfo{}, false
+	}
+	return provider.RuntimeInfo(), true
+}
+
 type Delta struct {
 	Content            string
 	Reasoning          string

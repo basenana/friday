@@ -13,6 +13,7 @@ import (
 // Input message kinds carried on the inbox topic.
 const (
 	InboxUserText    = "user.text"
+	InboxAgentText   = "agent.text"
 	InboxFormSubmit  = "form.submit"
 	InboxFormCancel  = "form.cancel"
 	InboxCancelInput = "input.cancel"
@@ -152,6 +153,13 @@ type UserTextInput struct {
 	Metadata    map[string]any       `json:"metadata,omitempty"`
 }
 
+// AgentTextInput is the payload schema of inbox agent.text envelopes.
+type AgentTextInput struct {
+	Text     string         `json:"text"`
+	TurnID   string         `json:"turn_id,omitempty"`
+	Metadata map[string]any `json:"metadata,omitempty"`
+}
+
 // FormSubmitInput is the payload schema of inbox form.submit envelopes.
 type FormSubmitInput struct {
 	FormID string         `json:"form_id"`
@@ -210,6 +218,11 @@ func inputEnvelope(kind, session, from string, payload any) Envelope {
 // NewUserInput builds an inbox envelope carrying UserTextInput.
 func NewUserInput(session, from string, in UserTextInput) Envelope {
 	return inputEnvelope(InboxUserText, session, from, in)
+}
+
+// NewAgentInput builds an inbox envelope carrying AgentTextInput.
+func NewAgentInput(session, from string, in AgentTextInput) Envelope {
+	return inputEnvelope(InboxAgentText, session, from, in)
 }
 
 // NewFormSubmit builds an inbox envelope carrying FormSubmitInput.

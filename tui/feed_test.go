@@ -297,6 +297,23 @@ func TestAgentFeedPreservesCrossTopicOrder(t *testing.T) {
 // TestSendUserTextDroppedRendersError verifies an inbox_dropped status
 // envelope (e.g. unknown inbox kind) surfaces as an error block in the
 // chat view.
+func TestRunErrorAlwaysRendersItsMessage(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	before := len(m.messages)
+
+	m.handleActorEvent(events.NewEvent(events.KindRunError, "run-error").WithPayload(events.RunErrorData{
+		Message: "provider failed after context canceled upstream",
+	}))
+
+	if len(m.messages) != before+1 {
+		t.Fatalf("RUN_ERROR did not render: %#v", m.messages[before:])
+	}
+	got := m.messages[before]
+	if got.kind != blockError || got.content != "provider failed after context canceled upstream" {
+		t.Fatalf("RUN_ERROR block = %#v", got)
+	}
+}
+
 func TestSendUserTextDroppedRendersError(t *testing.T) {
 	m, _, _ := newTestModel(t)
 

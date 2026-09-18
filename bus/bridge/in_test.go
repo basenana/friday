@@ -13,6 +13,7 @@ import (
 	"github.com/basenana/friday/core/api"
 	coresession "github.com/basenana/friday/core/session"
 	"github.com/basenana/friday/core/tools"
+	"github.com/basenana/friday/core/types"
 )
 
 type formBridgeAgent struct{ result chan *tools.Result }
@@ -46,7 +47,7 @@ func TestInBridgeReportsActorInboxSaturation(t *testing.T) {
 	}, eventbus.SerialConfig{Overflow: eventbus.OverflowBlock})
 
 	b.Publish(bus.TopicInbox("s1"), bus.NewUserInput("s1", "test", bus.UserTextInput{Text: "first", TurnID: "turn-1"}))
-	b.Publish(bus.TopicInbox("s1"), bus.NewUserInput("s1", "test", bus.UserTextInput{Text: "second", TurnID: "turn-2"}))
+	b.Publish(bus.TopicInbox("s1"), bus.NewAgentInput("s1", "test", bus.AgentTextInput{Text: "second", TurnID: "turn-2"}))
 
 	select {
 	case drop := <-drops:
@@ -89,9 +90,10 @@ func TestInBridgeReportsAcceptedWithInputCausality(t *testing.T) {
 	}
 }
 
-func TestInBridgePreservesInputProducerOnAcceptedEvent(t *testing.T) {
+func TestInBridgePreservesAgentInputEnvelope(t *testing.T) {
 	b := eventbus.NewBus()
-	a := coreactor.New(&captureInputAgent{}, coresession.New("s1", nil))
+	requests := make(chan *api.Request, 1)
+	a := coreactor.New(&captureInputAgent{requests: requests}, coresession.New("s1", nil))
 	sub := a.Subscribe()
 	a.Start(context.Background())
 	ib := NewInBridge(b, "s1", a)
@@ -100,7 +102,10 @@ func TestInBridgePreservesInputProducerOnAcceptedEvent(t *testing.T) {
 		a.Stop()
 	}()
 
-	b.Publish(bus.TopicInbox("s1"), bus.NewUserInput("s1", "loop", bus.UserTextInput{Text: "internal"}))
+	input := bus.NewAgentInput("s1", "loop", bus.AgentTextInput{
+		Text: "internal", TurnID: "agent-turn", Metadata: map[string]any{"trace_id": "trace-1"},
+	})
+	b.Publish(bus.TopicInbox("s1"), input)
 	deadline := time.After(time.Second)
 	for {
 		select {
@@ -112,8 +117,19 @@ func TestInBridgePreservesInputProducerOnAcceptedEvent(t *testing.T) {
 			if err := events.DecodePayload(evt, &body); err != nil {
 				t.Fatal(err)
 			}
-			if len(body.Sources) != 1 || body.Sources[0] != "loop" {
-				t.Fatalf("accepted sources = %v", body.Sources)
+			if len(body.Sources) != 1 || body.Sources[0] != "loop" || body.Role != types.RoleAgent {
+				t.Fatalf("accepted input = %+v", body)
+			}
+			if body.TurnID != "agent-turn" || len(evt.CausedBy) != 1 || evt.CausedBy[0] != input.ID {
+				t.Fatalf("accepted event = %+v", evt)
+			}
+			select {
+			case req := <-requests:
+				if req.AgentMessage != "internal" || req.UserMessage != "" || req.Metadata["trace_id"] != "trace-1" {
+					t.Fatalf("agent request = %+v", req)
+				}
+			case <-deadline:
+				t.Fatal("timed out waiting for agent request")
 			}
 			return
 		case <-deadline:
@@ -122,9 +138,12 @@ func TestInBridgePreservesInputProducerOnAcceptedEvent(t *testing.T) {
 	}
 }
 
-type captureInputAgent struct{}
+type captureInputAgent struct {
+	requests chan<- *api.Request
+}
 
-func (*captureInputAgent) Chat(_ context.Context, _ *api.Request) *api.Response {
+func (a *captureInputAgent) Chat(_ context.Context, req *api.Request) *api.Response {
+	a.requests <- req
 	resp := api.NewResponse()
 	resp.Close()
 	return resp

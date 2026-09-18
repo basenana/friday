@@ -1,5 +1,7 @@
 package events
 
+import "github.com/basenana/friday/core/types"
+
 // Custom event payloads. The Event.Name field discriminates between
 // these; payloads are intentionally permissive maps to keep the actor
 // layer agnostic to specific card schemas (those live in the cards
@@ -58,13 +60,15 @@ type ReasoningDeltaBody struct {
 	Content string `json:"content"`
 }
 
-// InputAcceptedBody records the complete user input that caused a run. It is
-// emitted immediately after RUN_STARTED so event logs can rebuild a transcript
-// without having to infer user messages from the intentionally short preview.
+// InputAcceptedBody records the complete turn-starting input that caused a run.
+// It is emitted immediately after RUN_STARTED so event logs can rebuild a
+// transcript without having to infer messages from the intentionally short
+// preview. Historical events omit Role and are interpreted as user input.
 type InputAcceptedBody struct {
-	TurnID      string `json:"turn_id"`
-	Text        string `json:"text"`
-	DisplayText string `json:"display_text,omitempty"`
+	TurnID      string            `json:"turn_id"`
+	Text        string            `json:"text"`
+	DisplayText string            `json:"display_text,omitempty"`
+	Role        types.MessageRole `json:"role,omitempty"`
 	// Sources are the transport producers whose inputs were coalesced into the
 	// turn. They describe provenance only and are never exposed to the model.
 	Sources []string `json:"sources,omitempty"`

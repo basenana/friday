@@ -32,10 +32,12 @@ type AfterModelHook interface {
 // response text. Unlike AfterModelHook, AfterModelCallHook fires on both
 // success and error paths of the model call.
 type ModelCallStats struct {
-	Model      string
-	Tokens     providers.Tokens
-	StartAt    time.Time
-	DurationMs int64
+	Model       string
+	EndpointKey string
+	Effort      string
+	Tokens      providers.Tokens
+	StartAt     time.Time
+	DurationMs  int64
 	// Err is empty on success; on failure it carries the error message.
 	Err       string
 	Content   string
@@ -66,6 +68,8 @@ type ToolExecution struct {
 type AgentRequest interface {
 	GetUserMessage() string
 	SetUserMessage(msg string)
+	GetAgentMessage() string
+	SetAgentMessage(msg string)
 	GetTools() []*tools.Tool
 	AppendTools(...*tools.Tool)
 }

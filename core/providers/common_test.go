@@ -100,3 +100,35 @@ func TestCommonResponseTokensConcurrentAccess(t *testing.T) {
 		t.Fatalf("unexpected accumulated usage: %#v", got)
 	}
 }
+
+func TestCommonResponseRuntimeInfoConcurrentAccess(t *testing.T) {
+	resp := NewCommonResponse()
+	defer close(resp.Stream)
+	defer close(resp.Err)
+
+	var writers sync.WaitGroup
+	for i := 0; i < 4; i++ {
+		writers.Add(1)
+		go func(index int) {
+			defer writers.Done()
+			for j := 0; j < 500; j++ {
+				resp.SetRuntimeInfo(ClientRuntimeInfo{Model: "model", EndpointKey: "endpoint", Effort: "high", Actual: true})
+			}
+		}(i)
+	}
+	for i := 0; i < 500; i++ {
+		info, ok := ResponseRuntimeInfo(resp)
+		if !ok {
+			t.Fatal("CommonResponse does not expose response runtime info")
+		}
+		if info.Model != "" && (info.Model != "model" || info.EndpointKey != "endpoint" || !info.Actual) {
+			t.Fatalf("partial runtime info snapshot: %#v", info)
+		}
+	}
+	writers.Wait()
+
+	info, ok := ResponseRuntimeInfo(resp)
+	if !ok || info != (ClientRuntimeInfo{Model: "model", EndpointKey: "endpoint", Effort: "high", Actual: true}) {
+		t.Fatalf("runtime info = %#v, ok=%v", info, ok)
+	}
+}

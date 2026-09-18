@@ -321,14 +321,14 @@ func (r *Registry) AcquireLifecycle(sessionID string) (sessions.SessionLifecycle
 	return lifecycle, release, nil
 }
 
-// DispatchInput delivers one actor inbox envelope. User text transparently
-// starts an evicted actor; stateful controls require the original live actor
-// because pending forms and cancellation targets cannot be reconstructed.
+// DispatchInput delivers one actor inbox envelope. Turn-starting text input
+// transparently starts an evicted actor; stateful controls require the original
+// live actor because pending forms and cancellation targets cannot be reconstructed.
 func (r *Registry) DispatchInput(env bus.Envelope) error {
 	if strings.TrimSpace(env.Session) == "" {
 		return errors.New("input session is required")
 	}
-	if env.Name == bus.InboxUserText {
+	if env.Name == bus.InboxUserText || env.Name == bus.InboxAgentText {
 		if _, err := r.GetOrCreate(env.Session); err != nil {
 			return err
 		}

@@ -25,7 +25,7 @@ func TestManagerAdvancesByInputCausalityWithoutLoopMetadata(t *testing.T) {
 	sess := session.New("root", nil)
 	inputs := make(chan bus.Envelope, 4)
 	id := b.SubscribeSerial([]string{bus.TopicInbox(sess.ID)}, func(env bus.Envelope) {
-		if env.Name == bus.InboxUserText {
+		if env.Name == bus.InboxAgentText {
 			inputs <- env
 		}
 	}, eventbus.SerialConfig{Overflow: eventbus.OverflowBlock})
@@ -35,7 +35,7 @@ func TestManagerAdvancesByInputCausalityWithoutLoopMetadata(t *testing.T) {
 		t.Fatal(err)
 	}
 	first := waitInput(t, inputs)
-	var firstBody bus.UserTextInput
+	var firstBody bus.AgentTextInput
 	if err := events.DecodePayload(first.Event, &firstBody); err != nil {
 		t.Fatal(err)
 	}
@@ -45,7 +45,7 @@ func TestManagerAdvancesByInputCausalityWithoutLoopMetadata(t *testing.T) {
 	assertPhase(t, sess, phaseBootstrap)
 	publishFinished(b, sess.ID, first.ID, "end_turn")
 	second := waitInput(t, inputs)
-	var secondBody bus.UserTextInput
+	var secondBody bus.AgentTextInput
 	_ = events.DecodePayload(second.Event, &secondBody)
 	if secondBody.Text != DevelopPrompt {
 		t.Fatalf("next prompt = %q", secondBody.Text)
@@ -112,7 +112,7 @@ func TestManagerAttachRecoversActiveLoop(t *testing.T) {
 	}
 	inputs := make(chan bus.Envelope, 1)
 	id := b.SubscribeSerial([]string{bus.TopicInbox(sess.ID)}, func(env bus.Envelope) {
-		if env.Name == bus.InboxUserText {
+		if env.Name == bus.InboxAgentText {
 			inputs <- env
 		}
 	}, eventbus.SerialConfig{Overflow: eventbus.OverflowBlock})
@@ -132,7 +132,7 @@ func TestManagerPersistsEveryPhaseBeforeDispatch(t *testing.T) {
 	sess := session.New("root", nil)
 	inputs := make(chan bus.Envelope, 5)
 	id := b.SubscribeSerial([]string{bus.TopicInbox(sess.ID)}, func(env bus.Envelope) {
-		if env.Name == bus.InboxUserText {
+		if env.Name == bus.InboxAgentText {
 			inputs <- env
 		}
 	}, eventbus.SerialConfig{Overflow: eventbus.OverflowBlock})
@@ -197,7 +197,7 @@ func TestManagerCompactsLargeHistoryAfterUpdate(t *testing.T) {
 
 			inputs := make(chan bus.Envelope, 4)
 			id := b.SubscribeSerial([]string{bus.TopicInbox(sess.ID)}, func(env bus.Envelope) {
-				if env.Name == bus.InboxUserText {
+				if env.Name == bus.InboxAgentText {
 					inputs <- env
 				}
 			}, eventbus.SerialConfig{Overflow: eventbus.OverflowBlock})
@@ -240,7 +240,7 @@ func TestManagerSkipsCompactBelowUpdateThreshold(t *testing.T) {
 
 	inputs := make(chan bus.Envelope, 4)
 	id := b.SubscribeSerial([]string{bus.TopicInbox(sess.ID)}, func(env bus.Envelope) {
-		if env.Name == bus.InboxUserText {
+		if env.Name == bus.InboxAgentText {
 			inputs <- env
 		}
 	}, eventbus.SerialConfig{Overflow: eventbus.OverflowBlock})
@@ -271,7 +271,7 @@ func TestManagerContinuesWhenUpdateCompactFails(t *testing.T) {
 
 	inputs := make(chan bus.Envelope, 4)
 	id := b.SubscribeSerial([]string{bus.TopicInbox(sess.ID)}, func(env bus.Envelope) {
-		if env.Name == bus.InboxUserText {
+		if env.Name == bus.InboxAgentText {
 			inputs <- env
 		}
 	}, eventbus.SerialConfig{Overflow: eventbus.OverflowBlock})
@@ -300,7 +300,7 @@ func TestManagerDetachDuringUpdateCompactDoesNotDispatch(t *testing.T) {
 
 	inputs := make(chan bus.Envelope, 4)
 	id := b.SubscribeSerial([]string{bus.TopicInbox(sess.ID)}, func(env bus.Envelope) {
-		if env.Name == bus.InboxUserText {
+		if env.Name == bus.InboxAgentText {
 			inputs <- env
 		}
 	}, eventbus.SerialConfig{Overflow: eventbus.OverflowBlock})
@@ -333,7 +333,7 @@ func TestManagerRunsDevelopmentAndReviewCycles(t *testing.T) {
 	sess := session.New("root", nil)
 	inputs := make(chan bus.Envelope, 8)
 	id := b.SubscribeSerial([]string{bus.TopicInbox(sess.ID)}, func(env bus.Envelope) {
-		if env.Name == bus.InboxUserText {
+		if env.Name == bus.InboxAgentText {
 			inputs <- env
 		}
 	}, eventbus.SerialConfig{Overflow: eventbus.OverflowBlock})
@@ -402,7 +402,7 @@ func TestManagerRecoveryReturnsToInterruptedCycle(t *testing.T) {
 			}
 			inputs := make(chan bus.Envelope, 2)
 			id := b.SubscribeSerial([]string{bus.TopicInbox(sess.ID)}, func(env bus.Envelope) {
-				if env.Name == bus.InboxUserText {
+				if env.Name == bus.InboxAgentText {
 					inputs <- env
 				}
 			}, eventbus.SerialConfig{Overflow: eventbus.OverflowBlock})
@@ -427,7 +427,7 @@ func TestManagerSuspendsOnUnexpectedPhaseChange(t *testing.T) {
 	sess := session.New("root", nil)
 	inputs := make(chan bus.Envelope, 2)
 	id := b.SubscribeSerial([]string{bus.TopicInbox(sess.ID)}, func(env bus.Envelope) {
-		if env.Name == bus.InboxUserText {
+		if env.Name == bus.InboxAgentText {
 			inputs <- env
 		}
 	}, eventbus.SerialConfig{Overflow: eventbus.OverflowBlock})
@@ -452,7 +452,7 @@ func TestManagerIdempotentResumeDoesNotOverwriteRunningPhase(t *testing.T) {
 	sess := session.New("root", nil)
 	inputs := make(chan bus.Envelope, 1)
 	id := b.SubscribeSerial([]string{bus.TopicInbox(sess.ID)}, func(env bus.Envelope) {
-		if env.Name == bus.InboxUserText {
+		if env.Name == bus.InboxAgentText {
 			inputs <- env
 		}
 	}, eventbus.SerialConfig{Overflow: eventbus.OverflowBlock})
@@ -512,7 +512,7 @@ func TestManagerDoesNotDispatchWhenRecoveryPhaseCannotBePersisted(t *testing.T) 
 	defer m.Close()
 	inputs := make(chan bus.Envelope, 1)
 	id := b.SubscribeSerial([]string{bus.TopicInbox(sess.ID)}, func(env bus.Envelope) {
-		if env.Name == bus.InboxUserText {
+		if env.Name == bus.InboxAgentText {
 			inputs <- env
 		}
 	}, eventbus.SerialConfig{Overflow: eventbus.OverflowBlock})
@@ -543,7 +543,7 @@ func TestManagerAttachResumesWithoutReplacingWorkingNote(t *testing.T) {
 	}
 	inputs := make(chan bus.Envelope, 1)
 	id := b.SubscribeSerial([]string{bus.TopicInbox(sess.ID)}, func(env bus.Envelope) {
-		if env.Name == bus.InboxUserText {
+		if env.Name == bus.InboxAgentText {
 			inputs <- env
 		}
 	}, eventbus.SerialConfig{Overflow: eventbus.OverflowBlock})
@@ -576,7 +576,7 @@ func TestManagerExplicitStartReplacesSuspendedLoop(t *testing.T) {
 	}
 	inputs := make(chan bus.Envelope, 1)
 	id := b.SubscribeSerial([]string{bus.TopicInbox(sess.ID)}, func(env bus.Envelope) {
-		if env.Name == bus.InboxUserText {
+		if env.Name == bus.InboxAgentText {
 			inputs <- env
 		}
 	}, eventbus.SerialConfig{Overflow: eventbus.OverflowBlock})
@@ -644,7 +644,7 @@ func TestManagerAttachRepairsAndResumesUnknownLoopState(t *testing.T) {
 	}
 	inputs := make(chan bus.Envelope, 1)
 	id := b.SubscribeSerial([]string{bus.TopicInbox(sess.ID)}, func(env bus.Envelope) {
-		if env.Name == bus.InboxUserText {
+		if env.Name == bus.InboxAgentText {
 			inputs <- env
 		}
 	}, eventbus.SerialConfig{Overflow: eventbus.OverflowBlock})
@@ -669,7 +669,7 @@ func TestManagerAttachDoesNotResumeTerminalStates(t *testing.T) {
 			}
 			inputs := make(chan bus.Envelope, 1)
 			id := b.SubscribeSerial([]string{bus.TopicInbox(sess.ID)}, func(env bus.Envelope) {
-				if env.Name == bus.InboxUserText {
+				if env.Name == bus.InboxAgentText {
 					inputs <- env
 				}
 			}, eventbus.SerialConfig{Overflow: eventbus.OverflowBlock})
@@ -691,7 +691,7 @@ func TestManagerCancelledTurnEndsWithoutRecovery(t *testing.T) {
 	sess := session.New("root", nil)
 	inputs := make(chan bus.Envelope, 2)
 	id := b.SubscribeSerial([]string{bus.TopicInbox(sess.ID)}, func(env bus.Envelope) {
-		if env.Name == bus.InboxUserText {
+		if env.Name == bus.InboxAgentText {
 			inputs <- env
 		}
 	}, eventbus.SerialConfig{Overflow: eventbus.OverflowBlock})
@@ -736,7 +736,7 @@ func TestManagerAttachResumesSuspendedLoop(t *testing.T) {
 	}
 	inputs := make(chan bus.Envelope, 1)
 	id := b.SubscribeSerial([]string{bus.TopicInbox(sess.ID)}, func(env bus.Envelope) {
-		if env.Name == bus.InboxUserText {
+		if env.Name == bus.InboxAgentText {
 			inputs <- env
 		}
 	}, eventbus.SerialConfig{Overflow: eventbus.OverflowBlock})
@@ -756,7 +756,7 @@ func TestManagerResumeWaitsForPreviousControllerToExit(t *testing.T) {
 	sess := session.New("root", nil)
 	inputs := make(chan bus.Envelope, 3)
 	id := b.SubscribeSerial([]string{bus.TopicInbox(sess.ID)}, func(env bus.Envelope) {
-		if env.Name == bus.InboxUserText {
+		if env.Name == bus.InboxAgentText {
 			inputs <- env
 		}
 	}, eventbus.SerialConfig{Overflow: eventbus.OverflowBlock})
@@ -792,7 +792,7 @@ func TestManagerResumeDoesNotReviveTerminalLoop(t *testing.T) {
 			}
 			inputs := make(chan bus.Envelope, 1)
 			id := b.SubscribeSerial([]string{bus.TopicInbox(sess.ID)}, func(env bus.Envelope) {
-				if env.Name == bus.InboxUserText {
+				if env.Name == bus.InboxAgentText {
 					inputs <- env
 				}
 			}, eventbus.SerialConfig{Overflow: eventbus.OverflowBlock})
@@ -817,7 +817,7 @@ func TestManagerConcurrentResumeLaunchesOneController(t *testing.T) {
 	}
 	inputs := make(chan bus.Envelope, 8)
 	id := b.SubscribeSerial([]string{bus.TopicInbox(sess.ID)}, func(env bus.Envelope) {
-		if env.Name == bus.InboxUserText {
+		if env.Name == bus.InboxAgentText {
 			inputs <- env
 		}
 	}, eventbus.SerialConfig{Overflow: eventbus.OverflowBlock})
@@ -845,7 +845,7 @@ func TestManagerPendingResumeDoesNotReviveCancelledLoop(t *testing.T) {
 	sess := session.New("root", nil)
 	inputs := make(chan bus.Envelope, 3)
 	id := b.SubscribeSerial([]string{bus.TopicInbox(sess.ID)}, func(env bus.Envelope) {
-		if env.Name == bus.InboxUserText {
+		if env.Name == bus.InboxAgentText {
 			inputs <- env
 		}
 	}, eventbus.SerialConfig{Overflow: eventbus.OverflowBlock})
@@ -925,7 +925,7 @@ func TestManagerHoldsActorLeaseForControllerLifetime(t *testing.T) {
 	sess := session.New("root", nil)
 	inputs := make(chan bus.Envelope, 1)
 	id := b.SubscribeSerial([]string{bus.TopicInbox(sess.ID)}, func(env bus.Envelope) {
-		if env.Name == bus.InboxUserText {
+		if env.Name == bus.InboxAgentText {
 			inputs <- env
 		}
 	}, eventbus.SerialConfig{Overflow: eventbus.OverflowBlock})
@@ -973,7 +973,7 @@ func TestManagerLeaseFailureSuspendsLoop(t *testing.T) {
 
 func assertInputPrompt(t *testing.T, env bus.Envelope, want string) {
 	t.Helper()
-	var body bus.UserTextInput
+	var body bus.AgentTextInput
 	if err := events.DecodePayload(env.Event, &body); err != nil {
 		t.Fatal(err)
 	}

@@ -7,13 +7,14 @@ import (
 )
 
 type Request struct {
-	Session     *session.Session
-	UserMessage string
-	Image       *types.ImageContent
-	Images      []types.ImageContent
-	ImageURLs   []string
-	Metadata    map[string]string
-	Tools       []*tools.Tool
+	Session      *session.Session
+	UserMessage  string
+	AgentMessage string
+	Image        *types.ImageContent
+	Images       []types.ImageContent
+	ImageURLs    []string
+	Metadata     map[string]string
+	Tools        []*tools.Tool
 }
 
 func (r *Request) GetUserMessage() string {
@@ -22,6 +23,23 @@ func (r *Request) GetUserMessage() string {
 
 func (r *Request) SetUserMessage(msg string) {
 	r.UserMessage = msg
+}
+
+func (r *Request) GetAgentMessage() string {
+	return r.AgentMessage
+}
+
+func (r *Request) SetAgentMessage(msg string) {
+	r.AgentMessage = msg
+}
+
+// InputMessage returns the role and content of the turn-starting input.
+// AgentMessage takes precedence when both compatibility fields are populated.
+func (r *Request) InputMessage() (types.MessageRole, string) {
+	if r.AgentMessage != "" {
+		return types.RoleAgent, r.AgentMessage
+	}
+	return types.RoleUser, r.UserMessage
 }
 
 func (r *Request) GetTools() []*tools.Tool {

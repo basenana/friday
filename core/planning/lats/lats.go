@@ -40,12 +40,13 @@ func (a *Agent) Chat(ctx context.Context, req *agtapi.Request) *agtapi.Response 
 		sess = session.New(types.NewID(), a.llm)
 	}
 
+	_, inputMessage := req.InputMessage()
 	if a.root == nil {
-		a.task = req.UserMessage
+		a.task = inputMessage
 		a.root = newRoot(a.task, sess)
 	}
 
-	a.logger.Infow("handle request", "message", logger.FirstLine(req.UserMessage), "session", sess.ID)
+	a.logger.Infow("handle request", "message", logger.FirstLine(inputMessage), "session", sess.ID)
 	go func() {
 		defer resp.Close()
 		for step := 0; step < a.option.MaxSteps; step++ {

@@ -152,7 +152,18 @@ func (m *model) presentBuiltinTool(block *chatBlock, args map[string]any) (toolP
 			specialized: true,
 		}, true
 	case "fs_read":
-		return toolPresentation{title: "Read file", body: labeledValue("path", value("path")), specialized: true}, true
+		body := labeledValue("path", value("path"))
+		startLine, endLine := value("start_line"), value("end_line")
+		if startLine != "" || endLine != "" {
+			if startLine == "" {
+				startLine = "1"
+			}
+			if endLine == "" {
+				endLine = "EOF"
+			}
+			body = fields(body, labeledValue("lines", startLine+"–"+endLine))
+		}
+		return toolPresentation{title: "Read file", body: body, specialized: true}, true
 	case "fs_list":
 		path := value("path")
 		if path == "" {

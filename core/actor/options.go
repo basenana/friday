@@ -28,8 +28,8 @@ type Options struct {
 	// TurnIDGenerator, when set, is invoked at the start of each turn
 	// to produce the runID. When nil the actor uses its built-in
 	// globalIDGenerator. The actor also consults the inbound
-	// UserTextMessage.TurnID field first; this generator is only the
-	// fallback for messages without an explicit TurnID.
+	// UserTextMessage.TurnID or AgentTextMessage.TurnID field first; this
+	// generator is only the fallback for inputs without an explicit TurnID.
 	turnIDGenerator func() string
 
 	// TurnTimeout caps the duration of a single turn. Zero means no
@@ -112,8 +112,8 @@ func WithTurnLifecycle(l TurnLifecycle) Option {
 	}
 }
 
-// WithTurnIDGenerator overrides runID generation. The generator is
-// consulted when an inbound UserTextMessage carries no TurnID.
+// WithTurnIDGenerator overrides runID generation. The generator is consulted
+// when an inbound user or agent text message carries no TurnID.
 func WithTurnIDGenerator(fn func() string) Option {
 	return func(o *Options) { o.turnIDGenerator = fn }
 }
