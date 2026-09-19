@@ -93,6 +93,70 @@ func TestWorkspaceLoadProvidesSystemPrompt(t *testing.T) {
 	}
 }
 
+func TestProjectPromptLayersPreserveUserMessage(t *testing.T) {
+	base := t.TempDir()
+	projectRoot := filepath.Join(base, "project")
+	if err := os.MkdirAll(projectRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(projectRoot, "AGENTS.md"), []byte("distinct project rules"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.DefaultConfig()
+	cfg.DataDir = filepath.Join(base, "data")
+	cfg.Workspace = filepath.Join(base, "workspace")
+	cfg.Memory.Enabled = false
+	cfg.Sandbox.Sandbox.Enabled = false
+	ws := workspace.NewWorkspace(cfg.WorkspacePath(), cfg.MemoryPath())
+	if _, err := ws.InitWithParams(nil); err != nil {
+		t.Fatal(err)
+	}
+	store := file.NewFileSessionStore(cfg.SessionsPath())
+	mgr := sessions.NewManager(store, filepath.Join(cfg.DataDirPath(), "current"), "")
+	client := &recordingProviderClient{}
+	pool := fallback.NewModelPool([]fallback.ModelEntry{{Client: client, Name: "recording"}})
+	agentCtx, err := NewAgent(mgr, cfg, WithModelPool(pool), WithWorkdir(projectRoot))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer agentCtx.Close()
+
+	const userMessage = "USER-BYTES-unchanged\nsecond line"
+	if _, err := api.ReadAllContent(context.Background(), agentCtx.Agent.Chat(context.Background(), &api.Request{
+		Session: agentCtx.Session, UserMessage: userMessage,
+	})); err != nil {
+		t.Fatal(err)
+	}
+	requests := client.snapshot()
+	if len(requests) != 1 {
+		t.Fatalf("provider calls = %d, want 1", len(requests))
+	}
+	if got := strings.Count(requests[0].SystemPrompt(), "Project coding baseline:"); got != 1 {
+		t.Fatalf("coding contract count = %d", got)
+	}
+	history := requests[0].History()
+	if len(history) < 2 || history[0].Role != types.RoleAgent || history[len(history)-1].Role != types.RoleUser || history[len(history)-1].Content != userMessage {
+		t.Fatalf("provider history = %#v", history)
+	}
+	canonicalRoot, err := filepath.EvalSymlinks(projectRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspaceIndex := strings.Index(history[0].Content, `"`+canonicalRoot+`"`)
+	instructionsIndex := strings.Index(history[0].Content, "distinct project rules")
+	if workspaceIndex < 0 || instructionsIndex <= workspaceIndex {
+		t.Fatalf("project context ordering = %q", history[0].Content)
+	}
+	for _, message := range agentCtx.Session.GetHistory() {
+		if message.Role == types.RoleUser && message.Content != userMessage {
+			t.Fatalf("unexpected user history: %#v", agentCtx.Session.GetHistory())
+		}
+		if message.Role == types.RoleAgent && (strings.Contains(message.Content, "# workspace") || strings.Contains(message.Content, canonicalRoot)) {
+			t.Fatalf("bootstrap persisted in durable history: %#v", agentCtx.Session.GetHistory())
+		}
+	}
+}
+
 func TestDiskAgentReusesPrimaryClientPromptAndRunTaskRegistration(t *testing.T) {
 	base := t.TempDir()
 	cfg := config.DefaultConfig()
@@ -144,6 +208,9 @@ func TestDiskAgentReusesPrimaryClientPromptAndRunTaskRegistration(t *testing.T) 
 	)
 	if !strings.HasPrefix(strings.TrimSpace(systemPrompt), wantStablePrefix) {
 		t.Fatalf("system prompt does not start with workspace + agent prompt:\n%s", systemPrompt)
+	}
+	if got := strings.Count(systemPrompt, "Project coding baseline:"); got != 1 {
+		t.Fatalf("disk expert coding contract count = %d", got)
 	}
 	foundRunTask := false
 	for _, tool := range requests[0].ToolDefines() {
@@ -285,14 +352,17 @@ func TestNewAgentMemoryInjectedPerRequestNotPersisted(t *testing.T) {
 		t.Fatalf("RunHooks failed: %v", err)
 	}
 	injected := req.History()
-	if len(injected) != 2 {
-		t.Fatalf("expected 2 memory messages in the model request, got %#v", injected)
+	if len(injected) != 3 {
+		t.Fatalf("expected project context plus 2 memory messages in the model request, got %#v", injected)
 	}
-	if !strings.Contains(injected[0].Content, "[Long-Term Memory]") {
-		t.Fatalf("expected long-term memory message, got %q", injected[0].Content)
+	if injected[0].Role != types.RoleAgent || !strings.Contains(injected[0].Content, "# workspace") {
+		t.Fatalf("expected leading project context, got %#v", injected[0])
 	}
-	if !strings.Contains(injected[1].Content, "[Recent Memory Context]") {
-		t.Fatalf("expected recent memory message, got %q", injected[1].Content)
+	if !strings.Contains(injected[1].Content, "[Long-Term Memory]") {
+		t.Fatalf("expected long-term memory message, got %q", injected[1].Content)
+	}
+	if !strings.Contains(injected[2].Content, "[Recent Memory Context]") {
+		t.Fatalf("expected recent memory message, got %q", injected[2].Content)
 	}
 	if history := agentCtx.Session.GetHistory(); len(history) != 0 {
 		t.Fatalf("session history must stay untouched, got %#v", history)

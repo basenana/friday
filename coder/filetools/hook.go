@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -125,6 +126,7 @@ func (h *Hook) BeforeAgent(ctx context.Context, sess *session.Session, _ session
 // BeforeModel refreshes project-root instructions on every request so edits
 // made by people or external processes are visible without a file-tool call.
 func (h *Hook) BeforeModel(ctx context.Context, _ *session.Session, req providers.Request) error {
+	req.AppendSystemPrompt(projectCodingSystemPrompt)
 	promptcontext.SetBlock(req, promptcontext.ProjectInstructions, h.projectInstructions(ctx))
 	return nil
 }
@@ -191,16 +193,19 @@ func (h *Hook) discover(ctx context.Context, req *tools.Request, toolName, path 
 	if strings.TrimSpace(path) == "" {
 		return "", nil
 	}
-	resolved, err := h.fs.Resolve(ctx, path, sandbox.FileAccessRead)
-	if err != nil {
+	if _, err := h.fs.Resolve(ctx, path, sandbox.FileAccessRead); err != nil {
 		return "", nil
 	}
-	dir := resolved
+	logicalPath, ok := h.logicalProjectPath(path)
+	if !ok {
+		return "", nil
+	}
+	dir := logicalPath
 	if toolName != sandbox.FsListToolName && toolName != sandbox.FsSearchToolName {
-		dir = filepath.Dir(resolved)
+		dir = filepath.Dir(logicalPath)
 	}
 	dir = h.nearestExistingDirectory(ctx, dir)
-	if dir == "" || !withinRoot(h.root, dir) {
+	if dir == "" {
 		return "", nil
 	}
 
@@ -257,11 +262,22 @@ func (h *Hook) discover(ctx context.Context, req *tools.Request, toolName, path 
 	return truncateWithNotice(strings.Join(sections, "\n\n"), maxFYIRunes), nil
 }
 
+func (h *Hook) logicalProjectPath(path string) (string, bool) {
+	logical := filepath.Clean(path)
+	if !filepath.IsAbs(logical) {
+		logical = filepath.Join(h.root, logical)
+	}
+	return logical, withinRoot(h.root, logical)
+}
+
 func (h *Hook) nearestExistingDirectory(ctx context.Context, dir string) string {
 	for withinRoot(h.root, dir) {
-		info, err := h.fs.Stat(ctx, dir)
-		if err == nil && info.IsDir() {
-			return dir
+		resolved, resolveErr := h.fs.Resolve(ctx, dir, sandbox.FileAccessRead)
+		if resolveErr == nil {
+			info, err := h.fs.Stat(ctx, resolved)
+			if err == nil && info.IsDir() {
+				return dir
+			}
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
@@ -288,13 +304,17 @@ type instructionCandidate struct {
 
 func (h *Hook) scanInstruction(ctx context.Context, dir string) (instructionCandidate, error) {
 	candidate := instructionCandidate{relativeDir: h.relativeDirectory(dir)}
+	resolvedDir, err := h.fs.Resolve(ctx, dir, sandbox.FileAccessRead)
+	if err != nil {
+		return candidate, nil
+	}
 	for _, name := range instructionNames {
 		path := filepath.Join(dir, name)
 		resolved, err := h.fs.Resolve(ctx, path, sandbox.FileAccessRead)
 		if err != nil {
 			continue
 		}
-		if !withinRoot(h.root, resolved) {
+		if filepath.Clean(filepath.Dir(resolved)) != filepath.Clean(resolvedDir) {
 			continue
 		}
 		info, err := h.fs.Stat(ctx, resolved)
@@ -319,9 +339,9 @@ func (h *Hook) readFYISection(ctx context.Context, candidate instructionCandidat
 	if err != nil {
 		return "", err
 	}
-	rel, err := filepath.Rel(h.root, candidate.path)
-	if err != nil {
-		return "", err
+	rel := candidate.stamp.SelectedFile
+	if candidate.relativeDir != "." {
+		rel = filepath.Join(candidate.relativeDir, rel)
 	}
 	return "## " + filepath.ToSlash(rel) + "\n\n" + truncateInstruction(string(content)), nil
 }
@@ -418,7 +438,11 @@ func cloneInstructionRecord(record instructionRecord) instructionRecord {
 }
 
 func (h *Hook) projectInstructions(ctx context.Context) string {
-	var sections []string
+	sections := []string{`# workspace
+The quoted path below is the current project directory and default scope for all work:
+` + strconv.Quote(h.root) + `
+
+Perform exploration, edits, builds, and tests within this directory by default. Use project-relative paths as presented by filesystem tools; internal symbolic-link resolution does not change the workspace boundary. Do not inspect or modify files outside it unless the user's task or a required runtime or dependency operation concretely requires that access. When outside access is necessary, keep that access minimal and do not alter unrelated files.`}
 	for _, dir := range []string{h.root, filepath.Join(h.root, ".friday")} {
 		candidate, err := h.scanInstruction(ctx, dir)
 		if err != nil {

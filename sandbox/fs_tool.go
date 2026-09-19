@@ -674,7 +674,8 @@ func fsListFileSystemHandler(fs FileSystem) tools.ToolHandlerFunc {
 			}
 			return tools.NewToolResultActionableError(fmt.Sprintf("failed to list directory %q: %s", path, err), "verify that the path exists and is a readable directory"), nil
 		}
-		result := fsListResult{Path: displayToolPath(fs, absPath), Entries: make([]fsListEntry, 0, len(entries))}
+		display := newRootedDisplayPathFn(fs, path, absPath)
+		result := fsListResult{Path: display(absPath), Entries: make([]fsListEntry, 0, len(entries))}
 		for _, entry := range entries {
 			entryPath := filepath.Join(absPath, entry.Name())
 			info, infoErr := entry.Info()
@@ -685,7 +686,7 @@ func fsListFileSystemHandler(fs FileSystem) tools.ToolHandlerFunc {
 			}
 			if infoErr != nil {
 				item := fsListEntry{
-					Name: entry.Name(), Path: displayToolPath(fs, entryPath), Type: "unknown", Error: infoErr.Error(),
+					Name: entry.Name(), Path: display(entryPath), Type: "unknown", Error: infoErr.Error(),
 				}
 				if listResultWouldOverflow(result, item, req.MaxOutputChars) {
 					result.Truncated = true
@@ -695,7 +696,7 @@ func fsListFileSystemHandler(fs FileSystem) tools.ToolHandlerFunc {
 				continue
 			}
 			item := fsListEntry{
-				Name: entry.Name(), Path: displayToolPath(fs, entryPath), Type: fileTypeName(info.Mode()),
+				Name: entry.Name(), Path: display(entryPath), Type: fileTypeName(info.Mode()),
 				Mode: info.Mode().String(), SizeBytes: info.Size(), ModifiedAt: info.ModTime().UTC().Format(time.RFC3339Nano),
 			}
 			item.UID, item.GID = fileOwnership(info)
@@ -789,6 +790,38 @@ func fileTypeName(mode os.FileMode) string {
 	}
 }
 
+func requestedDisplayPath(fs FileSystem, requested string) string {
+	displayPath := filepath.ToSlash(filepath.Clean(requested))
+	if local, ok := fs.(*localFileSystem); ok {
+		if logical, err := resolveLocalFsPath(local.workdir, requested); err == nil {
+			if workdir, rootErr := resolveLocalFsPath("", local.workdir); rootErr == nil {
+				if rel, relErr := filepath.Rel(workdir, logical); relErr == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+					return filepath.ToSlash(rel)
+				}
+				return filepath.ToSlash(logical)
+			}
+		}
+	}
+	return displayPath
+}
+
+func newRootedDisplayPathFn(fs FileSystem, requested, resolvedRoot string) func(string) string {
+	displayRoot := requestedDisplayPath(fs, requested)
+	return func(path string) string {
+		rel, err := filepath.Rel(resolvedRoot, path)
+		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+			return displayToolPath(fs, path)
+		}
+		if rel == "." {
+			return displayRoot
+		}
+		if displayRoot == "." {
+			return filepath.ToSlash(rel)
+		}
+		return filepath.ToSlash(filepath.Join(displayRoot, rel))
+	}
+}
+
 func displayToolPath(fs FileSystem, path string) string {
 	if local, ok := fs.(*localFileSystem); ok {
 		root, err := local.resolvedWorkdirRoot()
@@ -802,26 +835,6 @@ func displayToolPath(fs FileSystem, path string) string {
 		}
 	}
 	return filepath.ToSlash(path)
-}
-
-// newDisplayPathFn returns a per-search path renderer that closes over the
-// filesystem's resolved workdir, so workers avoid repeating EvalSymlinks for
-// every match. Non-local backends keep the absolute-path behavior.
-func newDisplayPathFn(fs FileSystem) func(string) string {
-	if local, ok := fs.(*localFileSystem); ok {
-		if root, err := local.resolvedWorkdirRoot(); err == nil {
-			return func(path string) string {
-				if rel, relErr := filepath.Rel(root, path); relErr == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
-					if rel == "." {
-						return "."
-					}
-					return filepath.ToSlash(rel)
-				}
-				return filepath.ToSlash(path)
-			}
-		}
-	}
-	return func(path string) string { return filepath.ToSlash(path) }
 }
 
 func jsonTextResult(value interface{}) (*tools.Result, error) {
@@ -896,8 +909,8 @@ func fsSearchFileSystemHandler(fs FileSystem) tools.ToolHandlerFunc {
 			return tools.NewToolResultActionableError(fmt.Sprintf("cannot search %q because it is not a directory", directory), "provide a directory path"), nil
 		}
 
-		displayRoot := displayToolPath(fs, root)
-		result := fsSearchResult{Directory: displayRoot, Regex: pattern, Matches: []fsSearchMatch{}}
+		display := newRootedDisplayPathFn(fs, directory, root)
+		result := fsSearchResult{Directory: display(root), Regex: pattern, Matches: []fsSearchMatch{}}
 		result.encodedSize = searchResultSize(&result)
 		outputLimit := maxSearchOutputBytes
 		if req.MaxOutputChars > 0 && int64(outputLimit) > req.MaxOutputChars-512 {
@@ -907,7 +920,7 @@ func fsSearchFileSystemHandler(fs FileSystem) tools.ToolHandlerFunc {
 			}
 		}
 		start := time.Now()
-		workers, jobsScanned, err := runParallelSearch(ctx, fs, root, re, &result, outputLimit)
+		workers, jobsScanned, err := runParallelSearch(ctx, fs, root, display, re, &result, outputLimit)
 		log.Infow("search complete",
 			"workers", workers,
 			"jobs", jobsScanned,
@@ -951,7 +964,7 @@ var searchWorkerOverride int
 // parallel. Matches are merged and totally ordered by (path, line, column)
 // before limits are applied, so the emitted JSON stays deterministic no
 // matter how the scan interleaved.
-func runParallelSearch(ctx context.Context, fs FileSystem, root string, re *regexp.Regexp, result *fsSearchResult, outputLimit int) (workers, jobsEmitted int, err error) {
+func runParallelSearch(ctx context.Context, fs FileSystem, root string, display func(string) string, re *regexp.Regexp, result *fsSearchResult, outputLimit int) (workers, jobsEmitted int, err error) {
 	workerCount := searchWorkerOverride
 	if workerCount <= 0 {
 		workerCount = runtime.NumCPU()
@@ -970,7 +983,6 @@ func runParallelSearch(ctx context.Context, fs FileSystem, root string, re *rege
 		return workerCount, 0, err
 	}
 
-	display := newDisplayPathFn(fs)
 	jobs := make(chan fileJob, 256)
 	var stopped atomic.Bool
 	var walkerErrors atomic.Int64
@@ -1201,13 +1213,14 @@ func searchResultSize(result *fsSearchResult) int {
 
 func missingPathCause(ctx context.Context, fs FileSystem, requested, resolved string) string {
 	dir := filepath.Dir(resolved)
+	displayDir := filepath.Dir(requestedDisplayPath(fs, requested))
 	for {
 		if err := ctx.Err(); err != nil {
 			return fmt.Sprintf("path %q does not exist", requested)
 		}
 		info, err := fs.Stat(ctx, dir)
 		if err == nil && info.IsDir() {
-			cause := fmt.Sprintf("path %q does not exist; nearest existing directory is %q", requested, displayToolPath(fs, dir))
+			cause := fmt.Sprintf("path %q does not exist; nearest existing directory is %q", requested, filepath.ToSlash(displayDir))
 			entries, readErr := fs.ReadDir(ctx, dir)
 			if readErr == nil {
 				stem := strings.TrimSuffix(filepath.Base(resolved), filepath.Ext(resolved))
@@ -1219,7 +1232,7 @@ func missingPathCause(ctx context.Context, fs FileSystem, requested, resolved st
 					}
 					entryStem := strings.TrimSuffix(entry.Name(), filepath.Ext(entry.Name()))
 					if candidateStem(entryStem) == stemKey || strings.Contains(strings.ToLower(entry.Name()), strings.ToLower(stem)) {
-						candidates = append(candidates, displayToolPath(fs, filepath.Join(dir, entry.Name())))
+						candidates = append(candidates, filepath.ToSlash(filepath.Join(displayDir, entry.Name())))
 						if len(candidates) == 10 {
 							break
 						}
@@ -1236,6 +1249,7 @@ func missingPathCause(ctx context.Context, fs FileSystem, requested, resolved st
 			break
 		}
 		dir = parent
+		displayDir = filepath.Dir(displayDir)
 	}
 	return fmt.Sprintf("path %q does not exist", requested)
 }

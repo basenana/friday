@@ -29,7 +29,7 @@ The `coder` tree assembles disk-defined expert agents, slash commands, guarded c
 - `commands/ui.go` implements UI-directed command actions.
 - `configtools/store.go` validates and persists controlled agent/model/MCP configuration.
 - `configtools/hook.go` exposes configuration operations as tools.
-- `filetools/hook.go` injects project instructions and protects instruction-file mutations.
+- `filetools/hook.go` injects the dynamic workspace/project bootstrap, appends the project-scoped coding baseline, and protects instruction-file mutations; `filetools/prompts.go` owns that baseline.
 - `loop/state.go` defines loop state, phase, and transition validation.
 - `loop/manager.go` owns autonomous loop execution and cancellation.
 - `loop/hook.go` integrates loop state with agent turns.
@@ -73,7 +73,9 @@ func (m *Manager) OpenRoot(ctx context.Context, id string, client providers.Clie
 
 ## Project instruction handling
 
-- `filetools` walks from project root toward the target directory and injects the applicable instruction files.
+- `filetools` injects the canonical project root and default workspace boundary before root/project instructions on every model request, even when no instruction file exists.
+- The same hook appends the project-scoped coding baseline to the system prompt; request-local bootstrap context is not persisted into session history.
+- `filetools` walks logical project paths from the project root toward the target directory and injects the applicable instruction files. Directory symlinks remain workspace-relative for agent-visible paths and instruction discovery; resolved physical paths are used only for filesystem safety and access.
 - Within one directory, `AGENTS.md` takes precedence over `CLAUDE.md`. The latter remains supported because coder operates on external projects.
 - Instruction context is informational for reads but mutations of an instruction file require the existing read/acknowledgement guard.
 - Resolve and validate paths through the sandbox/project root. Do not trust lexical prefix checks.

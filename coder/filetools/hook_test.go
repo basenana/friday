@@ -177,6 +177,74 @@ func TestInstructionAndFYILimits(t *testing.T) {
 	}
 }
 
+func TestBeforeModelIncludesWorkspaceWithoutProjectInstructions(t *testing.T) {
+	root := t.TempDir()
+	hook := newTestHook(t, root)
+	req := providers.NewRequest("", types.Message{Role: types.RoleUser, Content: "hello"})
+
+	if err := hook.BeforeModel(context.Background(), session.New("session-1", nil), req); err != nil {
+		t.Fatal(err)
+	}
+	history := req.History()
+	if len(history) != 2 || history[0].Role != types.RoleAgent || history[1].Content != "hello" {
+		t.Fatalf("history = %#v", history)
+	}
+	content := history[0].Content
+	if !strings.Contains(content, `"`+hook.root+`"`) ||
+		!strings.Contains(content, "current project directory and default scope") ||
+		!strings.Contains(content, "Do not inspect or modify files outside") ||
+		!strings.Contains(content, "Use project-relative paths as presented by filesystem tools") ||
+		!strings.Contains(content, "keep that access minimal") {
+		t.Fatalf("workspace bootstrap = %q", content)
+	}
+	if strings.Contains(content, "Contents of ") || strings.Contains(content, "AGENTS.md") {
+		t.Fatalf("empty project rendered fake instructions: %q", content)
+	}
+}
+
+func TestBeforeModelAppendsCodingContractOnce(t *testing.T) {
+	root := t.TempDir()
+	hook := newTestHook(t, root)
+
+	for i := 0; i < 2; i++ {
+		req := providers.NewRequest("sentinel base prompt")
+		if err := hook.BeforeModel(context.Background(), session.New("session-1", nil), req); err != nil {
+			t.Fatal(err)
+		}
+		systemPrompt := req.SystemPrompt()
+		baseIndex := strings.Index(systemPrompt, "sentinel base prompt")
+		contractIndex := strings.Index(systemPrompt, "Preserve pre-existing and unrelated user changes")
+		if baseIndex < 0 || contractIndex <= baseIndex {
+			t.Fatalf("system prompt ordering = %q", systemPrompt)
+		}
+		for _, invariant := range []string{
+			"existing architecture, naming, style, utilities, and dependencies",
+			"destructive Git commands",
+			"Never claim completion without actual evidence",
+		} {
+			if !strings.Contains(systemPrompt, invariant) {
+				t.Fatalf("coding contract missing %q: %q", invariant, systemPrompt)
+			}
+		}
+		if strings.Count(systemPrompt, "Preserve pre-existing and unrelated user changes") != 1 {
+			t.Fatalf("coding contract count != 1: %q", systemPrompt)
+		}
+		if strings.Contains(req.History()[0].Content, "Project coding baseline:") {
+			t.Fatalf("coding contract leaked into bootstrap history: %#v", req.History())
+		}
+	}
+}
+
+func TestReservedTokensIncludesWorkspaceWithoutProjectInstructions(t *testing.T) {
+	root := t.TempDir()
+	hook := newTestHook(t, root)
+	content := hook.projectInstructions(context.Background())
+	want := session.EstimateHistoryTokens([]types.Message{{Role: types.RoleAgent, Content: content}})
+	if got := hook.ReservedTokens(nil); got <= 0 || got != want {
+		t.Fatalf("ReservedTokens() = %d, want %d", got, want)
+	}
+}
+
 func TestBeforeModelMaintainsPersistentProjectInstructions(t *testing.T) {
 	root := t.TempDir()
 	mustWrite(t, filepath.Join(root, "AGENTS.md"), "root agents")
@@ -197,9 +265,10 @@ func TestBeforeModelMaintainsPersistentProjectInstructions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	workspaceIndex := strings.Index(content, "# workspace")
 	rootIndex := strings.Index(content, "Contents of "+filepath.Join(canonicalRoot, "AGENTS.md"))
 	fridayIndex := strings.Index(content, "Contents of "+filepath.Join(canonicalRoot, ".friday", "CLAUDE.md"))
-	if rootIndex < 0 || fridayIndex <= rootIndex || !strings.Contains(content, "root agents") || !strings.Contains(content, "friday claude") {
+	if workspaceIndex < 0 || rootIndex <= workspaceIndex || fridayIndex <= rootIndex || !strings.Contains(content, "root agents") || !strings.Contains(content, "friday claude") {
 		t.Fatalf("persistent instructions = %q", content)
 	}
 	if strings.Contains(content, "root claude") {
@@ -223,7 +292,7 @@ func TestBeforeModelRefreshesHumanEdits(t *testing.T) {
 	if err := hook.BeforeModel(context.Background(), sess, second); err != nil {
 		t.Fatal(err)
 	}
-	if got := second.History()[0].Content; !strings.Contains(got, "new rules") || strings.Contains(got, "old rules") {
+	if got := second.History()[0].Content; !strings.Contains(got, "new rules") || strings.Contains(got, "old rules") || strings.Count(got, "# workspace") != 1 {
 		t.Fatalf("refreshed instructions = %q", got)
 	}
 }
@@ -283,6 +352,35 @@ func TestFridayDirectoryInstructionsAreExcludedFromFYI(t *testing.T) {
 	}
 }
 
+func TestHookDiscoversInstructionsThroughWorkspaceSymlink(t *testing.T) {
+	root := t.TempDir()
+	target := t.TempDir()
+	mustWrite(t, filepath.Join(target, "AGENTS.md"), "linked root rules")
+	mustWrite(t, filepath.Join(target, "pkg", "CLAUDE.md"), "linked package rules")
+	mustWrite(t, filepath.Join(target, "pkg", "main.go"), "package pkg")
+	if err := os.Symlink(target, filepath.Join(root, "linked")); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+
+	cfg := sandbox.DefaultConfig()
+	cfg.Sandbox.Filesystem.ReadOnly = append(cfg.Sandbox.Filesystem.ReadOnly, target)
+	hook, err := New(sandbox.NewExecutor(cfg), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	read := findTool(t, hook.Tools(), sandbox.FsReadToolName)
+	result := callTool(t, read, session.New("session-1", nil), map[string]any{"path": "linked/pkg/main.go"})
+
+	packageIndex := strings.Index(result.FYI, "## linked/pkg/CLAUDE.md")
+	rootIndex := strings.Index(result.FYI, "## linked/AGENTS.md")
+	if packageIndex < 0 || rootIndex <= packageIndex || !strings.Contains(result.FYI, "linked package rules") || !strings.Contains(result.FYI, "linked root rules") {
+		t.Fatalf("linked instructions = %q", result.FYI)
+	}
+	if strings.Contains(result.FYI, filepath.ToSlash(target)) {
+		t.Fatalf("physical symlink target leaked: %q", result.FYI)
+	}
+}
+
 func TestInstructionSymlinkCannotEscapeProjectRoot(t *testing.T) {
 	root := t.TempDir()
 	outside := t.TempDir()
@@ -303,8 +401,9 @@ func TestInstructionSymlinkCannotEscapeProjectRoot(t *testing.T) {
 	if err := hook.BeforeModel(context.Background(), session.New("session-1", nil), req); err != nil {
 		t.Fatal(err)
 	}
-	if len(req.History()) != 0 {
-		t.Fatalf("outside instruction was loaded: %#v", req.History())
+	history := req.History()
+	if len(history) != 1 || !strings.Contains(history[0].Content, "# workspace") || strings.Contains(history[0].Content, "outside rules") {
+		t.Fatalf("outside instruction was loaded: %#v", history)
 	}
 }
 

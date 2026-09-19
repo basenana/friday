@@ -56,6 +56,102 @@ func TestFsListReturnsStructuredMetadata(t *testing.T) {
 	}
 }
 
+func TestFsListPreservesLogicalPathForAllowedSymlinkRoot(t *testing.T) {
+	root := t.TempDir()
+	target := t.TempDir()
+	if err := os.WriteFile(filepath.Join(target, "file.txt"), []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(root, "linked")); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	cfg := DefaultConfig()
+	cfg.Sandbox.Filesystem.ReadOnly = append(cfg.Sandbox.Filesystem.ReadOnly, target)
+	result, err := fsListHandler(NewExecutor(cfg), root)(context.Background(), &tools.Request{Arguments: map[string]any{"path": "linked"}})
+	if err != nil || result.IsError {
+		t.Fatalf("fs_list result=%+v err=%v", result, err)
+	}
+	var decoded fsListResult
+	if err := json.Unmarshal([]byte(textResult(t, result)), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded.Path != "linked" || len(decoded.Entries) != 1 || decoded.Entries[0].Path != "linked/file.txt" {
+		t.Fatalf("logical list paths not preserved: %#v", decoded)
+	}
+	if strings.Contains(textResult(t, result), filepath.ToSlash(target)) {
+		t.Fatalf("physical symlink target leaked: %s", textResult(t, result))
+	}
+}
+
+func TestFsSearchPreservesLogicalPathForAllowedSymlinkRoot(t *testing.T) {
+	root := t.TempDir()
+	target := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(target, "nested"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(target, "nested", "result.txt"), []byte("needle\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(root, "linked")); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	cfg := DefaultConfig()
+	cfg.Sandbox.Filesystem.ReadOnly = append(cfg.Sandbox.Filesystem.ReadOnly, target)
+	result, err := fsSearchHandler(NewExecutor(cfg), root)(context.Background(), &tools.Request{Arguments: map[string]any{
+		"directory": "linked", "regex": "needle",
+	}})
+	if err != nil || result.IsError {
+		t.Fatalf("fs_search result=%+v err=%v", result, err)
+	}
+	var decoded fsSearchResult
+	if err := json.Unmarshal([]byte(textResult(t, result)), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded.Directory != "linked" || len(decoded.Matches) != 1 || decoded.Matches[0].Path != "linked/nested/result.txt" {
+		t.Fatalf("logical search paths not preserved: %#v", decoded)
+	}
+	if strings.Contains(textResult(t, result), filepath.ToSlash(target)) {
+		t.Fatalf("physical symlink target leaked: %s", textResult(t, result))
+	}
+}
+
+func TestFsToolsPreserveLogicalPathsInMissingSymlinkErrors(t *testing.T) {
+	root := t.TempDir()
+	target := t.TempDir()
+	if err := os.WriteFile(filepath.Join(target, "missing.go"), []byte("package linked"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(root, "linked")); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	cfg := DefaultConfig()
+	cfg.Sandbox.Filesystem.ReadOnly = append(cfg.Sandbox.Filesystem.ReadOnly, target)
+	exec := NewExecutor(cfg)
+	requests := []struct {
+		name    string
+		handler tools.ToolHandlerFunc
+		args    map[string]any
+	}{
+		{name: "list", handler: fsListHandler(exec, root), args: map[string]any{"path": "linked/missing.txt"}},
+		{name: "search", handler: fsSearchHandler(exec, root), args: map[string]any{"directory": "linked/missing.txt", "regex": "needle"}},
+	}
+	for _, test := range requests {
+		t.Run(test.name, func(t *testing.T) {
+			result, err := test.handler(context.Background(), &tools.Request{Arguments: test.args})
+			if err != nil || result == nil || !result.IsError {
+				t.Fatalf("result=%+v err=%v", result, err)
+			}
+			text := textResult(t, result)
+			if !strings.Contains(text, `nearest existing directory is "linked"`) || !strings.Contains(text, "linked/missing.go") {
+				t.Fatalf("logical recovery paths missing: %q", text)
+			}
+			if strings.Contains(text, filepath.ToSlash(target)) {
+				t.Fatalf("physical symlink target leaked: %q", text)
+			}
+		})
+	}
+}
+
 func TestFsSearchRecursesAndSkipsGitBinaryAndSymlinks(t *testing.T) {
 	root := t.TempDir()
 	files := map[string]string{
@@ -259,6 +355,28 @@ func TestFsSearchUsesUnicodeColumnsAndStablePathOrder(t *testing.T) {
 	}
 }
 
+func TestFsListOutsideWorkdirReturnsAbsolutePaths(t *testing.T) {
+	workdir := t.TempDir()
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "result.txt"), []byte("data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := DefaultConfig()
+	cfg.DisableIsolation()
+	result, err := fsListHandler(NewExecutor(cfg), workdir)(context.Background(), &tools.Request{Arguments: map[string]any{"path": outside}})
+	if err != nil || result.IsError {
+		t.Fatalf("fs_list result=%+v err=%v", result, err)
+	}
+	var decoded fsListResult
+	if err := json.Unmarshal([]byte(textResult(t, result)), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	wantRoot := filepath.ToSlash(filepath.Clean(outside))
+	if decoded.Path != wantRoot || len(decoded.Entries) != 1 || decoded.Entries[0].Path != wantRoot+"/result.txt" {
+		t.Fatalf("list = %#v, want root %q", decoded, wantRoot)
+	}
+}
+
 func TestFsSearchOutsideWorkdirReturnsAbsolutePaths(t *testing.T) {
 	workdir := t.TempDir()
 	outside := t.TempDir()
@@ -281,14 +399,7 @@ func TestFsSearchOutsideWorkdirReturnsAbsolutePaths(t *testing.T) {
 	if err := json.Unmarshal([]byte(textResult(t, result)), &decoded); err != nil {
 		t.Fatal(err)
 	}
-	// The search backend resolves symlinks, and TMPDIR itself is a symlink on
-	// macOS (/var -> /private/var, /tmp -> /private/tmp), so the expected
-	// absolute path must be resolved the same way before comparing.
-	resolved, err := filepath.EvalSymlinks(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := filepath.ToSlash(resolved)
+	want := filepath.ToSlash(filepath.Clean(path))
 	if len(decoded.Matches) != 1 || decoded.Matches[0].Path != want {
 		t.Fatalf("matches = %#v, want path %q", decoded.Matches, want)
 	}
