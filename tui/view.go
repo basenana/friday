@@ -380,14 +380,22 @@ func (m *model) layout() {
 	if attachments := m.renderAttachments(); attachments != "" {
 		extra += lipgloss.Height(attachments)
 	}
+	// The activity line lives below the viewport, outside its content, so
+	// it must be reserved here or the frame grows past the terminal and the
+	// status line gets pushed off-screen.
+	if activity := m.renderActivityLine(); activity != "" {
+		extra += lipgloss.Height(activity)
+	}
 	if len(m.queued) > 0 {
-		extra += min(len(m.queued), 3) + 3
+		// Measure the rendered box: wrapped rows would grow past any
+		// formula and push the input and status line off-screen.
+		extra += lipgloss.Height(m.renderQueue())
 	}
 	if todo := m.renderTodoPanel(width); todo != "" {
 		extra += lipgloss.Height(todo)
 	}
 	if m.menu.mode != menuNone {
-		extra += min(len(m.menu.items), 8) + 2
+		extra += lipgloss.Height(m.renderMenu())
 	}
 	if m.form != nil {
 		extra += m.form.Height(width)
@@ -418,11 +426,17 @@ func (m *model) layout() {
 }
 
 func (m *model) renderQueue() string {
+	// menuStyle.Width(m.width-4) minus its border and padding leaves
+	// m.width-8 columns of text; queue rows must be truncated to one line
+	// or the box wraps and grows past what layout() reserved.
+	textWidth := max(m.width-8, 8)
 	start := max(len(m.queued)-3, 0)
-	lines := []string{mutedStyle.Render(fmt.Sprintf("up next (%d) · sent after the current task", len(m.queued)))}
+	header := truncateWidth(fmt.Sprintf("up next (%d) · sent after the current task", len(m.queued)), textWidth)
+	lines := []string{mutedStyle.Render(header)}
 	for i := start; i < len(m.queued); i++ {
 		item := m.queued[i]
-		lines = append(lines, fmt.Sprintf("  %d. %s", i+1, terminalSafe(firstLine(userInputDisplay(item.text, item.images)))))
+		row := fmt.Sprintf("  %d. %s", i+1, terminalSafe(firstLine(userInputDisplay(item.text, item.images))))
+		lines = append(lines, truncateWidth(row, textWidth))
 	}
 	return menuStyle.Width(max(m.width-4, 10)).Render(strings.Join(lines, "\n"))
 }
@@ -447,7 +461,10 @@ func (m *model) renderMenu() string {
 		if item.description != "" {
 			line += "  " + item.description
 		}
-		line = truncateWidth(line, max(m.width-6, 10))
+		// menuStyle.Width(m.width-4) minus its border and padding leaves
+		// m.width-8 columns of text; truncating wider than that makes the
+		// box wrap every long item onto a second line.
+		line = truncateWidth(line, max(m.width-8, 8))
 		line = interactiveStyle(i == m.menu.selected).Render(line)
 		lines = append(lines, line)
 	}

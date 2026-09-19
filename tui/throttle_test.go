@@ -9,6 +9,7 @@ import (
 
 	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/basenana/friday/core/providers"
 )
@@ -332,5 +333,92 @@ func TestStreamedDeltasBufferIncrementally(t *testing.T) {
 		if !containsPlain(b.content, marker) {
 			t.Fatalf("materialized content missing %q: len=%d", marker, len(b.content))
 		}
+	}
+}
+
+// TestApplyProjectionMarksTranscriptDirty pins the session-switch contract:
+// /clear and /resume swap the transcript wholesale via applyProjection, so
+// the next View must rebuild instead of showing the previous session's
+// blocks from the cached viewport content.
+func TestApplyProjectionMarksTranscriptDirty(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	_, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m.appendBlock(chatBlock{kind: blockUser, content: "old session marker"})
+	_ = m.View().Content
+	rebuilds := m.transcriptRebuilds
+
+	m.applyProjection(transcriptProjection{})
+	view := m.View().Content
+	if containsPlain(view, "old session marker") {
+		t.Fatalf("view kept previous session content after applyProjection")
+	}
+	if m.transcriptRebuilds != rebuilds+1 {
+		t.Fatalf("applyProjection did not rebuild transcript: %d -> %d", rebuilds, m.transcriptRebuilds)
+	}
+}
+
+// TestFrameHeightMatchesTerminal pins the layout invariant: every rendered
+// frame must be exactly as tall as the terminal. If any part (activity line,
+// menus, queue, composer) is not reserved in layout()'s height budget, the
+// input box sinks and the status line gets pushed off-screen.
+func TestFrameHeightMatchesTerminal(t *testing.T) {
+	const termHeight = 24
+	states := []struct {
+		name   string
+		mutate func(t *testing.T, m *model)
+	}{
+		{"idle", nil},
+		{"running", func(t *testing.T, m *model) { m.running = true }},
+		{"plan compacting", func(t *testing.T, m *model) { m.planCompacting = true }},
+		{"manual compacting", func(t *testing.T, m *model) { m.manualCompacting = true }},
+		{"slash menu with matches", func(t *testing.T, m *model) {
+			m.textarea.SetValue("/")
+			m.refreshMenu()
+			if len(m.menu.items) == 0 {
+				t.Fatal("test model has no slash commands to match")
+			}
+		}},
+		{"menu without matches", func(t *testing.T, m *model) {
+			m.textarea.SetValue("/zzzz-no-such-command")
+			m.refreshMenu()
+			if len(m.menu.items) != 0 {
+				t.Fatal("expected no menu matches for unmatched prefix")
+			}
+		}},
+		{"queued input", func(t *testing.T, m *model) {
+			m.queued = []pendingInput{{text: "next"}}
+		}},
+		{"menu with long descriptions", func(t *testing.T, m *model) {
+			items := make([]menuItem, 10)
+			for i := range items {
+				items[i] = menuItem{
+					value:       "/cmd",
+					label:       "/cmd",
+					description: strings.Repeat("d", 150),
+				}
+			}
+			m.menu = menuState{mode: menuCommands, items: items}
+		}},
+		{"queue with long text", func(t *testing.T, m *model) {
+			m.queued = []pendingInput{{text: strings.Repeat("q", 200)}}
+		}},
+		{"running with menu and queue", func(t *testing.T, m *model) {
+			m.running = true
+			m.queued = []pendingInput{{text: "next"}}
+			m.textarea.SetValue("/")
+			m.refreshMenu()
+		}},
+	}
+	for _, state := range states {
+		t.Run(state.name, func(t *testing.T) {
+			m, _, _ := newTestModel(t)
+			_, _ = m.Update(tea.WindowSizeMsg{Width: 100, Height: termHeight})
+			if state.mutate != nil {
+				state.mutate(t, m)
+			}
+			if h := lipgloss.Height(m.View().Content); h != termHeight {
+				t.Errorf("frame height = %d, want %d (input/status pushed off)", h, termHeight)
+			}
+		})
 	}
 }

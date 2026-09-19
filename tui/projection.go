@@ -96,6 +96,9 @@ func (m *model) applyProjection(p transcriptProjection) {
 	m.runActivity = ""
 	m.form = nil
 	m.resetStreaming()
+	// The transcript was swapped wholesale: the cached viewport content
+	// belongs to the previous session and must not survive the next View.
+	m.markTranscriptDirty(true)
 }
 
 func (m *model) loadTranscript(sessionID string) error {
