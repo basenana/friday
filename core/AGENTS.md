@@ -1,4 +1,4 @@
-# CLAUDE.md (core)
+# AGENTS.md (core)
 
 This file provides guidance for the `core` module — the reusable agent framework.
 
@@ -41,7 +41,7 @@ The core agent implements a thought/action/observation loop:
 2. Call LLM with tools defined
 3. If tool calls returned → execute tools, append results, go to step 2
 4. If no tool calls → stream response to user
-5. Max 50 iterations (configurable via `MaxLoopTimes`)
+5. Max 500 iterations by default (configurable via `MaxLoopTimes`)
 
 ### Session (`session/session.go`)
 
