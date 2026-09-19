@@ -34,15 +34,17 @@ const maxApprovalRounds = 3
 
 // Approval form field/option values.
 const (
-	approvalFieldDecision   = "decision"
-	approvalValuePersist    = "persist"
-	approvalValueOnce       = "once"
-	approvalValueDeny       = "deny"
-	approvalFormVariant     = "permission"
-	approvalFormTitle       = "Sandbox 命令授权"
-	approvalPersistLabelFmt = "为本项目永久授权（推荐）— %q 将保存到 %s，本项目后续会话不再询问"
-	approvalOnceLabelFmt    = "仅本次授权 — 只允许当前会话使用 %q"
-	approvalDenyLabel       = "拒绝"
+	approvalFieldDecision = "decision"
+	approvalValuePersist  = "persist"
+	approvalValueOnce     = "once"
+	approvalValueDeny     = "deny"
+	// approvalFormVariant reuses the standard "questions" variant so the TUI
+	// renders the same focused one-question view users already know from
+	// request_user_input: up/down radio selection and Enter to submit. A
+	// bespoke variant would fall back to the generic form renderer, whose
+	// left/right option cycling feels inconsistent next to every other form.
+	approvalFormVariant = "questions"
+	approvalFormTitle   = "Sandbox 命令授权"
 )
 
 // HeadlessSuggestion is the remediation hint surfaced when a command is
@@ -58,11 +60,30 @@ func IsApprovalDenied(err error) bool {
 	return errors.Is(err, ErrApprovalDenied)
 }
 
+// ErrApprovalTimeout marks denials caused by an approval form timing out:
+// nobody answered, so the default deny applies instead of blocking the agent
+// on a form the user may never have seen.
+var ErrApprovalTimeout = errors.New("sandbox approval timed out")
+
+// IsApprovalTimeout reports whether err is (or wraps) ErrApprovalTimeout.
+func IsApprovalTimeout(err error) bool {
+	return errors.Is(err, ErrApprovalTimeout)
+}
+
+// approvalWaitTimeout bounds how long one approval form waits for an answer
+// before the default deny applies. It is a variable so tests can shorten it.
+var approvalWaitTimeout = time.Minute
+
 // userDenied wraps a denial the user explicitly declined so callers can
 // distinguish "user said no" from "no interactive session available" while
 // errors.Is(err, ErrPermissionDenied) keeps holding.
 func userDenied(denied *DeniedError) error {
 	return fmt.Errorf("%w: %w", ErrApprovalDenied, denied)
+}
+
+// approvalTimedOut wraps a denial that expired without an answer.
+func approvalTimedOut(denied *DeniedError) error {
+	return fmt.Errorf("%w after %s, denied by default: %w", ErrApprovalTimeout, approvalWaitTimeout, denied)
 }
 
 // FormPrompter is the narrow actor surface the approval flow needs. It is
@@ -170,16 +191,25 @@ func (a *CommandApprover) approve(ctx context.Context, denied *DeniedError) (App
 	}
 
 	formID := nextApprovalFormID()
-	schema := approvalFormSchema(denied.Command, a.overlayPath)
+	schema := approvalFormSchema(denied.Command)
 	schemaMap, err := marshalFormSchema(schema)
 	if err != nil {
 		return ApprovalDeny, err
 	}
 
 	prompter.EmitCustom(events.CustomFormRequested, formID, events.FormRequestedBody{FormID: formID, Schema: schemaMap})
-	outcome, err := prompter.WaitForForm(ctx, formID)
+	waitCtx, cancelWait := context.WithTimeout(ctx, approvalWaitTimeout)
+	outcome, err := prompter.WaitForForm(waitCtx, formID)
+	cancelWait()
 	if err != nil {
+		// Dismiss the form on the UI so a late-arriving user is not left
+		// staring at a dead prompt.
 		prompter.EmitCustom(events.CustomFormCancelled, formID, events.FormCancelledBody{FormID: formID})
+		if errors.Is(err, context.DeadlineExceeded) {
+			// Nobody answered within the budget: deny by default instead of
+			// blocking the agent on a form the user may never have seen.
+			return ApprovalDeny, approvalTimedOut(denied)
+		}
 		return ApprovalDeny, fmt.Errorf("approval wait failed: %w", err)
 	}
 	if outcome.Cancelled {
@@ -198,23 +228,24 @@ func (a *CommandApprover) approve(ctx context.Context, denied *DeniedError) (App
 	}
 }
 
-// approvalFormSchema builds the single-question approval form. The
-// recommended option (persist for the project) comes first.
-func approvalFormSchema(command, overlayPath string) cards.FormSchema {
+// approvalFormSchema builds the single-question approval form. The question
+// text lives in the field Help (the question view's primary text) and option
+// labels stay short; details belong in option descriptions, not labels. All
+// user-facing copy is English, matching every other form and tool message.
+func approvalFormSchema(command string) cards.FormSchema {
 	return cards.FormSchema{
-		Title:       approvalFormTitle,
-		Description: fmt.Sprintf("命令 %q 不在沙箱允许列表中。选择如何处理：", command),
-		Variant:     approvalFormVariant,
-		SubmitLabel: "提交",
+		Title:   approvalFormTitle,
+		Variant: approvalFormVariant,
 		Fields: []cards.Field{{
 			Name:     approvalFieldDecision,
-			Label:    "授权决定",
+			Label:    "Decision",
+			Help:     fmt.Sprintf("Command %q is not in the sandbox allow list. Allow it?", command),
 			Type:     cards.FieldSelect,
 			Required: true,
 			Options: []cards.Option{
-				{Label: fmt.Sprintf(approvalPersistLabelFmt, command, overlayPath), Value: approvalValuePersist},
-				{Label: fmt.Sprintf(approvalOnceLabelFmt, command), Value: approvalValueOnce},
-				{Label: approvalDenyLabel, Value: approvalValueDeny},
+				{Label: "Allow for this project (recommended)", Value: approvalValuePersist, Description: "won't ask again in this project"},
+				{Label: "Just this once", Value: approvalValueOnce, Description: "allowed for this session only"},
+				{Label: "Deny", Value: approvalValueDeny, Description: "do not run this command"},
 			},
 		}},
 	}

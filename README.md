@@ -386,7 +386,9 @@ approval form with three choices:
 
 After approval the command is retried immediately inside the same tool call,
 so the agent receives the real command output without an extra round trip.
-Commands matched by deny rules (for example `sudo` and `su`) never prompt
+An approval form waits at most one minute; an unanswered form denies the
+command by default so a prompt nobody sees cannot stall the agent. Commands
+matched by deny rules (for example `sudo` and `su`) never prompt
 and can never be granted.
 
 Project grants are stored on the HOME side, in

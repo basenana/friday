@@ -148,6 +148,8 @@ func bashDenialResult(result *Result, err error) *tools.Result {
 	switch {
 	case IsApprovalDenied(err):
 		suggestion = "the user declined this command; use an allowed command or a different approach"
+	case IsApprovalTimeout(err):
+		suggestion = "nobody answered the approval form in time and the command was denied by default; retry when the user is available, or ask them to run `friday sandbox allow <command>` in the project directory"
 	case errors.As(err, &denied) && !denied.ExplicitDeny:
 		// Denied only because it is missing from the allow list, with no
 		// interactive approval available (headless run or unbound approver).

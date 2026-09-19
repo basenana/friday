@@ -2,41 +2,54 @@ package sandbox
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	coreactor "github.com/basenana/friday/core/actor"
 	"github.com/basenana/friday/core/actor/events"
 )
 
 // fakePrompter implements FormPrompter with scripted decisions. WaitForForm
-// pops the next queued decision value (defaulting to deny).
+// pops the next queued decision value (defaulting to deny); with block set
+// it waits for ctx and returns its error, simulating an unanswered form.
 type fakePrompter struct {
 	mu      sync.Mutex
 	queue   []string
 	calls   int
+	cancels int
+	block   bool
 	schemas []map[string]any
 }
 
 func (f *fakePrompter) EmitCustom(name, itemID string, payload any) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if name == events.CustomFormCancelled {
+		f.cancels++
+	}
 	if body, ok := payload.(events.FormRequestedBody); ok {
 		f.schemas = append(f.schemas, body.Schema)
 	}
 }
 
-func (f *fakePrompter) WaitForForm(_ context.Context, _ string) (coreactor.FormOutcome, error) {
+func (f *fakePrompter) WaitForForm(ctx context.Context, _ string) (coreactor.FormOutcome, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.calls++
+	block := f.block
 	value := approvalValueDeny
-	if len(f.queue) > 0 {
+	if !block && len(f.queue) > 0 {
 		value = f.queue[0]
 		f.queue = f.queue[1:]
+	}
+	f.mu.Unlock()
+	if block {
+		<-ctx.Done()
+		return coreactor.FormOutcome{}, ctx.Err()
 	}
 	return coreactor.FormOutcome{Values: map[string]any{approvalFieldDecision: value}}, nil
 }
@@ -48,6 +61,12 @@ func (f *fakePrompter) stats() (calls int, lastSchema map[string]any) {
 		lastSchema = f.schemas[len(f.schemas)-1]
 	}
 	return f.calls, lastSchema
+}
+
+func (f *fakePrompter) statsWithCancels() (calls, cancels int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.calls, f.cancels
 }
 
 // approvalTestExecutor builds an executor whose commands run unsandboxed
@@ -116,14 +135,20 @@ func TestApproverPersistWritesOverlayAndExecutes(t *testing.T) {
 	if schema == nil {
 		t.Fatal("no form.requested schema captured")
 	}
-	if schema["variant"] != approvalFormVariant {
-		t.Fatalf("variant = %v, want %q", schema["variant"], approvalFormVariant)
+	// The questions variant is a UX contract: it must render through the same
+	// focused one-question view (up/down selection) as request_user_input.
+	// A bespoke variant silently falls back to the generic form renderer.
+	if schema["variant"] != "questions" {
+		t.Fatalf("variant = %v, want %q", schema["variant"], "questions")
 	}
 	fields, _ := schema["fields"].([]any)
 	if len(fields) != 1 {
 		t.Fatalf("fields = %#v, want one decision field", fields)
 	}
 	field, _ := fields[0].(map[string]any)
+	if help, _ := field["help"].(string); !strings.Contains(help, "printf") {
+		t.Fatalf("field help = %q, want the denied command name in the question text", help)
+	}
 	options, _ := field["options"].([]any)
 	if len(options) != 3 {
 		t.Fatalf("options = %#v, want 3", options)
@@ -131,6 +156,14 @@ func TestApproverPersistWritesOverlayAndExecutes(t *testing.T) {
 	first, _ := options[0].(map[string]any)
 	if first["value"] != approvalValuePersist {
 		t.Fatalf("first option value = %v, want %q (recommended choice first)", first["value"], approvalValuePersist)
+	}
+	if label, _ := first["label"].(string); len([]rune(label)) > 40 {
+		t.Fatalf("first option label %q is too long; keep option labels short", label)
+	}
+	// The overlay file path must not leak into the form; it is over-detailed
+	// for the moment of decision and documented in the README instead.
+	if encoded, err := json.Marshal(schema); err == nil && strings.Contains(string(encoded), overlay) {
+		t.Fatalf("form schema leaks the overlay path %q", overlay)
 	}
 }
 
@@ -207,6 +240,39 @@ func TestApproverUserDenyMarksError(t *testing.T) {
 	}
 	if decision, _ := exec.Permission().Check("printf x"); decision != Deny {
 		t.Fatal("deny decision must not grant anything")
+	}
+}
+
+func TestApproverTimeoutDeniesByDefault(t *testing.T) {
+	origTimeout := approvalWaitTimeout
+	approvalWaitTimeout = 100 * time.Millisecond
+	defer func() { approvalWaitTimeout = origTimeout }()
+
+	exec := approvalTestExecutor([]string{"echo"}, nil)
+	fake := &fakePrompter{block: true}
+	approver := NewCommandApprover(exec.Permission(), approvalOverlayPath(t))
+	approver.Bind(fake)
+
+	started := time.Now()
+	_, err := approver.Request(context.Background(), exec, "printf unanswered", ExecOptions{})
+	if !IsDenied(err) {
+		t.Fatalf("err = %v, want denial preserving IsDenied semantics", err)
+	}
+	if !IsApprovalTimeout(err) {
+		t.Fatalf("err = %v, want ErrApprovalTimeout marker", err)
+	}
+	if !strings.Contains(err.Error(), "timed out") {
+		t.Fatalf("err = %v, want timeout mention", err)
+	}
+	if elapsed := time.Since(started); elapsed > 5*time.Second {
+		t.Fatalf("Request blocked for %s; the approval timeout did not apply", elapsed)
+	}
+	if decision, _ := exec.Permission().Check("printf x"); decision != Deny {
+		t.Fatal("an unanswered form must not grant anything")
+	}
+	calls, cancels := fake.statsWithCancels()
+	if calls != 1 || cancels != 1 {
+		t.Fatalf("prompt calls = %d, cancel events = %d; want the form dismissed after one prompt", calls, cancels)
 	}
 }
 
