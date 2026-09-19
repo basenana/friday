@@ -41,8 +41,12 @@ type AgentContext struct {
 	Agent       agents.Agent
 	Memory      *memory.MemorySystem
 	TaskManager *sandbox.TaskManager
-	mcpManager  *fridaymcp.Manager
-	ownsMCP     bool
+	// Approver turns missing-allowlist bash denials into interactive approval
+	// forms. Interactive runtimes Bind it to their actor; it stays unbound
+	// (headless mode) otherwise.
+	Approver   *sandbox.CommandApprover
+	mcpManager *fridaymcp.Manager
+	ownsMCP    bool
 }
 
 type Option func(*options)
@@ -350,6 +354,14 @@ func NewAgent(sessionMgr SessionManager, cfg *config.Config, opts ...Option) (*A
 		sandboxCfg = sandbox.DefaultConfig()
 	}
 	sandboxExec := sandbox.NewExecutor(sandboxCfg)
+	// The project allow file lives under DataDir/projects/<projectID>/ on the
+	// HOME side; grants persist there and apply immediately via the executor's
+	// live permission config. When the workdir has no resolvable project root
+	// the approver stays nil and denials fall back to the headless error.
+	var approver *sandbox.CommandApprover
+	if allowPath, allowErr := sandbox.ProjectAllowPath(cfg.DataDirPath(), workdir); allowErr == nil {
+		approver = sandbox.NewCommandApprover(sandboxExec.Permission(), allowPath)
+	}
 	fileHook, err := filetools.New(sandboxExec, workdir)
 	if err != nil {
 		return nil, fmt.Errorf("create file tools: %w", err)
@@ -365,7 +377,7 @@ func NewAgent(sessionMgr SessionManager, cfg *config.Config, opts ...Option) (*A
 	allTools = append(allTools, fileHook.Tools()...)
 	imageTool := sandbox.NewImageTool(sandboxExec, workdir, newImageAnalyzer(cfg))
 	allTools = append(allTools, imageTool)
-	bashTool := sandbox.NewBashTool(sandboxExec, workdir)
+	bashTool := sandbox.NewBashTool(sandboxExec, workdir, approver)
 	allTools = append(allTools, bashTool)
 	taskManager, err := sandbox.NewPersistentTaskManager(sandboxExec, sandbox.NewSessionTaskStore(sess))
 	if err != nil {
@@ -460,6 +472,7 @@ func NewAgent(sessionMgr SessionManager, cfg *config.Config, opts ...Option) (*A
 		Agent:       routedAgent,
 		Memory:      memSys,
 		TaskManager: taskManager,
+		Approver:    approver,
 		mcpManager:  mcpManager,
 		ownsMCP:     ownsMCP,
 	}, nil

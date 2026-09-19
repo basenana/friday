@@ -173,8 +173,15 @@ func TestExecutePermissionDenied(t *testing.T) {
 	ctx := context.Background()
 	result, err := exec.Run(ctx, "sudo ls", ExecOptions{})
 
-	if err != ErrPermissionDenied {
+	if !errors.Is(err, ErrPermissionDenied) {
 		t.Errorf("Executor.Run error = %v, want ErrPermissionDenied", err)
+	}
+	var denied *DeniedError
+	if !errors.As(err, &denied) {
+		t.Fatalf("Executor.Run error = %T, want *DeniedError", err)
+	}
+	if denied.Command != "sudo" || denied.ExplicitDeny {
+		t.Errorf("denied = %+v, want grantable denial for sudo", denied)
 	}
 	if result == nil {
 		t.Fatal("result should not be nil")
@@ -182,8 +189,8 @@ func TestExecutePermissionDenied(t *testing.T) {
 	if result.ExitCode == 0 {
 		t.Errorf("ExitCode = %d, want non-zero", result.ExitCode)
 	}
-	if !strings.Contains(result.Stderr, "Permission denied") {
-		t.Errorf("Stderr = %q, want to contain 'Permission denied'", result.Stderr)
+	if !strings.Contains(result.Stderr, "not in allow list") {
+		t.Errorf("Stderr = %q, want to contain the denial reason", result.Stderr)
 	}
 }
 

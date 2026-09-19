@@ -27,11 +27,13 @@ Usage notes:
 - Pipes, redirects, and compound commands are supported
 - Avoid using bash commands that require interactive input
 - If a command fails, analyze the error and try a different approach
+- A command denied only because it is missing from the allow list automatically asks the user for approval (project-wide or one-time) and is retried as soon as it is approved
 - Relative workdir values are resolved from the agent working directory`
 )
 
-// NewBashTool creates a new bash tool
-func NewBashTool(exec *Executor, workdir string) *tools.Tool {
+// NewBashTool creates a new bash tool. approver may be nil, in which case
+// missing-allowlist denials fall back to the headless actionable error.
+func NewBashTool(exec *Executor, workdir string, approver *CommandApprover) *tools.Tool {
 	return tools.NewTool(bashToolName,
 		tools.WithDescription(bashToolDescription),
 		tools.WithString("command", tools.Required(), tools.MinLength(1), tools.Description("Raw shell command text. Do not add an outer bash -c wrapper.")),
@@ -39,12 +41,12 @@ func NewBashTool(exec *Executor, workdir string) *tools.Tool {
 		tools.WithString("workdir", tools.Description("Working directory, relative to the agent root or an allowed absolute path. Defaults to the agent root.")),
 		tools.WithExample(map[string]interface{}{"command": "go test ./core/actor", "workdir": ".", "timeout": "5m"}),
 		tools.WithToolTimeout(exec.parseTimeout(), "timeout"),
-		tools.WithToolHandler(bashToolHandler(exec, workdir)),
+		tools.WithToolHandler(bashToolHandler(exec, workdir, approver)),
 	)
 }
 
 // bashToolHandler creates the handler for the bash tool
-func bashToolHandler(exec *Executor, baseWorkdir string) tools.ToolHandlerFunc {
+func bashToolHandler(exec *Executor, baseWorkdir string, approver *CommandApprover) tools.ToolHandlerFunc {
 	return func(ctx context.Context, req *tools.Request) (*tools.Result, error) {
 		// Extract command (required)
 		command, ok := req.Arguments["command"].(string)
@@ -74,52 +76,84 @@ func bashToolHandler(exec *Executor, baseWorkdir string) tools.ToolHandlerFunc {
 				return tools.NewToolResultActionableError(err.Error(), "enable a supported OS sandbox or explicitly run Friday inside a trusted outer sandbox"), nil
 			}
 			if IsDenied(err) {
-				cause := err.Error()
-				if result != nil && strings.TrimSpace(result.Stderr) != "" {
-					cause = result.Stderr
+				if approver != nil {
+					// Missing-allowlist denials go through the interactive
+					// approval flow; on approval the command is retried here
+					// and its real output is returned to the model.
+					result, err = approver.Request(ctx, exec, command, opts)
+					if err == nil {
+						return bashOutputResult(result), nil
+					}
+					if !IsDenied(err) && !IsApprovalDenied(err) {
+						return nil, err // approval infrastructure failure
+					}
 				}
-				return tools.NewToolResultActionableError(cause, "use an allowed command or request the required permission before retrying"), nil
+				return bashDenialResult(result, err), nil
 			}
 			return nil, err
 		}
 
-		// Build response
-		var output strings.Builder
-		if result.Stdout != "" {
-			output.WriteString(result.Stdout)
-			if result.StdoutTruncated {
-				output.WriteString("\n[stdout truncated by capture limits]")
-			}
-		}
-		if result.Stderr != "" {
-			if output.Len() > 0 {
-				output.WriteString("\n")
-			}
-			output.WriteString("stderr:\n")
-			output.WriteString(result.Stderr)
-			if result.StderrTruncated {
-				output.WriteString("\n[stderr truncated by capture limits]")
-			}
-		}
-
-		if result.TimedOut {
-			toolResult := tools.NewToolResultActionableError(fmt.Sprintf("Command timed out.\n%s", output.String()), "increase timeout, reduce the command workload, or use background_task for long-running work")
-			toolResult.ExitCode = &result.ExitCode
-			return toolResult, nil
-		}
-
-		if result.ExitCode != 0 {
-			toolResult := tools.NewToolResultActionableError(fmt.Sprintf("Command exited with code %d.\n%s", result.ExitCode, output.String()), "inspect stdout/stderr, correct the command or its inputs, and retry")
-			toolResult.ExitCode = &result.ExitCode
-			return toolResult, nil
-		}
-
-		if output.Len() == 0 {
-			return tools.NewToolResultText("Command completed successfully with no output."), nil
-		}
-
-		return tools.NewToolResultText(output.String()), nil
+		return bashOutputResult(result), nil
 	}
+}
+
+// bashOutputResult renders an executed command result for the model.
+func bashOutputResult(result *Result) *tools.Result {
+	var output strings.Builder
+	if result.Stdout != "" {
+		output.WriteString(result.Stdout)
+		if result.StdoutTruncated {
+			output.WriteString("\n[stdout truncated by capture limits]")
+		}
+	}
+	if result.Stderr != "" {
+		if output.Len() > 0 {
+			output.WriteString("\n")
+		}
+		output.WriteString("stderr:\n")
+		output.WriteString(result.Stderr)
+		if result.StderrTruncated {
+			output.WriteString("\n[stderr truncated by capture limits]")
+		}
+	}
+
+	if result.TimedOut {
+		toolResult := tools.NewToolResultActionableError(fmt.Sprintf("Command timed out.\n%s", output.String()), "increase timeout, reduce the command workload, or use background_task for long-running work")
+		toolResult.ExitCode = &result.ExitCode
+		return toolResult
+	}
+
+	if result.ExitCode != 0 {
+		toolResult := tools.NewToolResultActionableError(fmt.Sprintf("Command exited with code %d.\n%s", result.ExitCode, output.String()), "inspect stdout/stderr, correct the command or its inputs, and retry")
+		toolResult.ExitCode = &result.ExitCode
+		return toolResult
+	}
+
+	if output.Len() == 0 {
+		return tools.NewToolResultText("Command completed successfully with no output.")
+	}
+
+	return tools.NewToolResultText(output.String())
+}
+
+// bashDenialResult renders a permission denial as an actionable tool result
+// with a suggestion that matches why the command was denied.
+func bashDenialResult(result *Result, err error) *tools.Result {
+	var denied *DeniedError
+	cause := err.Error()
+	if result != nil && strings.TrimSpace(result.Stderr) != "" {
+		cause = result.Stderr
+	}
+	suggestion := "use an allowed command instead"
+	switch {
+	case IsApprovalDenied(err):
+		suggestion = "the user declined this command; use an allowed command or a different approach"
+	case errors.As(err, &denied) && !denied.ExplicitDeny:
+		// Denied only because it is missing from the allow list, with no
+		// interactive approval available (headless run or unbound approver).
+		suggestion = HeadlessSuggestion
+	}
+	return tools.NewToolResultActionableError(cause, suggestion)
 }
 
 // resolveToolWorkdir resolves the effective workdir for a tool call: the

@@ -69,15 +69,19 @@ func NewExecutor(cfg *Config) *Executor {
 func (e *Executor) Run(ctx context.Context, cmd string, opts ExecOptions) (*Result, error) {
 	// 1. Check permissions
 	if !e.config.IsolationDisabled() {
-		decision, reason, err := e.perm.CheckWithReason(cmd)
-		if err != nil {
+		decision, err := e.perm.CheckWithReason(cmd)
+		if decision == Deny {
+			var denied *DeniedError
+			if errors.As(err, &denied) {
+				return &Result{
+					ExitCode: 1,
+					Stderr:   denied.Error(),
+				}, denied
+			}
 			return nil, fmt.Errorf("permission check failed: %w", err)
 		}
-		if decision == Deny {
-			return &Result{
-				ExitCode: 1,
-				Stderr:   fmt.Sprintf("Permission denied: %s", reason),
-			}, ErrPermissionDenied
+		if err != nil {
+			return nil, fmt.Errorf("permission check failed: %w", err)
 		}
 	}
 
@@ -351,7 +355,24 @@ func (e *Executor) CheckPermission(cmd string) (Decision, string, error) {
 	if e.config.IsolationDisabled() {
 		return Allow, "isolation disabled by outer sandbox", nil
 	}
-	return e.perm.CheckWithReason(cmd)
+	decision, err := e.perm.CheckWithReason(cmd)
+	if err != nil {
+		var denied *DeniedError
+		if errors.As(err, &denied) {
+			return decision, denied.Reason, nil
+		}
+		return decision, "", err
+	}
+	if decision == Allow {
+		return Allow, "all commands allowed", nil
+	}
+	return Deny, "permission denied", nil
+}
+
+// Permission returns the live permission checker shared by this executor.
+// Grants applied to it take effect immediately for subsequent runs.
+func (e *Executor) Permission() *Permission {
+	return e.perm
 }
 
 // SandboxName returns the name of the sandbox being used

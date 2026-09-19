@@ -4,6 +4,7 @@ package e2e
 
 import (
 	"context"
+	"errors"
 	"os/exec"
 	"strings"
 	"testing"
@@ -69,19 +70,29 @@ func TestPermission_UnknownCommandDeny(t *testing.T) {
 	}
 }
 
-// TestPermission_CheckWithReason verifies that CheckWithReason's reason string
-// mentions the matched deny rule.
+// TestPermission_CheckWithReason verifies that CheckWithReason's denial error
+// mentions the matched deny rule and is marked explicit.
 func TestPermission_CheckWithReason(t *testing.T) {
 	perm := sandbox.NewPermission(sandbox.DefaultConfig())
-	_, reason, err := perm.CheckWithReason("sudo echo hi")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	_, err := perm.CheckWithReason("sudo echo hi")
+	if err == nil {
+		t.Fatal("expected denial error")
 	}
-	if !strings.Contains(reason, "sudo") {
-		t.Errorf("expected reason to mention sudo, got %q", reason)
+	var denied *sandbox.DeniedError
+	if !errors.As(err, &denied) {
+		t.Fatalf("expected *sandbox.DeniedError, got %T", err)
 	}
-	if !strings.Contains(reason, "deny") {
-		t.Errorf("expected reason to mention deny, got %q", reason)
+	if !strings.Contains(denied.Reason, "sudo") {
+		t.Errorf("expected reason to mention sudo, got %q", denied.Reason)
+	}
+	if !strings.Contains(denied.Reason, "deny rule") {
+		t.Errorf("expected reason to mention deny rule, got %q", denied.Reason)
+	}
+	if !denied.ExplicitDeny {
+		t.Error("expected ExplicitDeny for deny-rule match")
+	}
+	if !sandbox.IsDenied(err) {
+		t.Error("denial error should wrap ErrPermissionDenied")
 	}
 }
 

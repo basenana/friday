@@ -1,6 +1,10 @@
 package sandbox
 
 import (
+	"errors"
+	"fmt"
+	"strings"
+	"sync"
 	"testing"
 )
 
@@ -204,39 +208,58 @@ func TestCheckWithReason(t *testing.T) {
 	perm := NewPermission(cfg)
 
 	// Test allowed command
-	decision, reason, err := perm.CheckWithReason("git status")
+	decision, err := perm.CheckWithReason("git status")
 	if err != nil {
 		t.Fatalf("CheckWithReason error = %v", err)
 	}
 	if decision != Allow {
 		t.Errorf("git status should be allowed, got %v", decision)
 	}
-	if reason == "" {
-		t.Error("reason should not be empty")
-	}
 
 	// Test denied command (not in allow list)
-	decision, reason, err = perm.CheckWithReason("docker ps")
-	if err != nil {
-		t.Fatalf("CheckWithReason error = %v", err)
+	decision, err = perm.CheckWithReason("docker ps")
+	if err == nil {
+		t.Fatal("docker ps should return a denial error")
 	}
 	if decision != Deny {
 		t.Errorf("docker ps should be denied, got %v", decision)
 	}
-	if reason == "" {
-		t.Error("reason should not be empty")
+	if !IsDenied(err) {
+		t.Errorf("denial error should wrap ErrPermissionDenied, got %v", err)
+	}
+	var denied *DeniedError
+	if !errors.As(err, &denied) {
+		t.Fatalf("denial error should be *DeniedError, got %T", err)
+	}
+	if denied.Command != "docker" {
+		t.Errorf("denied command = %q, want docker", denied.Command)
+	}
+	if denied.ExplicitDeny {
+		t.Error("missing-allowlist denial must not be marked ExplicitDeny")
+	}
+	if !strings.Contains(denied.Reason, "not in allow list") {
+		t.Errorf("reason = %q, want allow-list mention", denied.Reason)
 	}
 
 	// Test denied command (in deny list)
-	decision, reason, err = perm.CheckWithReason("sudo ls")
-	if err != nil {
-		t.Fatalf("CheckWithReason error = %v", err)
+	decision, err = perm.CheckWithReason("sudo ls")
+	if err == nil {
+		t.Fatal("sudo ls should return a denial error")
 	}
 	if decision != Deny {
 		t.Errorf("sudo ls should be denied, got %v", decision)
 	}
-	if reason == "" {
-		t.Error("reason should not be empty")
+	if !errors.As(err, &denied) {
+		t.Fatalf("denial error should be *DeniedError, got %T", err)
+	}
+	if denied.Command != "sudo" {
+		t.Errorf("denied command = %q, want sudo", denied.Command)
+	}
+	if !denied.ExplicitDeny {
+		t.Error("deny-rule denial must be marked ExplicitDeny")
+	}
+	if !strings.Contains(denied.Reason, "deny rule") {
+		t.Errorf("reason = %q, want deny-rule mention", denied.Reason)
 	}
 }
 
@@ -324,4 +347,79 @@ func TestWildcardMatching(t *testing.T) {
 			t.Errorf("Permission.Check(%q) = %v, want %v", tt.cmd, got, tt.want)
 		}
 	}
+}
+
+func TestDeniedErrorWrapsErrPermissionDenied(t *testing.T) {
+	denied := &DeniedError{Command: "gofmt", Reason: "command 'gofmt' is not in allow list"}
+	if !errors.Is(denied, ErrPermissionDenied) {
+		t.Fatal("DeniedError should satisfy errors.Is(err, ErrPermissionDenied)")
+	}
+	if !IsDenied(denied) {
+		t.Fatal("IsDenied should accept *DeniedError")
+	}
+	if !strings.Contains(denied.Error(), "gofmt") {
+		t.Errorf("Error() = %q, want command name mention", denied.Error())
+	}
+}
+
+func TestGrantTakesEffectImmediatelyAndDeduplicates(t *testing.T) {
+	cfg := &Config{
+		Permissions: PermissionsConfig{
+			Allow: []string{"echo"},
+			Deny:  []string{"sudo"},
+		},
+	}
+	perm := NewPermission(cfg)
+
+	if decision, _ := perm.Check("printf hi"); decision != Deny {
+		t.Fatal("printf should be denied before the grant")
+	}
+
+	perm.Grant("printf")
+	perm.Grant("printf") // duplicate grant must not duplicate the entry
+
+	if decision, _ := perm.Check("printf hi"); decision != Allow {
+		t.Fatal("printf should be allowed right after the grant")
+	}
+	count := 0
+	for _, entry := range cfg.Permissions.Allow {
+		if entry == "printf" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("printf appears %d times in allow list, want 1", count)
+	}
+	// Grants never lift deny rules.
+	if decision, _ := perm.Check("sudo ls"); decision != Deny {
+		t.Fatal("sudo must stay denied after unrelated grants")
+	}
+	perm.Grant("   ") // empty pattern is ignored
+	if len(cfg.Permissions.Allow) != 2 {
+		t.Fatalf("allow list = %#v, want exactly echo+printf", cfg.Permissions.Allow)
+	}
+}
+
+func TestConcurrentCheckAndGrant(t *testing.T) {
+	cfg := &Config{Permissions: PermissionsConfig{Allow: []string{"echo"}}}
+	perm := NewPermission(cfg)
+
+	var wg sync.WaitGroup
+	for g := 0; g < 4; g++ {
+		wg.Add(1)
+		go func(g int) {
+			defer wg.Done()
+			for i := 0; i < 100; i++ {
+				name := fmt.Sprintf("cmd%d_%d", g, i)
+				perm.Grant(name)
+				if _, err := perm.Check(name + " --flag"); err != nil {
+					t.Errorf("Check(%s) error = %v", name, err)
+				}
+				if _, err := perm.CheckWithReason("echo hi"); err != nil {
+					t.Errorf("CheckWithReason error = %v", err)
+				}
+			}
+		}(g)
+	}
+	wg.Wait()
 }

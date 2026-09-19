@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/basenana/friday/core/providers"
+	"github.com/basenana/friday/sandbox"
 	"gopkg.in/yaml.v3"
 )
 
@@ -100,6 +101,10 @@ func LoadForDir(explicitPath, cwd string) (*Config, error) {
 		}
 	}
 
+	if err := applyProjectSandboxAllow(cfg, absCWD); err != nil {
+		return nil, err
+	}
+
 	homeFriday = filepath.Clean(homeFriday)
 	if activeDir == homeFriday {
 		return cfg, nil
@@ -116,6 +121,47 @@ func LoadForDir(explicitPath, cwd string) (*Config, error) {
 	cfg.workspaceFallbacks = []string{homeCfg.WorkspacePath()}
 	cfg.agentPaths = append(homeCfg.AgentPaths(), filepath.Join(activeDir, "agents"))
 	return cfg, nil
+}
+
+// applyProjectSandboxAllow merges the per-project sandbox command grants from
+// <DataDir>/projects/<ProjectID(cwd)>/sandbox.json into the sandbox allow
+// list. The file lives on the HOME side (outside the agent's default
+// filesystem write roots) so a sandboxed agent cannot edit it to escalate its
+// own permissions. Deny rules are never affected; a structurally invalid
+// file fails loudly instead of being ignored.
+func applyProjectSandboxAllow(cfg *Config, cwd string) error {
+	if cfg == nil || cfg.Sandbox == nil || cfg.Sandbox.IsolationDisabled() {
+		return nil
+	}
+	allowPath, err := sandbox.ProjectAllowPath(cfg.DataDirPath(), cwd)
+	if err != nil {
+		// No usable project root (for example a vanished cwd); skip silently.
+		return nil
+	}
+	allow, err := sandbox.LoadProjectAllow(allowPath)
+	if err != nil {
+		return fmt.Errorf("load project sandbox allowlist %s: %w", allowPath, err)
+	}
+	if len(allow) == 0 {
+		return nil
+	}
+	merged := append([]string{}, cfg.Sandbox.Permissions.Allow...)
+	for _, entry := range allow {
+		if !containsString(merged, entry) {
+			merged = append(merged, entry)
+		}
+	}
+	cfg.Sandbox.Permissions.Allow = merged
+	return nil
+}
+
+func containsString(list []string, target string) bool {
+	for _, entry := range list {
+		if entry == target {
+			return true
+		}
+	}
+	return false
 }
 
 func loadFile(configPath string, missingOK, projectDefaults bool) (*Config, error) {

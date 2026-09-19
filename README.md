@@ -371,6 +371,51 @@ for longer commands: starting, listing, waiting for, or stopping a task is
 still bounded, while the background process itself may continue past 30
 minutes.
 
+### Sandbox command authorization
+
+Commands executed by the `bash` tool must be in the sandbox allow list
+(`sandbox.permissions.allow` in the configuration). When an interactive
+session runs a command that is denied only because it is missing from the
+allow list — and not matched by a deny rule — Friday automatically shows an
+approval form with three choices:
+
+- **Allow for this project (recommended)** — the command is persisted to the
+  project's grant file and never asked for again in this project.
+- **Allow just this once** — the command runs for the current session only.
+- **Deny** — the command stays blocked.
+
+After approval the command is retried immediately inside the same tool call,
+so the agent receives the real command output without an extra round trip.
+Commands matched by deny rules (for example `sudo` and `su`) never prompt
+and can never be granted.
+
+Project grants are stored on the HOME side, in
+`~/.friday/projects/<project>/sandbox.json`, where `<project>` is derived
+from the canonical (symlink-resolved) project root — opening the same
+repository through different paths or symlinks resolves to one shared grant
+file. The file contains only an allow list:
+
+```json
+{"version": 1, "allow": ["gofmt", "staticcheck"]}
+```
+
+Grants are merged into the session allow list at startup and take effect
+immediately when approved. Deny rules always come from the base
+configuration; the grant file cannot add or remove them. The file
+deliberately lives outside the repository: the agent has write access to
+the project directory, so storing grants inside it would let the agent
+escalate its own permissions. Friday validates the file's ownership,
+permissions, size, and version, and refuses to load files that fail those
+checks.
+
+Headless runs (for example `friday chat`, heartbeat, or CI) have no approval
+form; denied commands fail with an actionable error instead. Persist a
+project grant ahead of time from the project directory:
+
+```bash
+friday sandbox allow gofmt
+```
+
 ## Data Structure
 
 ```

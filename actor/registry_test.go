@@ -524,3 +524,29 @@ func TestNewFilePathValidator(t *testing.T) {
 func writeFile(path, content string) error {
 	return os.WriteFile(path, []byte(content), 0o644)
 }
+
+func TestRegistryBindsSandboxApproverToActor(t *testing.T) {
+	r := newTestRegistry(t, nil)
+	defer r.ShutdownAll()
+
+	if _, err := r.GetOrCreate("sess-approver"); err != nil {
+		t.Fatalf("GetOrCreate: %v", err)
+	}
+	r.mu.Lock()
+	entry := r.entries["sess-approver"]
+	r.mu.Unlock()
+	if entry == nil || entry.agentCtx == nil {
+		t.Fatal("missing managed actor entry")
+	}
+	approver := entry.agentCtx.Approver
+	if approver == nil {
+		t.Fatal("expected setup to construct a sandbox approver for a resolvable workdir")
+	}
+	bound, ok := approver.Prompter().(*coreactor.Actor)
+	if !ok {
+		t.Fatalf("bound prompter = %T, want *coreactor.Actor", approver.Prompter())
+	}
+	if bound != entry.actor {
+		t.Fatal("approver must be bound to this session's actor")
+	}
+}

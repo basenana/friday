@@ -8,8 +8,10 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/basenana/friday/core/tools"
 )
@@ -279,7 +281,14 @@ func TestFsSearchOutsideWorkdirReturnsAbsolutePaths(t *testing.T) {
 	if err := json.Unmarshal([]byte(textResult(t, result)), &decoded); err != nil {
 		t.Fatal(err)
 	}
-	want := filepath.ToSlash(path)
+	// The search backend resolves symlinks, and TMPDIR itself is a symlink on
+	// macOS (/var -> /private/var, /tmp -> /private/tmp), so the expected
+	// absolute path must be resolved the same way before comparing.
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.ToSlash(resolved)
 	if len(decoded.Matches) != 1 || decoded.Matches[0].Path != want {
 		t.Fatalf("matches = %#v, want path %q", decoded.Matches, want)
 	}
@@ -326,6 +335,209 @@ func TestFsSearchHonorsSharedOutputBudgetWithValidJSON(t *testing.T) {
 	}
 	if !decoded.Truncated || decoded.StoppedReason != "output_size_limit" {
 		t.Fatalf("budgeted search = %#v", decoded)
+	}
+}
+
+// blockingOpenFileSystem stalls Open on one chosen path until the context is
+// cancelled, which lets the cancellation test stop the search mid-scan
+// deterministically instead of racing a timer against a fast tree.
+type blockingOpenFileSystem struct {
+	*localFileSystem
+	blockPath string
+}
+
+func (f blockingOpenFileSystem) Open(ctx context.Context, path string) (io.ReadCloser, error) {
+	if path == f.blockPath {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	return f.localFileSystem.Open(ctx, path)
+}
+
+func TestFsSearchCancellationStopsPromptly(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "aaa_blocker.txt"), []byte("needle\nplain\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "zzz_match.txt"), []byte("needle\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fs := blockingOpenFileSystem{
+		localFileSystem: &localFileSystem{exec: NewExecutor(DefaultConfig()), workdir: root},
+	}
+	// Resolve through the same path machinery the walker uses, so the blocked
+	// path matches even when TMPDIR itself is behind a symlink.
+	resolvedBlocker, err := fs.Resolve(context.Background(), filepath.Join(root, "aaa_blocker.txt"), FileAccessRead)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fs.blockPath = resolvedBlocker
+	handler := fsSearchFileSystemHandler(fs)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	type outcome struct {
+		result *tools.Result
+		err    error
+	}
+	done := make(chan outcome, 1)
+	start := time.Now()
+	go func() {
+		result, err := handler(ctx, &tools.Request{Arguments: map[string]any{"directory": ".", "regex": "needle"}})
+		done <- outcome{result: result, err: err}
+	}()
+
+	// The pool cannot finish while a worker is parked inside the blocking
+	// Open, so cancelling here always interrupts a live search.
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+
+	select {
+	case out := <-done:
+		if out.err != nil {
+			t.Fatalf("handler error: %v", out.err)
+		}
+		if !out.result.IsError {
+			t.Fatalf("cancelled search must surface an error result, got: %s", textResult(t, out.result))
+		}
+		if text := textResult(t, out.result); !strings.Contains(text, "context canceled") {
+			t.Fatalf("cancelled search error = %q, want it to mention context canceled", text)
+		}
+		if elapsed := time.Since(start); elapsed > 5*time.Second {
+			t.Fatalf("cancelled search took %s to return", elapsed)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("cancelled search did not return within 10s")
+	}
+}
+
+func TestFsSearchErrorsSkippedIncrement(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("permission-based skip rules are unix-only")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses file permissions; skip accounting would not trigger")
+	}
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "readable.txt"), []byte("needle\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	lockedDir := filepath.Join(root, "locked")
+	if err := os.MkdirAll(filepath.Join(lockedDir, "inner"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(lockedDir, "inner", "hidden.txt"), []byte("needle\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "locked.txt"), []byte("needle\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Restore permissions so t.TempDir cleanup can remove the tree.
+	t.Cleanup(func() {
+		_ = os.Chmod(lockedDir, 0o755)
+		_ = os.Chmod(filepath.Join(root, "locked.txt"), 0o644)
+	})
+	if err := os.Chmod(lockedDir, 0o000); err != nil {
+		t.Skipf("chmod unavailable: %v", err)
+	}
+	if err := os.Chmod(filepath.Join(root, "locked.txt"), 0o000); err != nil {
+		t.Skipf("chmod unavailable: %v", err)
+	}
+
+	result, err := fsSearchHandler(NewExecutor(DefaultConfig()), root)(context.Background(), &tools.Request{Arguments: map[string]any{
+		"directory": ".", "regex": "needle",
+	}})
+	if err != nil || result.IsError {
+		t.Fatalf("fs_search result=%+v err=%v", result, err)
+	}
+	var decoded fsSearchResult
+	if err := json.Unmarshal([]byte(textResult(t, result)), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded.ErrorsSkipped < 2 {
+		t.Fatalf("errors_skipped = %d, want at least 2 (unreadable dir + unreadable file): %#v", decoded.ErrorsSkipped, decoded)
+	}
+	if len(decoded.Matches) != 1 || decoded.Matches[0].Path != "readable.txt" {
+		t.Fatalf("matches = %#v, want only readable.txt", decoded.Matches)
+	}
+}
+
+func TestFsSearchParallelOrderStable(t *testing.T) {
+	root := t.TempDir()
+	for dir := 0; dir < 6; dir++ {
+		name := fmt.Sprintf("pkg%d", dir)
+		for file := 0; file < 10; file++ {
+			content := fmt.Sprintf("plain line\nneedle in %s/%d\nanother needle tail\n", name, file)
+			path := filepath.Join(root, name, fmt.Sprintf("file%02d.txt", file))
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	handler := fsSearchHandler(NewExecutor(DefaultConfig()), root)
+
+	var first string
+	for run := 0; run < 5; run++ {
+		result, err := handler(context.Background(), &tools.Request{Arguments: map[string]any{
+			"directory": ".", "regex": "needle",
+		}})
+		if err != nil || result.IsError {
+			t.Fatalf("fs_search result=%+v err=%v", result, err)
+		}
+		var decoded fsSearchResult
+		if err := json.Unmarshal([]byte(textResult(t, result)), &decoded); err != nil {
+			t.Fatal(err)
+		}
+		if len(decoded.Matches) != 120 {
+			t.Fatalf("matches = %d, want 120", len(decoded.Matches))
+		}
+		for i := 1; i < len(decoded.Matches); i++ {
+			prev, cur := decoded.Matches[i-1], decoded.Matches[i]
+			if prev.Path > cur.Path || (prev.Path == cur.Path && prev.Line > cur.Line) {
+				t.Fatalf("matches out of order at %d: %#v then %#v", i, prev, cur)
+			}
+		}
+		encoded := fmt.Sprint(decoded.Matches)
+		if first == "" {
+			first = encoded
+			continue
+		}
+		if encoded != first {
+			t.Fatalf("run %d produced a different match order than run 0", run)
+		}
+	}
+}
+
+func TestFsSearchTruncationRespectsLimits(t *testing.T) {
+	root := t.TempDir()
+	for file := 0; file < 5; file++ {
+		content := strings.Repeat("needle line\n", 300)
+		name := fmt.Sprintf("batch%d.txt", file)
+		if err := os.WriteFile(filepath.Join(root, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	result, err := fsSearchHandler(NewExecutor(DefaultConfig()), root)(context.Background(), &tools.Request{Arguments: map[string]any{
+		"directory": ".", "regex": "needle",
+	}})
+	if err != nil || result.IsError {
+		t.Fatalf("fs_search result=%+v err=%v", result, err)
+	}
+	var decoded fsSearchResult
+	if err := json.Unmarshal([]byte(textResult(t, result)), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if !decoded.Truncated {
+		t.Fatalf("multi-file overflow must report truncated: %#v", decoded)
+	}
+	if decoded.StoppedReason != "match_limit" && decoded.StoppedReason != "output_size_limit" {
+		t.Fatalf("stopped_reason = %q, want match_limit or output_size_limit", decoded.StoppedReason)
+	}
+	if len(decoded.Matches) > maxSearchMatches {
+		t.Fatalf("matches = %d, want at most %d", len(decoded.Matches), maxSearchMatches)
 	}
 }
 

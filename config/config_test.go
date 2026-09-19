@@ -3,7 +3,10 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/basenana/friday/coder/project"
 )
 
 func TestLoadForDirPrefersProjectAndKeepsConfigIndependent(t *testing.T) {
@@ -229,4 +232,131 @@ func hasPath(paths []string, want string) bool {
 		}
 	}
 	return false
+}
+
+// projectAllowPathFor computes the HOME-side overlay path for the project at
+// root using the same canonicalization as the loader (symlink-resolved).
+func projectAllowPathFor(t *testing.T, home, root string) string {
+	t.Helper()
+	canonical, err := project.CanonicalRoot(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return filepath.Join(home, ".friday", "projects", project.ProjectID(canonical), "sandbox.json")
+}
+
+func TestLoadForDirMergesProjectSandboxAllow(t *testing.T) {
+	home := t.TempDir()
+	projectDir := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("IS_SANDBOX", "")
+	writeTestConfig(t, filepath.Join(home, ".friday", "config.json"), `{
+  "model": {"model":"home"},
+  "sandbox": {"permissions": {"allow": ["echo"], "deny": ["sudo"]}}
+}`)
+	// Overlay contributes two new entries and one duplicate of the base list.
+	writeTestConfig(t, projectAllowPathFor(t, home, projectDir), `{"version":1,"allow":["gofmt","staticcheck","echo"]}`)
+
+	cfg, err := LoadForDir("", projectDir)
+	if err != nil {
+		t.Fatalf("LoadForDir() error = %v", err)
+	}
+	allow := cfg.Sandbox.Permissions.Allow
+	for _, want := range []string{"echo", "gofmt", "staticcheck"} {
+		if !hasPath(allow, want) {
+			t.Fatalf("allow = %#v, want %q merged in", allow, want)
+		}
+	}
+	echoCount := 0
+	for _, entry := range allow {
+		if entry == "echo" {
+			echoCount++
+		}
+	}
+	if echoCount != 1 {
+		t.Fatalf("echo appears %d times, want deduplicated 1", echoCount)
+	}
+	// Deny rules come from the base config only.
+	if !hasPath(cfg.Sandbox.Permissions.Deny, "sudo") {
+		t.Fatalf("deny = %#v, want base deny rules untouched", cfg.Sandbox.Permissions.Deny)
+	}
+}
+
+func TestLoadForDirWithoutProjectAllowKeepsBase(t *testing.T) {
+	home := t.TempDir()
+	projectDir := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("IS_SANDBOX", "")
+	writeTestConfig(t, filepath.Join(home, ".friday", "config.json"), `{
+  "model": {"model":"home"},
+  "sandbox": {"permissions": {"allow": ["echo"], "deny": []}}
+}`)
+
+	cfg, err := LoadForDir("", projectDir)
+	if err != nil {
+		t.Fatalf("LoadForDir() error = %v", err)
+	}
+	if got := cfg.Sandbox.Permissions.Allow; len(got) != 1 || got[0] != "echo" {
+		t.Fatalf("allow = %#v, want untouched base list", got)
+	}
+}
+
+func TestLoadForDirProjectAllowInvalidFailsLoudly(t *testing.T) {
+	home := t.TempDir()
+	projectDir := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("IS_SANDBOX", "")
+	writeTestConfig(t, filepath.Join(home, ".friday", "config.json"), `{"model":{"model":"home"}}`)
+	writeTestConfig(t, projectAllowPathFor(t, home, projectDir), `{"version":2,"allow":["gofmt"]}`)
+
+	if _, err := LoadForDir("", projectDir); err == nil {
+		t.Fatal("invalid project allow file should fail loudly")
+	} else if !strings.Contains(err.Error(), "allowlist") && !strings.Contains(err.Error(), "version") {
+		t.Fatalf("error = %v, want allowlist/version mention", err)
+	}
+}
+
+func TestLoadForDirSkipsProjectAllowWhenSandboxed(t *testing.T) {
+	home := t.TempDir()
+	projectDir := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("IS_SANDBOX", "1")
+	writeTestConfig(t, filepath.Join(home, ".friday", "config.json"), `{"model":{"model":"home"}}`)
+	writeTestConfig(t, projectAllowPathFor(t, home, projectDir), `{"version":1,"allow":["gofmt"]}`)
+
+	cfg, err := LoadForDir("", projectDir)
+	if err != nil {
+		t.Fatalf("LoadForDir() error = %v", err)
+	}
+	if !cfg.Sandbox.IsolationDisabled() {
+		t.Fatal("expected isolation disabled under IS_SANDBOX=1")
+	}
+	if got := cfg.Sandbox.Permissions.Allow; len(got) != 1 || got[0] != "*" {
+		t.Fatalf("allow = %#v, want the IS_SANDBOX override untouched", got)
+	}
+}
+
+func TestLoadForDirProjectAllowFollowsSymlinkedCWD(t *testing.T) {
+	home := t.TempDir()
+	projectDir := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("IS_SANDBOX", "")
+	writeTestConfig(t, filepath.Join(home, ".friday", "config.json"), `{
+  "model": {"model":"home"},
+  "sandbox": {"permissions": {"allow": ["echo"], "deny": []}}
+}`)
+	writeTestConfig(t, projectAllowPathFor(t, home, projectDir), `{"version":1,"allow":["gofmt"]}`)
+
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(projectDir, link); err != nil {
+		t.Skipf("symlink: %v", err)
+	}
+
+	cfg, err := LoadForDir("", link)
+	if err != nil {
+		t.Fatalf("LoadForDir() via symlink error = %v", err)
+	}
+	if !hasPath(cfg.Sandbox.Permissions.Allow, "gofmt") {
+		t.Fatalf("allow = %#v, want overlay merged for symlinked cwd", cfg.Sandbox.Permissions.Allow)
+	}
 }

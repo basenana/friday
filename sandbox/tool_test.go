@@ -12,7 +12,7 @@ import (
 )
 
 func TestBashToolKeepsFunctionalOptions(t *testing.T) {
-	tool := NewBashTool(NewExecutor(DefaultConfig()), t.TempDir())
+	tool := NewBashTool(NewExecutor(DefaultConfig()), t.TempDir(), nil)
 	for _, name := range []string{"command", "timeout", "workdir"} {
 		if _, exists := tool.InputSchema.Properties[name]; !exists {
 			t.Fatalf("parameter %q missing", name)
@@ -23,7 +23,7 @@ func TestBashToolKeepsFunctionalOptions(t *testing.T) {
 func TestCommandToolDefinitionsAreModelReady(t *testing.T) {
 	exec := NewExecutor(DefaultConfig())
 	manager := NewTaskManager(exec)
-	toolList := []*tools.Tool{NewBashTool(exec, t.TempDir())}
+	toolList := []*tools.Tool{NewBashTool(exec, t.TempDir(), nil)}
 	toolList = append(toolList, NewBackgroundTaskTools(manager, t.TempDir())...)
 	for _, tool := range toolList {
 		if issues := tool.ValidateDefinition(2); len(issues) != 0 {
@@ -129,7 +129,7 @@ func TestBashToolHandlerRejectsWorkdirOutsideBase(t *testing.T) {
 	exec := NewExecutor(cfg)
 	base := t.TempDir()
 
-	handler := bashToolHandler(exec, base)
+	handler := bashToolHandler(exec, base, nil)
 
 	result, err := handler(context.Background(), &tools.Request{
 		Arguments: map[string]interface{}{
@@ -170,7 +170,7 @@ func TestBashToolHandlerAllowsWorkdirOutsideBaseWhenIsolationDisabled(t *testing
 	base := t.TempDir()
 	outside := t.TempDir()
 
-	result, err := bashToolHandler(exec, base)(context.Background(), &tools.Request{
+	result, err := bashToolHandler(exec, base, nil)(context.Background(), &tools.Request{
 		Arguments: map[string]interface{}{
 			"command": "pwd",
 			"workdir": outside,
@@ -193,7 +193,7 @@ func TestBashToolHandlerReturnsTimeoutResult(t *testing.T) {
 	exec := NewExecutor(cfg)
 
 	started := time.Now()
-	tool := NewBashTool(exec, t.TempDir())
+	tool := NewBashTool(exec, t.TempDir(), nil)
 	result, err := tools.NewInvoker().Invoke(context.Background(), tool, &tools.Request{
 		Arguments: map[string]interface{}{
 			"command": "sleep 30",
@@ -225,7 +225,7 @@ func TestBashToolDeclaredTimeoutOverridesShorterConfigDefault(t *testing.T) {
 	cfg.DisableIsolation()
 	cfg.Sandbox.Defaults.Timeout = "20ms"
 	exec := NewExecutor(cfg)
-	tool := NewBashTool(exec, t.TempDir())
+	tool := NewBashTool(exec, t.TempDir(), nil)
 
 	result, err := tools.NewInvoker().Invoke(context.Background(), tool, &tools.Request{
 		Arguments: map[string]interface{}{
@@ -238,5 +238,69 @@ func TestBashToolDeclaredTimeoutOverridesShorterConfigDefault(t *testing.T) {
 	}
 	if result.IsError || textResult(t, result) != "done" {
 		t.Fatalf("result = %+v, want successful command", result)
+	}
+}
+
+func TestBashToolHeadlessDenialSuggestsCLI(t *testing.T) {
+	exec := approvalTestExecutor([]string{"echo"}, nil)
+	tool := NewBashTool(exec, t.TempDir(), nil) // no approver: headless
+
+	result, err := tools.NewInvoker().Invoke(context.Background(), tool, &tools.Request{
+		Arguments: map[string]interface{}{"command": "printf headless"},
+	})
+	if err != nil {
+		t.Fatalf("Invoke() error = %v", err)
+	}
+	if !result.IsError {
+		t.Fatalf("result = %+v, want tool error", result)
+	}
+	text := textResult(t, result)
+	if !strings.Contains(text, "friday sandbox allow") {
+		t.Fatalf("result = %q, want headless CLI suggestion", text)
+	}
+}
+
+func TestBashToolApprovalPersistExecutesAndWritesOverlay(t *testing.T) {
+	exec := approvalTestExecutor([]string{"echo"}, nil)
+	overlay := approvalOverlayPath(t)
+	approver := NewCommandApprover(exec.Permission(), overlay)
+	approver.Bind(&fakePrompter{queue: []string{approvalValuePersist}})
+	tool := NewBashTool(exec, t.TempDir(), approver)
+
+	result, err := tools.NewInvoker().Invoke(context.Background(), tool, &tools.Request{
+		Arguments: map[string]interface{}{"command": "printf via-approval"},
+	})
+	if err != nil {
+		t.Fatalf("Invoke() error = %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("result = %+v, want approved execution", result)
+	}
+	if !strings.Contains(textResult(t, result), "via-approval") {
+		t.Fatalf("result = %q, want real command output", textResult(t, result))
+	}
+	allow, err := LoadProjectAllow(overlay)
+	if err != nil || len(allow) != 1 || allow[0] != "printf" {
+		t.Fatalf("overlay allow = %#v, err = %v; want persisted [printf]", allow, err)
+	}
+}
+
+func TestBashToolApprovalDeniedByUser(t *testing.T) {
+	exec := approvalTestExecutor([]string{"echo"}, nil)
+	approver := NewCommandApprover(exec.Permission(), approvalOverlayPath(t))
+	approver.Bind(&fakePrompter{queue: []string{approvalValueDeny}})
+	tool := NewBashTool(exec, t.TempDir(), approver)
+
+	result, err := tools.NewInvoker().Invoke(context.Background(), tool, &tools.Request{
+		Arguments: map[string]interface{}{"command": "printf denied"},
+	})
+	if err != nil {
+		t.Fatalf("Invoke() error = %v", err)
+	}
+	if !result.IsError {
+		t.Fatalf("result = %+v, want tool error", result)
+	}
+	if text := textResult(t, result); !strings.Contains(text, "declined") {
+		t.Fatalf("result = %q, want user-declined hint", text)
 	}
 }

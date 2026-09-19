@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -14,11 +15,15 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
+	"github.com/basenana/friday/core/logger"
 	"github.com/basenana/friday/core/tools"
 )
 
@@ -98,6 +103,23 @@ type deletePathResolver interface {
 type localFileSystem struct {
 	exec    *Executor
 	workdir string
+
+	// rootResolveOnce caches resolveSymlinkedPath(workdir). Search scans now
+	// run concurrently and used to repeat that walk-the-path syscall for every
+	// file operation and every rendered match path.
+	rootResolveOnce sync.Once
+	rootPath        string
+	rootResolveErr  error
+}
+
+// resolvedWorkdirRoot returns the symlink-resolved workdir, computed at most
+// once per filesystem instance. The workdir is fixed for the instance's
+// lifetime, so caching cannot change behavior.
+func (f *localFileSystem) resolvedWorkdirRoot() (string, error) {
+	f.rootResolveOnce.Do(func() {
+		f.rootPath, f.rootResolveErr = resolveSymlinkedPath(f.workdir)
+	})
+	return f.rootPath, f.rootResolveErr
 }
 
 func NewLocalFileSystem(exec *Executor, workdir string) FileSystem {
@@ -108,7 +130,7 @@ func (f *localFileSystem) openWorkdirRoot(path string) (*os.Root, string, bool, 
 	if f == nil || f.exec == nil || f.exec.config == nil || f.exec.config.IsolationDisabled() {
 		return nil, "", false, nil
 	}
-	rootPath, err := resolveSymlinkedPath(f.workdir)
+	rootPath, err := f.resolvedWorkdirRoot()
 	if err != nil || !pathWithinRoot(path, rootPath) {
 		return nil, "", false, err
 	}
@@ -769,7 +791,7 @@ func fileTypeName(mode os.FileMode) string {
 
 func displayToolPath(fs FileSystem, path string) string {
 	if local, ok := fs.(*localFileSystem); ok {
-		root, err := resolveSymlinkedPath(local.workdir)
+		root, err := local.resolvedWorkdirRoot()
 		if err == nil {
 			if rel, relErr := filepath.Rel(root, path); relErr == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
 				if rel == "." {
@@ -780,6 +802,26 @@ func displayToolPath(fs FileSystem, path string) string {
 		}
 	}
 	return filepath.ToSlash(path)
+}
+
+// newDisplayPathFn returns a per-search path renderer that closes over the
+// filesystem's resolved workdir, so workers avoid repeating EvalSymlinks for
+// every match. Non-local backends keep the absolute-path behavior.
+func newDisplayPathFn(fs FileSystem) func(string) string {
+	if local, ok := fs.(*localFileSystem); ok {
+		if root, err := local.resolvedWorkdirRoot(); err == nil {
+			return func(path string) string {
+				if rel, relErr := filepath.Rel(root, path); relErr == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+					if rel == "." {
+						return "."
+					}
+					return filepath.ToSlash(rel)
+				}
+				return filepath.ToSlash(path)
+			}
+		}
+	}
+	return func(path string) string { return filepath.ToSlash(path) }
 }
 
 func jsonTextResult(value interface{}) (*tools.Result, error) {
@@ -825,6 +867,7 @@ type fsSearchResult struct {
 }
 
 func fsSearchFileSystemHandler(fs FileSystem) tools.ToolHandlerFunc {
+	log := logger.New("fs.search")
 	return func(ctx context.Context, req *tools.Request) (*tools.Result, error) {
 		directory, ok := req.Arguments["directory"].(string)
 		if !ok || strings.TrimSpace(directory) == "" {
@@ -853,7 +896,8 @@ func fsSearchFileSystemHandler(fs FileSystem) tools.ToolHandlerFunc {
 			return tools.NewToolResultActionableError(fmt.Sprintf("cannot search %q because it is not a directory", directory), "provide a directory path"), nil
 		}
 
-		result := fsSearchResult{Directory: displayToolPath(fs, root), Regex: pattern, Matches: []fsSearchMatch{}}
+		displayRoot := displayToolPath(fs, root)
+		result := fsSearchResult{Directory: displayRoot, Regex: pattern, Matches: []fsSearchMatch{}}
 		result.encodedSize = searchResultSize(&result)
 		outputLimit := maxSearchOutputBytes
 		if req.MaxOutputChars > 0 && int64(outputLimit) > req.MaxOutputChars-512 {
@@ -862,7 +906,17 @@ func fsSearchFileSystemHandler(fs FileSystem) tools.ToolHandlerFunc {
 				outputLimit = 1024
 			}
 		}
-		if err := searchDirectory(ctx, fs, root, re, &result, outputLimit); err != nil && err != errSearchLimit {
+		start := time.Now()
+		workers, jobsScanned, err := runParallelSearch(ctx, fs, root, re, &result, outputLimit)
+		log.Infow("search complete",
+			"workers", workers,
+			"jobs", jobsScanned,
+			"scanned", result.FilesScanned,
+			"matches", len(result.Matches),
+			"truncated", result.Truncated,
+			"reason", result.StoppedReason,
+			"duration_ms", time.Since(start).Milliseconds())
+		if err != nil && err != errSearchLimit {
 			return tools.NewToolResultActionableError(fmt.Sprintf("search failed: %s", err), "narrow the directory or correct unreadable paths and retry"), nil
 		}
 		return jsonTextResult(result)
@@ -871,18 +925,111 @@ func fsSearchFileSystemHandler(fs FileSystem) tools.ToolHandlerFunc {
 
 var errSearchLimit = fmt.Errorf("search result limit reached")
 
-func searchDirectory(ctx context.Context, fs FileSystem, dir string, re *regexp.Regexp, result *fsSearchResult, outputLimit int) error {
-	if err := ctx.Err(); err != nil {
-		return err
+// fileJob is one regular file discovered by the walker and queued for a
+// scanning worker.
+type fileJob struct {
+	absPath string
+}
+
+// workerOutput is a worker's complete local accounting. Workers never touch
+// shared state; everything is merged by the collector after they finish.
+type workerOutput struct {
+	matches       []fsSearchMatch
+	filesScanned  int
+	binarySkipped int
+	errorsSkipped int
+	localLimitHit bool
+}
+
+// searchWorkerOverride pins the worker-pool size for benchmarks; 0 means the
+// production default of runtime.NumCPU() (capped at 16).
+var searchWorkerOverride int
+
+// runParallelSearch drives one walker goroutine plus a worker pool. The
+// walker keeps the original depth-first, name-sorted discovery order for the
+// .git / symlink / non-regular skip rules; workers scan file contents in
+// parallel. Matches are merged and totally ordered by (path, line, column)
+// before limits are applied, so the emitted JSON stays deterministic no
+// matter how the scan interleaved.
+func runParallelSearch(ctx context.Context, fs FileSystem, root string, re *regexp.Regexp, result *fsSearchResult, outputLimit int) (workers, jobsEmitted int, err error) {
+	workerCount := searchWorkerOverride
+	if workerCount <= 0 {
+		workerCount = runtime.NumCPU()
+		if workerCount > 16 {
+			workerCount = 16
+		}
+		if workerCount < 1 {
+			workerCount = 1
+		}
 	}
-	entries, err := fs.ReadDir(ctx, dir)
+
+	// The root ReadDir failure keeps the historical contract: an unreadable
+	// search root is an actionable error, not a JSON result.
+	entries, err := fs.ReadDir(ctx, root)
 	if err != nil {
-		return err
+		return workerCount, 0, err
 	}
+
+	display := newDisplayPathFn(fs)
+	jobs := make(chan fileJob, 256)
+	var stopped atomic.Bool
+	var walkerErrors atomic.Int64
+	outputs := make([]workerOutput, workerCount)
+
+	var wg sync.WaitGroup
+	for i := range workerCount {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			outputs[i] = scanFiles(ctx, fs, display, jobs, re, &stopped)
+		}()
+	}
+	emitted := walkEntries(ctx, fs, root, entries, jobs, &stopped, &walkerErrors)
+	close(jobs)
+	wg.Wait()
+
+	for i := range outputs {
+		out := &outputs[i]
+		result.FilesScanned += out.filesScanned
+		result.BinaryFilesSkipped += out.binarySkipped
+		result.ErrorsSkipped += out.errorsSkipped
+	}
+	result.ErrorsSkipped += int(walkerErrors.Load())
+
+	matches := make([]fsSearchMatch, 0)
+	workerLimitHit := false
+	for i := range outputs {
+		matches = append(matches, outputs[i].matches...)
+		workerLimitHit = workerLimitHit || outputs[i].localLimitHit
+	}
+	sort.Slice(matches, func(i, j int) bool {
+		if matches[i].Path != matches[j].Path {
+			return matches[i].Path < matches[j].Path
+		}
+		if matches[i].Line != matches[j].Line {
+			return matches[i].Line < matches[j].Line
+		}
+		return matches[i].Column < matches[j].Column
+	})
+	applyGlobalLimits(matches, result, outputLimit, workerLimitHit)
+
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return workerCount, emitted, ctxErr
+	}
+	return workerCount, emitted, nil
+}
+
+// walkEntries is the discovery half of the search. It mirrors the previous
+// serial DFS exactly — entries sorted by name, .git directories and symlinks
+// skipped, only regular files queued — but it never blocks: workers keep
+// draining the jobs channel even after an early stop, so sends always
+// complete. Unreadable subdirectories only increment the skip counter.
+func walkEntries(ctx context.Context, fs FileSystem, dir string, entries []os.DirEntry, jobs chan<- fileJob, stopped *atomic.Bool, errCount *atomic.Int64) int {
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
+	emitted := 0
 	for _, entry := range entries {
-		if err := ctx.Err(); err != nil {
-			return err
+		if ctx.Err() != nil || stopped.Load() {
+			return emitted
 		}
 		if entry.Name() == ".git" && entry.IsDir() {
 			continue
@@ -890,98 +1037,150 @@ func searchDirectory(ctx context.Context, fs FileSystem, dir string, re *regexp.
 		if entry.Type()&os.ModeSymlink != 0 {
 			continue
 		}
-		path := filepath.Join(dir, entry.Name())
-		if entry.IsDir() {
-			if err := searchDirectory(ctx, fs, path, re, result, outputLimit); err != nil {
-				if err == errSearchLimit {
-					return err
-				}
-				result.ErrorsSkipped++
+		abs := filepath.Join(dir, entry.Name())
+		switch entryType := entry.Type(); {
+		case entryType&os.ModeDir != 0:
+			childEntries, err := fs.ReadDir(ctx, abs)
+			if err != nil {
+				errCount.Add(1)
+				continue
 			}
+			emitted += walkEntries(ctx, fs, abs, childEntries, jobs, stopped, errCount)
+		case entryType&os.ModeType == 0:
+			// Regular file: type bits are all clear.
+			jobs <- fileJob{absPath: abs}
+			emitted++
+		default:
+			// Device, socket, named pipe, or other non-regular entry.
+		}
+	}
+	return emitted
+}
+
+// scanFiles is the worker loop. It drains the jobs channel for its whole
+// life — even once stopped is set — so the walker can never block on a full
+// channel; skipping the scan is what makes an early stop cheap.
+func scanFiles(ctx context.Context, fs FileSystem, display func(string) string, jobs <-chan fileJob, re *regexp.Regexp, stopped *atomic.Bool) workerOutput {
+	var out workerOutput
+	for job := range jobs {
+		if stopped.Load() || ctx.Err() != nil {
 			continue
 		}
-		info, infoErr := entry.Info()
-		if infoErr != nil || !info.Mode().IsRegular() {
-			if infoErr != nil {
-				result.ErrorsSkipped++
-			}
-			continue
-		}
-		binary, scanErr := searchFile(ctx, fs, path, re, result, outputLimit)
-		if scanErr == errSearchLimit {
-			result.FilesScanned++
-			return scanErr
-		}
+		matches, binary, scanErr := scanSingleFile(ctx, fs, job.absPath, display, re, &out)
 		if scanErr != nil {
-			result.ErrorsSkipped++
+			if scanErr == errSearchLimit {
+				// Keep the matches collected before the cap; then tell the
+				// other workers and the walker to wind down.
+				out.matches = append(out.matches, matches...)
+				stopped.Store(true)
+				continue
+			}
+			if errors.Is(scanErr, context.Canceled) || errors.Is(scanErr, context.DeadlineExceeded) {
+				continue
+			}
+			out.errorsSkipped++
 			continue
 		}
 		if binary {
-			result.BinaryFilesSkipped++
+			out.binarySkipped++
 			continue
 		}
-		result.FilesScanned++
+		out.filesScanned++
+		if len(matches) > 0 {
+			out.matches = append(out.matches, matches...)
+		}
 	}
-	return nil
+	return out
 }
 
-func searchFile(ctx context.Context, fs FileSystem, path string, re *regexp.Regexp, result *fsSearchResult, outputLimit int) (bool, error) {
-	reader, err := openSearchFile(ctx, fs, path)
+// scanSingleFile opens one file, runs the binary probe, and collects
+// per-line matches. A worker stops itself after maxSearchMatches local
+// matches so no single worker can dwarf the global limit; the output-byte
+// budget is enforced once, globally, after the merge.
+func scanSingleFile(ctx context.Context, fs FileSystem, absPath string, display func(string) string, re *regexp.Regexp, out *workerOutput) ([]fsSearchMatch, bool, error) {
+	reader, err := openSearchFile(ctx, fs, absPath)
 	if err != nil {
-		return false, err
+		return nil, false, err
 	}
 	defer reader.Close()
 
 	buffered := bufio.NewReader(reader)
 	probe, err := buffered.Peek(8192)
 	if err != nil && err != io.EOF && err != bufio.ErrBufferFull {
-		return false, err
+		return nil, false, err
 	}
 	if bytes.IndexByte(probe, 0) >= 0 || (!utf8.Valid(probe) && len(probe) > 0) {
-		return true, nil
+		return nil, true, nil
 	}
 
+	displayPath := display(absPath)
+	var matches []fsSearchMatch
 	lineNumber := 0
 	for {
 		if err := ctx.Err(); err != nil {
-			return false, err
+			return nil, false, err
 		}
 		line, readErr := buffered.ReadString('\n')
 		if len(line) > 0 {
 			lineNumber++
 			line = strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r")
 			if location := re.FindStringIndex(line); location != nil {
-				match := fsSearchMatch{
-					Path: displayToolPath(fs, path), Line: lineNumber,
+				if len(out.matches)+len(matches) >= maxSearchMatches {
+					out.localLimitHit = true
+					out.filesScanned++
+					return matches, false, errSearchLimit
+				}
+				matches = append(matches, fsSearchMatch{
+					Path: displayPath, Line: lineNumber,
 					Column: utf8.RuneCountInString(line[:location[0]]) + 1, Text: line,
-				}
-				encoded, _ := json.Marshal(match)
-				separatorBytes := 0
-				if len(result.Matches) > 0 {
-					separatorBytes = 1
-				}
-				const finalMetadataReserve = 256
-				if len(result.Matches) >= maxSearchMatches || result.encodedSize+separatorBytes+len(encoded)+finalMetadataReserve > outputLimit {
-					result.Truncated = true
-					if len(result.Matches) >= maxSearchMatches {
-						result.StoppedReason = "match_limit"
-					} else {
-						result.StoppedReason = "output_size_limit"
-					}
-					return false, errSearchLimit
-				}
-				result.Matches = append(result.Matches, match)
-				result.encodedSize += separatorBytes + len(encoded)
+				})
 			}
 		}
 		if readErr == io.EOF {
 			break
 		}
 		if readErr != nil {
-			return false, readErr
+			return nil, false, readErr
 		}
 	}
-	return false, nil
+	return matches, false, nil
+}
+
+// applyGlobalLimits applies the count and byte budgets to the fully sorted
+// match list. Truncation keeps the smallest entries under the total order,
+// which is deterministic across runs regardless of worker scheduling.
+func applyGlobalLimits(matches []fsSearchMatch, result *fsSearchResult, outputLimit int, workerLimitHit bool) {
+	const finalMetadataReserve = 256
+	kept := 0
+	encodedSize := 0
+	truncated := false
+	reason := ""
+	for _, match := range matches {
+		encoded, _ := json.Marshal(match)
+		separatorBytes := 1
+		if kept >= maxSearchMatches || encodedSize+separatorBytes+len(encoded)+finalMetadataReserve > outputLimit {
+			truncated = true
+			if kept >= maxSearchMatches {
+				reason = "match_limit"
+			} else {
+				reason = "output_size_limit"
+			}
+			break
+		}
+		matches[kept] = match
+		kept++
+		encodedSize += separatorBytes + len(encoded)
+	}
+	if !truncated && workerLimitHit {
+		// A worker filled its local share, so some files were never scanned;
+		// report the result as truncated even if the kept slice is in budget.
+		truncated = true
+		reason = "match_limit"
+	}
+	result.Truncated = truncated
+	result.StoppedReason = reason
+	result.Matches = matches[:kept]
+	result.encodedSize = searchResultSize(result)
 }
 
 func openSearchFile(ctx context.Context, fs FileSystem, path string) (io.ReadCloser, error) {

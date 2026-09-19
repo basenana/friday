@@ -110,7 +110,7 @@ func newExecutor(t *testing.T, cfg *E2EConfig) *sandbox.Executor {
 // newBashFsTools returns bash + fs tools bound to workdir.
 func newBashFsTools(t *testing.T, exec *sandbox.Executor, workdir string) []*tools.Tool {
 	t.Helper()
-	out := []*tools.Tool{sandbox.NewBashTool(exec, workdir)}
+	out := []*tools.Tool{sandbox.NewBashTool(exec, workdir, nil)}
 	out = append(out, sandbox.NewFsTools(exec, workdir)...)
 	return out
 }

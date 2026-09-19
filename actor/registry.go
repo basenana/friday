@@ -292,6 +292,11 @@ func (r *Registry) GetOrCreate(sessionID string) (result *coreactor.Actor, resul
 	opts = append(opts, coreactor.WithFilePathValidator(validator))
 
 	e.actor = coreactor.New(agentCtx.Agent, agentCtx.Session, opts...)
+	// Interactive approval: missing-allowlist bash denials raise a form on
+	// this actor's stream and block the tool call until the user answers.
+	if agentCtx.Approver != nil {
+		agentCtx.Approver.Bind(e.actor)
+	}
 	e.stopLoop = e.actor.Start(r.ctx) // loop tied to registry lifetime
 	e.attach(r.bus, sessionID)
 	r.entries[sessionID] = e
