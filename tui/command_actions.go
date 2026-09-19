@@ -232,6 +232,7 @@ func (m *model) applyModel(name string) (tea.Model, tea.Cmd) {
 	for _, model := range m.cfg.ChatModels() {
 		if model.Model == name {
 			m.activeModel = model
+			m.invalidateRuntimeInfo()
 			break
 		}
 	}
@@ -272,6 +273,7 @@ func (m *model) applyEffort(effort string) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.registry.RefreshSessionPolicy(m.sessionID)
+	m.invalidateRuntimeInfo()
 	m.appendBlock(chatBlock{kind: blockDivider, content: "effort · " + effort})
 	return m, nil
 }
@@ -662,7 +664,26 @@ func effectiveEffort(m *model) string {
 	return effort
 }
 
+// runtimeInfoTTL bounds how long client runtime info is reused before the
+// registry and session-runtime lookups run again.
+const runtimeInfoTTL = 2 * time.Second
+
 func (m *model) clientRuntimeInfo() providers.ClientRuntimeInfo {
+	if !m.runtimeInfoAt.IsZero() && m.nowTime().Sub(m.runtimeInfoAt) < runtimeInfoTTL {
+		return m.runtimeInfoCache
+	}
+	info := m.computeClientRuntimeInfo()
+	m.runtimeInfoCache, m.runtimeInfoAt = info, m.nowTime()
+	return info
+}
+
+// invalidateRuntimeInfo drops the cached client runtime info so the next
+// read recomputes it (model switch, session switch, model retry events).
+func (m *model) invalidateRuntimeInfo() {
+	m.runtimeInfoAt = time.Time{}
+}
+
+func (m *model) computeClientRuntimeInfo() providers.ClientRuntimeInfo {
 	if m != nil && m.registry != nil {
 		if info, ok := m.registry.SessionClientRuntime(m.sessionID); ok {
 			return info

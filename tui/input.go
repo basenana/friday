@@ -247,7 +247,7 @@ func (m *model) applySessionAction(action codercmds.Action) (bool, tea.Cmd) {
 	case codercmds.CompactSessionAction:
 		m.manualCompacting = true
 		m.layout()
-		return true, tea.Batch(m.compactManually(m.sessionID), m.spinner.Tick)
+		return true, tea.Batch(m.compactManually(m.sessionID), m.armSpinner())
 	case codercmds.ShowContextAction:
 		lifecycle, release, err := m.registry.AcquireLifecycle(m.sessionID)
 		if err != nil {
@@ -442,7 +442,7 @@ func (m *model) applyCollaborationAction(action codercmds.Action) (bool, tea.Cmd
 		}
 		m.loopActive = true
 		m.appendBlock(chatBlock{kind: blockDivider, content: "loop · started"})
-		return true, m.spinner.Tick
+		return true, m.armSpinner()
 	}
 	return false, nil
 }
@@ -455,7 +455,7 @@ func (m *model) dispatchIfIdle() (tea.Model, tea.Cmd) {
 }
 
 func (m *model) canDispatchQueued() bool {
-	return !m.running && !m.reconciling && !m.planCompacting && !m.manualCompacting && len(m.queued) > 0 && m.form == nil && m.planHandoff == nil &&
+	return !m.running && !m.dispatching && !m.reconciling && !m.planCompacting && !m.manualCompacting && len(m.queued) > 0 && m.form == nil && m.planHandoff == nil &&
 		m.commandConfirm == nil && m.selector == nil && m.detail == nil && m.confirm == nil
 }
 
@@ -552,6 +552,7 @@ func (m *model) switchSession(newID string) (cmd tea.Cmd, err error) {
 	m.mode = m.runtime.CollaborationMode(newID)
 	m.latestPlan = latestPlan
 	m.activeModel = activeModel
+	m.invalidateRuntimeInfo()
 	m.subscriptionToken++
 	m.tokenCount, m.iteration = 0, 0
 	m.running, m.cancelling = false, false

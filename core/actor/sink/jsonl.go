@@ -13,12 +13,20 @@ import (
 	"github.com/basenana/friday/core/actor/events"
 )
 
+// sinkFlushThreshold bounds the JSONL write buffer. Streaming produces on
+// the order of a hundred events per second; an eager write(2)+stat(2) per
+// event is pure self-inflicted syscall load. Terminal events always flush.
+const sinkFlushThreshold = 32 << 10
+
 // JSONL appends events as one JSON object per line to a file. Writes
 // are serialized under a mutex; fsync is not called by default.
+// Non-terminal events are buffered and flushed when a terminal event
+// (RunFinished/RunError) lands or the buffer fills.
 type JSONL struct {
 	path        string
 	mu          sync.Mutex
 	f           *os.File
+	w           *bufio.Writer
 	enc         *json.Encoder
 	maxBytes    int64
 	targetBytes int64
@@ -37,12 +45,13 @@ func NewBoundedJSONL(path string, maxBytes, targetBytes int64) (*JSONL, error) {
 	if err != nil {
 		return nil, fmt.Errorf("sink: open jsonl %s: %w", path, err)
 	}
-	enc := json.NewEncoder(f)
+	w := bufio.NewWriterSize(f, sinkFlushThreshold)
+	enc := json.NewEncoder(w)
 	enc.SetEscapeHTML(false)
 	if maxBytes > 0 && (targetBytes <= 0 || targetBytes >= maxBytes) {
 		targetBytes = maxBytes * 3 / 4
 	}
-	return &JSONL{path: path, f: f, enc: enc, maxBytes: maxBytes, targetBytes: targetBytes}, nil
+	return &JSONL{path: path, f: f, w: w, enc: enc, maxBytes: maxBytes, targetBytes: targetBytes}, nil
 }
 
 // Append writes one event line.
@@ -51,6 +60,14 @@ func (j *JSONL) Append(_ context.Context, evt events.Event) error {
 	defer j.mu.Unlock()
 	if err := j.enc.Encode(evt); err != nil {
 		return fmt.Errorf("sink: encode event: %w", err)
+	}
+	terminal := evt.Type == events.KindRunFinished || evt.Type == events.KindRunError
+	if !terminal {
+		// The bufio.Writer flushes itself when the buffer fills.
+		return nil
+	}
+	if err := j.w.Flush(); err != nil {
+		return fmt.Errorf("sink: flush jsonl: %w", err)
 	}
 	if j.maxBytes > 0 {
 		info, err := j.f.Stat()
@@ -142,15 +159,18 @@ func compactJSONLFile(f *os.File, size, maxBytes, targetBytes int64) error {
 	return nil
 }
 
-// Close closes the underlying file. Subsequent Append calls return an
-// error.
+// Close flushes any buffered events and closes the underlying file.
+// Subsequent Append calls return an error.
 func (j *JSONL) Close() error {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	if j.f == nil {
 		return nil
 	}
-	err := j.f.Close()
+	err := j.w.Flush()
+	if cerr := j.f.Close(); err == nil {
+		err = cerr
+	}
 	j.f = nil
 	return err
 }

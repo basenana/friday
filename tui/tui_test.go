@@ -126,20 +126,20 @@ func (s *blockingEventStore) LoadEvents(ctx context.Context, id string) ([]event
 	}
 }
 
-func newTestModel(t *testing.T) (*model, *sessions.Manager, *sessionfile.FileSessionStore) {
-	return newTestModelWithConfig(t, nil)
+func newTestModel(tb testing.TB) (*model, *sessions.Manager, *sessionfile.FileSessionStore) {
+	return newTestModelWithConfig(tb, nil)
 }
 
-func newTestModelWithConfig(t *testing.T, configure func(*config.Config)) (*model, *sessions.Manager, *sessionfile.FileSessionStore) {
-	t.Helper()
+func newTestModelWithConfig(tb testing.TB, configure func(*config.Config)) (*model, *sessions.Manager, *sessionfile.FileSessionStore) {
+	tb.Helper()
 
-	baseDir := t.TempDir()
+	baseDir := tb.TempDir()
 	store := sessionfile.NewFileSessionStore(filepath.Join(baseDir, "sessions"))
 	mgr := sessions.NewManager(store, filepath.Join(baseDir, "current"), "test")
 
 	sessionID := "session-initial"
 	if _, _, err := mgr.GetOrCreateByID(sessionID); err != nil {
-		t.Fatalf("GetOrCreateByID() failed: %v", err)
+		tb.Fatalf("GetOrCreateByID() failed: %v", err)
 	}
 
 	cfg := config.DefaultConfig()
@@ -152,16 +152,16 @@ func newTestModelWithConfig(t *testing.T, configure func(*config.Config)) (*mode
 
 	registry, err := actor.NewRegistry(mgr, cfg, actor.DefaultRegistryConfig())
 	if err != nil {
-		t.Fatal(err)
+		tb.Fatal(err)
 	}
-	t.Cleanup(registry.ShutdownAll)
+	tb.Cleanup(registry.ShutdownAll)
 
 	cmdRegistry := codercmds.NewRegistry()
 	codercmds.RegisterAll(cmdRegistry)
 
 	m, err := initialModel(mgr, registry, cmdRegistry, cfg, sessionID)
 	if err != nil {
-		t.Fatalf("initialModel() failed: %v", err)
+		tb.Fatalf("initialModel() failed: %v", err)
 	}
 	return m, mgr, store
 }

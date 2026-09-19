@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -37,6 +38,7 @@ func TestComposerPublishesImageOnlyInput(t *testing.T) {
 	if len(m.attachments) != 0 {
 		t.Fatalf("sent attachments were not cleared: %#v", m.attachments)
 	}
+	flushDispatch(t, m, cmd)
 	select {
 	case env := <-inbox:
 		var body bus.UserTextInput
@@ -107,8 +109,13 @@ func TestTUILoopCommandSeedsRecordsAndIdleEscCancels(t *testing.T) {
 	// There is a small interval before RUN_STARTED reaches the TUI. Esc must
 	// still cancel an active Loop during that interval.
 	m.running = false
-	got, _ = m.updateKey(tea.KeyPressMsg{Code: tea.KeyEsc})
+	got, cancel := m.updateKey(tea.KeyPressMsg{Code: tea.KeyEsc})
 	m = got.(*model)
+	if cancel == nil {
+		t.Fatal("Esc during an active loop returned no cancel command")
+	}
+	updated, _ := m.Update(cancel())
+	m = updated.(*model)
 	if state := readLoopState(t, sess); state != string(coderloop.StateCancelled) {
 		t.Fatalf("state after Esc = %q", state)
 	}
@@ -171,11 +178,12 @@ func TestTUITabDuringLoopPublishesNormalActorInput(t *testing.T) {
 
 	m.running = true
 	m.textarea.SetValue("queued user correction")
-	got, _ := m.updateKey(tea.KeyPressMsg{Code: tea.KeyTab})
+	got, cmd := m.updateKey(tea.KeyPressMsg{Code: tea.KeyTab})
 	m = got.(*model)
 	if len(m.queued) != 0 {
 		t.Fatalf("input remained in TUI queue: %#v", m.queued)
 	}
+	flushDispatch(t, m, cmd)
 	select {
 	case env := <-inbox:
 		var body bus.UserTextInput
@@ -216,8 +224,9 @@ func TestTUIEnterDuringLoopAddsNormalInboxInputWithoutCancelling(t *testing.T) {
 	m.loopActive = true
 	before := len(m.messages)
 	m.textarea.SetValue("stop changing the API; preserve compatibility")
-	got, _ := m.updateKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	got, cmd := m.updateKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = got.(*model)
+	flushDispatch(t, m, cmd)
 	if state := readLoopState(t, sess); state != string(coderloop.StateActive) {
 		t.Fatalf("Loop state after user input = %q", state)
 	}
@@ -274,8 +283,9 @@ func TestTUISuccessfulUserTurnResumesSuspendedLoop(t *testing.T) {
 	m.running = true
 	m.currentRunID = "user-wake"
 	m.seenInputs["user-wake"] = true
-	m.handleActorEvent(events.NewEvent(events.KindRunFinished, "user-wake").
+	cmd := m.handleActorEvent(events.NewEvent(events.KindRunFinished, "user-wake").
 		WithPayload(events.RunFinishedData{StopReason: "end_turn"}))
+	execCmds(cmd) // record + resume run off the update loop
 
 	select {
 	case env := <-inbox:
@@ -322,8 +332,9 @@ func TestTUIFailedUserTurnRemainsSuspended(t *testing.T) {
 	m.currentRunID = "user-failed"
 	m.seenInputs["user-failed"] = true
 	before := len(m.messages)
-	m.handleActorEvent(events.NewEvent(events.KindRunFinished, "user-failed").
+	cmd := m.handleActorEvent(events.NewEvent(events.KindRunFinished, "user-failed").
 		WithPayload(events.RunFinishedData{StopReason: "error"}))
+	execCmds(cmd) // record runs off the update loop
 
 	select {
 	case env := <-inbox:
@@ -486,6 +497,70 @@ func TestEventLogRestoresVisibleLoopActivity(t *testing.T) {
 	if m.messages[0].content != "loop · develop" || m.messages[1].kind != blockReasoning ||
 		m.messages[2].kind != blockToolCall || m.messages[3].kind != blockDivider {
 		t.Fatalf("restored Loop activity = %#v", m.messages)
+	}
+}
+
+// TestLoopStateMsgSurfacesErrorsAndState pins the loopStateMsg contract:
+// errors become labeled error blocks, dividers render, and loopActive is
+// applied only when the message carries state.
+func TestLoopStateMsgSurfacesErrorsAndState(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	m.loopActive = true
+
+	updated, _ := m.Update(loopStateMsg{err: errors.New("boom"), errLabel: "record loop state"})
+	um := updated.(*model)
+	last := um.messages[len(um.messages)-1]
+	if last.kind != blockError || !strings.Contains(last.content, "record loop state: boom") {
+		t.Fatalf("error path produced %#v", last)
+	}
+
+	updated, _ = um.Update(loopStateMsg{active: false, hasState: true, divider: "loop · cancelled"})
+	um = updated.(*model)
+	if um.loopActive {
+		t.Fatal("loopActive was not applied from the message")
+	}
+	last = um.messages[len(um.messages)-1]
+	if last.kind != blockDivider || last.content != "loop · cancelled" {
+		t.Fatalf("divider missing: %#v", last)
+	}
+
+	// Messages without state (e.g. cancelling an inactive loop) leave
+	// loopActive alone.
+	um.loopActive = true
+	updated, _ = um.Update(loopStateMsg{})
+	if !updated.(*model).loopActive {
+		t.Fatal("empty loopStateMsg changed loopActive")
+	}
+}
+
+// TestRecordRunFinishedCmdRecordsThenResumes pins the serialized record
+// order inside one command: record the finished run, then resume, then
+// report the refreshed state.
+func TestRecordRunFinishedCmdRecordsThenResumes(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	defer m.loopManager.Close()
+	lifecycle, _ := m.registry.Lifecycle(m.sessionID)
+	sess := lifecycle.Current()
+	if err := sess.UpdateRecord(context.Background(), coderloop.StateNamespace, func([]byte) ([]byte, error) {
+		return []byte(coderloop.StateSuspended), nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := m.recordRunFinishedCmd("end_turn", true)
+	msg := cmd()
+	state, ok := msg.(loopStateMsg)
+	if !ok {
+		t.Fatalf("command produced %T", msg)
+	}
+	if state.err != nil {
+		t.Fatalf("record+resume failed: %v", state.err)
+	}
+	if !state.hasState || !state.active {
+		t.Fatalf("state message = %#v, want active loop", state)
+	}
+	if got := readLoopState(t, sess); got != string(coderloop.StateActive) {
+		t.Fatalf("loop state = %q, want active", got)
 	}
 }
 

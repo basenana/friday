@@ -24,6 +24,11 @@ func writeTestSkill(t *testing.T, m *model, dirName, name, description, instruct
 	if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// The registry rate-limits its directory stamp checks; tests need the
+	// freshly written skill visible immediately, so force a reload.
+	if err := m.skillRegistry.Refresh(); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestSlashPopupIncludesSkillsAndHidesBuiltinConflicts(t *testing.T) {
@@ -109,11 +114,12 @@ func TestSlashSkillSendsInstructionsAndDisplaysInvocation(t *testing.T) {
 	defer m.registry.Bus().Unsubscribe(id)
 
 	m.textarea.SetValue("/writer preserve   spacing")
-	got, _ := m.submitComposer()
+	got, cmd := m.submitComposer()
 	m = got.(*model)
 	if len(m.messages) == 0 || m.messages[len(m.messages)-1].content != "/writer preserve   spacing" {
 		t.Fatalf("displayed message = %#v", m.messages)
 	}
+	flushDispatch(t, m, cmd)
 
 	select {
 	case env := <-inbox:
@@ -152,8 +158,9 @@ func TestRunningSlashSkillQueuesAndRefreshesWhenDispatched(t *testing.T) {
 	}, eventbus.SerialConfig{Overflow: eventbus.OverflowBlock})
 	defer m.registry.Bus().Unsubscribe(id)
 	m.running = false
-	got, _ = m.dispatchNextQueued()
+	got, cmd := m.dispatchNextQueued()
 	m = got.(*model)
+	flushDispatch(t, m, cmd)
 
 	select {
 	case env := <-inbox:

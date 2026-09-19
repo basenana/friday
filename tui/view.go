@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"time"
 	"unicode"
 
 	tea "charm.land/bubbletea/v2"
@@ -42,6 +43,22 @@ type chatBlock struct {
 	timedOut         bool
 	timeoutKind      string
 	card             *cardState
+
+	// wip buffers streamed deltas so appending does not re-copy the whole
+	// accumulated message on every delta. fullContent materializes it lazily.
+	// Never copy a chatBlock by value after wip has been written to.
+	wip strings.Builder
+}
+
+// fullContent returns the complete content, materializing any buffered
+// streamed deltas exactly once.
+func (b *chatBlock) fullContent() string {
+	if b.wip.Len() == 0 {
+		return b.content
+	}
+	b.content += b.wip.String()
+	b.wip.Reset()
+	return b.content
 }
 
 var (
@@ -120,6 +137,84 @@ func (m *model) invalidateRendered() {
 	for i := range m.messages {
 		m.messages[i].rendered = ""
 	}
+	m.markTranscriptDirty(true)
+}
+
+// streamRebuildInterval throttles transcript rebuilds while a run is
+// streaming deltas: full glamour re-renders are the most expensive part of
+// a frame, and 10 fps keeps streaming output responsive without burning CPU.
+const streamRebuildInterval = 100 * time.Millisecond
+
+// markTranscriptDirty flags the transcript for rebuild on the next View.
+// force bypasses the streaming rebuild throttle.
+func (m *model) markTranscriptDirty(force bool) {
+	m.transcriptDirty = true
+	if force {
+		m.forceTranscript = true
+	}
+}
+
+// streamActive reports whether a run is currently streaming deltas into the
+// transcript, which gates the rebuild throttle.
+func (m *model) streamActive() bool {
+	return m.textBlock >= 0 || m.reasonBlock >= 0 || len(m.toolCalls) > 0
+}
+
+// rebuildDue reports whether the next View must rebuild the transcript.
+func (m *model) rebuildDue() bool {
+	if !m.transcriptDirty {
+		return false
+	}
+	if m.forceTranscript || !m.streamActive() {
+		return true
+	}
+	return m.nowTime().Sub(m.lastTranscriptBuild) >= streamRebuildInterval
+}
+
+// rebuildTranscript re-renders every block, joins them, and pushes the
+// result into the viewport. This is the only path that touches viewport
+// content, so presentation-only frames never pay for it.
+func (m *model) rebuildTranscript(atBottom bool) {
+	var blocks []string
+	for i := range m.messages {
+		if rendered := m.renderBlock(&m.messages[i]); rendered != "" {
+			blocks = append(blocks, rendered)
+		}
+	}
+	m.viewport.SetContent(joinConversationBlocks(blocks))
+	if atBottom {
+		m.viewport.GotoBottom()
+	}
+	m.transcriptDirty = false
+	m.forceTranscript = false
+	m.lastTranscriptBuild = m.nowTime()
+	m.transcriptRebuilds++
+}
+
+// renderActivityLine is the fixed status line rendered below the transcript
+// while a run or compaction is in flight. It lives outside the viewport so
+// the transcript itself stays clean for dirty-flag caching.
+func (m *model) renderActivityLine() string {
+	if m.running {
+		label := m.runActivity
+		if label == "" {
+			label = "working"
+		}
+		if m.form != nil {
+			label = "waiting for input"
+		}
+		if m.cancelling {
+			label = "cancelling"
+		}
+		return accentStyle.Render(m.spinner.View() + " " + label + "… · " + formatElapsed(m.currentElapsed()))
+	}
+	if m.planCompacting {
+		return accentStyle.Render(m.spinner.View() + " compacting context for approved plan…")
+	}
+	if m.manualCompacting {
+		return accentStyle.Render(m.spinner.View() + " compacting context…")
+	}
+	return ""
 }
 
 func (m *model) markdown(content string) string {
@@ -159,11 +254,11 @@ func (m *model) renderBlock(b *chatBlock) string {
 	wrapWidth := m.conversationWidth()
 	switch b.kind {
 	case blockUser:
-		b.rendered = lipgloss.Wrap(userStyle.Render("› ")+strings.TrimRight(terminalSafe(b.content), "\n"), wrapWidth, "")
+		b.rendered = lipgloss.Wrap(userStyle.Render("› ")+strings.TrimRight(terminalSafe(b.fullContent()), "\n"), wrapWidth, "")
 	case blockAssistant:
-		b.rendered = lipgloss.Wrap(m.markdown(b.content)+suffix, wrapWidth, "")
+		b.rendered = lipgloss.Wrap(m.markdown(b.fullContent())+suffix, wrapWidth, "")
 	case blockReasoning:
-		content := lipgloss.Wrap(truncateLines(terminalSafe(b.content), 12), max(wrapWidth-2, 18), "")
+		content := lipgloss.Wrap(truncateLines(terminalSafe(b.fullContent()), 12), max(wrapWidth-2, 18), "")
 		b.rendered = mutedStyle.Render("thinking") + "\n" + reasoningStyle.Render(content) + suffix
 	case blockToolCall:
 		b.rendered = m.renderToolCard(b)
@@ -214,35 +309,14 @@ func (m *model) View() tea.View {
 	}
 	wasAtBottom := m.viewport.AtBottom()
 	m.layout()
-	var blocks []string
-	for i := range m.messages {
-		if rendered := m.renderBlock(&m.messages[i]); rendered != "" {
-			blocks = append(blocks, rendered)
-		}
-	}
-	if m.running {
-		label := m.runActivity
-		if label == "" {
-			label = "working"
-		}
-		if m.form != nil {
-			label = "waiting for input"
-		}
-		if m.cancelling {
-			label = "cancelling"
-		}
-		blocks = append(blocks, accentStyle.Render(m.spinner.View()+" "+label+"… · "+formatElapsed(m.currentElapsed())))
-	} else if m.planCompacting {
-		blocks = append(blocks, accentStyle.Render(m.spinner.View()+" compacting context for approved plan…"))
-	} else if m.manualCompacting {
-		blocks = append(blocks, accentStyle.Render(m.spinner.View()+" compacting context…"))
-	}
-	m.viewport.SetContent(joinConversationBlocks(blocks))
-	if wasAtBottom {
-		m.viewport.GotoBottom()
+	if m.rebuildDue() {
+		m.rebuildTranscript(wasAtBottom)
 	}
 
 	parts := []string{m.viewport.View()}
+	if activity := m.renderActivityLine(); activity != "" {
+		parts = append(parts, activity)
+	}
 	if len(m.queued) > 0 {
 		parts = append(parts, m.renderQueue())
 	}

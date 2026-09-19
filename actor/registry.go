@@ -84,8 +84,12 @@ func DefaultRegistryConfig() RegistryConfig {
 // GetOrCreate and torn down on Shutdown, ShutdownAll, or after
 // IdleTimeout of inactivity, provided they own no protected work.
 type Registry struct {
-	mu      sync.Mutex
+	mu      sync.RWMutex
 	entries map[string]*managedActor
+	// building tracks in-flight actor constructions per session so
+	// concurrent GetOrCreate callers singleflight onto one build instead
+	// of serializing on the mutex (builds do disk IO and client init).
+	building map[string]chan struct{}
 
 	cfg     RegistryConfig
 	sessMgr setup.SessionManager
@@ -147,18 +151,19 @@ func NewRegistry(sessMgr setup.SessionManager, appCfg *config.Config, cfg Regist
 		return nil, fmt.Errorf("create model pool: %w", err)
 	}
 	r := &Registry{
-		entries: make(map[string]*managedActor),
-		cfg:     cfg,
-		sessMgr: sessMgr,
-		appCfg:  appCfg,
-		catalog: catalog,
-		workdir: workdir,
-		bus:     cfg.Bus,
-		skills:  skills.NewRegistry(skillLoader),
-		agents:  agentRegistry,
-		models:  modelPool,
-		ctx:     ctx,
-		cancel:  cancel,
+		entries:  make(map[string]*managedActor),
+		building: make(map[string]chan struct{}),
+		cfg:      cfg,
+		sessMgr:  sessMgr,
+		appCfg:   appCfg,
+		catalog:  catalog,
+		workdir:  workdir,
+		bus:      cfg.Bus,
+		skills:   skills.NewRegistry(skillLoader),
+		agents:   agentRegistry,
+		models:   modelPool,
+		ctx:      ctx,
+		cancel:   cancel,
 	}
 	mcpManager, err := fridaymcp.NewManager(fridaymcp.ManagerConfig{
 		ConfigRoots: ws.MCPRoots(), ProjectRoot: workdir,
@@ -192,8 +197,10 @@ func (r *Registry) MCPManager() *fridaymcp.Manager { return r.mcp }
 // GetOrCreate returns the live Actor for sessionID, constructing it
 // (agent + session via setup.NewAgent) on first use. An actor is built
 // once for its lifetime; its session keeps in-memory history across
-// turns, with persistence handled by the session store.
-func (r *Registry) GetOrCreate(sessionID string) (result *coreactor.Actor, resultErr error) {
+// turns, with persistence handled by the session store. Concurrent
+// callers singleflight onto one build; the build runs outside the
+// registry lock so read paths never queue behind it.
+func (r *Registry) GetOrCreate(sessionID string) (*coreactor.Actor, error) {
 	// Cache misses finish their bounded handshake before the first actor is
 	// exposed. Cached schemas remain non-blocking while their connection is
 	// refreshed in the background.
@@ -201,16 +208,49 @@ func (r *Registry) GetOrCreate(sessionID string) (result *coreactor.Actor, resul
 		r.mcp.Warmup(r.ctx)
 	}
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	if e, ok := r.entries[sessionID]; ok && !e.stopped.Load() {
 		e.touch()
+		r.mu.Unlock()
 		return e.actor, nil
+	}
+	if done, ok := r.building[sessionID]; ok {
+		// Another goroutine is building this actor; wait for its result.
+		r.mu.Unlock()
+		<-done
+		r.mu.Lock()
+		if e, ok := r.entries[sessionID]; ok && !e.stopped.Load() {
+			e.touch()
+			r.mu.Unlock()
+			return e.actor, nil
+		}
+		r.mu.Unlock()
+		return nil, fmt.Errorf("session actor for %s is unavailable after build", sessionID)
 	}
 	if old, ok := r.entries[sessionID]; ok {
 		// Stale entry from a concurrent shutdown; clean it up.
 		delete(r.entries, sessionID)
+		r.mu.Unlock()
 		old.close(r.cfg.ShutdownGrace)
+		r.mu.Lock()
 	}
+	done := make(chan struct{})
+	r.building[sessionID] = done
+	r.mu.Unlock()
+
+	result, resultErr := r.buildActor(sessionID)
+
+	r.mu.Lock()
+	delete(r.building, sessionID)
+	r.mu.Unlock()
+	close(done)
+	return result, resultErr
+}
+
+// buildActor constructs a session actor (agent + session via setup.NewAgent)
+// and installs it. It runs WITHOUT the registry mutex held so readers never
+// wait behind the build; only the final map insert takes the lock briefly.
+// Callers reach it through GetOrCreate, which singleflights per session.
+func (r *Registry) buildActor(sessionID string) (result *coreactor.Actor, resultErr error) {
 	started := time.Now()
 	registryLogger := logger.New("actor.registry")
 	registryLogger.Infow("creating session actor",
@@ -299,7 +339,9 @@ func (r *Registry) GetOrCreate(sessionID string) (result *coreactor.Actor, resul
 	}
 	e.stopLoop = e.actor.Start(r.ctx) // loop tied to registry lifetime
 	e.attach(r.bus, sessionID)
+	r.mu.Lock()
 	r.entries[sessionID] = e
+	r.mu.Unlock()
 	bus.PublishStatus(r.bus, sessionID, e.actor.ID(), bus.StatusCreated)
 	return e.actor, nil
 }
@@ -420,14 +462,16 @@ func (r *Registry) RefreshSessionPolicy(sessionID string) {
 // snapshot. Agent and subagent forks own separate snapshots and therefore do
 // not affect this Session-level view.
 func (r *Registry) SessionClientRuntime(sessionID string) (providers.ClientRuntimeInfo, bool) {
-	r.mu.Lock()
+	// Read-only under the shared lock: this is on the renderStatus hot
+	// path and must never queue behind a build.
+	r.mu.RLock()
 	entry := r.entries[sessionID]
 	if entry == nil || entry.stopped.Load() || entry.agentCtx == nil {
-		r.mu.Unlock()
+		r.mu.RUnlock()
 		return providers.ClientRuntimeInfo{}, false
 	}
 	client := entry.agentCtx.Client
-	r.mu.Unlock()
+	r.mu.RUnlock()
 	return providers.RuntimeInfo(client)
 }
 

@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -20,6 +21,78 @@ import (
 	sessionusage "github.com/basenana/friday/sessions/usage"
 	"github.com/basenana/friday/setup"
 )
+
+// TestGetOrCreateConcurrentSameSession pins the singleflight contract:
+// concurrent builders of the same session must all return the same live
+// actor, must not deadlock, and SessionClientRuntime readers must keep
+// making progress while a build is in flight (builds run outside the
+// registry lock).
+func TestGetOrCreateConcurrentSameSession(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.DataDir = t.TempDir()
+	cfg.Workspace = filepath.Join(cfg.DataDir, "workspace")
+	store := file.NewFileSessionStore(cfg.SessionsPath())
+	mgr := sessions.NewManager(store, filepath.Join(cfg.DataDir, "current"), "")
+	registry, err := NewRegistry(mgr, cfg, DefaultRegistryConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(registry.ShutdownAll)
+	if _, _, err := mgr.GetOrCreateByID("session-concurrent"); err != nil {
+		t.Fatal(err)
+	}
+
+	const workers = 50
+	actors := make([]*coreactor.Actor, workers)
+	errs := make([]error, workers)
+	readerDone := make(chan struct{})
+	var wg sync.WaitGroup
+	started := make(chan struct{})
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-started
+			actors[i], errs[i] = registry.GetOrCreate("session-concurrent")
+		}(i)
+	}
+	go func() {
+		defer close(readerDone)
+		<-started
+		// Reads must not starve behind the concurrent builds.
+		deadline := time.After(5 * time.Second)
+		for {
+			select {
+			case <-deadline:
+				return
+			default:
+			}
+			registry.SessionClientRuntime("session-concurrent")
+			time.Sleep(time.Millisecond)
+		}
+	}()
+	close(started)
+	wg.Wait()
+
+	for i := range errs {
+		if errs[i] != nil {
+			t.Fatalf("worker %d: %v", i, errs[i])
+		}
+	}
+	for i := 1; i < workers; i++ {
+		if actors[i] != actors[0] {
+			t.Fatalf("worker %d returned a different actor instance", i)
+		}
+	}
+	if actors[0] == nil {
+		t.Fatal("nil actor returned")
+	}
+	select {
+	case <-readerDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("SessionClientRuntime reader starved behind concurrent builds")
+	}
+}
 
 func TestNewRegistryRejectsMalformedAgentSpec(t *testing.T) {
 	cfg := config.DefaultConfig()

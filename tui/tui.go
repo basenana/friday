@@ -25,6 +25,7 @@ import (
 	"github.com/basenana/friday/core/actor/events"
 	"github.com/basenana/friday/core/collaboration"
 	"github.com/basenana/friday/core/planning"
+	"github.com/basenana/friday/core/providers"
 	coresession "github.com/basenana/friday/core/session"
 	"github.com/basenana/friday/core/types"
 	"github.com/basenana/friday/sessions"
@@ -201,19 +202,23 @@ type model struct {
 	composerGeneration   uint64
 	viewport             viewport.Model
 	spinner              spinner.Model
-	markdownRenderer     *glamour.TermRenderer
-	markdownWidth        int
-	darkBackground       bool
-	alternateScreen      bool
-	menu                 menuState
-	form                 *formState
-	confirm              *openConfirmation
-	detail               *detailState
-	selector             *selectorState
-	commandConfirm       *commandConfirmation
-	planHandoff          *planHandoffState
-	planCompacting       bool
-	manualCompacting     bool
+	// spinnerTicking tracks whether the spinner tick chain is alive, so
+	// busy paths only arm it on idle→busy transitions instead of every
+	// event batch.
+	spinnerTicking   bool
+	markdownRenderer *glamour.TermRenderer
+	markdownWidth    int
+	darkBackground   bool
+	alternateScreen  bool
+	menu             menuState
+	form             *formState
+	confirm          *openConfirmation
+	detail           *detailState
+	selector         *selectorState
+	commandConfirm   *commandConfirmation
+	planHandoff      *planHandoffState
+	planCompacting   bool
+	manualCompacting bool
 
 	running         bool
 	currentRunID    string
@@ -224,9 +229,26 @@ type model struct {
 	textBlock       int
 	reasonBlock     int
 	toolCalls       map[string]int
-	queued          []pendingInput
-	promptHistory   []string
-	historyIndex    int
+
+	// dispatching guards the async user-input dispatch: DispatchInput may
+	// rebuild an evicted actor (disk IO + client init), so it runs as a
+	// tea.Cmd instead of blocking the update loop. pendingDispatch chains
+	// follow-up submissions to preserve submit order.
+	dispatching     bool
+	pendingDispatch []bus.Envelope
+
+	// Transcript rebuild state: View() only re-renders blocks, joins, and
+	// pushes content into the viewport when the transcript actually changed.
+	// Presentation-only messages (cursor blink, spinner, mouse wheel) reuse
+	// the previous viewport content.
+	transcriptDirty     bool
+	forceTranscript     bool
+	lastTranscriptBuild time.Time
+	transcriptRebuilds  int
+
+	queued        []pendingInput
+	promptHistory []string
+	historyIndex  int
 
 	tokenCount        int
 	iteration         int
@@ -236,6 +258,12 @@ type model struct {
 	planProposalRunID string
 	activeModel       config.ModelConfig
 
+	// runtimeInfoCache keeps renderStatus from hitting the registry lock
+	// and session-runtime lookups on every frame; invalidated on model and
+	// session switches, bounded by runtimeInfoTTL otherwise.
+	runtimeInfoCache providers.ClientRuntimeInfo
+	runtimeInfoAt    time.Time
+
 	width, height      int
 	quitting           bool
 	replaying          bool
@@ -243,6 +271,11 @@ type model struct {
 	requestedSessionID string
 	fatalErr           error
 	now                func() time.Time
+
+	// resizeToken debounces full re-renders while the terminal is being
+	// resized: only the settle message carrying the latest token invalidates
+	// rendered blocks.
+	resizeToken int
 }
 
 func initialModel(sessMgr *sessions.Manager, registry *actor.Registry, cmdRegistry *codercmds.Registry, cfg *config.Config, sessionID string) (*model, error) {
@@ -273,11 +306,13 @@ func loadingModelAt(sessMgr *sessions.Manager, registry *actor.Registry, cmdRegi
 	return m
 }
 
-// newConversationViewport builds the transcript viewport. SoftWrap folds any
-// line wider than the terminal instead of cutting it off at the right edge.
+// newConversationViewport builds the transcript viewport. Blocks are
+// pre-wrapped to the conversation width by their renderers (see
+// TestAllBlockKindsFitConversationWidth), so SoftWrap stays off: viewport
+// offset math (AtBottom/GotoBottom/scrolling) is O(1) instead of scanning
+// every line for soft-wrapped heights.
 func newConversationViewport() viewport.Model {
 	vp := viewport.New(viewport.WithWidth(80), viewport.WithHeight(20))
-	vp.SoftWrap = true
 	return vp
 }
 
@@ -307,7 +342,8 @@ func baseModelAt(sessMgr *sessions.Manager, registry *actor.Registry, cmdRegistr
 		cards:        make(map[string]*cardState),
 		historyIndex: -1, darkBackground: true,
 		textBlock: -1, reasonBlock: -1,
-		now: time.Now,
+		transcriptDirty: true,
+		now:             time.Now,
 	}
 	m.clipboardImageReader = readClipboardImage
 	m.loopManager = coderloop.NewManager(
@@ -344,9 +380,9 @@ func baseModelAt(sessMgr *sessions.Manager, registry *actor.Registry, cmdRegistr
 func (m *model) Init() tea.Cmd {
 	if m.loading {
 		m.logInfo("initial session load requested", "requested_session", m.requestedSessionID != "")
-		return tea.Batch(textarea.Blink, m.spinner.Tick, m.loadInitialSession(), tea.RequestBackgroundColor)
+		return tea.Batch(textarea.Blink, m.armSpinner(), m.loadInitialSession(), tea.RequestBackgroundColor)
 	}
-	return tea.Batch(textarea.Blink, m.spinner.Tick, m.waitForActorEvent(), tea.RequestBackgroundColor)
+	return tea.Batch(textarea.Blink, m.armSpinner(), m.waitForActorEvent(), tea.RequestBackgroundColor)
 }
 
 type dispatchQueuedMsg struct{}
@@ -366,14 +402,74 @@ type transcriptReconciledMsg struct {
 	err        error
 }
 
+// resizeDebounce is how long the terminal must stay stable after a resize
+// before rendered blocks are invalidated and re-rendered at the new width.
+const resizeDebounce = 120 * time.Millisecond
+
+// resizeSettledMsg is emitted after a resize debounce window; a stale token
+// (superseded by a newer resize) is ignored.
+type resizeSettledMsg struct{ token int }
+
+// inputDispatchedMsg reports the result of an async user-input dispatch
+// (registry.DispatchInput) back into the update loop.
+type inputDispatchedMsg struct{ err error }
+
+// dispatchEnvelope runs the user-input dispatch off the update loop. The
+// registry may need to rebuild an evicted actor, which does disk IO and
+// provider client initialization.
+func (m *model) dispatchEnvelope(env bus.Envelope) tea.Cmd {
+	registry := m.registry
+	return func() tea.Msg {
+		return inputDispatchedMsg{err: registry.DispatchInput(env)}
+	}
+}
+
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		m.layout()
-		m.invalidateRendered()
-		m.markdownRenderer = nil
-		m.markdownWidth = 0
+		// Width and layout apply immediately; the expensive full
+		// re-render is debounced until the resize settles, so dragging
+		// the window edge does not re-render every block per step.
+		m.resizeToken++
+		token := m.resizeToken
+		return m, tea.Tick(resizeDebounce, func(time.Time) tea.Msg {
+			return resizeSettledMsg{token: token}
+		})
+	case resizeSettledMsg:
+		if msg.token == m.resizeToken {
+			m.invalidateRendered() // also forces a transcript rebuild
+		}
+		return m, nil
+	case inputDispatchedMsg:
+		m.dispatching = false
+		var next tea.Cmd
+		if len(m.pendingDispatch) > 0 {
+			// Chain follow-up submissions to preserve submit order.
+			env := m.pendingDispatch[0]
+			m.pendingDispatch = m.pendingDispatch[1:]
+			m.dispatching = true
+			next = m.dispatchEnvelope(env)
+		}
+		if msg.err != nil {
+			// The turn never started; undo the optimistic running state.
+			m.running = false
+			m.runActivity = ""
+			m.appendBlock(chatBlock{kind: blockError, content: msg.err.Error()})
+		}
+		return m, next
+	case loopStateMsg:
+		if msg.err != nil {
+			m.appendBlock(chatBlock{kind: blockError, content: msg.errLabel + ": " + msg.err.Error()})
+			return m, nil
+		}
+		if msg.divider != "" {
+			m.appendBlock(chatBlock{kind: blockDivider, content: msg.divider})
+		}
+		if msg.hasState {
+			m.loopActive = msg.active
+		}
 		return m, nil
 	case tea.BackgroundColorMsg:
 		m.applyTheme(msg.IsDark())
@@ -475,8 +571,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.resumeAfterReconcile && !m.transcriptDesynced {
 			m.resumeAfterReconcile = false
-			m.resumeLoop()
-			return m, nil
+			return m, m.resumeLoopCmd()
 		}
 		return m.dispatchIfIdle()
 	case planCompactFinishedMsg:
@@ -537,6 +632,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.loading || m.running || m.planCompacting || m.manualCompacting {
 			return m, cmd
 		}
+		m.spinnerTicking = false // chain dies while idle
 		return m, nil
 	case tea.MouseWheelMsg:
 		if m.loading || m.fatalErr != nil || m.planCompacting || m.manualCompacting {
@@ -559,11 +655,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m.textarea, cmd = m.textarea.Update(msg)
 	if m.textarea.Value() != oldValue {
 		m.afterComposerEdit()
-	} else {
-		// Cursor blink and other presentation-only messages must not reset
-		// prompt-history navigation between arrow key presses.
-		m.layout()
 	}
+	// No layout call here for presentation-only messages (cursor blink):
+	// View() runs layout() unconditionally on every frame.
 	return m, cmd
 }
 
@@ -588,7 +682,9 @@ func (m *model) updateActorEvents(msg actorEventsMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 	if m.running {
-		cmds = append(cmds, m.spinner.Tick)
+		if cmd := m.armSpinner(); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
 	}
 	if m.transcriptDesynced && !m.reconciling && !m.running {
 		m.reconciling = true
@@ -927,8 +1023,13 @@ func (m *model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if m.running {
 			return m.cancelRun()
 		}
-		if m.cancelActiveLoop() {
+		if active, err := m.isLoopActive(); err != nil {
+			m.appendBlock(chatBlock{kind: blockError, content: "cancel loop: " + err.Error()})
 			return m, nil
+		} else if active {
+			// Cancelling mutates session records; run it off the update
+			// loop. The composer is preserved while a loop is active.
+			return m, m.cancelActiveLoopCmd()
 		}
 		m.textarea.Reset()
 		m.attachments = nil
@@ -988,13 +1089,13 @@ func (m *model) submitComposer() (tea.Model, tea.Cmd) {
 	m.menu = menuState{}
 	if strings.HasPrefix(text, "/") {
 		name, _, _ := parseSlash(text)
-		if cmd, ok := m.cmdRegistry.Lookup(name); ok && m.running {
+		if cmd, ok := m.cmdRegistry.Lookup(name); ok && (m.running || m.dispatching) {
 			if codercmds.CommandMetadata(cmd).Policy == codercmds.PolicyDeferred {
 				m.queued = append(m.queued, pendingInput{text: text})
 				m.layout()
 				return m, nil
 			}
-		} else if m.running {
+		} else if m.running || m.dispatching {
 			if _, found := m.resolveSlashAgent(name); found {
 				m.queued = append(m.queued, pendingInput{text: text})
 				m.layout()
@@ -1015,7 +1116,7 @@ func (m *model) submitComposer() (tea.Model, tea.Cmd) {
 	images := append([]types.ImageContent(nil), m.attachments...)
 	m.attachments = nil
 	m.composerGeneration++
-	if m.running {
+	if m.running || m.dispatching {
 		return m.sendRunningInbox(text, images)
 	}
 	return m.startUserTurn(text, images)
@@ -1051,12 +1152,9 @@ func (m *model) sendRunningInbox(text string, images []types.ImageContent) (tea.
 	turnID := types.NewID()
 	m.appendBlockPreservingStream(chatBlock{kind: blockUser, id: turnID, content: userInputDisplay(text, images)})
 	m.seenInputs[turnID] = true
-	if err := m.sendUserText(text, images, turnID); err != nil {
-		m.appendBlockPreservingStream(chatBlock{kind: blockError, content: err.Error()})
-		return m, nil
-	}
+	dispatch := m.sendUserText(text, images, turnID)
 	m.layout()
-	return m, m.spinner.Tick
+	return m, tea.Batch(m.armSpinner(), dispatch)
 }
 
 func (m *model) dispatchNextQueued() (tea.Model, tea.Cmd) {
@@ -1087,91 +1185,111 @@ func (m *model) startUserTurnWithMetadata(text, displayText string, images []typ
 	}
 	m.appendBlock(chatBlock{kind: blockUser, id: turnID, content: renderText})
 	m.seenInputs[turnID] = true
-	if err := m.sendUserTextWithMetadata(text, displayText, images, turnID, metadata); err != nil {
-		m.appendBlock(chatBlock{kind: blockError, content: err.Error()})
-		return m, nil
-	}
+	dispatch := m.sendUserTextWithMetadata(text, displayText, images, turnID, metadata)
 	m.running = true
 	m.runStartedAt = m.nowTime()
 	m.runActivity = "working"
 	m.resetStreaming()
-	return m, m.spinner.Tick
+	return m, tea.Batch(m.armSpinner(), dispatch)
 }
 
 func (m *model) cancelRun() (tea.Model, tea.Cmd) {
 	if m.cancelling {
 		return m, nil
 	}
-	m.cancelActiveLoop()
+	cancelLoop := m.cancelActiveLoopCmd()
 	if err := m.registry.DispatchPreempt(bus.NewScopedPreempt(m.sessionID, "user.local", "user cancelled", bus.PreemptCurrent)); err != nil {
 		m.appendBlock(chatBlock{kind: blockError, content: "cancel: " + err.Error()})
 		return m, nil
 	}
 	m.cancelling = true
-	return m, nil
+	return m, cancelLoop
 }
 
-func (m *model) cancelActiveLoop() bool {
-	if m.loopManager == nil {
-		return false
-	}
-	sess, release, err := m.acquireCurrentSession()
-	if err != nil {
-		m.appendBlock(chatBlock{kind: blockError, content: "cancel loop: " + err.Error()})
-		return false
-	}
-	defer release()
-	if cancelled, err := m.loopManager.Cancel(context.Background(), sess); err != nil {
-		m.appendBlock(chatBlock{kind: blockError, content: "cancel loop: " + err.Error()})
-	} else if cancelled {
-		m.loopActive = false
-		m.appendBlock(chatBlock{kind: blockDivider, content: "loop · cancelled"})
-		return true
-	}
-	return false
+// loopStateMsg reports the outcome of loop state mutations executed off
+// the update loop; active/hasState carry the refreshed loopActive value so
+// the handler applies it without data races.
+type loopStateMsg struct {
+	err      error
+	errLabel string
+	active   bool
+	hasState bool
+	divider  string
 }
 
-func (m *model) recordLoopRunFinished(stopReason string) {
-	if m.loopManager == nil {
-		return
-	}
-	sess, release, err := m.acquireCurrentSession()
-	if err != nil {
-		m.appendBlock(chatBlock{kind: blockError, content: "record loop state: " + err.Error()})
-		return
-	}
-	defer release()
-	if err := m.loopManager.RecordRunFinished(context.Background(), sess, stopReason); err != nil {
-		m.appendBlock(chatBlock{kind: blockError, content: "record loop state: " + err.Error()})
-	} else if err := m.refreshLoopStatus(); err != nil {
-		m.appendBlock(chatBlock{kind: blockError, content: "read loop state: " + err.Error()})
+// loopSessionCmd runs op against the restored session off the update loop.
+// Loop state mutations go through the session store; doing them inside
+// Update stalled the render loop on disk writes.
+func loopSessionCmd(manager *coderloop.Manager, registry *actor.Registry, sessionID, errLabel string, op func(sess *coresession.Session) loopStateMsg) tea.Cmd {
+	return func() tea.Msg {
+		if manager == nil {
+			return loopStateMsg{}
+		}
+		lifecycle, release, err := registry.AcquireLifecycle(sessionID)
+		if err != nil {
+			return loopStateMsg{err: err, errLabel: errLabel}
+		}
+		sess := lifecycle.Current()
+		if sess == nil {
+			release()
+			return loopStateMsg{err: fmt.Errorf("restored session is unavailable"), errLabel: errLabel}
+		}
+		msg := op(sess)
+		release()
+		return msg
 	}
 }
 
-func (m *model) resumeLoop() {
-	if m.loopManager == nil {
-		return
-	}
-	sess, release, err := m.acquireCurrentSession()
-	if err != nil {
-		m.appendBlock(chatBlock{kind: blockError, content: "resume loop: " + err.Error()})
-		return
-	}
-	defer release()
-	if err := m.loopManager.Resume(context.Background(), sess); err != nil {
-		m.appendBlock(chatBlock{kind: blockError, content: "resume loop: " + err.Error()})
-	} else if err := m.refreshLoopStatus(); err != nil {
-		m.appendBlock(chatBlock{kind: blockError, content: "read loop state: " + err.Error()})
-	}
+// cancelActiveLoopCmd cancels an active loop off the update loop.
+func (m *model) cancelActiveLoopCmd() tea.Cmd {
+	manager, registry, sessionID := m.loopManager, m.registry, m.sessionID
+	return loopSessionCmd(manager, registry, sessionID, "cancel loop", func(sess *coresession.Session) loopStateMsg {
+		cancelled, err := manager.Cancel(context.Background(), sess)
+		if err != nil {
+			return loopStateMsg{err: err, errLabel: "cancel loop"}
+		}
+		if !cancelled {
+			return loopStateMsg{}
+		}
+		return loopStateMsg{active: false, hasState: true, divider: "loop · cancelled"}
+	})
 }
 
-func (m *model) refreshLoopStatus() error {
-	active, err := m.isLoopActive()
-	if err != nil {
-		return err
-	}
-	m.loopActive = active
-	return nil
+// recordRunFinishedCmd records a finished run in the loop manager and, when
+// resumeAfter is set, resumes the loop — strictly in that order within one
+// command so the store writes serialize correctly.
+func (m *model) recordRunFinishedCmd(stopReason string, resumeAfter bool) tea.Cmd {
+	manager, registry, sessionID := m.loopManager, m.registry, m.sessionID
+	return loopSessionCmd(manager, registry, sessionID, "record loop state", func(sess *coresession.Session) loopStateMsg {
+		if err := manager.RecordRunFinished(context.Background(), sess, stopReason); err != nil {
+			return loopStateMsg{err: err, errLabel: "record loop state"}
+		}
+		if resumeAfter {
+			if err := manager.Resume(context.Background(), sess); err != nil {
+				return loopStateMsg{err: err, errLabel: "resume loop"}
+			}
+		}
+		active, err := manager.IsActive(context.Background(), sess)
+		if err != nil {
+			return loopStateMsg{err: err, errLabel: "read loop state"}
+		}
+		return loopStateMsg{active: active, hasState: true}
+	})
+}
+
+// resumeLoopCmd resumes a suspended loop off the update loop.
+func (m *model) resumeLoopCmd() tea.Cmd {
+	manager, registry, sessionID := m.loopManager, m.registry, m.sessionID
+	return loopSessionCmd(manager, registry, sessionID, "resume loop", func(sess *coresession.Session) loopStateMsg {
+		if err := manager.Resume(context.Background(), sess); err != nil {
+			return loopStateMsg{err: err, errLabel: "resume loop"}
+		}
+		active, err := manager.IsActive(context.Background(), sess)
+		if err != nil {
+			return loopStateMsg{err: err, errLabel: "read loop state"}
+		}
+		return loopStateMsg{active: active, hasState: true}
+	})
 }
 
 func (m *model) isLoopActive() (bool, error) {
@@ -1184,6 +1302,17 @@ func (m *model) isLoopActive() (bool, error) {
 	}
 	defer release()
 	return m.loopManager.IsActive(context.Background(), sess)
+}
+
+// refreshLoopStatus reads the loop state for the current session into
+// loopActive. Read-only; used on session load and switch.
+func (m *model) refreshLoopStatus() error {
+	active, err := m.isLoopActive()
+	if err != nil {
+		return err
+	}
+	m.loopActive = active
+	return nil
 }
 
 func (m *model) acquireCurrentSession() (*coresession.Session, func(), error) {
@@ -1199,28 +1328,32 @@ func (m *model) acquireCurrentSession() (*coresession.Session, func(), error) {
 	return sess, release, nil
 }
 
-func (m *model) sendUserText(text string, images []types.ImageContent, turnID string) error {
+func (m *model) sendUserText(text string, images []types.ImageContent, turnID string) tea.Cmd {
 	return m.sendUserTextWithDisplay(text, "", images, turnID)
 }
 
-func (m *model) sendUserTextWithDisplay(text, displayText string, images []types.ImageContent, turnID string) error {
+func (m *model) sendUserTextWithDisplay(text, displayText string, images []types.ImageContent, turnID string) tea.Cmd {
 	return m.sendUserTextWithMetadata(text, displayText, images, turnID, nil)
 }
 
-func (m *model) sendUserTextWithMetadata(text, displayText string, images []types.ImageContent, turnID string, metadata map[string]any) error {
-	if err := m.registry.DispatchInput(bus.NewUserInput(m.sessionID, "user.local", bus.UserTextInput{
+func (m *model) sendUserTextWithMetadata(text, displayText string, images []types.ImageContent, turnID string, metadata map[string]any) tea.Cmd {
+	env := bus.NewUserInput(m.sessionID, "user.local", bus.UserTextInput{
 		Text: text, DisplayText: displayText, TurnID: turnID,
 		Images: append([]types.ImageContent(nil), images...), Metadata: metadata,
-	})); err != nil {
-		m.logError("failed to prepare actor before publishing user input", err, "turn_id", turnID)
-		return err
-	}
-	m.logInfo("user input published",
+	})
+	m.logInfo("user input submitted",
 		"turn_id", turnID,
 		"text_bytes", len(text),
 		"queued_count", len(m.queued),
 	)
-	return nil
+	if m.dispatching {
+		// A dispatch is already in flight; chain this one after it to
+		// preserve submit order.
+		m.pendingDispatch = append(m.pendingDispatch, env)
+		return nil
+	}
+	m.dispatching = true
+	return m.dispatchEnvelope(env)
 }
 
 func userInputDisplay(text string, images []types.ImageContent) string {
@@ -1262,9 +1395,6 @@ func (m *model) handleActorEvent(evt events.Event) tea.Cmd {
 		var d events.RunFinishedData
 		m.decodeEventPayload(evt, &d)
 		userTurn := m.seenInputs[evt.RunID]
-		if !m.replaying {
-			m.recordLoopRunFinished(d.StopReason)
-		}
 		m.flushStreaming(d.StopReason == "cancelled")
 		finishedCurrent := evt.RunID != m.lastFinishedRun && (evt.RunID == m.currentRunID || m.currentRunID == "")
 		if finishedCurrent {
@@ -1292,17 +1422,26 @@ func (m *model) handleActorEvent(evt events.Event) tea.Cmd {
 				"iteration", m.iteration,
 			)
 		}
+		resumeAfter := false
 		if !m.replaying && userTurn && d.StopReason == "end_turn" {
 			if m.transcriptDesynced {
 				m.resumeAfterReconcile = true
 			} else {
-				m.resumeLoop()
+				resumeAfter = true
 			}
+		}
+		var recordLoop tea.Cmd
+		if !m.replaying {
+			// Recording the finished run (and the conditional resume) mutates
+			// session records; run both off the update loop, serialized
+			// inside one command.
+			recordLoop = m.recordRunFinishedCmd(d.StopReason, resumeAfter)
 		}
 		proposalRunFinished := m.planProposalRunID == evt.RunID || (m.planProposalRunID == "" && d.StopReason == "plan_completed")
 		if finishedCurrent && !m.replaying && proposalRunFinished && m.mode == collaboration.ModePlan && m.latestPlan != nil && m.latestPlan.Status == planning.ArtifactProposed {
 			m.planHandoff = &planHandoffState{}
 		}
+		return recordLoop
 	case events.KindRunError:
 		var d events.RunErrorData
 		if m.decodeEventPayload(evt, &d) && d.Message != "" {
@@ -1338,6 +1477,7 @@ func (m *model) handleActorEvent(evt events.Event) tea.Cmd {
 			if index, ok := m.toolCalls[d.ToolCallID]; ok && index >= 0 && index < len(m.messages) {
 				m.messages[index].toolArgs += d.PartialJSON
 				m.messages[index].rendered = ""
+				m.markTranscriptDirty(false)
 			}
 		}
 	case events.KindToolCallEnd:
@@ -1346,6 +1486,7 @@ func (m *model) handleActorEvent(evt events.Event) tea.Cmd {
 			if index, ok := m.toolCalls[d.ToolCallID]; ok && index >= 0 && index < len(m.messages) {
 				m.messages[index].toolArgsComplete = true
 				m.messages[index].rendered = ""
+				m.markTranscriptDirty(false)
 			}
 		}
 	case events.KindToolCallResult:
@@ -1364,6 +1505,7 @@ func (m *model) handleActorEvent(evt events.Event) tea.Cmd {
 				block.pending = false
 				block.rendered = ""
 				delete(m.toolCalls, d.ToolCallID)
+				m.markTranscriptDirty(false)
 			} else {
 				m.appendBlock(chatBlock{kind: blockToolCall, id: d.ToolCallID, toolName: "tool", toolOutput: d.Output, toolArgsComplete: true, success: d.Success, timedOut: d.Status == "timed_out", timeoutKind: d.TimeoutKind})
 			}
@@ -1477,6 +1619,9 @@ func (m *model) handleCustomEvent(evt events.Event) tea.Cmd {
 	case events.CustomModelRetry:
 		var d events.CustomData
 		if m.decodeEventPayload(evt, &d) {
+			// A retry or fallback changes the effective model server-side;
+			// drop the cached runtime info so renderStatus catches up.
+			m.invalidateRuntimeInfo()
 			provider, _ := d.Body["provider"].(string)
 			attempt, _ := d.Body["attempt"].(string)
 			maxAttempts, _ := d.Body["max_attempts"].(string)
@@ -1712,9 +1857,22 @@ func (m *model) resetStreaming() {
 	m.toolCalls = make(map[string]int)
 }
 
+// armSpinner returns a spinner tick only when the tick chain is dead, i.e.
+// on idle→busy transitions. The bubbles tag guard already prevents double
+// ticking, so re-arming on every event batch only added extra Update/View
+// round-trips.
+func (m *model) armSpinner() tea.Cmd {
+	if m.spinnerTicking {
+		return nil
+	}
+	m.spinnerTicking = true
+	return m.spinner.Tick
+}
+
 func (m *model) flushStreaming(interrupted bool) {
 	for _, index := range []int{m.textBlock, m.reasonBlock} {
 		if index >= 0 && index < len(m.messages) {
+			m.messages[index].fullContent()
 			m.messages[index].interrupted = interrupted
 			m.messages[index].rendered = ""
 		}
@@ -1727,9 +1885,16 @@ func (m *model) flushStreaming(interrupted bool) {
 		}
 	}
 	m.resetStreaming()
+	m.markTranscriptDirty(true)
 }
 
 func (m *model) breakStreamSegments() {
+	if m.textBlock >= 0 && m.textBlock < len(m.messages) {
+		m.messages[m.textBlock].fullContent()
+	}
+	if m.reasonBlock >= 0 && m.reasonBlock < len(m.messages) {
+		m.messages[m.reasonBlock].fullContent()
+	}
 	m.textBlock = -1
 	m.reasonBlock = -1
 }
@@ -1744,6 +1909,7 @@ func (m *model) appendBlockPreservingStream(b chatBlock) {
 	if b.kind == blockError && !m.replaying {
 		m.logWarn("error displayed in TUI", "error", boundedTUILogText(b.content))
 	}
+	m.markTranscriptDirty(true)
 }
 
 func (m *model) appendStreamContent(kind blockKind, content string) {
@@ -1763,10 +1929,12 @@ func (m *model) appendStreamContent(kind blockKind, content string) {
 		} else {
 			m.textBlock = index
 		}
+		m.markTranscriptDirty(false)
 		return
 	}
-	m.messages[index].content += content
+	m.messages[index].wip.WriteString(content)
 	m.messages[index].rendered = ""
+	m.markTranscriptDirty(false)
 }
 
 func (m *model) closeFeed() {

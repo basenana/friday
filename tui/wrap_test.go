@@ -63,6 +63,62 @@ func maxLineWidth(s string) int {
 	return w
 }
 
+// TestAllBlockKindsFitConversationWidth is the safety net for keeping the
+// viewport's SoftWrap off: every block kind must render within the terminal
+// width on its own, because the viewport no longer folds wide lines.
+func TestAllBlockKindsFitConversationWidth(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	_, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 40})
+
+	gridCard := &cardState{id: "card-grid", kind: "table", title: strings.Repeat("grid title ", 12),
+		document: map[string]any{
+			"title": strings.Repeat("grid title ", 12),
+			"component": map[string]any{
+				"columns": []any{
+					map[string]any{"key": "name", "label": strings.Repeat("NAME", 30)},
+					map[string]any{"key": "value"},
+				},
+				"rows": []any{
+					map[string]any{"name": strings.Repeat("n", 200), "value": strings.Repeat("v", 90)},
+					map[string]any{"name": "plain", "value": 42},
+				},
+			},
+		}}
+	diffCard := &cardState{id: "card-diff", kind: "diff", title: "diff card",
+		document: map[string]any{
+			"title": "diff card",
+			"component": map[string]any{
+				"unified_diff": "@@ -1 +1 @@\n" + strings.Repeat("+added long line ", 30) + "\n" + strings.Repeat("-removed ", 40),
+			},
+		}}
+
+	blocks := []chatBlock{
+		{kind: blockToolCall, id: "tc1", toolName: "generic-tool",
+			toolArgs:         `{"path":"` + strings.Repeat("p", 200) + `"}`,
+			toolOutput:       strings.Repeat("x", 500),
+			toolArgsComplete: true, success: true},
+		{kind: blockToolCall, id: "tc2", toolName: "bash",
+			toolArgs:         `{"command":"ls"}`,
+			toolOutput:       strings.Repeat("err\n", 40),
+			toolArgsComplete: true, success: false},
+		{kind: blockToolCall, id: "tc3", toolName: "generic", pending: true,
+			toolArgs: strings.Repeat(`{"k":"v",`, 30)},
+		{kind: blockPlan, toolName: "plan title " + strings.Repeat("L", 60),
+			content: strings.Repeat("# heading\n\n- item\n", 20)},
+		{kind: blockDivider, content: strings.Repeat("d", 100)},
+		{kind: blockCard, id: "card-grid", card: gridCard},
+		{kind: blockCard, id: "card-diff", card: diffCard},
+	}
+	for i := range blocks {
+		rendered := m.renderBlock(&blocks[i])
+		for li, line := range strings.Split(rendered, "\n") {
+			if w := lipgloss.Width(line); w > 80 {
+				t.Errorf("blocks[%d] kind=%d line %d width=%d want <=80: %q", i, blocks[i].kind, li, w, truncateForLog(line))
+			}
+		}
+	}
+}
+
 func truncateForLog(s string) string {
 	s = ansi.Strip(s)
 	if len(s) > 60 {

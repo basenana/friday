@@ -132,6 +132,7 @@ func (m *model) projectMessage(msg types.Message) {
 				block.pending = false
 				block.rendered = ""
 				delete(m.toolCalls, msg.ToolResult.CallID)
+				m.markTranscriptDirty(true)
 			} else {
 				m.appendBlock(chatBlock{kind: blockToolCall, id: msg.ToolResult.CallID, toolName: "tool",
 					toolOutput: msg.ToolResult.Content, toolArgsComplete: true, success: msg.ToolResult.Success,

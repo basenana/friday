@@ -7,6 +7,7 @@
 package tui
 
 import (
+	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -67,46 +68,90 @@ func waitForActorEvent(f *bus.Feed, token uint64) tea.Cmd {
 	}
 }
 
+// mergeAdjacentStreamEvents merges adjacent events from the same stream
+// (text deltas, reasoning deltas) into one event per run. Runs are merged
+// in linear time: every event is decoded once and the run is marshaled
+// once, instead of re-decoding and re-marshaling a growing payload per
+// pair.
 func mergeAdjacentStreamEvents(input []events.Event) []events.Event {
 	if len(input) < 2 {
 		return input
 	}
 	merged := make([]events.Event, 0, len(input))
-	for _, evt := range input {
-		if len(merged) > 0 && mergeStreamEvent(&merged[len(merged)-1], evt) {
+	for i := 0; i < len(input); {
+		evt := input[i]
+		if !streamMergeable(evt) {
+			merged = append(merged, evt)
+			i++
 			continue
 		}
+		var acc strings.Builder
+		if !decodeStreamPayload(evt, &acc) {
+			merged = append(merged, evt)
+			i++
+			continue
+		}
+		j := i + 1
+		for j < len(input) && streamMergeable(input[j]) && sameStreamKey(evt, input[j]) {
+			if !decodeStreamPayload(input[j], &acc) {
+				break
+			}
+			j++
+		}
+		if j > i+1 {
+			evt = withStreamPayload(evt, acc.String())
+			evt.Seq, evt.Timestamp = input[j-1].Seq, input[j-1].Timestamp
+		}
 		merged = append(merged, evt)
+		i = j
 	}
 	return merged
 }
 
-func mergeStreamEvent(previous *events.Event, next events.Event) bool {
-	if previous.Type != next.Type || previous.Name != next.Name ||
-		previous.ActorID != next.ActorID || previous.RunID != next.RunID ||
-		previous.MessageID != next.MessageID {
-		return false
-	}
-	switch next.Type {
+// streamMergeable reports whether evt is a stream delta that participates in
+// adjacent-merge runs.
+func streamMergeable(evt events.Event) bool {
+	switch evt.Type {
 	case events.KindTextMessageContent:
-		var left, right events.TextMessageContentData
-		if events.DecodePayload(*previous, &left) != nil || events.DecodePayload(next, &right) != nil {
-			return false
-		}
-		*previous = previous.WithPayload(events.TextMessageContentData{Content: left.Content + right.Content})
+		return true
 	case events.KindCustom:
-		if next.Name != events.CustomReasoningDelta {
-			return false
-		}
-		var left, right events.ReasoningDeltaBody
-		if events.DecodePayload(*previous, &left) != nil || events.DecodePayload(next, &right) != nil {
-			return false
-		}
-		*previous = previous.WithPayload(events.ReasoningDeltaBody{Content: left.Content + right.Content})
+		return evt.Name == events.CustomReasoningDelta
 	default:
 		return false
 	}
-	previous.Timestamp = next.Timestamp
-	previous.Seq = next.Seq
+}
+
+// sameStreamKey reports whether two events belong to the same stream run.
+func sameStreamKey(a, b events.Event) bool {
+	return a.Type == b.Type && a.Name == b.Name &&
+		a.ActorID == b.ActorID && a.RunID == b.RunID && a.MessageID == b.MessageID
+}
+
+// decodeStreamPayload decodes evt's delta content and appends it to acc.
+func decodeStreamPayload(evt events.Event, acc *strings.Builder) bool {
+	switch evt.Type {
+	case events.KindTextMessageContent:
+		var d events.TextMessageContentData
+		if events.DecodePayload(evt, &d) != nil {
+			return false
+		}
+		acc.WriteString(d.Content)
+	case events.KindCustom:
+		var d events.ReasoningDeltaBody
+		if events.DecodePayload(evt, &d) != nil {
+			return false
+		}
+		acc.WriteString(d.Content)
+	default:
+		return false
+	}
 	return true
+}
+
+// withStreamPayload rebuilds evt with the accumulated delta content.
+func withStreamPayload(evt events.Event, content string) events.Event {
+	if evt.Type == events.KindCustom {
+		return evt.WithPayload(events.ReasoningDeltaBody{Content: content})
+	}
+	return evt.WithPayload(events.TextMessageContentData{Content: content})
 }

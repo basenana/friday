@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/basenana/friday/core/logger"
 )
@@ -18,12 +19,18 @@ import (
 // cannot delete skills (only the filesystem Loader supports deletion).
 var ErrDeleteUnsupported = errors.New("delete is not supported by this skills provider")
 
+// stampCheckInterval rate-limits the filesystem stamp check in
+// reloadIfChangedLocked. Interactive callers (the TUI slash menu) hit List()
+// on every keystroke; stat-walking every SKILL.md each time is wasted IO.
+const stampCheckInterval = 500 * time.Millisecond
+
 // Registry manages a cached, mtime-refreshable skill snapshot and provides
 // thread-safe access.
 type Registry struct {
-	provider Provider
-	mu       sync.RWMutex
-	stamp    string
+	provider       Provider
+	mu             sync.RWMutex
+	stamp          string
+	stampCheckedAt time.Time
 }
 
 // NewRegistry creates a new skill registry from a provider
@@ -34,6 +41,7 @@ func NewRegistry(provider Provider) *Registry {
 	if loader, ok := provider.(*Loader); ok {
 		r.stamp, _ = skillFilesStamp(loader.SkillsPaths())
 	}
+	r.stampCheckedAt = time.Now()
 	return r
 }
 
@@ -113,6 +121,7 @@ func (r *Registry) Refresh() error {
 
 	r.provider = newLoader
 	r.stamp, _ = skillFilesStamp(loader.SkillsPaths())
+	r.stampCheckedAt = time.Now()
 	return nil
 }
 
@@ -144,12 +153,18 @@ func (r *Registry) Delete(skillName string) error {
 }
 
 // reloadIfChangedLocked refreshes filesystem-backed providers lazily. Reload
-// failures leave the last usable snapshot installed.
+// failures leave the last usable snapshot installed. The stamp check is
+// rate-limited to stampCheckInterval to keep keystroke-frequency callers
+// from stat-walking the skills directories on every call.
 func (r *Registry) reloadIfChangedLocked() {
 	loader, ok := r.provider.(*Loader)
 	if !ok {
 		return
 	}
+	if r.stamp != "" && time.Since(r.stampCheckedAt) < stampCheckInterval {
+		return
+	}
+	r.stampCheckedAt = time.Now()
 	stamp, err := skillFilesStamp(loader.SkillsPaths())
 	if err != nil || stamp == r.stamp {
 		if err != nil {

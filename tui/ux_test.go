@@ -266,6 +266,7 @@ func TestRunningEnterQueuesActorInputWithoutInterruptingCurrentRun(t *testing.T)
 	if userCount != 1 {
 		t.Fatalf("follow-up user blocks = %d, want 1", userCount)
 	}
+	flushDispatch(t, m, cmd)
 
 	select {
 	case env := <-inbox:
@@ -297,11 +298,16 @@ func TestConsecutiveRunningEnterInputsHaveDistinctOrderedTurnIDs(t *testing.T) {
 	defer m.registry.Bus().Unsubscribe(id)
 
 	m.running = true
+	var dispatch tea.Cmd
 	for _, text := range []string{"second", "third"} {
 		m.textarea.SetValue(text)
-		got, _ := m.submitComposer()
+		got, cmd := m.submitComposer()
 		m = got.(*model)
+		if cmd != nil {
+			dispatch = cmd
+		}
 	}
+	flushDispatch(t, m, dispatch)
 
 	var inputs []bus.UserTextInput
 	for len(inputs) < 2 {

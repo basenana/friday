@@ -95,6 +95,7 @@ func (m *model) invalidateCard(card *cardState) {
 			m.messages[i].rendered = ""
 		}
 	}
+	m.markTranscriptDirty(false)
 }
 
 func (m *model) renderCard(card *cardState) string {

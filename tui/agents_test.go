@@ -91,8 +91,9 @@ func TestSlashAgentPublishesOneTurnRouteMetadata(t *testing.T) {
 	defer m.registry.Bus().Unsubscribe(id)
 
 	m.textarea.SetValue("/writer preserve   spacing")
-	got, _ := m.submitComposer()
+	got, cmd := m.submitComposer()
 	m = got.(*model)
+	flushDispatch(t, m, cmd)
 	select {
 	case input := <-inbox:
 		if input.Text != "preserve   spacing" || input.DisplayText != "/writer preserve   spacing" {
@@ -129,8 +130,9 @@ func TestRunningSlashAgentQueuesAndRoutesWhenDispatched(t *testing.T) {
 	}, eventbus.SerialConfig{Overflow: eventbus.OverflowBlock})
 	defer m.registry.Bus().Unsubscribe(id)
 	m.running = false
-	got, _ = m.dispatchNextQueued()
+	got, cmd := m.dispatchNextQueued()
 	m = got.(*model)
+	flushDispatch(t, m, cmd)
 	select {
 	case input := <-inbox:
 		if input.Text != "queued task" || input.Metadata[coderagents.RouteMetadataKey] != "writer" {
