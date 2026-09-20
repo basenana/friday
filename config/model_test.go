@@ -214,6 +214,14 @@ func TestPlanReasoningEffortDefaultsAndValidation(t *testing.T) {
 	}
 }
 
+func TestConfigValidateIncludesSandboxConfig(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Sandbox.Sandbox.Filesystem.Deny = []string{"[unterminated"}
+	if err := cfg.validate(); err == nil {
+		t.Fatal("validate() accepted invalid sandbox configuration")
+	}
+}
+
 func TestResolveImageModel(t *testing.T) {
 	tests := []struct {
 		name          string

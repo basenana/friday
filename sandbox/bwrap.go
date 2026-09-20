@@ -3,6 +3,7 @@
 package sandbox
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,142 +13,157 @@ import (
 	"github.com/basenana/friday/shellcmd"
 )
 
-// Bwrap implements Sandbox using Linux bubblewrap
+// Bwrap implements Sandbox using Linux bubblewrap.
 type Bwrap struct {
 	config *Config
+	binary string
 
 	probeOnce sync.Once
 	probeOK   bool
 }
 
-// NewBwrap creates a new Bwrap sandbox
 func NewBwrap(cfg *Config) *Bwrap {
-	return &Bwrap{config: cfg}
+	binary, _ := exec.LookPath("bwrap")
+	if binary != "" {
+		if absolute, err := filepath.Abs(binary); err == nil {
+			binary = absolute
+		}
+		if physical, err := filepath.EvalSymlinks(binary); err == nil {
+			binary = physical
+		}
+	}
+	return &Bwrap{config: cfg, binary: binary}
 }
 
-// WrapCommand wraps a command to run in the sandbox
 func (b *Bwrap) WrapCommand(cmd string, opts ExecOptions) (string, func(), error) {
 	if !b.config.Sandbox.Enabled {
 		return cmd, func() {}, nil
 	}
-
-	// Build bwrap arguments
-	args := b.buildArgs(opts.Workdir, opts.HomeDir)
-
-	// Quote each argument (binary, flags, and the inner command) with bash
-	// quoting rules so values containing spaces or metacharacters stay a
-	// single argument.
-	wrappedCmd := shellcmd.Join("bwrap", append(args, "--", "bash", "-c", cmd)...)
-	cleanup := func() {}
-
-	return wrappedCmd, cleanup, nil
+	if b.binary == "" {
+		return "", nil, fmt.Errorf("bubblewrap is unavailable")
+	}
+	args, cleanup, err := b.buildArgs(opts.Workdir, opts.HomeDir)
+	if err != nil {
+		return "", nil, err
+	}
+	return shellcmd.Join(b.binary, append(args, "--", "bash", "-c", cmd)...), cleanup, nil
 }
 
-// IsAvailable checks if bwrap is available and functional.
-// The probe result is memoized: bwrap is only executed once per process.
+// IsAvailable executes the production mount/namespace builder once. This
+// catches kernels that expose bwrap but prohibit user namespaces.
 func (b *Bwrap) IsAvailable() bool {
 	if runtime.GOOS != "linux" {
 		return false
 	}
-	if _, err := exec.LookPath("bwrap"); err != nil {
+	if b.binary == "" {
 		return false
 	}
 	b.probeOnce.Do(func() {
-		// Probe bwrap to verify it can actually run (e.g. nested containers
-		// may block namespace creation). The probe uses the same argument
-		// builder as real invocations so it cannot diverge from them.
-		cmd := exec.Command("bwrap", b.probeArgs()...)
-		b.probeOK = cmd.Run() == nil
+		workdir, err := os.MkdirTemp("", "friday-bwrap-probe-*")
+		if err != nil {
+			return
+		}
+		defer os.RemoveAll(workdir)
+		args, cleanup, err := b.buildArgs(workdir, workdir)
+		if err != nil {
+			return
+		}
+		defer cleanup()
+		b.probeOK = exec.Command(b.binary, append(args, "--", "true")...).Run() == nil
 	})
 	return b.probeOK
 }
 
-// probeArgs derives the availability probe arguments from buildArgs so the
-// probe exercises the same mount layout as a real sandboxed command.
-func (b *Bwrap) probeArgs() []string {
-	return append(b.buildArgs("", ""), "--", "true")
-}
+func (b *Bwrap) Name() string { return "bubblewrap" }
 
-// Name returns the name of this sandbox
-func (b *Bwrap) Name() string {
-	return "bubblewrap"
-}
-
-// buildArgs builds bubblewrap arguments.
-//
-// Mount ordering matters: bubblewrap applies arguments in order, so the host
-// root is first mounted read-only, then writable mounts are layered on top,
-// and deny paths are masked with an empty tmpfs last so they can never be
-// re-exposed by a later bind.
-func (b *Bwrap) buildArgs(workdir string, homeDir string) []string {
-	var args []string
-
-	// Basic isolation
-	args = append(args,
+// buildArgs compiles the shared filesystem policy and renders it in mount
+// precedence order. Its cleanup owns temporary regular-file deny masks.
+func (b *Bwrap) buildArgs(workdir, homeDir string) ([]string, func(), error) {
+	policy, err := compileFilesystemPolicy(b.config, workdir, homeDir)
+	if err != nil {
+		return nil, nil, err
+	}
+	cleanup := func() {}
+	args := []string{
 		"--die-with-parent",
 		"--unshare-pid",
 		"--unshare-ipc",
 		"--new-session",
 		"--cap-drop", "ALL",
-	)
-
-	// Host root is visible read-only; writable access is granted explicitly
-	// below via the write paths and the working directory.
-	args = append(args, "--ro-bind", "/", "/")
-
-	// Proc filesystem — use bind mount as fallback when --proc is not permitted (e.g., in containers)
+		"--ro-bind", "/", "/",
+	}
 	if os.Getenv("FRIDAY_SANDBOX_PROC_BIND") != "" {
 		args = append(args, "--bind", "/proc", "/proc")
 	} else {
 		args = append(args, "--proc", "/proc")
 	}
+	args = append(args,
+		"--tmpfs", "/dev",
+		"--dev-bind", "/dev/null", "/dev/null",
+	)
+	for _, device := range []string{"/dev/zero", "/dev/random", "/dev/urandom"} {
+		args = append(args, "--ro-bind", device, device)
+	}
+	args = append(args,
+		"--symlink", "/proc/self/fd", "/dev/fd",
+		"--symlink", "fd/0", "/dev/stdin",
+		"--symlink", "fd/1", "/dev/stdout",
+		"--symlink", "fd/2", "/dev/stderr",
+	)
 
-	// Devtmpfs for /dev
-	args = append(args, "--dev", "/dev")
-	args = addLinuxRuntimeCompatMounts(args)
-
-	// Readonly paths
-	for _, path := range b.config.Sandbox.Filesystem.ReadOnly {
-		expanded := expandPath(path, workdir, homeDir)
-		if _, err := os.Stat(expanded); err == nil {
-			args = append(args, "--ro-bind", expanded, expanded)
+	// Writable roots, including workdir, must be mounted before narrower
+	// readonly/protected overlays.
+	for _, rule := range policy.Rules {
+		if rule.Kind == filesystemRuleWrite {
+			args = append(args, "--bind", rule.Path, rule.Path)
+		}
+	}
+	for _, rule := range policy.Rules {
+		if rule.Kind == filesystemRuleReadOnly || rule.Kind == filesystemRuleProtected {
+			args = append(args, "--ro-bind", rule.Path, rule.Path)
 		}
 	}
 
-	// Write paths (rw bind mount)
-	for _, path := range b.config.Sandbox.Filesystem.Write {
-		expanded := expandPath(path, workdir, homeDir)
-		if _, err := os.Stat(expanded); err == nil {
-			args = append(args, "--bind", expanded, expanded)
+	var maskDir string
+	for _, rule := range policy.Rules {
+		if rule.Kind != filesystemRuleDeny {
+			continue
+		}
+		switch rule.Object {
+		case filesystemObjectDirectory:
+			args = append(args, "--perms", "0555", "--tmpfs", rule.Path, "--remount-ro", rule.Path)
+		case filesystemObjectFile:
+			if maskDir == "" {
+				maskDir, err = os.MkdirTemp("", "friday-bwrap-deny-*")
+				if err != nil {
+					return nil, nil, fmt.Errorf("create deny mask directory: %w", err)
+				}
+				cleanup = func() { _ = os.RemoveAll(maskDir) }
+			}
+			mask, err := os.CreateTemp(maskDir, "mask-*")
+			if err != nil {
+				cleanup()
+				return nil, nil, fmt.Errorf("create deny file mask: %w", err)
+			}
+			maskPath := mask.Name()
+			if err := mask.Close(); err != nil {
+				cleanup()
+				return nil, nil, fmt.Errorf("close deny file mask: %w", err)
+			}
+			if err := os.Chmod(maskPath, 0o444); err != nil {
+				cleanup()
+				return nil, nil, fmt.Errorf("make deny file mask readonly: %w", err)
+			}
+			args = append(args, "--ro-bind", maskPath, rule.Path)
+		default:
+			cleanup()
+			return nil, nil, fmt.Errorf("unsupported deny object %q", rule.Path)
 		}
 	}
 
-	// Set working directory (writable)
-	if workdir != "" {
-		absWorkdir, err := filepath.Abs(workdir)
-		if err != nil {
-			absWorkdir = filepath.Clean(workdir)
-		}
-		args = append(args, "--bind", absWorkdir, absWorkdir)
-		args = append(args, "--chdir", absWorkdir)
-	}
-
-	// Deny paths are masked with an empty tmpfs. They are applied last so a
-	// deny path inside a writable mount (including the workdir) stays hidden.
-	for _, path := range b.config.Sandbox.Filesystem.Deny {
-		expanded := expandPath(path, workdir, homeDir)
-		args = append(args, "--tmpfs", filepath.Clean(expanded))
-	}
-
-	// Network isolation
+	args = append(args, "--chdir", policy.Workdir)
 	if b.config.Sandbox.Network.Isolation {
 		args = append(args, "--unshare-net")
-		// If network is needed, we'd set up a proxy
-		// For now, just unshare network completely
-		if len(b.config.Sandbox.Network.Allow) > 0 {
-			// TODO: Set up proxy for allowed domains
-		}
 	}
-
-	return args
+	return args, cleanup, nil
 }

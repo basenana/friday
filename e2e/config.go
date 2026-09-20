@@ -21,9 +21,9 @@ type E2EConfig struct {
 	Timeout TimeoutConfig                 `yaml:"timeout"`
 }
 
-// SandboxToggle controls whether OS-level sandboxing (bwrap/seatbelt) is
-// applied during tool execution. Disabling it is useful when the sandbox
-// binaries are unavailable (e.g. CI containers without bwrap).
+// SandboxToggle controls whether OS-level sandboxing (bubblewrap/Seatbelt) is
+// applied during broader e2e tool execution. Dedicated native backend
+// contracts use FRIDAY_REQUIRE_NATIVE_SANDBOX instead.
 type SandboxToggle struct {
 	Enabled bool `yaml:"enabled"`
 }

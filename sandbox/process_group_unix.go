@@ -9,10 +9,6 @@ import (
 	"syscall"
 )
 
-func configureProcessGroup(cmd *exec.Cmd) {
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-}
-
 func commandProcessGroupID(cmd *exec.Cmd) int {
 	if cmd == nil || cmd.Process == nil {
 		return 0

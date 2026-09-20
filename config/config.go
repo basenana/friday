@@ -270,6 +270,11 @@ func (c *Config) validate() error {
 	if e := c.Collaboration.Plan.ReasoningEffort; !providers.IsValidReasoningEffort(e) {
 		return fmt.Errorf("invalid collaboration.plan.reasoning_effort %q: must be one of default, none, low, medium, high, xhigh, max", e)
 	}
+	if c.Sandbox != nil {
+		if err := c.Sandbox.Validate(); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

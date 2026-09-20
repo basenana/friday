@@ -1,0 +1,21 @@
+(allow system-mac-syscall (mac-policy-name "vnguard"))
+(allow system-mac-syscall
+  (require-all
+    (mac-policy-name "Sandbox")
+    (mac-syscall-number 67)))
+(allow system-fsctl (fsctl-command FSIOC_CAS_BSDFLAGS))
+
+; Broad host reads remain the product contract, but device data is separate.
+(allow file-read* (require-not (subpath "/dev")))
+(allow file-read-metadata file-test-existence (subpath "/dev"))
+
+(allow file-read* file-write-data (literal "/dev/null"))
+(allow file-read* (literal "/dev/zero"))
+(allow file-read* (literal "/dev/random"))
+(allow file-read* (literal "/dev/urandom"))
+(allow file-read* (literal "/dev/fd/0"))
+(allow file-read* file-write-data (literal "/dev/fd/1"))
+(allow file-read* file-write-data (literal "/dev/fd/2"))
+(allow file-read* (literal "/dev/stdin"))
+(allow file-read* file-write-data (literal "/dev/stdout"))
+(allow file-read* file-write-data (literal "/dev/stderr"))

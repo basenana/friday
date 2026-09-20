@@ -48,9 +48,9 @@ func validateNetworkURLAccess(exec *Executor, rawURL string) (*neturl.URL, error
 	return parsed, nil
 }
 
-// checkNetworkHostPolicy enforces the network allow-list on a single URL.
-// It is applied to the initial URL and to every redirect hop, so an
-// allowed host cannot bypass the policy by redirecting to an internal
+// checkNetworkHostPolicy enforces Network.Allow for remote image URLs only.
+// It is independent of OS sandbox networking and applies to the initial URL
+// and every redirect hop, so an allowed host cannot redirect to an internal
 // address.
 func checkNetworkHostPolicy(cfg *Config, u *neturl.URL) error {
 	host := strings.ToLower(strings.TrimSpace(u.Hostname()))

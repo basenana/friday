@@ -49,8 +49,10 @@ models:
     temperature: 0.3
     qpm: 30
 
+# Controls OS isolation for the broader model/tool e2e suite only.
+# Dedicated native contracts use FRIDAY_REQUIRE_NATIVE_SANDBOX=1.
 sandbox:
-  enabled: true          # set to false to skip bwrap/seatbelt isolation
+  enabled: true
 
 retry:
   max_attempts: 3        # retries for non-deterministic LLM assertions

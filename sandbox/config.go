@@ -29,7 +29,8 @@ type PermissionsConfig struct {
 	Deny  []string `json:"deny" yaml:"deny"`
 }
 
-// SandboxConfig defines sandbox isolation settings
+// SandboxConfig defines sandbox isolation settings.
+// Enabled controls only the native Seatbelt/bubblewrap layer.
 type SandboxConfig struct {
 	Enabled    bool             `json:"enabled" yaml:"enabled"`
 	Filesystem FilesystemConfig `json:"filesystem" yaml:"filesystem"`
@@ -37,7 +38,8 @@ type SandboxConfig struct {
 	Defaults   DefaultsConfig   `json:"defaults" yaml:"defaults"`
 }
 
-// FilesystemConfig defines filesystem access control
+// FilesystemConfig defines filesystem access control. Native backends compile
+// these entries as a snapshot of existing objects for each command launch.
 type FilesystemConfig struct {
 	// ReadOnly paths are mounted as read-only
 	ReadOnly []string `json:"readonly" yaml:"readonly"`
@@ -49,7 +51,8 @@ type FilesystemConfig struct {
 	Protected []string `json:"protected" yaml:"protected"`
 }
 
-// NetworkConfig defines network access control
+// NetworkConfig defines network access control. Isolation controls command IP
+// networking; Allow applies only to remote image URL downloads.
 type NetworkConfig struct {
 	Isolation bool     `json:"isolation" yaml:"isolation"`
 	Allow     []string `json:"allow" yaml:"allow"`
@@ -191,6 +194,28 @@ func (c *Config) Validate() error {
 	for _, entry := range c.Sandbox.Network.Allow {
 		if err := validateNetworkAllowEntry(entry); err != nil {
 			return fmt.Errorf("invalid sandbox.network.allow: %w", err)
+		}
+	}
+	filesystemFields := []struct {
+		name  string
+		paths []string
+	}{
+		{name: "readonly", paths: c.Sandbox.Filesystem.ReadOnly},
+		{name: "protected", paths: c.Sandbox.Filesystem.Protected},
+		{name: "deny", paths: c.Sandbox.Filesystem.Deny},
+		{name: "write", paths: c.Sandbox.Filesystem.Write},
+	}
+	for _, field := range filesystemFields {
+		for _, path := range field.paths {
+			if strings.TrimSpace(path) == "" {
+				return fmt.Errorf("invalid sandbox.filesystem.%s: path must not be empty", field.name)
+			}
+			if strings.IndexByte(path, 0) >= 0 {
+				return fmt.Errorf("invalid sandbox.filesystem.%s %q: path contains NUL", field.name, path)
+			}
+			if _, err := filepath.Match(path, ""); err != nil {
+				return fmt.Errorf("invalid sandbox.filesystem.%s %q: %w", field.name, path, err)
+			}
 		}
 	}
 	return nil

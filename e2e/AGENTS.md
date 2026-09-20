@@ -14,7 +14,7 @@ This package validates Friday across provider, agent, actor, session, sandbox, p
 - `planning_test.go` covers TODO, LATS, simple, summarize, and research agents.
 - `skills_test.go`, `subagent_test.go`, and `mcp_test.go` cover extension boundaries.
 - `coder_test.go` and `loop_test.go` cover coder policy, commands, and autonomous work.
-- `sandbox_test.go` covers permissions and Linux bubblewrap isolation.
+- `sandbox_test.go` covers the command permission layer. Native Seatbelt/bubblewrap behavior lives in `sandbox/backend_contract*_test.go`.
 - `workspace_test.go` covers prompt loading/composition.
 - `testdata/` contains suite fixtures.
 
@@ -44,7 +44,7 @@ Use focused `-run` expressions while developing. These are integration tests, no
 - Provider cases require real API credentials, reachable endpoints, and configured model names.
 - Network variability is handled with bounded retries and suite/test timeouts; do not introduce unbounded sleeps.
 - MCP tests start a local server and therefore require loopback listen permission.
-- Linux isolation cases require `bwrap`; helpers detect availability and unsupported systems should skip appropriately.
+- The broader e2e sandbox toggle controls OS isolation during model/tool scenarios. Dedicated native contracts run from `sandbox` on both macOS and Linux; `FRIDAY_REQUIRE_NATIVE_SANDBOX=1` makes an unavailable backend or missing loopback prerequisite fail rather than skip.
 - Model-driven assertions should verify durable behavior or broad semantic markers rather than exact prose.
 - Every test must clean up sessions, temporary files, servers, and background work via `t.Cleanup`.
 

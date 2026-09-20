@@ -377,6 +377,21 @@ func TestBuildCommandEnvDoesNotInheritHostEnv(t *testing.T) {
 	}
 }
 
+func TestResolveExecutionHomeUsesExplicitChildHome(t *testing.T) {
+	home, err := resolveExecutionHome("/option/home", []string{"HOME=/child/home"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if home != "/child/home" {
+		t.Fatalf("execution HOME = %q, want /child/home", home)
+	}
+	for _, env := range [][]string{{"HOME="}, {"HOME=relative"}} {
+		if _, err := resolveExecutionHome("/option/home", env); err == nil {
+			t.Fatalf("expected invalid HOME %q to fail", env[0])
+		}
+	}
+}
+
 func TestBuildCommandEnvPreservesExplicitHome(t *testing.T) {
 	env := buildCommandEnv([]string{"HOME=/custom/home"}, "/sandbox/home")
 

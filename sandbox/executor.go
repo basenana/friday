@@ -98,6 +98,13 @@ func (e *Executor) Run(ctx context.Context, cmd string, opts ExecOptions) (*Resu
 	defer cancel()
 
 	// 4. Wrap command with sandbox
+	if e.config.Sandbox.Enabled {
+		homeDir, err := resolveExecutionHome(opts.HomeDir, opts.Env)
+		if err != nil {
+			return &Result{ExitCode: 1, Stderr: err.Error()}, err
+		}
+		opts.HomeDir = homeDir
+	}
 	if e.config.Sandbox.Enabled && !e.sandbox.IsAvailable() {
 		e.warnUnsandboxedOnce.Do(func() {
 			logger.New("sandbox").Warnw("sandbox is unavailable; command execution is disabled",

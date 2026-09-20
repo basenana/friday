@@ -7,6 +7,46 @@ import (
 	"testing"
 )
 
+func TestConfigValidateRejectsInvalidFilesystemPatterns(t *testing.T) {
+	fields := []struct {
+		name string
+		set  func(*FilesystemConfig, []string)
+	}{
+		{name: "readonly", set: func(c *FilesystemConfig, v []string) { c.ReadOnly = v }},
+		{name: "protected", set: func(c *FilesystemConfig, v []string) { c.Protected = v }},
+		{name: "deny", set: func(c *FilesystemConfig, v []string) { c.Deny = v }},
+		{name: "write", set: func(c *FilesystemConfig, v []string) { c.Write = v }},
+	}
+	for _, field := range fields {
+		t.Run(field.name, func(t *testing.T) {
+			cfg := DefaultConfig()
+			field.set(&cfg.Sandbox.Filesystem, []string{"[unterminated"})
+			if err := cfg.Validate(); err == nil {
+				t.Fatal("Validate() accepted malformed filesystem glob")
+			}
+		})
+	}
+}
+
+func TestConfigValidateAllowsMissingSnapshotPaths(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Sandbox.Filesystem = FilesystemConfig{
+		ReadOnly:  []string{"missing-literal", "missing-*.pem"},
+		Protected: []string{"~/.missing-credentials"},
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() rejected missing snapshot paths: %v", err)
+	}
+}
+
+func TestConfigValidateRejectsEmptyFilesystemPath(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Sandbox.Filesystem.Deny = []string{"  "}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("Validate() accepted empty filesystem path")
+	}
+}
+
 func TestLoadConfig_EmptyPathUsesDefaults(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

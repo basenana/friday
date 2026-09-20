@@ -378,6 +378,47 @@ for longer commands: starting, listing, waiting for, or stopping a task is
 still bounded, while the background process itself may continue past 30
 minutes.
 
+### OS sandbox contract
+
+Friday uses Seatbelt on macOS and bubblewrap on Linux. `sandbox.enabled`
+controls only that OS isolation layer; command authorization, native `fs_*`
+path checks, image URL protection, environment filtering, timeouts, and output
+limits remain active independently.
+
+Both native backends compile the same filesystem policy when each command
+starts. The precedence is `deny` over `protected`/`readonly`, then the workdir
+and explicit `write` roots, with everything else read-only. Relative paths are
+rooted at the command workdir, `~/` uses the execution HOME, and symlinks are
+resolved to their physical target. Dangling symlinks fail closed. Filesystem
+patterns use Go `filepath.Match` semantics: `*` does not cross a directory
+separator. Rules cover only objects that exist when the command starts;
+missing literals and zero-match globs are ignored and do not reserve future
+pathnames.
+
+`sandbox.network.isolation: false` retains the host IP network, including
+connect, bind, listen, and accept. `true` blocks access to host and external IP
+networks. Linux still has namespace-local networking, while Seatbelt has no
+network namespace, so local bind behavior under isolation is not a portable
+contract. `sandbox.network.allow` is only the allow policy for remote image
+URLs; it is not a domain firewall for shell commands. A Linux network namespace
+does not by itself hide filesystem-reachable Unix sockets.
+
+Seatbelt is deny-by-default and limits process inspection/signalling to the
+same sandbox plus a small device and system-service set. macOS has no PID or
+device namespace and no reliable equivalent of bubblewrap's parent-death
+behavior; Friday uses an independent process session and inherited Seatbelt
+policy but cannot promise immediate orphan removal if Friday itself is killed.
+Bubblewrap uses private PID/IPC/network namespaces, drops all capabilities,
+creates a private `/dev`, starts a new session, and dies with its parent.
+Setting `FRIDAY_SANDBOX_PROC_BIND` on Linux is an explicit degraded mode that
+binds the host `/proc` instead of mounting a private procfs and expands process
+visibility.
+
+`IS_SANDBOX=1` is stronger than `sandbox.enabled: false`: it trusts an outer
+sandbox and disables Friday's command, filesystem, and network policy layers to
+avoid nesting. Set it only when the outer environment supplies the complete
+security boundary.
+
 ### Sandbox command authorization
 
 Commands executed by the `bash` tool must be in the sandbox allow list

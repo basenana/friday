@@ -1,6 +1,7 @@
 package sandbox
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -21,6 +22,29 @@ func normalizeExecutionHome(homeDir string) string {
 		return homeDir
 	}
 	return defaultExecutionHome()
+}
+
+func resolveExecutionHome(homeDir string, env []string) (string, error) {
+	home := strings.TrimSpace(homeDir)
+	for i := len(env) - 1; i >= 0; i-- {
+		if envKey(env[i]) == "HOME" {
+			home = strings.TrimSpace(strings.TrimPrefix(env[i], "HOME="))
+			if home == "" {
+				return "", fmt.Errorf("execution HOME must not be empty")
+			}
+			break
+		}
+	}
+	if home == "" {
+		home = defaultExecutionHome()
+	}
+	if home == "" {
+		return "", fmt.Errorf("execution HOME is unavailable")
+	}
+	if !filepath.IsAbs(home) {
+		return "", fmt.Errorf("execution HOME must be absolute: %q", home)
+	}
+	return home, nil
 }
 
 // expandPath expands ~ and relative paths. homeDir overrides the home used

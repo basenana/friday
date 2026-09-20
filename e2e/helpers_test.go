@@ -10,7 +10,6 @@ import (
 	"image/color"
 	"image/png"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -77,7 +76,7 @@ func fridayConfig(t *testing.T, cfg *E2EConfig, modelName string) *config.Config
 	t.Helper()
 	m := mustModel(t, cfg, modelName)
 	c := config.DefaultConfig()
-	c.Model = m
+	c.Model = &m
 	if img, ok := cfg.Models["image"]; ok && img.IsConfigured() {
 		c.ImageModel = &img
 	}
@@ -551,18 +550,6 @@ func waitForEventType(eventsPtr *[]types.Event, mu *sync.Mutex, eventType types.
 			mu.Unlock()
 		}
 	}
-}
-
-// ---------------------------------------------------------------------------
-// Sandbox availability
-// ---------------------------------------------------------------------------
-
-// isBwrapAvailable reports whether the bwrap binary is available on PATH.
-// Used by sandbox tests to skip when bwrap is missing. This is pure e2e
-// framework code — the sandbox/ business package is never modified.
-func isBwrapAvailable() bool {
-	_, err := exec.LookPath("bwrap")
-	return err == nil
 }
 
 // ---------------------------------------------------------------------------
