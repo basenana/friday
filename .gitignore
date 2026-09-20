@@ -19,5 +19,6 @@ friday
 .local
 .claude
 .friday
+docs/
 bin/
 venv/

@@ -2,6 +2,7 @@ package sessions
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/basenana/friday/core/actor/events"
@@ -12,6 +13,10 @@ import (
 	coresession "github.com/basenana/friday/core/session"
 	"github.com/basenana/friday/core/types"
 )
+
+// ErrEventWriterActive reports that another Friday process owns the session's
+// actor event writer lease.
+var ErrEventWriterActive = errors.New("session is already active in another Friday process; close it there and retry")
 
 // EventStore is an optional capability implemented by stores that persist the
 // actor event stream used by rich TUI transcript replay. Store intentionally

@@ -2,6 +2,7 @@ package actor
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,6 +14,7 @@ import (
 	"github.com/basenana/friday/config"
 	coreactor "github.com/basenana/friday/core/actor"
 	"github.com/basenana/friday/core/actor/events"
+	actorsink "github.com/basenana/friday/core/actor/sink"
 	"github.com/basenana/friday/core/providers"
 	coresession "github.com/basenana/friday/core/session"
 	"github.com/basenana/friday/sandbox"
@@ -141,6 +143,31 @@ func TestNewRegistryRejectsAgentWithUnknownModel(t *testing.T) {
 	}
 }
 
+type blockingEventStore struct {
+	sessions.Store
+	events  sessions.EventStore
+	started chan struct{}
+	release chan struct{}
+	err     error
+}
+
+func (s *blockingEventStore) OpenEventSink(ctx context.Context, id string) (actorsink.EventSink, error) {
+	select {
+	case <-s.started:
+	default:
+		close(s.started)
+	}
+	<-s.release
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.events.OpenEventSink(ctx, id)
+}
+
+func (s *blockingEventStore) LoadEvents(ctx context.Context, id string) ([]events.Event, error) {
+	return s.events.LoadEvents(ctx, id)
+}
+
 func newTestRegistry(t *testing.T, cfgMod func(*RegistryConfig)) *Registry {
 	t.Helper()
 	cfg := config.DefaultConfig()
@@ -225,6 +252,141 @@ func TestRegistryPersistsActorEventsWhenStoreSupportsIt(t *testing.T) {
 		t.Fatalf("persisted events = %#v", got)
 	}
 	r.ShutdownAll()
+}
+
+func TestRegistryEventWriterContentionPreservesSentinelAndReleasesOnShutdown(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.DataDir = t.TempDir()
+	cfg.Workspace = filepath.Join(cfg.DataDir, "workspace")
+	cfg.Memory.Enabled = false
+	cfg.Sandbox.Sandbox.Enabled = false
+
+	newRegistry := func() *Registry {
+		store := file.NewFileSessionStore(cfg.SessionsPath())
+		mgr := sessions.NewManager(store, filepath.Join(cfg.DataDir, "current"), "")
+		registry, err := NewRegistry(mgr, cfg, DefaultRegistryConfig())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return registry
+	}
+	first := newRegistry()
+	second := newRegistry()
+	t.Cleanup(first.ShutdownAll)
+	t.Cleanup(second.ShutdownAll)
+
+	if _, err := first.GetOrCreate("sess-writer"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := second.GetOrCreate("sess-writer"); !errors.Is(err, sessions.ErrEventWriterActive) {
+		t.Fatalf("second registry error = %v, want ErrEventWriterActive", err)
+	} else if !strings.Contains(err.Error(), "sess-writer") {
+		t.Fatalf("contention error lacks session ID: %v", err)
+	}
+	if _, ok := second.Get("sess-writer"); ok {
+		t.Fatal("failed actor build installed a registry entry")
+	}
+
+	first.Shutdown("sess-writer")
+	if _, err := second.GetOrCreate("sess-writer"); err != nil {
+		t.Fatalf("second registry did not acquire writer after shutdown: %v", err)
+	}
+}
+
+func TestRegistryConcurrentFailedBuildPreservesWriterContentionError(t *testing.T) {
+	baseDir := t.TempDir()
+	cfg := config.DefaultConfig()
+	cfg.DataDir = baseDir
+	cfg.Workspace = filepath.Join(baseDir, "workspace")
+	cfg.Memory.Enabled = false
+	cfg.Sandbox.Sandbox.Enabled = false
+	raw := file.NewFileSessionStore(cfg.SessionsPath())
+	store := &blockingEventStore{
+		Store: raw, events: raw, started: make(chan struct{}), release: make(chan struct{}), err: sessions.ErrEventWriterActive,
+	}
+	mgr := sessions.NewManager(store, filepath.Join(baseDir, "current"), "")
+	registry, err := NewRegistry(mgr, cfg, DefaultRegistryConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(registry.ShutdownAll)
+
+	const callers = 8
+	errs := make(chan error, callers)
+	go func() {
+		_, err := registry.GetOrCreate("sess-contended")
+		errs <- err
+	}()
+	<-store.started
+	for i := 1; i < callers; i++ {
+		go func() {
+			_, err := registry.GetOrCreate("sess-contended")
+			errs <- err
+		}()
+	}
+	time.Sleep(50 * time.Millisecond)
+	close(store.release)
+	for i := 0; i < callers; i++ {
+		if err := <-errs; !errors.Is(err, sessions.ErrEventWriterActive) {
+			t.Fatalf("caller %d error = %v, want ErrEventWriterActive", i, err)
+		}
+	}
+}
+
+func TestRegistryShutdownAllWaitsForInFlightBuildAndReleasesWriter(t *testing.T) {
+	baseDir := t.TempDir()
+	cfg := config.DefaultConfig()
+	cfg.DataDir = baseDir
+	cfg.Workspace = filepath.Join(baseDir, "workspace")
+	cfg.Memory.Enabled = false
+	cfg.Sandbox.Sandbox.Enabled = false
+	raw := file.NewFileSessionStore(cfg.SessionsPath())
+	store := &blockingEventStore{
+		Store: raw, events: raw, started: make(chan struct{}), release: make(chan struct{}),
+	}
+	mgr := sessions.NewManager(store, filepath.Join(baseDir, "current"), "")
+	registry, err := NewRegistry(mgr, cfg, DefaultRegistryConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result := make(chan error, 1)
+	go func() {
+		_, err := registry.GetOrCreate("sess-building")
+		result <- err
+	}()
+	<-store.started
+	shutdownDone := make(chan struct{})
+	go func() {
+		registry.ShutdownAll()
+		close(shutdownDone)
+	}()
+	select {
+	case <-shutdownDone:
+		t.Fatal("ShutdownAll returned while actor construction was in flight")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(store.release)
+	select {
+	case <-shutdownDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("ShutdownAll did not finish after actor construction completed")
+	}
+	if err := <-result; err == nil {
+		t.Fatal("in-flight GetOrCreate succeeded after registry shutdown")
+	}
+	if _, ok := registry.Get("sess-building"); ok {
+		t.Fatal("actor built during shutdown remained registered")
+	}
+
+	probe := file.NewFileSessionStore(cfg.SessionsPath())
+	sink, err := probe.OpenEventSink(context.Background(), "sess-building")
+	if err != nil {
+		t.Fatalf("writer lease survived ShutdownAll: %v", err)
+	}
+	if err := sink.Close(); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestRegistry_ShutdownThenRebuild(t *testing.T) {

@@ -103,7 +103,7 @@ func (h *Hook) Tools() []*tools.Tool {
 	for _, tool := range base {
 		clone := *tool
 		switch clone.Name {
-		case sandbox.FsReadToolName, sandbox.FsListToolName, sandbox.FsSearchToolName:
+		case sandbox.FsReadToolName, sandbox.FsListToolName, sandbox.FsFindToolName, sandbox.FsSearchToolName:
 			clone.Handler = h.withFYI(clone.Name, tool.Handler)
 		case sandbox.FsWriteToolName, sandbox.FsEditToolName, sandbox.FsDeleteToolName:
 			clone.Handler = h.withInstructionGuard(clone.Name, tool.Handler)
@@ -181,8 +181,11 @@ func (h *Hook) withInstructionGuard(toolName string, next tools.ToolHandlerFunc)
 }
 
 func toolPathArgument(toolName string, arguments map[string]interface{}) string {
-	if toolName == sandbox.FsSearchToolName {
+	if toolName == sandbox.FsSearchToolName || toolName == sandbox.FsFindToolName {
 		path, _ := arguments["directory"].(string)
+		if toolName == sandbox.FsFindToolName && strings.TrimSpace(path) == "" {
+			return "."
+		}
 		return path
 	}
 	path, _ := arguments["path"].(string)
@@ -201,7 +204,7 @@ func (h *Hook) discover(ctx context.Context, req *tools.Request, toolName, path 
 		return "", nil
 	}
 	dir := logicalPath
-	if toolName != sandbox.FsListToolName && toolName != sandbox.FsSearchToolName {
+	if toolName != sandbox.FsListToolName && toolName != sandbox.FsFindToolName && toolName != sandbox.FsSearchToolName {
 		dir = filepath.Dir(logicalPath)
 	}
 	dir = h.nearestExistingDirectory(ctx, dir)

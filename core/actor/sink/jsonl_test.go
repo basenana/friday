@@ -75,6 +75,19 @@ func TestJSONLBufferFlushesOnTerminalEventsAndClose(t *testing.T) {
 	}
 }
 
+func TestJSONLAppendAfterCloseFails(t *testing.T) {
+	sink, err := NewJSONL(filepath.Join(t.TempDir(), "events.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sink.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := sink.Append(context.Background(), deltaEvent()); err == nil {
+		t.Fatal("Append after Close succeeded")
+	}
+}
+
 func TestJSONLRunErrorAlsoFlushes(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "events.jsonl")
@@ -106,6 +119,89 @@ func TestJSONLRunErrorAlsoFlushes(t *testing.T) {
 
 // TestBoundedJSONLCompactsAfterBufferedFlush ensures the size check still
 // runs on flush and compaction keeps the log bounded with valid records.
+func eventLine(t *testing.T, evt events.Event) []byte {
+	t.Helper()
+	data, err := json.Marshal(evt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return append(data, '\n')
+}
+
+func compactFixture(t *testing.T, data []byte, maxBytes, targetBytes int64) []byte {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "events.jsonl")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.OpenFile(path, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := compactJSONLFile(f, int64(len(data)), maxBytes, targetBytes); err != nil {
+		_ = f.Close()
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return got
+}
+
+func TestCompactJSONLSkipsMalformedLineBeforeRunBoundary(t *testing.T) {
+	prefix := append(bytes.Repeat([]byte("p"), 256), '\n')
+	ordinary := eventLine(t, events.NewEvent(events.KindTextMessageContent, "old-run"))
+	runStart := eventLine(t, events.NewEvent(events.KindRunStarted, "kept-run"))
+	runEnd := eventLine(t, events.NewEvent(events.KindRunFinished, "kept-run"))
+	data := bytes.Join([][]byte{prefix, []byte("not-json\n"), ordinary, runStart, runEnd}, nil)
+
+	got := compactFixture(t, data, int64(len(data)), int64(len(data)-128))
+	want := append(append([]byte{}, runStart...), runEnd...)
+	if !bytes.Equal(got, want) {
+		t.Fatalf("compacted tail = %q, want run boundary suffix %q", got, want)
+	}
+}
+
+func TestCompactJSONLFallsBackAcrossMalformedLinesWithoutRunBoundary(t *testing.T) {
+	prefix := append(bytes.Repeat([]byte("p"), 256), '\n')
+	valid := eventLine(t, events.NewEvent(events.KindRunFinished, "old-run"))
+	want := append([]byte("not-json\n"), valid...)
+	data := append(append([]byte{}, prefix...), want...)
+
+	got := compactFixture(t, data, int64(len(data)), int64(len(data)-128))
+	if !bytes.Equal(got, want) {
+		t.Fatalf("compacted tail = %q, want complete fallback suffix %q", got, want)
+	}
+}
+
+func TestCompactJSONLMalformedFallbackRemainsBoundedAtLineBoundary(t *testing.T) {
+	prefix := append(bytes.Repeat([]byte("p"), 256), '\n')
+	var tail []byte
+	tail = append(tail, []byte("not-json\n")...)
+	for i := 0; i < 8; i++ {
+		evt := events.NewEvent(events.KindTextMessageContent, "old-run").
+			WithPayload(events.TextMessageContentData{Content: strings.Repeat(string(rune('a'+i)), 96)})
+		tail = append(tail, eventLine(t, evt)...)
+	}
+	data := append(append([]byte{}, prefix...), tail...)
+	const maxBytes, targetBytes = int64(600), int64(400)
+
+	got := compactFixture(t, data, maxBytes, targetBytes)
+	if int64(len(got)) > maxBytes {
+		t.Fatalf("compacted size = %d, want <= %d", len(got), maxBytes)
+	}
+	if len(got) == 0 || got[len(got)-1] != '\n' {
+		t.Fatalf("compacted tail is not newline terminated: %q", got)
+	}
+	if !bytes.HasSuffix(data, got) {
+		t.Fatal("compacted output does not begin at a complete physical-line boundary")
+	}
+}
+
 func TestBoundedJSONLCompactsAfterBufferedFlush(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "events.jsonl")

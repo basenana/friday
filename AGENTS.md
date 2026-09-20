@@ -295,7 +295,7 @@ OS-level sandboxing and tool-safe execution:
 - `permission.go` — Permission allow/deny rules and decisions
 - `approval.go` — Interactive command approval (`CommandApprover`, `FormPrompter`); project-scope grants persist via `project_overlay.go`
 - `tool.go` — The agent-facing `bash` tool
-- `fs_tool.go` — Native filesystem tools (`NewFsTools`) over a `FileSystem` backend with resolved-path access policy; parallel content search with deterministic ordering
+- `fs_tool.go` — Native filesystem tools (`NewFsTools`) over a `FileSystem` backend with resolved-path access policy; parallel filename/path and content search with deterministic ordering
 - `bg_task.go` / `bg_task_store.go` — Background task management
 - `image_tool.go` — Image analysis tool
 - `network_policy.go` — Network access policy

@@ -79,6 +79,12 @@ func DefaultRegistryConfig() RegistryConfig {
 	}
 }
 
+type actorBuild struct {
+	done  chan struct{}
+	actor *coreactor.Actor
+	err   error
+}
+
 // Registry manages one core/actor Actor per session, along with the
 // setup.AgentContext backing it. Actors are created lazily via
 // GetOrCreate and torn down on Shutdown, ShutdownAll, or after
@@ -89,7 +95,8 @@ type Registry struct {
 	// building tracks in-flight actor constructions per session so
 	// concurrent GetOrCreate callers singleflight onto one build instead
 	// of serializing on the mutex (builds do disk IO and client init).
-	building map[string]chan struct{}
+	building map[string]*actorBuild
+	closed   bool
 
 	cfg     RegistryConfig
 	sessMgr setup.SessionManager
@@ -152,7 +159,7 @@ func NewRegistry(sessMgr setup.SessionManager, appCfg *config.Config, cfg Regist
 	}
 	r := &Registry{
 		entries:  make(map[string]*managedActor),
-		building: make(map[string]chan struct{}),
+		building: make(map[string]*actorBuild),
 		cfg:      cfg,
 		sessMgr:  sessMgr,
 		appCfg:   appCfg,
@@ -208,15 +215,22 @@ func (r *Registry) GetOrCreate(sessionID string) (*coreactor.Actor, error) {
 		r.mcp.Warmup(r.ctx)
 	}
 	r.mu.Lock()
+	if r.closed {
+		r.mu.Unlock()
+		return nil, errors.New("actor registry is shut down")
+	}
 	if e, ok := r.entries[sessionID]; ok && !e.stopped.Load() {
 		e.touch()
 		r.mu.Unlock()
 		return e.actor, nil
 	}
-	if done, ok := r.building[sessionID]; ok {
+	if build, ok := r.building[sessionID]; ok {
 		// Another goroutine is building this actor; wait for its result.
 		r.mu.Unlock()
-		<-done
+		<-build.done
+		if build.err != nil {
+			return nil, build.err
+		}
 		r.mu.Lock()
 		if e, ok := r.entries[sessionID]; ok && !e.stopped.Load() {
 			e.touch()
@@ -232,18 +246,26 @@ func (r *Registry) GetOrCreate(sessionID string) (*coreactor.Actor, error) {
 		r.mu.Unlock()
 		old.close(r.cfg.ShutdownGrace)
 		r.mu.Lock()
+		if r.closed {
+			r.mu.Unlock()
+			return nil, errors.New("actor registry is shut down")
+		}
 	}
-	done := make(chan struct{})
-	r.building[sessionID] = done
+	build := &actorBuild{done: make(chan struct{})}
+	r.building[sessionID] = build
 	r.mu.Unlock()
 
-	result, resultErr := r.buildActor(sessionID)
+	build.actor, build.err = r.buildActor(sessionID)
 
 	r.mu.Lock()
+	if r.closed && build.err == nil {
+		build.actor = nil
+		build.err = errors.New("actor registry is shut down")
+	}
 	delete(r.building, sessionID)
+	close(build.done)
 	r.mu.Unlock()
-	close(done)
-	return result, resultErr
+	return build.actor, build.err
 }
 
 // buildActor constructs a session actor (agent + session via setup.NewAgent)
@@ -340,6 +362,11 @@ func (r *Registry) buildActor(sessionID string) (result *coreactor.Actor, result
 	e.stopLoop = e.actor.Start(r.ctx) // loop tied to registry lifetime
 	e.attach(r.bus, sessionID)
 	r.mu.Lock()
+	if r.closed {
+		r.mu.Unlock()
+		e.close(r.cfg.ShutdownGrace)
+		return nil, errors.New("actor registry is shut down")
+	}
 	r.entries[sessionID] = e
 	r.mu.Unlock()
 	bus.PublishStatus(r.bus, sessionID, e.actor.ID(), bus.StatusCreated)
@@ -616,15 +643,23 @@ func (r *Registry) Shutdown(sessionID string) {
 func (r *Registry) ShutdownAll() {
 	r.cancel() // stops the sweep loop and all actor loop contexts
 	r.mu.Lock()
+	r.closed = true
 	entries := make([]registryEntry, 0, len(r.entries))
 	for id, e := range r.entries {
 		entries = append(entries, registryEntry{sessionID: id, managed: e})
 		delete(r.entries, id)
 	}
+	builds := make([]*actorBuild, 0, len(r.building))
+	for _, build := range r.building {
+		builds = append(builds, build)
+	}
 	r.mu.Unlock()
 	logger.New("actor.registry").Infow("shutting down all session actors", "actor_count", len(entries))
 	for _, entry := range entries {
 		r.stopEntry(entry, false)
+	}
+	for _, build := range builds {
+		<-build.done
 	}
 	if r.mcp != nil {
 		_ = r.mcp.Close()

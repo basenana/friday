@@ -19,7 +19,7 @@ constructs these tools and exposes them to agents.
 | `approval.go` | Interactive command approval (`CommandApprover` + actor form bridge) |
 | `project_overlay.go` | HOME-side per-project grant document loading/validation/atomic append |
 | `tool.go` | Agent-facing `bash` tool and denial routing |
-| `fs_tool.go` | `FileSystem` backend, six native fs tools, canonical path policy, deterministic parallel search |
+| `fs_tool.go` | `FileSystem` backend, seven native fs tools, canonical path policy, deterministic parallel filename/path and content search |
 | `bg_task.go`, `bg_task_store.go` | Background task lifecycle/tools and session-record persistence |
 | `image_tool.go` | Image-analysis tool, local image resize/compression, remote download |
 | `network_policy.go` | Outbound URL host/IP/CIDR/port and redirect policy used by image downloads |
@@ -93,7 +93,8 @@ func NewBackgroundTaskTools(tm *TaskManager, workdir string) []*tools.Tool
 - Each output stream is captured to at most 8 MiB, then rendered as the last 300 lines / 512 KiB with a truncation marker and flags.
 - Sandboxed children inherit only PATH, TERM, TZ, LANG, HOME, LC_* plus explicit overrides; isolation-disabled mode inherits `os.Environ()`. `IS_SANDBOX=1` disables nested isolation.
 - Seatbelt's command network policy is binary isolation/allow-outbound; `Network.Allow` host rules apply to image URL downloads, not arbitrary shell commands.
-- Filesystem paths are lexically cleaned, fully symlink-resolved (or resolved through the nearest existing ancestor), then checked against deny/protected/read-only/write roots. Agent-visible list/search paths preserve the requested logical project path; physical paths remain internal to safety checks and file access. Writes must be inside workdir or a write root. Deletion cannot target the workdir root or any policy root.
+- Filesystem paths are lexically cleaned, fully symlink-resolved (or resolved through the nearest existing ancestor), then checked against deny/protected/read-only/write roots. Agent-visible list/find/search paths preserve the requested logical project path; physical paths remain internal to safety checks and file access. Writes must be inside workdir or a write root. Deletion cannot target the workdir root or any policy root.
+- `fs_find` uses up to 16 directory-reading workers and matches files/directories against slash-separated relative-path globs. It includes hidden/vendor entries, skips `.git`, symlinks, and special nodes, and deterministically returns the lexicographically first 1000 paths within the 512-KiB/shared output budget regardless of worker scheduling.
 - `fs_search` uses one sorted walker + up to 16 workers; workers keep local results, then the collector sorts by `(path,line,column)` before applying the 1000-match/512-KiB limits, so output is deterministic.
 - Remote images allow only HTTP(S); every redirect is rechecked. IP literals require explicit IP/CIDR permission; sensitive loopback/link-local/metadata/CGNAT addresses are blocked by default.
 - Restored running background tasks become `interrupted`; stale PIDs are never reused for signals. Persistence keeps all running plus the 20 newest terminal tasks.

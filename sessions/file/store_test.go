@@ -1,7 +1,10 @@
 package file
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -14,6 +17,7 @@ import (
 	"github.com/basenana/friday/core/actor/events"
 	"github.com/basenana/friday/core/collaboration"
 	"github.com/basenana/friday/core/contextmgr"
+	corelogger "github.com/basenana/friday/core/logger"
 	"github.com/basenana/friday/core/planning"
 	"github.com/basenana/friday/core/types"
 	"github.com/basenana/friday/sessions"
@@ -232,6 +236,248 @@ func TestLegacySessionMetadataUsesRuntimeDefaults(t *testing.T) {
 	}
 }
 
+func writeEventLines(t *testing.T, store *FileSessionStore, id string, lines ...[]byte) {
+	t.Helper()
+	if err := os.MkdirAll(store.sessionDir(id), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var data []byte
+	for _, line := range lines {
+		data = append(data, line...)
+		data = append(data, '\n')
+	}
+	if err := os.WriteFile(store.eventsPath(id), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func marshalEvent(t *testing.T, evt events.Event) []byte {
+	t.Helper()
+	data, err := json.Marshal(evt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
+}
+
+func TestEventStoreSkipsMalformedInteriorRecord(t *testing.T) {
+	store := NewFileSessionStore(t.TempDir())
+	first := events.NewEvent(events.KindRunStarted, "run-1")
+	second := events.NewEvent(events.KindRunFinished, "run-1")
+	writeEventLines(t, store, "events", marshalEvent(t, first), []byte("not-json"), marshalEvent(t, second))
+
+	got, err := store.LoadEvents(context.Background(), "events")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].Type != first.Type || got[1].Type != second.Type {
+		t.Fatalf("events = %#v, want valid records before and after corruption", got)
+	}
+}
+
+func TestEventStoreSkipsBlankAndMultipleMalformedRecords(t *testing.T) {
+	store := NewFileSessionStore(t.TempDir())
+	want := events.NewEvent(events.KindRunFinished, "run-2")
+	writeEventLines(t, store, "events", nil, []byte("  "), []byte("bad-one"), []byte("{bad-two"), marshalEvent(t, want))
+
+	got, err := store.LoadEvents(context.Background(), "events")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].RunID != want.RunID {
+		t.Fatalf("events = %#v, want only valid suffix", got)
+	}
+}
+
+func TestEventStoreLoadsLargeRecordWithoutScannerLimit(t *testing.T) {
+	store := NewFileSessionStore(t.TempDir())
+	want := strings.Repeat("x", 96<<10)
+	evt := events.NewEvent(events.KindTextMessageContent, "large").
+		WithPayload(events.TextMessageContentData{Content: want})
+	writeEventLines(t, store, "events", marshalEvent(t, evt))
+
+	got, err := store.LoadEvents(context.Background(), "events")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("loaded %d events, want 1", len(got))
+	}
+	var payload events.TextMessageContentData
+	if err := events.DecodePayload(got[0], &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Content != want {
+		t.Fatalf("large payload length = %d, want %d", len(payload.Content), len(want))
+	}
+}
+
+func TestEventStoreLoadIsReadOnly(t *testing.T) {
+	store := NewFileSessionStore(t.TempDir())
+	valid := marshalEvent(t, events.NewEvent(events.KindRunStarted, "run"))
+	if err := os.MkdirAll(store.sessionDir("events"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	before := append(append(append(valid, '\n'), []byte("bad\n")...), []byte(`{"type":`)...)
+	if err := os.WriteFile(store.eventsPath("events"), before, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.LoadEvents(context.Background(), "events"); err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.ReadFile(store.eventsPath("events"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(after, before) {
+		t.Fatalf("LoadEvents modified event log\nbefore: %q\nafter:  %q", before, after)
+	}
+}
+
+func TestEventWriterLeaseRejectsSecondStoreAndReleasesAfterClose(t *testing.T) {
+	dir := t.TempDir()
+	first := NewFileSessionStore(dir)
+	second := NewFileSessionStore(dir)
+	sink, err := first.OpenEventSink(context.Background(), "events")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := second.OpenEventSink(context.Background(), "events"); !errors.Is(err, sessions.ErrEventWriterActive) {
+		t.Fatalf("second OpenEventSink error = %v, want ErrEventWriterActive", err)
+	}
+	if err := sink.Close(); err != nil {
+		t.Fatal(err)
+	}
+	next, err := second.OpenEventSink(context.Background(), "events")
+	if err != nil {
+		t.Fatalf("OpenEventSink after close: %v", err)
+	}
+	if err := next.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestEventWriterCloseFlushesBeforeLeaseReleaseAndIsIdempotent(t *testing.T) {
+	dir := t.TempDir()
+	first := NewFileSessionStore(dir)
+	second := NewFileSessionStore(dir)
+	sink, err := first.OpenEventSink(context.Background(), "events")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := events.NewEvent(events.KindTextMessageContent, "run-buffered").
+		WithPayload(events.TextMessageContentData{Content: "buffered"})
+	if err := sink.Append(context.Background(), want); err != nil {
+		t.Fatal(err)
+	}
+	if err := sink.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := sink.Close(); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+	next, err := second.OpenEventSink(context.Background(), "events")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := next.Close(); err != nil {
+		t.Fatal(err)
+	}
+	got, err := second.LoadEvents(context.Background(), "events")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].RunID != want.RunID {
+		t.Fatalf("events after lease transfer = %#v", got)
+	}
+}
+
+func TestLoadEventsWhileAnotherStoreOwnsWriterIsNonMutating(t *testing.T) {
+	dir := t.TempDir()
+	writer := NewFileSessionStore(dir)
+	reader := NewFileSessionStore(dir)
+	sink, err := writer.OpenEventSink(context.Background(), "events")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sink.Close()
+	want := events.NewEvent(events.KindRunFinished, "run-flushed")
+	if err := sink.Append(context.Background(), want); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(writer.eventsPath("events"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := reader.LoadEvents(context.Background(), "events")
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.ReadFile(writer.eventsPath("events"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].RunID != want.RunID || !bytes.Equal(before, after) {
+		t.Fatalf("read under writer lease: events=%#v modified=%t", got, !bytes.Equal(before, after))
+	}
+	if _, err := reader.OpenEventSink(context.Background(), "events"); !errors.Is(err, sessions.ErrEventWriterActive) {
+		t.Fatalf("second writer error = %v, want ErrEventWriterActive", err)
+	}
+}
+
+type captureLogger struct {
+	warnings []capturedWarning
+}
+
+type capturedWarning struct {
+	message string
+	fields  map[string]interface{}
+}
+
+func (l *captureLogger) Named(string) corelogger.Logger        { return l }
+func (l *captureLogger) With(...interface{}) corelogger.Logger { return l }
+func (l *captureLogger) Info(...interface{})                   {}
+func (l *captureLogger) Warn(...interface{})                   {}
+func (l *captureLogger) Error(...interface{})                  {}
+func (l *captureLogger) Infof(string, ...interface{})          {}
+func (l *captureLogger) Warnf(string, ...interface{})          {}
+func (l *captureLogger) Errorf(string, ...interface{})         {}
+func (l *captureLogger) Infow(string, ...interface{})          {}
+func (l *captureLogger) Errorw(string, ...interface{})         {}
+func (l *captureLogger) Warnw(message string, keysAndValues ...interface{}) {
+	fields := make(map[string]interface{}, len(keysAndValues)/2)
+	for i := 0; i+1 < len(keysAndValues); i += 2 {
+		key, _ := keysAndValues[i].(string)
+		fields[key] = keysAndValues[i+1]
+	}
+	l.warnings = append(l.warnings, capturedWarning{message: message, fields: fields})
+}
+
+func TestEventStoreWarnsOnceWithoutLoggingMalformedRecord(t *testing.T) {
+	oldLogger := corelogger.Root()
+	capture := &captureLogger{}
+	corelogger.SetRoot(capture)
+	t.Cleanup(func() { corelogger.SetRoot(oldLogger) })
+
+	store := NewFileSessionStore(t.TempDir())
+	secret := "private-tool-output-do-not-log"
+	valid := events.NewEvent(events.KindRunFinished, "run")
+	writeEventLines(t, store, "session-warning", []byte(secret), []byte("also-bad"), marshalEvent(t, valid))
+	if _, err := store.LoadEvents(context.Background(), "session-warning"); err != nil {
+		t.Fatal(err)
+	}
+	if len(capture.warnings) != 1 {
+		t.Fatalf("warnings = %d, want 1", len(capture.warnings))
+	}
+	warning := capture.warnings[0]
+	if warning.fields["session_id"] != "session-warning" || warning.fields["skipped_records"] != 2 || warning.fields["first_line"] != 1 || warning.fields["first_offset"] != int64(0) || warning.fields["first_error"] == nil {
+		t.Fatalf("warning = %#v", warning)
+	}
+	if strings.Contains(fmt.Sprint(warning), secret) {
+		t.Fatalf("warning leaked malformed record: %#v", warning)
+	}
+}
+
 func TestEventStoreRoundTripAndRepairsTruncatedTail(t *testing.T) {
 	dir := t.TempDir()
 	store := NewFileSessionStore(dir)
@@ -331,7 +577,7 @@ func TestEventStoreLoadsWhileActorSinkAppends(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer sink.Close()
+	t.Cleanup(func() { _ = sink.Close() })
 
 	const count = 200
 	errs := make(chan error, 1)
@@ -352,6 +598,9 @@ func TestEventStoreLoadsWhileActorSinkAppends(t *testing.T) {
 		case err := <-errs:
 			t.Fatal(err)
 		case <-done:
+			if err := sink.Close(); err != nil {
+				t.Fatal(err)
+			}
 			loaded, err := store.LoadEvents(context.Background(), "live-events")
 			if err != nil {
 				t.Fatal(err)

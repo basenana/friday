@@ -170,6 +170,16 @@ func (m *model) presentBuiltinTool(block *chatBlock, args map[string]any) (toolP
 			path = "."
 		}
 		return toolPresentation{title: "List directory", body: labeledValue("path", path), specialized: true}, true
+	case "fs_find":
+		directory := value("directory")
+		if directory == "" {
+			directory = "."
+		}
+		return toolPresentation{
+			title:       "Find files",
+			body:        fields(labeledValue("directory", directory), labeledValue("pattern", value("pattern"))),
+			specialized: true,
+		}, true
 	case "fs_search":
 		return toolPresentation{
 			title:       "Search files",

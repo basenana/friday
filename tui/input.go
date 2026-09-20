@@ -235,7 +235,7 @@ func (m *model) applyLifecycleAction(action codercmds.Action) (bool, tea.Cmd) {
 	case codercmds.QuitAction:
 		m.quitting = true
 		m.loopManager.Close()
-		m.closeFeed()
+		m.closeSession()
 		m.registry.Shutdown(m.sessionID)
 		return true, tea.Quit
 	}
@@ -521,7 +521,8 @@ func (m *model) switchSession(newID string) (cmd tea.Cmd, err error) {
 	activeModel, _ := configuredSessionModel(m.runtime, m.cfg, newID)
 
 	newFeed := bus.SubscribeAgentFeed(m.registry.Bus(), newID)
-	if _, err := m.registry.GetOrCreate(newID); err != nil {
+	_, newRelease, err := m.registry.AcquireLifecycle(newID)
+	if err != nil {
 		newFeed.Close()
 		return nil, sessionSwitchError(fmt.Errorf("prepare actor %s: %w", shortID(newID), err), rollbackCreated())
 	}
@@ -529,6 +530,7 @@ func (m *model) switchSession(newID string) (cmd tea.Cmd, err error) {
 	projection, err := m.projectTranscript(newID)
 	if err != nil {
 		newFeed.Close()
+		newRelease()
 		m.registry.Shutdown(newID)
 		return nil, sessionSwitchError(fmt.Errorf("restore session %s: %w", shortID(newID), err), rollbackCreated())
 	}
@@ -539,13 +541,14 @@ func (m *model) switchSession(newID string) (cmd tea.Cmd, err error) {
 	}
 	if err != nil {
 		newFeed.Close()
+		newRelease()
 		m.registry.Shutdown(newID)
 		return nil, sessionSwitchError(fmt.Errorf("activate session %s: %w", shortID(newID), err), rollbackCreated())
 	}
 
-	oldFeed := m.feed
+	oldFeed, oldRelease := m.feed, m.sessionRelease
 	m.loopManager.Detach(oldID)
-	m.sessionID, m.feed = newID, newFeed
+	m.sessionID, m.feed, m.sessionRelease = newID, newFeed, newRelease
 	m.resetEventTracking()
 	m.attachments = nil
 	m.composerGeneration++
@@ -572,6 +575,9 @@ func (m *model) switchSession(newID string) (cmd tea.Cmd, err error) {
 		} else if err := m.refreshLoopStatus(); err != nil {
 			m.appendBlock(chatBlock{kind: blockError, content: "restore loop status: " + err.Error()})
 		}
+	}
+	if oldRelease != nil {
+		oldRelease()
 	}
 	if oldFeed != nil {
 		oldFeed.Close()

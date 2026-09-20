@@ -171,6 +171,8 @@ func TestTodoPanelIsTerminalSafe(t *testing.T) {
 
 func TestEventLogRestoresLatestTodoSnapshot(t *testing.T) {
 	m, _, _ := newTestModel(t)
+	m.closeSession()
+	m.registry.Shutdown(m.sessionID)
 	store := m.sessMgr.GetStore().(sessions.EventStore)
 	sink, err := store.OpenEventSink(context.Background(), m.sessionID)
 	if err != nil {

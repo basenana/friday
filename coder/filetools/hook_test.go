@@ -407,14 +407,66 @@ func TestInstructionSymlinkCannotEscapeProjectRoot(t *testing.T) {
 	}
 }
 
+func TestFindDiscoversDirectoryInstructionsOnce(t *testing.T) {
+	root := t.TempDir()
+	mustWrite(t, filepath.Join(root, "pkg", "AGENTS.md"), "package rules")
+	mustWrite(t, filepath.Join(root, "pkg", "service", "CLAUDE.md"), "service rules")
+	mustWrite(t, filepath.Join(root, "pkg", "service", "main.go"), "package service")
+
+	hook := newTestHook(t, root)
+	sess := session.New("session-1", nil)
+	find := findTool(t, hook.Tools(), sandbox.FsFindToolName)
+	args := map[string]any{"directory": "pkg/service", "pattern": "**/*.go"}
+
+	first := callTool(t, find, sess, args)
+	serviceIndex := strings.Index(first.FYI, "## pkg/service/CLAUDE.md")
+	packageIndex := strings.Index(first.FYI, "## pkg/AGENTS.md")
+	if serviceIndex < 0 || packageIndex <= serviceIndex {
+		t.Fatalf("find FYI order/content mismatch: %q", first.FYI)
+	}
+	if second := callTool(t, find, sess, args); second.FYI != "" {
+		t.Fatalf("second find FYI = %q, want empty", second.FYI)
+	}
+}
+
+func TestToolPathArgumentDefaultsFindDirectory(t *testing.T) {
+	if got := toolPathArgument(sandbox.FsFindToolName, map[string]interface{}{"pattern": "**/*.go"}); got != "." {
+		t.Fatalf("toolPathArgument(fs_find) = %q, want %q", got, ".")
+	}
+}
+
 type countingFileSystem struct {
 	sandbox.FileSystem
-	reads int
+	reads    int
+	readDirs int
 }
 
 func (f *countingFileSystem) ReadFile(ctx context.Context, path string) ([]byte, error) {
 	f.reads++
 	return f.FileSystem.ReadFile(ctx, path)
+}
+
+func (f *countingFileSystem) ReadDir(ctx context.Context, path string) ([]os.DirEntry, error) {
+	f.readDirs++
+	return f.FileSystem.ReadDir(ctx, path)
+}
+
+func TestFindUsesInjectedFileSystem(t *testing.T) {
+	root := t.TempDir()
+	mustWrite(t, filepath.Join(root, "pkg", "AGENTS.md"), "rules")
+	mustWrite(t, filepath.Join(root, "pkg", "main.go"), "package main")
+	cfg := sandbox.DefaultConfig()
+	cfg.Sandbox.Enabled = false
+	custom := &countingFileSystem{FileSystem: sandbox.NewLocalFileSystem(sandbox.NewExecutor(cfg), root)}
+	hook, err := New(nil, root, WithFileSystem(custom))
+	if err != nil {
+		t.Fatal(err)
+	}
+	find := findTool(t, hook.Tools(), sandbox.FsFindToolName)
+	result := callTool(t, find, session.New("session-1", nil), map[string]any{"directory": "pkg", "pattern": "**/*.go"})
+	if custom.readDirs == 0 || custom.reads == 0 || !strings.Contains(result.FYI, "rules") {
+		t.Fatalf("injected filesystem not used: reads=%d readDirs=%d FYI=%q", custom.reads, custom.readDirs, result.FYI)
+	}
 }
 
 func TestHookUsesInjectedFileSystem(t *testing.T) {

@@ -16,21 +16,23 @@ import (
 	"github.com/basenana/friday/bus"
 	coreactor "github.com/basenana/friday/core/actor"
 	"github.com/basenana/friday/core/actor/events"
+	"github.com/basenana/friday/sessions"
 )
 
 type fakeRegistry struct {
-	bus *eventbus.Bus
-	mu  sync.Mutex
-	got []string
+	bus            *eventbus.Bus
+	mu             sync.Mutex
+	got            []string
+	getOrCreateErr error
 }
 
 func newFakeRegistry() *fakeRegistry { return &fakeRegistry{bus: eventbus.NewBus()} }
 
 func (r *fakeRegistry) GetOrCreate(id string) (*coreactor.Actor, error) {
 	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.got = append(r.got, id)
-	r.mu.Unlock()
-	return nil, nil
+	return nil, r.getOrCreateErr
 }
 
 func (r *fakeRegistry) DispatchInput(env bus.Envelope) error {
@@ -204,6 +206,34 @@ func TestHandlerOnlyExposesWebSocketAndChecksOrigin(t *testing.T) {
 	writeClientFrame(t, local, ClientFrame{Version: ProtocolVersion, Type: TypeSessionCreate, RequestID: "create"})
 	if got := readWireFrame(t, local); got.Type != TypeResult || got.ThreadID != "new-session" {
 		t.Fatalf("create result = %+v", got)
+	}
+}
+
+func TestSubscribeReportsActorStartFailureAndRemovesSubscription(t *testing.T) {
+	_, registry, httpServer := newTestServer(t, newFakeCatalog("busy-session"))
+	registry.getOrCreateErr = sessions.ErrEventWriterActive
+	conn := dialTestServer(t, httpServer, "")
+
+	writeClientFrame(t, conn, ClientFrame{Version: ProtocolVersion, Type: TypeSessionSubscribe, RequestID: "subscribe", ThreadID: "busy-session"})
+	got := readWireFrame(t, conn)
+	if got.Type != TypeError || got.RequestID != "subscribe" || got.ThreadID != "busy-session" {
+		t.Fatalf("subscribe error frame = %+v", got)
+	}
+	var payload ErrorPayload
+	if err := json.Unmarshal(got.Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Code != "actor_start_failed" || !strings.Contains(payload.Message, sessions.ErrEventWriterActive.Error()) {
+		t.Fatalf("subscribe error payload = %+v", payload)
+	}
+
+	writeClientFrame(t, conn, ClientFrame{Version: ProtocolVersion, Type: TypeSessionUnsubscribe, RequestID: "unsubscribe", ThreadID: "busy-session"})
+	got = readWireFrame(t, conn)
+	if err := json.Unmarshal(got.Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if got.Type != TypeError || payload.Code != "not_subscribed" {
+		t.Fatalf("unsubscribe after failed subscribe = frame %+v payload %+v", got, payload)
 	}
 }
 

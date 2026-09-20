@@ -2,6 +2,7 @@ package sink
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -58,6 +59,9 @@ func NewBoundedJSONL(path string, maxBytes, targetBytes int64) (*JSONL, error) {
 func (j *JSONL) Append(_ context.Context, evt events.Event) error {
 	j.mu.Lock()
 	defer j.mu.Unlock()
+	if j.f == nil {
+		return errors.New("sink: append to closed jsonl")
+	}
 	if err := j.enc.Encode(evt); err != nil {
 		return fmt.Errorf("sink: encode event: %w", err)
 	}
@@ -115,20 +119,23 @@ func compactJSONLFile(f *os.File, size, maxBytes, targetBytes int64) error {
 		return err
 	}
 	start += int64(len(skipped))
-	decoder := json.NewDecoder(reader)
 	keepFrom := start
+	recordStart := start
 	for {
-		recordStart := decoder.InputOffset()
-		var evt events.Event
-		if err := decoder.Decode(&evt); err != nil {
-			if errors.Is(err, io.EOF) {
+		line, readErr := reader.ReadBytes('\n')
+		if len(bytes.TrimSpace(line)) > 0 {
+			var evt events.Event
+			if err := json.Unmarshal(line, &evt); err == nil && evt.Type == events.KindRunStarted {
+				keepFrom = recordStart
 				break
 			}
-			return err
 		}
-		if evt.Type == events.KindRunStarted {
-			keepFrom = start + recordStart
-			break
+		recordStart += int64(len(line))
+		if readErr != nil {
+			if errors.Is(readErr, io.EOF) {
+				break
+			}
+			return readErr
 		}
 	}
 	if _, err := f.Seek(keepFrom, io.SeekStart); err != nil {

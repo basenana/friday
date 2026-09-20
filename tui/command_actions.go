@@ -383,6 +383,11 @@ func (m *model) updateCommandConfirmation(key tea.KeyPressMsg) (tea.Model, tea.C
 		}
 	}
 	if err != nil {
+		if current {
+			if restoreErr := m.bindSession(c.target); restoreErr != nil {
+				err = fmt.Errorf("%w; restore session: %v", err, restoreErr)
+			}
+		}
 		m.appendBlock(chatBlock{kind: blockError, content: c.action + ": " + err.Error()})
 		return m, nil
 	}

@@ -6,6 +6,7 @@ const (
 	ToolFsRead    = "fs_read"
 	ToolFsWrite   = "fs_write"
 	ToolFsList    = "fs_list"
+	ToolFsFind    = "fs_find"
 	ToolFsSearch  = "fs_search"
 	ToolFsDelete  = "fs_delete"
 	ToolFsEdit    = "fs_edit"

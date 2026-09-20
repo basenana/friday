@@ -263,18 +263,25 @@ plan-producing turn ends with a visible duration marker.
 
 #### Project instruction files
 
-The native `fs_read` and `fs_list` tools lazily discover project instructions.
-Starting at the accessed directory and walking toward the project root, Friday
-reads at most one instruction file per directory (`AGENTS.md` first, then
-`CLAUDE.md`) and returns newly discovered Markdown in the tool result's `fyi`
-field. Directories already checked by the current session are not returned
-again, including after history compaction or session reload. Forks inherit the
-parent snapshot and then track their own directories independently.
+The native `fs_read`, `fs_list`, `fs_find`, and `fs_search` tools lazily
+discover project instructions. For directory-oriented operations, discovery
+starts at the requested directory; for `fs_read`, it starts at the file's
+containing directory. Friday then walks toward the project root, reads at most
+one instruction file per directory (`AGENTS.md` first, then `CLAUDE.md`), and
+returns newly discovered Markdown in the tool result's `fyi` field. Directories
+already checked by the current session are not returned again, including after
+history compaction or session reload. Forks inherit the parent snapshot and
+then track their own directories independently.
+
+Use `fs_find` to locate files or directories by a relative-path glob, for
+example `{"pattern":"**/*.py"}`; `directory` defaults to `.`. It returns stable,
+path-sorted results and stops after 1000 matches. Use `fs_search` instead to
+search text-file contents.
 
 Instruction discovery is limited to the native filesystem tools; shell,
 background, and external MCP tools do not participate. Editing an instruction
 file through a native filesystem tool invalidates that directory so its new
-contents are discovered on the next read or list.
+contents are discovered on the next read-only filesystem operation.
 
 Plan Mode uses the session's selected model and defaults to `medium` reasoning
 effort. Override it in JSON or YAML:

@@ -1323,6 +1323,8 @@ func TestFormAllValueFamilies(t *testing.T) {
 
 func TestEventLogRestoresTranscript(t *testing.T) {
 	m, _, _ := newTestModel(t)
+	m.closeSession()
+	m.registry.Shutdown(m.sessionID)
 	store := m.sessMgr.GetStore().(sessions.EventStore)
 	sink, err := store.OpenEventSink(context.Background(), m.sessionID)
 	if err != nil {

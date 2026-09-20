@@ -49,6 +49,7 @@ func Run(sessMgr *sessions.Manager, cfg *config.Config, sessionID string) error 
 
 	m := loadingModel(sessMgr, registry, cmdRegistry, cfg, sessionID)
 	defer m.loopManager.Close()
+	defer m.closeSession()
 	m.alternateScreen = useAlternateScreen(cfg.TUI.AlternateScreen)
 	m.logInfo("starting TUI",
 		"project_mode", false,
@@ -88,6 +89,7 @@ func RunProject(projectMgr *projectpkg.Manager, cfg *config.Config, sessionID st
 	codercmds.RegisterAll(cmdRegistry)
 	m := loadingModelAt(projectMgr.Base(), registry, cmdRegistry, cfg, sessionID, projectMgr.Project().Root())
 	defer m.loopManager.Close()
+	defer m.closeSession()
 	m.projectMgr = projectMgr
 	m.runtime = projectMgr
 	m.alternateScreen = useAlternateScreen(cfg.TUI.AlternateScreen)
@@ -170,14 +172,15 @@ type sessionRuntime interface {
 }
 
 type model struct {
-	sessMgr     *sessions.Manager
-	runtime     sessionRuntime
-	projectMgr  *projectpkg.Manager
-	registry    *actor.Registry
-	sessionID   string
-	feed        *bus.Feed
-	loopManager *coderloop.Manager
-	workdir     string
+	sessMgr        *sessions.Manager
+	runtime        sessionRuntime
+	projectMgr     *projectpkg.Manager
+	registry       *actor.Registry
+	sessionID      string
+	feed           *bus.Feed
+	sessionRelease func()
+	loopManager    *coderloop.Manager
+	workdir        string
 
 	cmdRegistry   *codercmds.Registry
 	agentRegistry *coderagents.Registry
@@ -390,6 +393,7 @@ type dispatchQueuedMsg struct{}
 type initialSessionLoadedMsg struct {
 	sessionID     string
 	feed          *bus.Feed
+	release       func()
 	projection    transcriptProjection
 	promptHistory []string
 	err           error
@@ -520,6 +524,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case initialSessionLoadedMsg:
 		m.loading = false
 		if msg.err != nil {
+			if msg.release != nil {
+				msg.release()
+			}
 			m.fatalErr = msg.err
 			m.appendBlock(chatBlock{kind: blockError, content: "load session: " + msg.err.Error()})
 			return m, nil
@@ -529,6 +536,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.mode = m.runtime.CollaborationMode(msg.sessionID)
 		m.activeModel, _ = configuredSessionModel(m.runtime, m.cfg, msg.sessionID)
 		m.feed = msg.feed
+		m.sessionRelease = msg.release
 		m.resetEventTracking()
 		if lifecycle, ok := m.registry.Lifecycle(msg.sessionID); ok && lifecycle.Current() != nil {
 			if err := m.loopManager.Attach(context.Background(), lifecycle.Current()); err != nil {
@@ -585,7 +593,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.logInfo("TUI quit requested", "source", "ctrl+c")
 			m.quitting = true
 			m.loopManager.Close()
-			m.closeFeed()
+			m.closeSession()
 			return m, tea.Quit
 		}
 		if m.loading || m.fatalErr != nil || m.planCompacting || m.manualCompacting || m.reconciling {
@@ -790,7 +798,7 @@ func (m *model) loadInitialSession() tea.Cmd {
 			)
 			return initialSessionLoadedMsg{sessionID: sessionID, err: wrapped}
 		}
-		succeed := func(sessionID string, feed *bus.Feed, projection transcriptProjection, promptHistory []string, created bool) initialSessionLoadedMsg {
+		succeed := func(sessionID string, feed *bus.Feed, release func(), projection transcriptProjection, promptHistory []string, created bool) initialSessionLoadedMsg {
 			tuiLogger().Infow("initial session loaded",
 				"session_id", sessionID,
 				"project_mode", projectMode,
@@ -798,7 +806,7 @@ func (m *model) loadInitialSession() tea.Cmd {
 				"duration_ms", elapsedMilliseconds(started),
 				"message_count", len(projection.messages),
 			)
-			return initialSessionLoadedMsg{sessionID: sessionID, feed: feed, projection: projection, promptHistory: promptHistory}
+			return initialSessionLoadedMsg{sessionID: sessionID, feed: feed, release: release, projection: projection, promptHistory: promptHistory}
 		}
 		if projectMgr != nil {
 			sessionID, created, err := prepareInitialProjectSession(projectMgr, requested)
@@ -825,13 +833,15 @@ func (m *model) loadInitialSession() tea.Cmd {
 				return fail("validate session model", sessionID, err)
 			}
 			feed := bus.SubscribeAgentFeed(registry.Bus(), sessionID)
-			if _, err := registry.GetOrCreate(sessionID); err != nil {
+			_, release, err := registry.AcquireLifecycle(sessionID)
+			if err != nil {
 				feed.Close()
 				cleanup()
 				return fail("prepare session actor", sessionID, err)
 			}
 			if err := projectMgr.Activate(sessionID); err != nil {
 				feed.Close()
+				release()
 				registry.Shutdown(sessionID)
 				cleanup()
 				return fail("activate project session", sessionID, err)
@@ -849,7 +859,7 @@ func (m *model) loadInitialSession() tea.Cmd {
 					promptHistory = append(promptHistory, entry.Text)
 				}
 			}
-			return succeed(sessionID, feed, projection, promptHistory, created)
+			return succeed(sessionID, feed, release, projection, promptHistory, created)
 		}
 		sessionID, err := prepareInitialSessionID(sessMgr, requested)
 		if err != nil {
@@ -863,11 +873,12 @@ func (m *model) loadInitialSession() tea.Cmd {
 			return fail("validate session model", sessionID, err)
 		}
 		feed := bus.SubscribeAgentFeed(registry.Bus(), sessionID)
-		if _, err := registry.GetOrCreate(sessionID); err != nil {
+		_, release, err := registry.AcquireLifecycle(sessionID)
+		if err != nil {
 			feed.Close()
 			return fail("prepare session actor", sessionID, err)
 		}
-		return succeed(sessionID, feed, projection, nil, false)
+		return succeed(sessionID, feed, release, projection, nil, false)
 	}
 }
 
@@ -953,7 +964,7 @@ func removeTextareaBackground(ta *textarea.Model) {
 func (m *model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if msg.String() == "ctrl+c" {
 		m.quitting = true
-		m.closeFeed()
+		m.closeSession()
 		return m, tea.Quit
 	}
 	if msg.String() == "ctrl+g" {
@@ -1944,19 +1955,38 @@ func (m *model) closeFeed() {
 	}
 }
 
-func (m *model) bindSession(sessionID string) error {
+func (m *model) releaseSessionLease() {
+	if m.sessionRelease != nil {
+		m.sessionRelease()
+		m.sessionRelease = nil
+	}
+}
+
+func (m *model) closeSession() {
 	m.closeFeed()
+	m.releaseSessionLease()
+}
+
+func (m *model) bindSession(sessionID string) error {
 	if err := normalizeSessionModel(m.runtime, m.cfg, sessionID); err != nil {
 		return fmt.Errorf("validate session model: %w", err)
 	}
 	feed := bus.SubscribeAgentFeed(m.registry.Bus(), sessionID)
-	if _, err := m.registry.GetOrCreate(sessionID); err != nil {
+	_, release, err := m.registry.AcquireLifecycle(sessionID)
+	if err != nil {
 		feed.Close()
 		return fmt.Errorf("failed to bind session %s: %w", shortID(sessionID), err)
 	}
-	m.sessionID, m.feed = sessionID, feed
+	oldFeed, oldRelease := m.feed, m.sessionRelease
+	m.sessionID, m.feed, m.sessionRelease = sessionID, feed, release
 	m.resetEventTracking()
 	m.subscriptionToken++
+	if oldRelease != nil {
+		oldRelease()
+	}
+	if oldFeed != nil {
+		oldFeed.Close()
+	}
 	return nil
 }
 

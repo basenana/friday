@@ -3,6 +3,7 @@ package sandbox
 import (
 	"bufio"
 	"bytes"
+	"container/heap"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -12,6 +13,7 @@ import (
 	"io"
 	"math"
 	"os"
+	pathpkg "path"
 	"path/filepath"
 	"reflect"
 	"regexp"
@@ -31,10 +33,13 @@ const (
 	toolFsRead   = "fs_read"
 	toolFsWrite  = "fs_write"
 	toolFsList   = "fs_list"
+	toolFsFind   = "fs_find"
 	toolFsSearch = "fs_search"
 	toolFsDelete = "fs_delete"
 	toolFsEdit   = "fs_edit"
 
+	maxFindMatches       = 1000
+	maxFindOutputBytes   = 512 * 1024
 	maxSearchMatches     = 1000
 	maxSearchOutputBytes = 512 * 1024
 )
@@ -43,6 +48,7 @@ const (
 	FsReadToolName   = toolFsRead
 	FsWriteToolName  = toolFsWrite
 	FsListToolName   = toolFsList
+	FsFindToolName   = toolFsFind
 	FsSearchToolName = toolFsSearch
 	FsDeleteToolName = toolFsDelete
 	FsEditToolName   = toolFsEdit
@@ -89,6 +95,15 @@ type linkStatter interface {
 
 type fileOpener interface {
 	Open(context.Context, string) (io.ReadCloser, error)
+}
+
+type findDirectoryRoot interface {
+	ReadDir(context.Context, string) ([]os.DirEntry, error)
+	Close() error
+}
+
+type findDirectoryRootOpener interface {
+	OpenFindRoot(context.Context, string, os.FileInfo) (findDirectoryRoot, error)
 }
 
 type exactFileEditor interface {
@@ -215,6 +230,51 @@ func (f *localFileSystem) ReadDir(ctx context.Context, path string) ([]os.DirEnt
 		return dir.ReadDir(-1)
 	}
 	return os.ReadDir(path)
+}
+
+type localFindDirectoryRoot struct {
+	root     *os.Root
+	rootPath string
+}
+
+func (f *localFileSystem) OpenFindRoot(ctx context.Context, rootPath string, expected os.FileInfo) (findDirectoryRoot, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	root, err := os.OpenRoot(rootPath)
+	if err != nil {
+		return nil, err
+	}
+	actual, err := root.Stat(".")
+	if err != nil {
+		root.Close()
+		return nil, err
+	}
+	if expected == nil || !os.SameFile(expected, actual) {
+		root.Close()
+		return nil, fmt.Errorf("search root changed after validation")
+	}
+	return &localFindDirectoryRoot{root: root, rootPath: rootPath}, nil
+}
+
+func (r *localFindDirectoryRoot) ReadDir(ctx context.Context, path string) ([]os.DirEntry, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	rel, err := filepath.Rel(r.rootPath, path)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+		return nil, fmt.Errorf("directory escaped the search root")
+	}
+	dir, err := r.root.Open(rel)
+	if err != nil {
+		return nil, err
+	}
+	defer dir.Close()
+	return dir.ReadDir(-1)
+}
+
+func (r *localFindDirectoryRoot) Close() error {
+	return r.root.Close()
 }
 
 func (f *localFileSystem) WriteFile(ctx context.Context, path string, content []byte) error {
@@ -385,6 +445,7 @@ func NewFsToolsWithFileSystem(fs FileSystem, workdir string) []*tools.Tool {
 		newFsReadTool(fs, workdir),
 		newFsWriteTool(fs, workdir),
 		newFsListTool(fs, workdir),
+		newFsFindTool(fs, workdir),
 		newFsSearchTool(fs, workdir),
 		newFsDeleteTool(fs, workdir),
 		newFsEditTool(fs, workdir),
@@ -396,7 +457,7 @@ func newFsReadTool(fs FileSystem, workdir string) *tools.Tool {
 
 Current working directory: %s
 
-Use this after confirming the path with fs_list or fs_search. Use fs_list for directories and fs_search to find text across files. By default the complete file is returned. Set the optional 1-based inclusive start_line and end_line fields to read only part of a file. Output is limited only by the shared tool-result budget; any truncation is reported explicitly.`, workdir)
+Use this after confirming the path with fs_list, fs_find, or fs_search. Use fs_list for direct directory inspection, fs_find to locate names or paths recursively, and fs_search to find text across files. By default the complete file is returned. Set the optional 1-based inclusive start_line and end_line fields to read only part of a file. Output is limited only by the shared tool-result budget; any truncation is reported explicitly.`, workdir)
 
 	return tools.NewTool(toolFsRead,
 		tools.WithDescription(desc),
@@ -439,7 +500,7 @@ func fsReadFileSystemHandler(fs FileSystem) tools.ToolHandlerFunc {
 		info, err := fs.Stat(ctx, absPath)
 		if err != nil {
 			if os.IsNotExist(err) {
-				return tools.NewToolResultActionableError(missingPathCause(ctx, fs, path, absPath), "use fs_list or fs_search from the nearest existing directory; do not repeat the same guessed path"), nil
+				return tools.NewToolResultActionableError(missingPathCause(ctx, fs, path, absPath), "use fs_list, fs_find, or fs_search from the nearest existing directory; do not repeat the same guessed path"), nil
 			}
 			return tools.NewToolResultActionableError(fmt.Sprintf("failed to inspect file %q: %s", path, err), "use fs_list to verify the path and then retry"), nil
 		}
@@ -641,7 +702,7 @@ func newFsListTool(fs FileSystem, workdir string) *tools.Tool {
 
 Current working directory: %s
 
-Use this before guessing a path or reading a file. This tool is not recursive; use fs_search to search text across a directory tree. Hidden entries are included. The result is a JSON string with stable, path-sorted entries and file metadata.`, workdir)
+Use this before guessing a path or reading a file. This tool is not recursive; use fs_find to locate names or paths recursively, or fs_search to search text across a directory tree. Hidden entries are included. The result is a JSON string with stable, path-sorted entries and file metadata.`, workdir)
 
 	return tools.NewTool(toolFsList,
 		tools.WithDescription(desc),
@@ -670,7 +731,7 @@ func fsListFileSystemHandler(fs FileSystem) tools.ToolHandlerFunc {
 		entries, err := fs.ReadDir(ctx, absPath)
 		if err != nil {
 			if os.IsNotExist(err) {
-				return tools.NewToolResultActionableError(missingPathCause(ctx, fs, path, absPath), "list the nearest existing directory or use fs_search; do not repeat the same guessed path"), nil
+				return tools.NewToolResultActionableError(missingPathCause(ctx, fs, path, absPath), "list the nearest existing directory or use fs_find; do not repeat the same guessed path"), nil
 			}
 			return tools.NewToolResultActionableError(fmt.Sprintf("failed to list directory %q: %s", path, err), "verify that the path exists and is a readable directory"), nil
 		}
@@ -845,12 +906,396 @@ func jsonTextResult(value interface{}) (*tools.Result, error) {
 	return tools.NewToolResultText(string(raw)), nil
 }
 
+type findPattern struct {
+	raw      string
+	segments []string
+}
+
+func newFsFindTool(fs FileSystem, workdir string) *tools.Tool {
+	desc := fmt.Sprintf(`Recursively locate files and directories by relative-path glob.
+
+Current working directory: %s
+
+Use this to find names or paths when their exact location is unknown. The pattern is matched against slash-separated paths relative to directory; ** as a complete segment matches zero or more directory levels. Ordinary segments use Go path.Match syntax. Hidden entries and vendor are included, while .git, symbolic links, and special nodes are skipped. Results are stably path-sorted and stop after 1000 matches or 512 KiB.`, workdir)
+	return tools.NewTool(toolFsFind,
+		tools.WithDescription(desc),
+		tools.WithString("pattern", tools.Description("Glob matched against slash-separated paths relative to directory."), tools.MinLength(1), tools.Required()),
+		tools.WithString("directory", tools.DefaultString("."), tools.Description("Existing directory to search recursively. Defaults to the current working directory.")),
+		tools.WithExample(map[string]interface{}{"pattern": "**/*.py"}),
+		tools.WithToolHandler(fsFindFileSystemHandler(fs)),
+	)
+}
+
+func fsFindHandler(exec *Executor, workdir string) tools.ToolHandlerFunc {
+	return fsFindFileSystemHandler(NewLocalFileSystem(exec, workdir))
+}
+
+func compileFindPattern(value string) (findPattern, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return findPattern{}, fmt.Errorf("pattern is required and must be a non-empty string")
+	}
+	if pathpkg.IsAbs(value) || filepath.IsAbs(value) {
+		return findPattern{}, fmt.Errorf("pattern must be relative to directory")
+	}
+	for strings.HasPrefix(value, "./") {
+		value = strings.TrimPrefix(value, "./")
+	}
+	if value == "" {
+		return findPattern{}, fmt.Errorf("pattern must identify a path below directory")
+	}
+	segments := strings.Split(value, "/")
+	for _, segment := range segments {
+		if segment == ".." {
+			return findPattern{}, fmt.Errorf("pattern must not contain a parent-directory segment")
+		}
+		if segment == "**" {
+			continue
+		}
+		if _, err := pathpkg.Match(segment, ""); err != nil {
+			return findPattern{}, fmt.Errorf("invalid glob segment %q: %w", segment, err)
+		}
+	}
+	return findPattern{raw: value, segments: segments}, nil
+}
+
+func findPatternMatches(pattern findPattern, relativePath string) bool {
+	pathSegments := strings.Split(filepath.ToSlash(relativePath), "/")
+	type state struct{ pattern, path int }
+	memo := make(map[state]bool)
+	seen := make(map[state]bool)
+	var match func(int, int) bool
+	match = func(patternIndex, pathIndex int) bool {
+		key := state{patternIndex, pathIndex}
+		if seen[key] {
+			return memo[key]
+		}
+		seen[key] = true
+		var ok bool
+		switch {
+		case patternIndex == len(pattern.segments):
+			ok = pathIndex == len(pathSegments)
+		case pattern.segments[patternIndex] == "**":
+			ok = match(patternIndex+1, pathIndex) || pathIndex < len(pathSegments) && match(patternIndex, pathIndex+1)
+		case pathIndex < len(pathSegments):
+			segmentMatch, _ := pathpkg.Match(pattern.segments[patternIndex], pathSegments[pathIndex])
+			ok = segmentMatch && match(patternIndex+1, pathIndex+1)
+		}
+		memo[key] = ok
+		return ok
+	}
+	return match(0, 0)
+}
+
+type fsFindMatch struct {
+	Path string `json:"path"`
+	Type string `json:"type"`
+}
+
+type fsFindResult struct {
+	Directory     string        `json:"directory"`
+	Pattern       string        `json:"pattern"`
+	Matches       []fsFindMatch `json:"matches"`
+	ErrorsSkipped int           `json:"errors_skipped"`
+	Truncated     bool          `json:"truncated"`
+	StoppedReason string        `json:"stopped_reason,omitempty"`
+}
+
+type findDirJob struct {
+	abs string
+	rel string
+}
+
+type findDirOutput struct {
+	children      []findDirJob
+	matches       []fsFindMatch
+	errorsSkipped int
+	limitExceeded bool
+	err           error
+}
+
+// findWorkerOverride pins the directory worker count in tests; zero uses the
+// production default of runtime.NumCPU(), capped at 16.
+var findWorkerOverride int
+
+func fsFindFileSystemHandler(fs FileSystem) tools.ToolHandlerFunc {
+	return func(ctx context.Context, req *tools.Request) (*tools.Result, error) {
+		directory, _ := req.Arguments["directory"].(string)
+		if strings.TrimSpace(directory) == "" {
+			directory = "."
+		}
+		patternValue, ok := req.Arguments["pattern"].(string)
+		if !ok {
+			return tools.NewToolResultActionableError("pattern is required and must be a non-empty string", "provide a relative-path glob such as **/*.go"), nil
+		}
+		pattern, err := compileFindPattern(patternValue)
+		if err != nil {
+			return tools.NewToolResultActionableError(err.Error(), "provide a valid relative-path glob; use ** only as a complete segment for recursive matching"), nil
+		}
+		root, err := fs.Resolve(ctx, directory, FileAccessRead)
+		if err != nil {
+			return tools.NewToolResultActionableError(fmt.Sprintf("invalid directory: %s", err), "use fs_list to find a readable directory and retry"), nil
+		}
+		info, err := fs.Stat(ctx, root)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return tools.NewToolResultActionableError(missingPathCause(ctx, fs, directory, root), "use fs_list or fs_find from the nearest existing directory; do not repeat the same guessed path"), nil
+			}
+			return tools.NewToolResultActionableError(fmt.Sprintf("failed to inspect directory %q: %s", directory, err), "use fs_list to verify the path and retry"), nil
+		}
+		if !info.IsDir() {
+			return tools.NewToolResultActionableError(fmt.Sprintf("cannot find below %q because it is not a directory", directory), "provide a directory path"), nil
+		}
+
+		display := newRootedDisplayPathFn(fs, directory, root)
+		matches, errorsSkipped, matchLimitExceeded, err := runParallelFind(ctx, fs, root, info, display, pattern)
+		if err != nil {
+			return tools.NewToolResultActionableError(fmt.Sprintf("find failed: %s", err), "narrow the directory or correct unreadable paths and retry"), nil
+		}
+		result := fsFindResult{
+			Directory: display(root), Pattern: pattern.raw, Matches: []fsFindMatch{}, ErrorsSkipped: errorsSkipped,
+		}
+		applyFindOutputLimit(matches, &result, req.MaxOutputChars, matchLimitExceeded)
+		return jsonTextResult(result)
+	}
+}
+
+func findWorkerCount() int {
+	workers := findWorkerOverride
+	if workers <= 0 {
+		workers = runtime.NumCPU()
+	}
+	if workers > 16 {
+		workers = 16
+	}
+	if workers < 1 {
+		workers = 1
+	}
+	return workers
+}
+
+func runParallelFind(ctx context.Context, fs FileSystem, root string, rootInfo os.FileInfo, display func(string) string, pattern findPattern) ([]fsFindMatch, int, bool, error) {
+	readDir := fs.ReadDir
+	if opener, ok := fs.(findDirectoryRootOpener); ok {
+		rootReader, err := opener.OpenFindRoot(ctx, root, rootInfo)
+		if err != nil {
+			return nil, 0, false, err
+		}
+		defer rootReader.Close()
+		readDir = rootReader.ReadDir
+	}
+	rootEntries, err := readDir(ctx, root)
+	if err != nil {
+		return nil, 0, false, err
+	}
+	initial := classifyFindEntries(root, "", rootEntries, display, pattern)
+	queue := initial.children
+	matches := &findMatchHeap{}
+	heap.Init(matches)
+	limitExceeded := initial.limitExceeded
+	addMatches := func(items []fsFindMatch) {
+		for _, item := range items {
+			if matches.Len() < maxFindMatches {
+				heap.Push(matches, item)
+				continue
+			}
+			limitExceeded = true
+			if item.Path < (*matches)[0].Path {
+				heap.Pop(matches)
+				heap.Push(matches, item)
+			}
+		}
+	}
+	addMatches(initial.matches)
+
+	workerCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	jobs := make(chan findDirJob)
+	outputs := make(chan findDirOutput)
+	var wg sync.WaitGroup
+	for range findWorkerCount() {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-workerCtx.Done():
+					return
+				case job, ok := <-jobs:
+					if !ok {
+						return
+					}
+					resolvedDir, resolveErr := fs.Resolve(workerCtx, job.abs, FileAccessRead)
+					if resolveErr == nil && !pathWithinRoot(resolvedDir, root) {
+						resolveErr = fmt.Errorf("resolved directory escaped the search root")
+					}
+					output := findDirOutput{err: resolveErr}
+					if resolveErr == nil {
+						entries, readErr := readDir(workerCtx, resolvedDir)
+						output.err = readErr
+						if readErr == nil {
+							output = classifyFindEntries(resolvedDir, job.rel, entries, display, pattern)
+						}
+					}
+					select {
+					case outputs <- output:
+					case <-workerCtx.Done():
+						return
+					}
+				}
+			}
+		}()
+	}
+
+	inFlight := 0
+	errorsSkipped := initial.errorsSkipped
+	for len(queue) > 0 || inFlight > 0 {
+		var send chan findDirJob
+		var next findDirJob
+		if len(queue) > 0 {
+			send, next = jobs, queue[0]
+		}
+		select {
+		case <-ctx.Done():
+			cancel()
+			close(jobs)
+			wg.Wait()
+			return nil, errorsSkipped, limitExceeded, ctx.Err()
+		case send <- next:
+			queue = queue[1:]
+			inFlight++
+		case output := <-outputs:
+			inFlight--
+			errorsSkipped += output.errorsSkipped
+			limitExceeded = limitExceeded || output.limitExceeded
+			if output.err != nil {
+				if ctx.Err() != nil || errors.Is(output.err, context.Canceled) || errors.Is(output.err, context.DeadlineExceeded) {
+					cancel()
+					close(jobs)
+					wg.Wait()
+					if ctx.Err() != nil {
+						return nil, errorsSkipped, limitExceeded, ctx.Err()
+					}
+					return nil, errorsSkipped, limitExceeded, output.err
+				}
+				errorsSkipped++
+				continue
+			}
+			queue = append(queue, output.children...)
+			addMatches(output.matches)
+		}
+	}
+	close(jobs)
+	wg.Wait()
+
+	kept := make([]fsFindMatch, matches.Len())
+	copy(kept, *matches)
+	sort.Slice(kept, func(i, j int) bool { return kept[i].Path < kept[j].Path })
+	return kept, errorsSkipped, limitExceeded, nil
+}
+
+func classifyFindEntries(absDir, relDir string, entries []os.DirEntry, display func(string) string, pattern findPattern) findDirOutput {
+	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
+	output := findDirOutput{}
+	matches := &findMatchHeap{}
+	heap.Init(matches)
+	for _, entry := range entries {
+		if entry.Type()&os.ModeSymlink != 0 || entry.Name() == ".git" && entry.IsDir() {
+			continue
+		}
+		absPath := filepath.Join(absDir, entry.Name())
+		relPath := entry.Name()
+		if relDir != "" {
+			relPath = pathpkg.Join(relDir, entry.Name())
+		}
+		entryType := ""
+		switch {
+		case entry.IsDir():
+			entryType = "directory"
+			output.children = append(output.children, findDirJob{abs: absPath, rel: relPath})
+		case entry.Type()&os.ModeType == 0:
+			info, err := entry.Info()
+			if err != nil {
+				output.errorsSkipped++
+				continue
+			}
+			if !info.Mode().IsRegular() {
+				continue
+			}
+			entryType = "file"
+		default:
+			continue
+		}
+		if findPatternMatches(pattern, relPath) {
+			item := fsFindMatch{Path: display(absPath), Type: entryType}
+			if matches.Len() < maxFindMatches {
+				heap.Push(matches, item)
+			} else {
+				output.limitExceeded = true
+				if item.Path < (*matches)[0].Path {
+					heap.Pop(matches)
+					heap.Push(matches, item)
+				}
+			}
+		}
+	}
+	output.matches = append(output.matches, *matches...)
+	return output
+}
+
+type findMatchHeap []fsFindMatch
+
+func (h findMatchHeap) Len() int           { return len(h) }
+func (h findMatchHeap) Less(i, j int) bool { return h[i].Path > h[j].Path }
+func (h findMatchHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
+func (h *findMatchHeap) Push(value interface{}) {
+	*h = append(*h, value.(fsFindMatch))
+}
+func (h *findMatchHeap) Pop() interface{} {
+	old := *h
+	last := old[len(old)-1]
+	*h = old[:len(old)-1]
+	return last
+}
+
+func applyFindOutputLimit(matches []fsFindMatch, result *fsFindResult, maxOutputChars int64, matchLimitExceeded bool) {
+	limit := maxFindOutputBytes
+	if maxOutputChars > 0 && maxOutputChars < int64(limit) {
+		limit = int(maxOutputChars)
+	}
+	const metadataReserve = 256
+	base, _ := json.Marshal(result)
+	used := len(base)
+	outputTruncated := false
+	for _, match := range matches {
+		encoded, _ := json.Marshal(match)
+		extra := len(encoded)
+		if len(result.Matches) > 0 {
+			extra++
+		}
+		if used+extra+metadataReserve > limit {
+			outputTruncated = true
+			break
+		}
+		result.Matches = append(result.Matches, match)
+		used += extra
+	}
+	switch {
+	case outputTruncated:
+		result.Truncated = true
+		result.StoppedReason = "output_size_limit"
+	case matchLimitExceeded:
+		result.Truncated = true
+		result.StoppedReason = "match_limit"
+	}
+}
+
 func newFsSearchTool(fs FileSystem, workdir string) *tools.Tool {
 	desc := fmt.Sprintf(`Recursively search regular text-file contents with a Go RE2 regular expression.
 
 Current working directory: %s
 
-Use this for structured code or text search across a directory tree. It searches file contents, not file names; use fs_list to inspect names. Hidden files and vendor are included, while .git, binary files, and symbolic links are skipped. The result is a JSON string and stops after 1000 matching lines or 512 KiB with explicit truncation metadata.`, workdir)
+Use this for structured code or text search across a directory tree. It searches file contents, not file names; use fs_find to locate names recursively or fs_list to inspect one directory. Hidden files and vendor are included, while .git, binary files, and symbolic links are skipped. The result is a JSON string and stops after 1000 matching lines or 512 KiB with explicit truncation metadata.`, workdir)
 	return tools.NewTool(toolFsSearch,
 		tools.WithDescription(desc),
 		tools.WithString("directory", tools.Description("Existing directory whose readable text files will be searched recursively."), tools.MinLength(1), tools.Required()),

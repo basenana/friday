@@ -1,6 +1,8 @@
 package file
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -16,6 +18,7 @@ import (
 	"github.com/basenana/friday/core/actor/events"
 	actorsink "github.com/basenana/friday/core/actor/sink"
 	"github.com/basenana/friday/core/contextmgr"
+	corelogger "github.com/basenana/friday/core/logger"
 	"github.com/basenana/friday/core/planning"
 	"github.com/basenana/friday/core/providers"
 	coresession "github.com/basenana/friday/core/session"
@@ -75,26 +78,37 @@ func (s *FileSessionStore) OpenEventSink(_ context.Context, id string) (actorsin
 	if err := os.MkdirAll(s.sessionDir(id), 0o755); err != nil {
 		return nil, err
 	}
+	release, err := tryAcquireEventWriterLock(filepath.Join(s.sessionDir(id), ".events.lock"))
+	if err != nil {
+		return nil, err
+	}
 	if err := repairEventLogTail(s.eventsPath(id)); err != nil {
+		release()
 		return nil, err
 	}
 	if err := actorsink.CompactJSONL(s.eventsPath(id), maxEventLogBytes, targetEventLogBytes); err != nil {
+		release()
 		return nil, err
 	}
 	eventSink, err := actorsink.NewBoundedJSONL(s.eventsPath(id), maxEventLogBytes, targetEventLogBytes)
 	if err != nil {
+		release()
 		return nil, err
 	}
 	if err := os.Chmod(s.eventsPath(id), 0o600); err != nil {
 		_ = eventSink.Close()
+		release()
 		return nil, err
 	}
-	return &lockedEventSink{mu: eventMu, inner: eventSink}, nil
+	return &lockedEventSink{mu: eventMu, inner: eventSink, release: release}, nil
 }
 
 type lockedEventSink struct {
-	mu    *sync.Mutex
-	inner actorsink.EventSink
+	mu        *sync.Mutex
+	inner     actorsink.EventSink
+	release   func()
+	closeOnce sync.Once
+	closeErr  error
 }
 
 func (s *lockedEventSink) Append(ctx context.Context, evt events.Event) error {
@@ -104,9 +118,13 @@ func (s *lockedEventSink) Append(ctx context.Context, evt events.Event) error {
 }
 
 func (s *lockedEventSink) Close() error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.inner.Close()
+	s.closeOnce.Do(func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		s.closeErr = s.inner.Close()
+		s.release()
+	})
+	return s.closeErr
 }
 
 func (s *FileSessionStore) eventLock(id string) *sync.Mutex {
@@ -182,19 +200,12 @@ func previousNewline(f *os.File, before int64) (int64, error) {
 	return -1, nil
 }
 
-// LoadEvents decodes every complete event record. A truncated final record is
-// ignored so a process killed mid-write does not make an otherwise valid
-// transcript unusable.
+// LoadEvents replays valid physical JSONL records without modifying the log.
+// Corrupt records are skipped so later durable events remain available.
 func (s *FileSessionStore) LoadEvents(ctx context.Context, id string) ([]events.Event, error) {
 	eventMu := s.eventLock(id)
 	eventMu.Lock()
 	defer eventMu.Unlock()
-	if err := repairEventLogTail(s.eventsPath(id)); err != nil {
-		return nil, err
-	}
-	if err := actorsink.CompactJSONL(s.eventsPath(id), maxEventLogBytes, targetEventLogBytes); err != nil {
-		return nil, err
-	}
 	f, err := os.Open(s.eventsPath(id))
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -204,20 +215,59 @@ func (s *FileSessionStore) LoadEvents(ctx context.Context, id string) ([]events.
 	}
 	defer f.Close()
 
-	var out []events.Event
-	decoder := json.NewDecoder(f)
+	var (
+		out         []events.Event
+		skipped     int
+		lineNumber  int
+		offset      int64
+		firstLine   int
+		firstOffset int64
+		firstErr    error
+	)
+	defer func() {
+		if skipped > 0 {
+			corelogger.New("session.events").Warnw(
+				"skipped malformed session event records",
+				"session_id", id,
+				"skipped_records", skipped,
+				"first_line", firstLine,
+				"first_offset", firstOffset,
+				"first_error", firstErr,
+			)
+		}
+	}()
+
+	reader := bufio.NewReader(f)
 	for {
 		if err := ctx.Err(); err != nil {
 			return out, err
 		}
-		var evt events.Event
-		if err := decoder.Decode(&evt); err != nil {
-			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		recordOffset := offset
+		line, readErr := reader.ReadBytes('\n')
+		offset += int64(len(line))
+		if len(line) > 0 {
+			lineNumber++
+			record := bytes.TrimSpace(line)
+			if len(record) > 0 {
+				var evt events.Event
+				if err := json.Unmarshal(record, &evt); err != nil {
+					skipped++
+					if firstErr == nil {
+						firstLine = lineNumber
+						firstOffset = recordOffset
+						firstErr = err
+					}
+				} else {
+					out = append(out, evt)
+				}
+			}
+		}
+		if readErr != nil {
+			if errors.Is(readErr, io.EOF) {
 				return out, nil
 			}
-			return out, fmt.Errorf("decode event log: %w", err)
+			return out, readErr
 		}
-		out = append(out, evt)
 	}
 }
 

@@ -17,6 +17,7 @@ func TestBuiltinToolCardPresentations(t *testing.T) {
 		{"fs_read", `{"path":"main.go"}`, "Read file", "main.go"},
 		{"fs_read", `{"path":"main.go","start_line":10,"end_line":20}`, "Read file", "lines · 10–20"},
 		{"fs_list", `{}`, "List directory", "."},
+		{"fs_find", `{"directory":"core","pattern":"**/*.go"}`, "Find files", "**/*.go"},
 		{"fs_search", `{"directory":"core","regex":"func\\s+New"}`, "Search files", "func\\s+New"},
 		{"fs_write", `{"path":"out.txt","content":"hello"}`, "Write file", "5 bytes"},
 		{"fs_edit", `{"path":"main.go","old_text":"old","new_text":"new","replace_all":true}`, "Edit file", "scope · all"},
@@ -36,6 +37,27 @@ func TestBuiltinToolCardPresentations(t *testing.T) {
 			got := m.presentTool(block)
 			if !got.specialized || got.title != test.wantTitle || !strings.Contains(terminalSafe(got.body), test.wantBody) {
 				t.Fatalf("presentation = %#v", got)
+			}
+		})
+	}
+}
+
+func TestFsFindToolCardShowsDirectoryPatternAndDefault(t *testing.T) {
+	configureTheme(true)
+	m := &model{width: 100}
+	for _, test := range []struct {
+		name, args, directory string
+	}{
+		{name: "explicit directory", args: `{"directory":"core","pattern":"**/*.go"}`, directory: "core"},
+		{name: "default directory", args: `{"pattern":"**/*.go"}`, directory: "."},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			block := &chatBlock{toolName: "fs_find", toolArgs: test.args, toolArgsComplete: true}
+			presentation := m.presentTool(block)
+			body := terminalSafe(presentation.body)
+			if presentation.title != "Find files" || !presentation.specialized ||
+				!strings.Contains(body, "directory · "+test.directory) || !strings.Contains(body, "pattern · **/*.go") {
+				t.Fatalf("presentation = %#v", presentation)
 			}
 		})
 	}

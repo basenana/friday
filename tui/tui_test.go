@@ -3,11 +3,14 @@ package tui
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"charm.land/bubbles/v2/textarea"
 	tea "charm.land/bubbletea/v2"
@@ -41,11 +44,31 @@ type faultStore struct {
 	sessions.Store
 	metadata     sessions.MetadataStore
 	plans        sessions.PlanningStore
+	events       sessions.EventStore
 	failNextSave bool
 	failMode     bool
+	failArchive  bool
+}
+
+func (s *faultStore) OpenEventSink(ctx context.Context, id string) (actorsink.EventSink, error) {
+	return s.events.OpenEventSink(ctx, id)
+}
+
+func (s *faultStore) LoadEvents(ctx context.Context, id string) ([]events.Event, error) {
+	return s.events.LoadEvents(ctx, id)
+}
+
+func (s *faultStore) Archive(sessionID string) error {
+	if s.failArchive {
+		return fmt.Errorf("injected archive failure")
+	}
+	return s.Store.Archive(sessionID)
 }
 
 func (s *faultStore) UpdateMeta(sessionID string, patch sessions.SessionMetaPatch) error {
+	if s.failArchive && patch.Archived != nil {
+		return fmt.Errorf("injected archive failure")
+	}
 	if s.failMode && patch.Mode != nil {
 		return fmt.Errorf("injected mode failure")
 	}
@@ -77,7 +100,7 @@ func newFaultTestModel(t *testing.T) (*model, *sessions.Manager, *sessionfile.Fi
 	baseDir := t.TempDir()
 	raw := sessionfile.NewFileSessionStore(filepath.Join(baseDir, "sessions"))
 	currentFile := filepath.Join(baseDir, "current")
-	store := &faultStore{Store: raw, metadata: raw, plans: raw}
+	store := &faultStore{Store: raw, metadata: raw, plans: raw, events: raw}
 	mgr := sessions.NewManager(store, currentFile, "test")
 	const sessionID = "session-initial"
 	if _, _, err := mgr.GetOrCreateByID(sessionID); err != nil {
@@ -280,6 +303,223 @@ func TestHandleSlashClearCreatesAndSwitchesCurrentSession(t *testing.T) {
 	}
 }
 
+func TestDisplayedSessionLifecycleLeasePreventsIdleEviction(t *testing.T) {
+	baseDir := t.TempDir()
+	store := sessionfile.NewFileSessionStore(filepath.Join(baseDir, "sessions"))
+	mgr := sessions.NewManager(store, filepath.Join(baseDir, "current"), "test")
+	if _, _, err := mgr.GetOrCreateByID("displayed"); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.DefaultConfig()
+	cfg.DataDir = baseDir
+	cfg.Workspace = filepath.Join(baseDir, "workspace")
+	cfg.Memory.Enabled = false
+	cfg.Sandbox.Sandbox.Enabled = false
+	registryCfg := actor.DefaultRegistryConfig()
+	registryCfg.IdleTimeout = 30 * time.Millisecond
+	registryCfg.SweepInterval = 10 * time.Millisecond
+	registry, err := actor.NewRegistry(mgr, cfg, registryCfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(registry.ShutdownAll)
+	m, err := initialModel(mgr, registry, codercmds.NewRegistry(), cfg, "displayed")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	time.Sleep(120 * time.Millisecond)
+	if _, ok := registry.Get("displayed"); !ok {
+		t.Fatal("displayed session was evicted while TUI remained open")
+	}
+	m.closeSession()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if _, ok := registry.Get("displayed"); !ok {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("released displayed session was not evicted")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestSessionSwitchContentionKeepsOldSessionAndTranscript(t *testing.T) {
+	baseDir := t.TempDir()
+	sessionsDir := filepath.Join(baseDir, "sessions")
+	store := sessionfile.NewFileSessionStore(sessionsDir)
+	if _, err := store.Create("old-session", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Create("busy-session", nil); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.DefaultConfig()
+	cfg.DataDir = baseDir
+	cfg.Workspace = filepath.Join(baseDir, "workspace")
+	cfg.Memory.Enabled = false
+	cfg.Sandbox.Sandbox.Enabled = false
+
+	mgr := sessions.NewManager(store, filepath.Join(baseDir, "current"), "test")
+	registry, err := actor.NewRegistry(mgr, cfg, actor.DefaultRegistryConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(registry.ShutdownAll)
+	m, err := initialModel(mgr, registry, codercmds.NewRegistry(), cfg, "old-session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.appendBlock(chatBlock{kind: blockAssistant, content: "keep transcript"})
+	oldFeed := m.feed
+
+	otherStore := sessionfile.NewFileSessionStore(sessionsDir)
+	otherMgr := sessions.NewManager(otherStore, filepath.Join(baseDir, "other-current"), "other")
+	otherRegistry, err := actor.NewRegistry(otherMgr, cfg, actor.DefaultRegistryConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(otherRegistry.ShutdownAll)
+	if _, err := otherRegistry.GetOrCreate("busy-session"); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = m.switchSession("busy-session")
+	if !errors.Is(err, sessions.ErrEventWriterActive) {
+		t.Fatalf("switch error = %v, want ErrEventWriterActive", err)
+	}
+	if m.sessionID != "old-session" || m.feed != oldFeed {
+		t.Fatalf("session changed after contention: id=%q", m.sessionID)
+	}
+	if len(m.messages) == 0 || m.messages[0].content != "keep transcript" {
+		t.Fatalf("transcript changed after contention: %#v", m.messages)
+	}
+	if _, ok := registry.Get("old-session"); !ok {
+		t.Fatal("old actor was shut down after contention")
+	}
+}
+
+func TestInitialSessionLoadSkipsCorruptEventAndProjectsValidSuffix(t *testing.T) {
+	baseDir := t.TempDir()
+	store := sessionfile.NewFileSessionStore(filepath.Join(baseDir, "sessions"))
+	if _, err := store.Create("corrupt-session", nil); err != nil {
+		t.Fatal(err)
+	}
+	valid := []events.Event{
+		events.NewEvent(events.KindRunStarted, "run"),
+		events.NewEvent(events.KindTextMessageStart, "run").WithMessageID("message"),
+		events.NewEvent(events.KindTextMessageContent, "run").WithMessageID("message").WithPayload(events.TextMessageContentData{Content: "valid suffix"}),
+		events.NewEvent(events.KindTextMessageEnd, "run").WithMessageID("message"),
+		events.NewEvent(events.KindRunFinished, "run"),
+	}
+	var log bytes.Buffer
+	for i, evt := range valid {
+		if i == 2 {
+			log.WriteString("not-json\n")
+		}
+		if err := json.NewEncoder(&log).Encode(evt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(baseDir, "sessions", "corrupt-session", "events.jsonl"), log.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	mgr := sessions.NewManager(store, filepath.Join(baseDir, "current"), "test")
+	cfg := config.DefaultConfig()
+	cfg.DataDir = baseDir
+	cfg.Workspace = filepath.Join(baseDir, "workspace")
+	cfg.Memory.Enabled = false
+	registry, err := actor.NewRegistry(mgr, cfg, actor.DefaultRegistryConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(registry.ShutdownAll)
+	m := loadingModel(mgr, registry, codercmds.NewRegistry(), cfg, "corrupt-session")
+	msg := m.loadInitialSession()()
+	updated, _ := m.Update(msg)
+	m = updated.(*model)
+	if m.fatalErr != nil || m.loading || m.feed == nil {
+		t.Fatalf("startup failed: fatal=%v loading=%v feed=%v", m.fatalErr, m.loading, m.feed != nil)
+	}
+	var transcript string
+	for _, block := range m.messages {
+		transcript += block.content
+	}
+	if !strings.Contains(transcript, "valid suffix") {
+		t.Fatalf("valid suffix missing from transcript: %#v", m.messages)
+	}
+}
+
+func TestInitialSessionLoadReportsWriterContention(t *testing.T) {
+	baseDir := t.TempDir()
+	sessionsDir := filepath.Join(baseDir, "sessions")
+	store := sessionfile.NewFileSessionStore(sessionsDir)
+	if _, err := store.Create("busy-session", nil); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.DefaultConfig()
+	cfg.DataDir = baseDir
+	cfg.Workspace = filepath.Join(baseDir, "workspace")
+	cfg.Memory.Enabled = false
+	cfg.Sandbox.Sandbox.Enabled = false
+
+	ownerMgr := sessions.NewManager(store, filepath.Join(baseDir, "owner-current"), "owner")
+	owner, err := actor.NewRegistry(ownerMgr, cfg, actor.DefaultRegistryConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(owner.ShutdownAll)
+	if _, err := owner.GetOrCreate("busy-session"); err != nil {
+		t.Fatal(err)
+	}
+
+	otherStore := sessionfile.NewFileSessionStore(sessionsDir)
+	otherMgr := sessions.NewManager(otherStore, filepath.Join(baseDir, "other-current"), "other")
+	other, err := actor.NewRegistry(otherMgr, cfg, actor.DefaultRegistryConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(other.ShutdownAll)
+	m := loadingModel(otherMgr, other, codercmds.NewRegistry(), cfg, "busy-session")
+	msg := m.loadInitialSession()()
+	updated, _ := m.Update(msg)
+	m = updated.(*model)
+	if !errors.Is(m.fatalErr, sessions.ErrEventWriterActive) {
+		t.Fatalf("fatal error = %v, want ErrEventWriterActive", m.fatalErr)
+	}
+	if m.feed != nil {
+		t.Fatal("contended startup installed an active feed")
+	}
+	if _, ok := other.Get("busy-session"); ok {
+		t.Fatal("contended startup installed an actor")
+	}
+	if !strings.Contains(m.fatalErr.Error(), sessions.ErrEventWriterActive.Error()) {
+		t.Fatalf("fatal error is not actionable: %v", m.fatalErr)
+	}
+}
+
+func TestFailedArchiveRestoresDisplayedSessionLease(t *testing.T) {
+	m, _, raw, store := newFaultTestModel(t)
+	store.failArchive = true
+	oldID, oldFeed := m.sessionID, m.feed
+	m.commandConfirm = &commandConfirmation{action: "archive", target: m.sessionID, label: "current"}
+	updated, _ := m.updateCommandConfirmation(tea.KeyPressMsg{Code: 'y', Text: "y"})
+	m = updated.(*model)
+	if m.sessionID != oldID {
+		t.Fatalf("failed archive changed session: %q", m.sessionID)
+	}
+	if m.feed == nil || m.feed == oldFeed {
+		t.Fatal("failed archive did not replace the stopped session feed")
+	}
+	if _, ok := m.registry.Get(m.sessionID); !ok {
+		t.Fatal("failed archive did not restore the displayed actor")
+	}
+	if _, err := raw.OpenEventSink(context.Background(), m.sessionID); !errors.Is(err, sessions.ErrEventWriterActive) {
+		t.Fatalf("restored displayed session does not own writer lease: %v", err)
+	}
+}
+
 func TestFailedSessionSwitchKeepsOldSessionAndTranscript(t *testing.T) {
 	baseDir := t.TempDir()
 	store := sessionfile.NewFileSessionStore(filepath.Join(baseDir, "sessions"))
@@ -327,6 +567,14 @@ func TestFailedSessionSwitchKeepsOldSessionAndTranscript(t *testing.T) {
 	}
 	if _, err := store.GetMeta("new-session"); err == nil {
 		t.Fatal("newly-created detached session was not rolled back")
+	}
+	probe := sessionfile.NewFileSessionStore(filepath.Join(baseDir, "sessions"))
+	sink, err := probe.OpenEventSink(context.Background(), "new-session")
+	if err != nil {
+		t.Fatalf("failed switch leaked writer lease: %v", err)
+	}
+	if err := sink.Close(); err != nil {
+		t.Fatal(err)
 	}
 }
 

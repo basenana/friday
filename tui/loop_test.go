@@ -461,6 +461,8 @@ func TestLoopPhaseLabels(t *testing.T) {
 
 func TestEventLogRestoresVisibleLoopActivity(t *testing.T) {
 	m, _, store := newTestModel(t)
+	m.closeSession()
+	m.registry.Shutdown(m.sessionID)
 	sink, err := store.OpenEventSink(context.Background(), m.sessionID)
 	if err != nil {
 		t.Fatal(err)

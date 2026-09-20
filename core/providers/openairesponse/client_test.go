@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/basenana/friday/core/providers"
@@ -15,7 +16,7 @@ import (
 func TestResponseNewParamsUsesResponsesWireFormat(t *testing.T) {
 	temp := 0.4
 	cli := &client{model: Model{
-		Name:            "gpt-test",
+		Name:            "gpt-5.6-sol",
 		Temperature:     &temp,
 		MaxTokens:       2048,
 		ReasoningEffort: "high",
@@ -53,8 +54,11 @@ func TestResponseNewParamsUsesResponsesWireFormat(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if body["model"] != "gpt-test" || body["instructions"] != "system prompt" {
+	if body["model"] != "gpt-5.6-sol" || body["instructions"] != "system prompt" {
 		t.Fatalf("unexpected top-level Responses fields: %s", raw)
+	}
+	if _, exists := body["prompt_cache_options"]; exists {
+		t.Fatalf("legacy model unexpectedly received prompt cache options: %s", raw)
 	}
 	if body["store"] != false || body["max_output_tokens"] != float64(2048) {
 		t.Fatalf("expected stateless response and max_output_tokens: %s", raw)
@@ -68,6 +72,9 @@ func TestResponseNewParamsUsesResponsesWireFormat(t *testing.T) {
 	input, ok := body["input"].([]any)
 	if !ok || len(input) != 4 {
 		t.Fatalf("expected user, reasoning, function_call, and function_call_output items: %s", raw)
+	}
+	if strings.Contains(string(raw), "prompt_cache_breakpoint") {
+		t.Fatalf("legacy model unexpectedly received explicit cache breakpoints: %s", raw)
 	}
 	assertItemType(t, input[1], "reasoning")
 	assertItemType(t, input[2], "function_call")
@@ -103,12 +110,14 @@ func assertItemType(t *testing.T, raw any, want string) {
 
 func TestCompletionTranslatesResponsesSSE(t *testing.T) {
 	var requestBody []byte
+	var sessionID string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/responses" {
 			http.NotFound(w, r)
 			return
 		}
 		requestBody, _ = io.ReadAll(r.Body)
+		sessionID = r.Header.Get("session-id")
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, _ = io.WriteString(w, "data: {\"type\":\"response.reasoning_summary_text.delta\",\"delta\":\"thinking\",\"item_id\":\"rs_1\",\"output_index\":0,\"summary_index\":0,\"sequence_number\":1}\n\n")
 		_, _ = io.WriteString(w, "data: {\"type\":\"response.output_text.delta\",\"delta\":\"hello\",\"item_id\":\"msg_1\",\"output_index\":1,\"content_index\":0,\"sequence_number\":2}\n\n")
@@ -120,7 +129,9 @@ func TestCompletionTranslatesResponsesSSE(t *testing.T) {
 	defer server.Close()
 
 	cli := New(server.URL+"/", "test-key", Model{Name: "gpt-test", QPM: 60})
-	resp := cli.Completion(context.Background(), providers.NewPromptRequest("hello"))
+	req := providers.NewPromptRequest("hello")
+	req.SetPromptCacheKey("session-1")
+	resp := cli.Completion(context.Background(), req)
 
 	var deltas []providers.Delta
 	for delta := range resp.Message() {
@@ -155,6 +166,9 @@ func TestCompletionTranslatesResponsesSSE(t *testing.T) {
 	}
 	if _, ok := sent["input"]; !ok {
 		t.Fatalf("request did not use Responses input: %s", requestBody)
+	}
+	if sent["prompt_cache_key"] != "session-1" || sessionID != "session-1" {
+		t.Fatalf("cache affinity mismatch: body=%#v session-id=%q", sent["prompt_cache_key"], sessionID)
 	}
 }
 

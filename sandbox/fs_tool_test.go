@@ -4,12 +4,15 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -25,7 +28,7 @@ func TestFsToolSurfaceIncludesSearchAndOmitsMkdir(t *testing.T) {
 			t.Fatalf("%s definition: %v", tool.Name, issues)
 		}
 	}
-	for _, name := range []string{"fs_list", "fs_search", "fs_read", "fs_write", "fs_edit", "fs_delete"} {
+	for _, name := range []string{"fs_list", "fs_find", "fs_search", "fs_read", "fs_write", "fs_edit", "fs_delete"} {
 		if !got[name] {
 			t.Fatalf("missing tool %q: %v", name, got)
 		}
@@ -81,6 +84,602 @@ func TestFsListPreservesLogicalPathForAllowedSymlinkRoot(t *testing.T) {
 	if strings.Contains(textResult(t, result), filepath.ToSlash(target)) {
 		t.Fatalf("physical symlink target leaked: %s", textResult(t, result))
 	}
+}
+
+func TestFsFindSchemaDefaultsDirectoryAndRequiresPattern(t *testing.T) {
+	tool := newFsFindTool(nil, ".")
+	directory := tool.InputSchema.Properties["directory"].(map[string]any)
+	if directory["default"] != "." {
+		t.Fatalf("directory default = %#v, want %q", directory["default"], ".")
+	}
+	pattern := tool.InputSchema.Properties["pattern"].(map[string]any)
+	if pattern["minLength"] != 1 {
+		t.Fatalf("pattern minLength = %#v, want 1", pattern["minLength"])
+	}
+	required := false
+	for _, name := range tool.InputSchema.Required {
+		if name == "pattern" {
+			required = true
+		}
+		if name == "directory" {
+			t.Fatal("directory must be optional")
+		}
+	}
+	if !required {
+		t.Fatal("pattern must be required")
+	}
+}
+
+func TestFsFindGlobstarAndSegmentMatching(t *testing.T) {
+	tests := []struct {
+		pattern string
+		path    string
+		want    bool
+	}{
+		{pattern: "**/*.py", path: "root.py", want: true},
+		{pattern: "**/*.py", path: "pkg/deep/file.py", want: true},
+		{pattern: "src/**/test_*.py", path: "src/test_root.py", want: true},
+		{pattern: "src/**/test_*.py", path: "src/a/b/test_unit.py", want: true},
+		{pattern: "foo/*/bar.go", path: "foo/one/bar.go", want: true},
+		{pattern: "foo/*/bar.go", path: "foo/one/two/bar.go", want: false},
+		{pattern: "file?.[ch]", path: "file1.c", want: true},
+		{pattern: "file?.[ch]", path: "file10.c", want: false},
+		{pattern: "*.go", path: "pkg/main.go", want: false},
+		{pattern: "*.go", path: "MAIN.GO", want: false},
+		{pattern: "foo**bar", path: "foo-any-bar", want: true},
+		{pattern: "**", path: "pkg/deep/file.go", want: true},
+		{pattern: "foo/**", path: "foo/child/deep.go", want: true},
+		{pattern: "**/**/file.go", path: "a/b/file.go", want: true},
+	}
+	for _, test := range tests {
+		t.Run(test.pattern+"/"+test.path, func(t *testing.T) {
+			pattern, err := compileFindPattern(test.pattern)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := findPatternMatches(pattern, test.path); got != test.want {
+				t.Fatalf("match(%q, %q) = %v, want %v", test.pattern, test.path, got, test.want)
+			}
+		})
+	}
+}
+
+func TestFsFindRejectsInvalidPatterns(t *testing.T) {
+	for _, pattern := range []string{"", "   ", "[", "/tmp/*.go", "../*.go", "src/../*.go"} {
+		t.Run(pattern, func(t *testing.T) {
+			if _, err := compileFindPattern(pattern); err == nil {
+				t.Fatalf("compileFindPattern(%q) succeeded", pattern)
+			}
+		})
+	}
+	compiled, err := compileFindPattern("./*.go")
+	if err != nil || !findPatternMatches(compiled, "main.go") {
+		t.Fatalf("leading ./ should be accepted: pattern=%v err=%v", compiled, err)
+	}
+}
+
+func TestFsFindMatchesFilesAndDirectoriesAndAppliesSkipRules(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{
+		"main.py", "pkg/deep/module.py", ".hidden/secret.py", "vendor/lib/vendor.py", ".git/ignored.py",
+	} {
+		mustWrite(t, filepath.Join(root, name), "content")
+	}
+	if err := os.MkdirAll(filepath.Join(root, "pkg", "named.py"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(root, "main.py"), filepath.Join(root, "linked.py")); err != nil {
+		t.Logf("symlink unavailable; continuing core traversal coverage: %v", err)
+	}
+
+	result := callFsFind(t, fsFindHandler(NewExecutor(DefaultConfig()), root), &tools.Request{Arguments: map[string]any{
+		"directory": ".", "pattern": "**/*.py",
+	}})
+	want := []fsFindMatch{
+		{Path: ".hidden/secret.py", Type: "file"},
+		{Path: "main.py", Type: "file"},
+		{Path: "pkg/deep/module.py", Type: "file"},
+		{Path: "pkg/named.py", Type: "directory"},
+		{Path: "vendor/lib/vendor.py", Type: "file"},
+	}
+	if fmt.Sprint(result.Matches) != fmt.Sprint(want) {
+		t.Fatalf("matches = %#v, want %#v", result.Matches, want)
+	}
+	if result.Directory != "." || result.Pattern != "**/*.py" || result.Truncated || result.ErrorsSkipped != 0 {
+		t.Fatalf("result metadata = %#v", result)
+	}
+
+	empty := callFsFind(t, fsFindHandler(NewExecutor(DefaultConfig()), root), &tools.Request{Arguments: map[string]any{
+		"pattern": "**/*.missing",
+	}})
+	if empty.Matches == nil || len(empty.Matches) != 0 {
+		t.Fatalf("empty matches = %#v, want []", empty.Matches)
+	}
+}
+
+func TestFsFindPreservesLogicalPathForAllowedSymlinkRoot(t *testing.T) {
+	root := t.TempDir()
+	target := t.TempDir()
+	mustWrite(t, filepath.Join(target, "nested", "result.go"), "package nested")
+	if err := os.Symlink(target, filepath.Join(root, "linked")); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	cfg := DefaultConfig()
+	cfg.Sandbox.Filesystem.ReadOnly = append(cfg.Sandbox.Filesystem.ReadOnly, target)
+	result := callFsFind(t, fsFindHandler(NewExecutor(cfg), root), &tools.Request{Arguments: map[string]any{
+		"directory": "linked", "pattern": "**/*.go",
+	}})
+	if result.Directory != "linked" || len(result.Matches) != 1 || result.Matches[0].Path != "linked/nested/result.go" {
+		t.Fatalf("logical find paths not preserved: %#v", result)
+	}
+	if strings.Contains(fmt.Sprint(result), filepath.ToSlash(target)) {
+		t.Fatalf("physical symlink target leaked: %#v", result)
+	}
+}
+
+func TestFsFindOutsideWorkdirReturnsAbsolutePaths(t *testing.T) {
+	workdir := t.TempDir()
+	outside := t.TempDir()
+	path := filepath.Join(outside, "nested", "result.go")
+	mustWrite(t, path, "package nested")
+	cfg := DefaultConfig()
+	cfg.DisableIsolation()
+	result := callFsFind(t, fsFindHandler(NewExecutor(cfg), workdir), &tools.Request{Arguments: map[string]any{
+		"directory": outside, "pattern": "**/*.go",
+	}})
+	if len(result.Matches) != 1 || result.Matches[0].Path != filepath.ToSlash(path) {
+		t.Fatalf("matches = %#v, want absolute path %q", result.Matches, filepath.ToSlash(path))
+	}
+}
+
+type orderedReadDirFileSystem struct {
+	FileSystem
+	firstDone chan struct{}
+	once      sync.Once
+}
+
+func (f *orderedReadDirFileSystem) ReadDir(ctx context.Context, path string) ([]os.DirEntry, error) {
+	if filepath.Base(path) == "a-small" {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-f.firstDone:
+		}
+	}
+	entries, err := f.FileSystem.ReadDir(ctx, path)
+	if filepath.Base(path) == "z-large" {
+		f.once.Do(func() { close(f.firstDone) })
+	}
+	return entries, err
+}
+
+func TestFsFindStableMatchLimitKeepsLexicographicPrefix(t *testing.T) {
+	root := t.TempDir()
+	for i := 0; i < 502; i++ {
+		mustWrite(t, filepath.Join(root, "a-small", fmt.Sprintf("file-%04d.go", i)), "package test")
+	}
+	for i := 0; i < 503; i++ {
+		mustWrite(t, filepath.Join(root, "z-large", fmt.Sprintf("file-%04d.go", i)), "package test")
+	}
+	t.Cleanup(func() { findWorkerOverride = 0 })
+
+	var first string
+	for _, workers := range []int{2, 8} {
+		findWorkerOverride = workers
+		base := NewLocalFileSystem(NewExecutor(DefaultConfig()), root)
+		fs := &orderedReadDirFileSystem{FileSystem: base, firstDone: make(chan struct{})}
+		result := callFsFind(t, fsFindFileSystemHandler(fs), &tools.Request{Arguments: map[string]any{
+			"directory": ".", "pattern": "**/*.go",
+		}})
+		if !result.Truncated || result.StoppedReason != "match_limit" || len(result.Matches) != maxFindMatches {
+			t.Fatalf("workers=%d limited result = %#v", workers, result)
+		}
+		if result.Matches[0].Path != "a-small/file-0000.go" || result.Matches[len(result.Matches)-1].Path != "z-large/file-0497.go" {
+			t.Fatalf("workers=%d prefix bounds = %q..%q", workers, result.Matches[0].Path, result.Matches[len(result.Matches)-1].Path)
+		}
+		encoded := fmt.Sprint(result.Matches)
+		if first == "" {
+			first = encoded
+		} else if encoded != first {
+			t.Fatalf("workers=%d produced a different prefix", workers)
+		}
+	}
+}
+
+func TestFsFindHonorsSharedOutputBudgetWithValidJSON(t *testing.T) {
+	root := t.TempDir()
+	for i := 0; i < 100; i++ {
+		mustWrite(t, filepath.Join(root, "long-directory-name", fmt.Sprintf("long-file-name-%03d.go", i)), "package test")
+	}
+	request := &tools.Request{Arguments: map[string]any{"directory": ".", "pattern": "**/*.go"}, MaxOutputChars: 2048}
+	result, err := fsFindHandler(NewExecutor(DefaultConfig()), root)(context.Background(), request)
+	if err != nil || result == nil || result.IsError {
+		t.Fatalf("find result=%+v err=%v", result, err)
+	}
+	text := textResult(t, result)
+	if len([]rune(text)) > int(request.MaxOutputChars) {
+		t.Fatalf("result length = %d, budget = %d", len([]rune(text)), request.MaxOutputChars)
+	}
+	var decoded fsFindResult
+	if err := json.Unmarshal([]byte(text), &decoded); err != nil {
+		t.Fatalf("budgeted result is invalid JSON: %v", err)
+	}
+	if !decoded.Truncated || decoded.StoppedReason != "output_size_limit" || len(decoded.Matches) == 0 {
+		t.Fatalf("budgeted find = %#v", decoded)
+	}
+}
+
+type concurrentReadDirFileSystem struct {
+	FileSystem
+	active    atomic.Int32
+	maxActive atomic.Int32
+	started   chan struct{}
+	release   chan struct{}
+	once      sync.Once
+}
+
+func (f *concurrentReadDirFileSystem) ReadDir(ctx context.Context, path string) ([]os.DirEntry, error) {
+	if !strings.HasPrefix(filepath.Base(path), "dir-") {
+		return f.FileSystem.ReadDir(ctx, path)
+	}
+	active := f.active.Add(1)
+	defer f.active.Add(-1)
+	for {
+		old := f.maxActive.Load()
+		if active <= old || f.maxActive.CompareAndSwap(old, active) {
+			break
+		}
+	}
+	if active >= 2 {
+		f.once.Do(func() { close(f.started) })
+	}
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-f.release:
+		return f.FileSystem.ReadDir(ctx, path)
+	}
+}
+
+func TestFsFindReadsDirectoriesInParallel(t *testing.T) {
+	root := t.TempDir()
+	for i := 0; i < 4; i++ {
+		mustWrite(t, filepath.Join(root, fmt.Sprintf("dir-%d", i), "file.go"), "package test")
+	}
+	base := NewLocalFileSystem(NewExecutor(DefaultConfig()), root)
+	fs := &concurrentReadDirFileSystem{FileSystem: base, started: make(chan struct{}), release: make(chan struct{})}
+	findWorkerOverride = 4
+	t.Cleanup(func() { findWorkerOverride = 0 })
+
+	type outcome struct {
+		result *tools.Result
+		err    error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		result, err := fsFindFileSystemHandler(fs)(context.Background(), &tools.Request{Arguments: map[string]any{"pattern": "**/*.go"}})
+		done <- outcome{result: result, err: err}
+	}()
+	select {
+	case <-fs.started:
+		close(fs.release)
+	case <-time.After(5 * time.Second):
+		close(fs.release)
+		t.Fatal("two directory reads never overlapped")
+	}
+	select {
+	case out := <-done:
+		if out.err != nil || out.result == nil || out.result.IsError || fs.maxActive.Load() < 2 {
+			t.Fatalf("parallel result=%+v err=%v maxActive=%d", out.result, out.err, fs.maxActive.Load())
+		}
+		var decoded fsFindResult
+		if err := json.Unmarshal([]byte(textResult(t, out.result)), &decoded); err != nil || len(decoded.Matches) != 4 {
+			t.Fatalf("parallel matches=%#v err=%v", decoded.Matches, err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("parallel find did not finish")
+	}
+}
+
+type controlledReadDirFileSystem struct {
+	FileSystem
+	failBase     string
+	blockBase    string
+	blockStarted chan struct{}
+	blockOnce    sync.Once
+}
+
+func (f *controlledReadDirFileSystem) ReadDir(ctx context.Context, path string) ([]os.DirEntry, error) {
+	switch filepath.Base(path) {
+	case f.failBase:
+		return nil, errors.New("read directory failed")
+	case f.blockBase:
+		if f.blockStarted != nil {
+			f.blockOnce.Do(func() { close(f.blockStarted) })
+		}
+		<-ctx.Done()
+		return nil, ctx.Err()
+	default:
+		return f.FileSystem.ReadDir(ctx, path)
+	}
+}
+
+func TestFsFindCountsNestedReadErrorsAndFailsRootRead(t *testing.T) {
+	root := t.TempDir()
+	mustWrite(t, filepath.Join(root, "good", "file.go"), "package good")
+	mustWrite(t, filepath.Join(root, "bad", "file.go"), "package bad")
+	base := NewLocalFileSystem(NewExecutor(DefaultConfig()), root)
+	result := callFsFind(t, fsFindFileSystemHandler(&controlledReadDirFileSystem{FileSystem: base, failBase: "bad"}), &tools.Request{Arguments: map[string]any{"pattern": "**/*.go"}})
+	if result.ErrorsSkipped != 1 || len(result.Matches) != 1 || result.Matches[0].Path != "good/file.go" {
+		t.Fatalf("nested error result = %#v", result)
+	}
+
+	rootResult, err := fsFindFileSystemHandler(&controlledReadDirFileSystem{FileSystem: base, failBase: filepath.Base(root)})(context.Background(), &tools.Request{Arguments: map[string]any{"pattern": "**/*.go"}})
+	if err != nil || rootResult == nil || !rootResult.IsError || !strings.Contains(textResult(t, rootResult), "read directory failed") {
+		t.Fatalf("root read result=%+v err=%v", rootResult, err)
+	}
+}
+
+func TestFsFindCancellationStopsPromptly(t *testing.T) {
+	root := t.TempDir()
+	mustWrite(t, filepath.Join(root, "blocked", "file.go"), "package blocked")
+	base := NewLocalFileSystem(NewExecutor(DefaultConfig()), root)
+	fs := &controlledReadDirFileSystem{FileSystem: base, blockBase: "blocked", blockStarted: make(chan struct{})}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan *tools.Result, 1)
+	go func() {
+		result, _ := fsFindFileSystemHandler(fs)(ctx, &tools.Request{Arguments: map[string]any{"pattern": "**/*.go"}})
+		done <- result
+	}()
+	select {
+	case <-fs.blockStarted:
+		cancel()
+	case <-time.After(5 * time.Second):
+		cancel()
+		t.Fatal("find never entered the blocking directory read")
+	}
+	select {
+	case result := <-done:
+		if result == nil || !result.IsError || !strings.Contains(textResult(t, result), "context canceled") {
+			t.Fatalf("cancelled find result=%+v", result)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("cancelled find did not return")
+	}
+}
+
+type specialFileInfo struct{ name string }
+
+func (i specialFileInfo) Name() string     { return i.name }
+func (specialFileInfo) Size() int64        { return 0 }
+func (specialFileInfo) Mode() os.FileMode  { return os.ModeNamedPipe }
+func (specialFileInfo) ModTime() time.Time { return time.Time{} }
+func (specialFileInfo) IsDir() bool        { return false }
+func (specialFileInfo) Sys() interface{}   { return nil }
+
+type unknownSpecialEntry struct{ name string }
+
+func (e unknownSpecialEntry) Name() string               { return e.name }
+func (unknownSpecialEntry) IsDir() bool                  { return false }
+func (unknownSpecialEntry) Type() os.FileMode            { return 0 }
+func (e unknownSpecialEntry) Info() (os.FileInfo, error) { return specialFileInfo{name: e.name}, nil }
+
+type specialEntryFileSystem struct {
+	FileSystem
+	root string
+}
+
+func (f specialEntryFileSystem) ReadDir(ctx context.Context, path string) ([]os.DirEntry, error) {
+	entries, err := f.FileSystem.ReadDir(ctx, path)
+	if err == nil && path == f.root {
+		entries = append(entries, unknownSpecialEntry{name: "pipe.go"})
+	}
+	return entries, err
+}
+
+func TestFsFindSkipsSpecialNodesWhenDirEntryTypeIsUnknown(t *testing.T) {
+	root := t.TempDir()
+	mustWrite(t, filepath.Join(root, "regular.go"), "package test")
+	base := NewLocalFileSystem(NewExecutor(DefaultConfig()), root)
+	resolvedRoot, err := base.Resolve(context.Background(), ".", FileAccessRead)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := callFsFind(t, fsFindFileSystemHandler(specialEntryFileSystem{FileSystem: base, root: resolvedRoot}), &tools.Request{Arguments: map[string]any{"pattern": "*.go"}})
+	if len(result.Matches) != 1 || result.Matches[0].Path != "regular.go" {
+		t.Fatalf("special node was not skipped: %#v", result.Matches)
+	}
+}
+
+type replacingReadDirFileSystem struct {
+	FileSystem
+	root    string
+	child   string
+	target  string
+	once    sync.Once
+	swapErr error
+}
+
+func (f *replacingReadDirFileSystem) ReadDir(ctx context.Context, path string) ([]os.DirEntry, error) {
+	entries, err := f.FileSystem.ReadDir(ctx, path)
+	if err == nil && path == f.root {
+		f.once.Do(func() {
+			backup := f.child + ".original"
+			if f.swapErr = os.Rename(f.child, backup); f.swapErr == nil {
+				f.swapErr = os.Symlink(f.target, f.child)
+			}
+		})
+	}
+	return entries, err
+}
+
+func TestFsFindRejectsReplacedExternalChildDirectory(t *testing.T) {
+	workdir := t.TempDir()
+	external := t.TempDir()
+	outside := t.TempDir()
+	child := filepath.Join(external, "queued")
+	mustWrite(t, filepath.Join(child, "safe.go"), "package safe")
+	mustWrite(t, filepath.Join(outside, "secret.go"), "package secret")
+
+	cfg := DefaultConfig()
+	cfg.Sandbox.Filesystem.ReadOnly = append(cfg.Sandbox.Filesystem.ReadOnly, external)
+	cfg.Sandbox.Filesystem.Deny = append(cfg.Sandbox.Filesystem.Deny, outside)
+	base := NewLocalFileSystem(NewExecutor(cfg), workdir)
+	resolvedRoot, err := base.Resolve(context.Background(), external, FileAccessRead)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fs := &replacingReadDirFileSystem{FileSystem: base, root: resolvedRoot, child: filepath.Join(resolvedRoot, "queued"), target: outside}
+	result := callFsFind(t, fsFindFileSystemHandler(fs), &tools.Request{Arguments: map[string]any{"directory": external, "pattern": "**/*.go"}})
+	if fs.swapErr != nil {
+		t.Skipf("directory replacement unavailable: %v", fs.swapErr)
+	}
+	if len(result.Matches) != 0 || result.ErrorsSkipped != 1 {
+		t.Fatalf("replacement escape result = %#v", result)
+	}
+}
+
+func TestLocalFindDirectoryRootRejectsReplacedRoot(t *testing.T) {
+	workdir := t.TempDir()
+	external := t.TempDir()
+	outside := t.TempDir()
+	mustWrite(t, filepath.Join(external, "safe.go"), "package safe")
+	mustWrite(t, filepath.Join(outside, "secret.go"), "package secret")
+
+	cfg := DefaultConfig()
+	cfg.Sandbox.Filesystem.ReadOnly = append(cfg.Sandbox.Filesystem.ReadOnly, external)
+	fs := NewLocalFileSystem(NewExecutor(cfg), workdir)
+	resolvedRoot, err := fs.Resolve(context.Background(), external, FileAccessRead)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected, err := fs.Stat(context.Background(), resolvedRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	backup := external + ".original"
+	if err := os.Rename(external, backup); err != nil {
+		t.Skipf("root replacement unavailable: %v", err)
+	}
+	if err := os.Symlink(outside, external); err != nil {
+		t.Skipf("symlink replacement unavailable: %v", err)
+	}
+	opener, ok := fs.(findDirectoryRootOpener)
+	if !ok {
+		t.Fatal("local filesystem does not provide rooted directory traversal")
+	}
+	if rootReader, err := opener.OpenFindRoot(context.Background(), resolvedRoot, expected); err == nil {
+		rootReader.Close()
+		t.Fatal("rooted traversal accepted a replaced search root")
+	}
+}
+
+func TestLocalFindDirectoryRootRejectsReplacementAfterOpen(t *testing.T) {
+	workdir := t.TempDir()
+	external := t.TempDir()
+	outside := t.TempDir()
+	child := filepath.Join(external, "queued")
+	mustWrite(t, filepath.Join(child, "safe.go"), "package safe")
+	mustWrite(t, filepath.Join(outside, "secret.go"), "package secret")
+
+	cfg := DefaultConfig()
+	cfg.Sandbox.Filesystem.ReadOnly = append(cfg.Sandbox.Filesystem.ReadOnly, external)
+	fs := NewLocalFileSystem(NewExecutor(cfg), workdir)
+	resolvedRoot, err := fs.Resolve(context.Background(), external, FileAccessRead)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected, err := fs.Stat(context.Background(), resolvedRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	opener, ok := fs.(findDirectoryRootOpener)
+	if !ok {
+		t.Fatal("local filesystem does not provide rooted directory traversal")
+	}
+	rootReader, err := opener.OpenFindRoot(context.Background(), resolvedRoot, expected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rootReader.Close()
+	if _, err := rootReader.ReadDir(context.Background(), resolvedRoot); err != nil {
+		t.Fatal(err)
+	}
+	backup := child + ".original"
+	if err := os.Rename(child, backup); err != nil {
+		t.Skipf("directory replacement unavailable: %v", err)
+	}
+	if err := os.Symlink(outside, child); err != nil {
+		t.Skipf("symlink replacement unavailable: %v", err)
+	}
+	if _, err := rootReader.ReadDir(context.Background(), child); err == nil {
+		t.Fatal("rooted traversal followed a replacement symlink outside the search root")
+	}
+}
+
+func TestFsFindRejectsSymlinkRootEscape(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	mustWrite(t, filepath.Join(outside, "secret.go"), "package secret")
+	if err := os.Symlink(outside, filepath.Join(root, "escape")); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	cfg := DefaultConfig()
+	cfg.Sandbox.Filesystem.Deny = append(cfg.Sandbox.Filesystem.Deny, outside)
+	result, err := fsFindHandler(NewExecutor(cfg), root)(context.Background(), &tools.Request{Arguments: map[string]any{"directory": "escape", "pattern": "**/*.go"}})
+	if err != nil || result == nil || !result.IsError {
+		t.Fatalf("symlink escape result=%+v err=%v", result, err)
+	}
+	if strings.Contains(textResult(t, result), filepath.ToSlash(outside)) {
+		t.Fatalf("symlink escape leaked physical target: %q", textResult(t, result))
+	}
+}
+
+func TestFsFindRejectsInvalidRoots(t *testing.T) {
+	root := t.TempDir()
+	denied := t.TempDir()
+	mustWrite(t, filepath.Join(root, "file.go"), "package test")
+	cfg := DefaultConfig()
+	cfg.Sandbox.Filesystem.Deny = append(cfg.Sandbox.Filesystem.Deny, denied)
+	exec := NewExecutor(cfg)
+	for _, test := range []struct {
+		name      string
+		directory string
+	}{
+		{name: "missing", directory: "missing"},
+		{name: "regular file", directory: "file.go"},
+		{name: "denied outside root", directory: denied},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			result, err := fsFindHandler(exec, root)(context.Background(), &tools.Request{Arguments: map[string]any{"directory": test.directory, "pattern": "**/*.go"}})
+			if err != nil || result == nil || !result.IsError {
+				t.Fatalf("result=%+v err=%v", result, err)
+			}
+		})
+	}
+}
+
+func mustWrite(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func callFsFind(t *testing.T, handler tools.ToolHandlerFunc, request *tools.Request) fsFindResult {
+	t.Helper()
+	result, err := handler(context.Background(), request)
+	if err != nil || result == nil || result.IsError {
+		t.Fatalf("fs_find result=%+v err=%v", result, err)
+	}
+	var decoded fsFindResult
+	if err := json.Unmarshal([]byte(textResult(t, result)), &decoded); err != nil {
+		t.Fatalf("invalid fs_find JSON: %v", err)
+	}
+	return decoded
 }
 
 func TestFsSearchPreservesLogicalPathForAllowedSymlinkRoot(t *testing.T) {

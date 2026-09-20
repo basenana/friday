@@ -78,6 +78,7 @@ func (m *Manager) OpenRoot(ctx context.Context, id string, client providers.Clie
 - `filetools` walks logical project paths from the project root toward the target directory and injects the applicable instruction files. Directory symlinks remain workspace-relative for agent-visible paths and instruction discovery; resolved physical paths are used only for filesystem safety and access.
 - Within one directory, `AGENTS.md` takes precedence over `CLAUDE.md`. The latter remains supported because coder operates on external projects.
 - Instruction context is informational for reads but mutations of an instruction file require the existing read/acknowledgement guard.
+- `fs_find` is FYI-wrapped like the other read-only filesystem tools; its `directory` argument (default `.`) is the instruction-discovery target, as with `fs_list` and `fs_search`.
 - Resolve and validate paths through the sandbox/project root. Do not trust lexical prefix checks.
 
 ## Loop and project invariants

@@ -15,7 +15,7 @@ const (
 	bashToolName        = "bash"
 	bashToolDescription = `Execute a non-interactive shell command in a sandboxed environment.
 
-Use this for builds, tests, Git, grep, pipelines, and shell workflows that the native filesystem tools do not express. Prefer fs_list, fs_search, fs_read, fs_write, fs_edit, and fs_delete for file operations because they provide structured results and stronger path checks.
+Use this for builds, tests, Git, grep, pipelines, and shell workflows that the native filesystem tools do not express. Prefer fs_list, fs_find, fs_search, fs_read, fs_write, fs_edit, and fs_delete for file operations because they provide structured results and stronger path checks.
 Commands are executed with safety restrictions:
 - Commands must be in the allow list
 - Dangerous commands are blocked

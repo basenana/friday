@@ -109,7 +109,11 @@ func (c *client) completionWithParams(ctx context.Context, request providers.Req
 			return
 		}
 
-		stream := c.openai.Responses.NewStreaming(ctx, params)
+		var requestOptions []option.RequestOption
+		if key := request.PromptCacheKey(); key != "" {
+			requestOptions = append(requestOptions, option.WithHeader("session-id", key))
+		}
+		stream := c.openai.Responses.NewStreaming(ctx, params, requestOptions...)
 		for stream.Next() {
 			if eventErr := resp.nextEvent(stream.Current()); eventErr != nil {
 				err = eventErr
