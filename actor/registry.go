@@ -191,6 +191,10 @@ func NewRegistry(sessMgr setup.SessionManager, appCfg *config.Config, cfg Regist
 // calling actor methods directly.
 func (r *Registry) Bus() *eventbus.Bus { return r.bus }
 
+// ModelPool returns the process-shared model pool used by Registry actors.
+// Callers may derive client views but do not own the pool.
+func (r *Registry) ModelPool() *fallback.ModelPool { return r.models }
+
 // SkillRegistry returns the shared, refreshable skills catalog used by all
 // agents owned by this registry.
 func (r *Registry) SkillRegistry() *skills.Registry { return r.skills }

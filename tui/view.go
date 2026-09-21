@@ -3,12 +3,14 @@ package tui
 import (
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 	"unicode"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	codebasepkg "github.com/basenana/friday/coder/codebase"
 	"github.com/basenana/friday/core/planning"
 	"github.com/basenana/friday/core/providers"
 	"github.com/charmbracelet/glamour"
@@ -317,6 +319,9 @@ func (m *model) View() tea.View {
 	if activity := m.renderActivityLine(); activity != "" {
 		parts = append(parts, activity)
 	}
+	if codebaseActivity := m.renderCodebaseActivities(); codebaseActivity != "" {
+		parts = append(parts, codebaseActivity)
+	}
 	if len(m.queued) > 0 {
 		parts = append(parts, m.renderQueue())
 	}
@@ -346,6 +351,39 @@ func (m *model) View() tea.View {
 	}
 	parts = append(parts, m.renderStatus())
 	return m.newView(lipgloss.JoinVertical(lipgloss.Left, parts...))
+}
+
+func (m *model) renderCodebaseActivities() string {
+	if len(m.codebaseActivities) == 0 {
+		return ""
+	}
+	activities := make([]codebasepkg.Activity, 0, len(m.codebaseActivities))
+	for _, activity := range m.codebaseActivities {
+		activities = append(activities, activity)
+	}
+	sort.Slice(activities, func(i, j int) bool { return activities[i].StartedAt.After(activities[j].StartedAt) })
+	if len(activities) > 6 {
+		activities = activities[:6]
+	}
+	lines := make([]string, 0, len(activities))
+	for _, activity := range activities {
+		prefix := "Codebase " + string(activity.Mode)
+		if activity.State == "running" {
+			prefix = m.spinner.View() + " " + prefix
+		}
+		text := strings.TrimSpace(activity.Summary)
+		if activity.State == codebasepkg.ActivityFailed || activity.State == codebasepkg.ActivityTimedOut {
+			text = strings.TrimSpace(activity.Error)
+		}
+		if text == "" {
+			text = strings.TrimSpace(activity.Error)
+		}
+		if text == "" {
+			text = string(activity.State)
+		}
+		lines = append(lines, truncateWidth(fmt.Sprintf("%s · %s · %s", prefix, activity.State, text), max(m.width-4, 16)))
+	}
+	return menuStyle.Width(max(m.width-4, 10)).Render(strings.Join(lines, "\n"))
 }
 
 func (m *model) renderAttachments() string {
@@ -385,6 +423,9 @@ func (m *model) layout() {
 	// status line gets pushed off-screen.
 	if activity := m.renderActivityLine(); activity != "" {
 		extra += lipgloss.Height(activity)
+	}
+	if codebaseActivity := m.renderCodebaseActivities(); codebaseActivity != "" {
+		extra += lipgloss.Height(codebaseActivity)
 	}
 	if len(m.queued) > 0 {
 		// Measure the rendered box: wrapped rows would grow past any

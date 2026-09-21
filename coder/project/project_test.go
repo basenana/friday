@@ -2,9 +2,11 @@ package project
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/basenana/friday/sessions"
 	sessionfile "github.com/basenana/friday/sessions/file"
@@ -95,6 +97,140 @@ func TestProjectCatalogScopesRootsAndCurrent(t *testing.T) {
 	}
 	if current, err := managerA.CurrentID(); err != nil || current != "" {
 		t.Fatalf("dangling current = %q, %v", current, err)
+	}
+}
+
+func TestCodebaseEnabledDefaultsFalseAndPersists(t *testing.T) {
+	data := t.TempDir()
+	root := t.TempDir()
+	store := NewFileStore(filepath.Join(data, "projects"))
+	p, err := Open(root, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if enabled, err := p.CodebaseEnabled(); err != nil || enabled {
+		t.Fatalf("default enabled = %v, %v", enabled, err)
+	}
+
+	if err := p.SetCodebaseEnabled(true); err != nil {
+		t.Fatal(err)
+	}
+	if enabled, err := p.CodebaseEnabled(); err != nil || !enabled {
+		t.Fatalf("enabled = %v, %v", enabled, err)
+	}
+
+	reopened, err := Open(root, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if enabled, err := reopened.CodebaseEnabled(); err != nil || !enabled {
+		t.Fatalf("reopened enabled = %v, %v", enabled, err)
+	}
+}
+
+func TestSetCodebaseEnabledIsAtomicAndIdempotent(t *testing.T) {
+	data := t.TempDir()
+	root := t.TempDir()
+	store := NewFileStore(filepath.Join(data, "projects"))
+	p, err := Open(root, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(data, "projects", p.ID(), "project.json")
+	beforeData, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var before Metadata
+	if err := json.Unmarshal(beforeData, &before); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := p.SetCodebaseEnabled(false); err != nil {
+		t.Fatal(err)
+	}
+	unchanged, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(unchanged) != string(beforeData) {
+		t.Fatal("idempotent disable rewrote project metadata")
+	}
+
+	time.Sleep(time.Millisecond)
+	if err := p.SetCodebaseEnabled(true); err != nil {
+		t.Fatal(err)
+	}
+	afterData, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var after Metadata
+	if err := json.Unmarshal(afterData, &after); err != nil {
+		t.Fatal(err)
+	}
+	if !after.CodebaseEnabled || !after.UpdatedAt.After(before.UpdatedAt) {
+		t.Fatalf("metadata not updated: %+v", after)
+	}
+	if after.Version != before.Version || after.ID != before.ID || after.Root != before.Root || !after.CreatedAt.Equal(before.CreatedAt) {
+		t.Fatalf("unrelated metadata changed: before=%+v after=%+v", before, after)
+	}
+
+	corrupt := []byte("{broken\n")
+	if err := os.WriteFile(path, corrupt, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.SetCodebaseEnabled(false); err == nil {
+		t.Fatal("expected corrupt metadata error")
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(corrupt) {
+		t.Fatal("corrupt metadata was partially rewritten")
+	}
+}
+
+func TestSetCodebaseEnabledPreservesUnknownMetadataFields(t *testing.T) {
+	data := t.TempDir()
+	root := t.TempDir()
+	store := NewFileStore(filepath.Join(data, "projects"))
+	p, err := Open(root, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(data, "projects", p.ID(), "project.json")
+	var raw map[string]any
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(contents, &raw); err != nil {
+		t.Fatal(err)
+	}
+	raw["future_field"] = map[string]any{"keep": true}
+	contents, err = json.MarshalIndent(raw, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, append(contents, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.SetCodebaseEnabled(true); err != nil {
+		t.Fatal(err)
+	}
+	contents, err = os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw = nil
+	if err := json.Unmarshal(contents, &raw); err != nil {
+		t.Fatal(err)
+	}
+	future, ok := raw["future_field"].(map[string]any)
+	if !ok || future["keep"] != true {
+		t.Fatalf("unknown metadata field was lost: %s", contents)
 	}
 }
 

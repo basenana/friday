@@ -11,6 +11,7 @@ import (
 
 	"github.com/basenana/friday/bus"
 	coderagents "github.com/basenana/friday/coder/agents"
+	codebasepkg "github.com/basenana/friday/coder/codebase"
 	codercmds "github.com/basenana/friday/coder/commands"
 	"github.com/basenana/friday/core/collaboration"
 	"github.com/basenana/friday/core/planning"
@@ -19,6 +20,36 @@ import (
 )
 
 func (m *model) handleSlash(text string) (tea.Model, tea.Cmd) {
+	if parsed, matched, err := codebasepkg.ParseCommand(text); matched {
+		if err != nil {
+			m.appendBlock(chatBlock{kind: blockError, content: err.Error()})
+			return m, nil
+		}
+		if m.codebaseRuntime == nil {
+			m.appendBlock(chatBlock{kind: blockError, content: "/codebase is available only in project mode"})
+			return m, nil
+		}
+		runtime := m.codebaseRuntime
+		return m, func() tea.Msg {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			switch parsed.Kind {
+			case codebasepkg.CommandStatus:
+				status, err := runtime.RefreshStatus()
+				lastSuccessful := "never"
+				if !status.LastSuccessfulIndex.IsZero() {
+					lastSuccessful = status.LastSuccessfulIndex.Format(time.RFC3339)
+				}
+				return codebaseCommandMsg{content: fmt.Sprintf("Codebase state: %s\nLast successful index: %s\nLast error: %s", status.State, lastSuccessful, status.LastError), err: err}
+			case codebasepkg.CommandIndex:
+				return codebaseCommandMsg{content: "Codebase indexing requested.", err: runtime.RequestIndex(ctx)}
+			case codebasepkg.CommandOff:
+				return codebaseCommandMsg{content: "Codebase disabled.", err: runtime.Disable(ctx)}
+			default:
+				return codebaseCommandMsg{err: fmt.Errorf("usage: /codebase [index|off]")}
+			}
+		}
+	}
 	name, rawArgs, parts := parseSlash(text)
 	if name == "" {
 		return m, nil
@@ -234,9 +265,6 @@ func (m *model) applyLifecycleAction(action codercmds.Action) (bool, tea.Cmd) {
 		return true, nil
 	case codercmds.QuitAction:
 		m.quitting = true
-		m.loopManager.Close()
-		m.closeSession()
-		m.registry.Shutdown(m.sessionID)
 		return true, tea.Quit
 	}
 	return false, nil
@@ -459,8 +487,27 @@ func (m *model) canDispatchQueued() bool {
 		m.commandConfirm == nil && m.selector == nil && m.detail == nil && m.confirm == nil
 }
 
-func (m *model) switchSession(newID string) (cmd tea.Cmd, err error) {
+func (m *model) switchSession(newID string) (tea.Cmd, error) {
 	if newID == m.sessionID {
+		return nil, nil
+	}
+	if m.codebaseRuntime != nil && newID != "" && newID == m.codebaseRuntime.IndexSessionID() {
+		runtime := m.codebaseRuntime
+		return func() tea.Msg {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			transition, err := runtime.PrepareSessionSwitch(ctx, newID)
+			return sessionSwitchPreparedMsg{sessionID: newID, transition: transition, err: err}
+		}, nil
+	}
+	return m.switchSessionPrepared(newID, nil)
+}
+
+func (m *model) switchSessionPrepared(newID string, prepared *codebasepkg.SessionTransition) (cmd tea.Cmd, err error) {
+	if newID == m.sessionID {
+		if prepared != nil {
+			prepared.Abort()
+		}
 		return nil, nil
 	}
 	oldID := m.sessionID
@@ -520,18 +567,46 @@ func (m *model) switchSession(newID string) (cmd tea.Cmd, err error) {
 	}
 	activeModel, _ := configuredSessionModel(m.runtime, m.cfg, newID)
 
+	codebaseTransition := prepared
+	if m.codebaseRuntime != nil && codebaseTransition == nil {
+		transitionCtx, cancelTransition := context.WithTimeout(context.Background(), 10*time.Second)
+		codebaseTransition, err = m.codebaseRuntime.PrepareSessionSwitch(transitionCtx, newID)
+		cancelTransition()
+		if err != nil {
+			return nil, sessionSwitchError(fmt.Errorf("prepare Codebase session transition: %w", err), rollbackCreated())
+		}
+	}
+	abortCodebase := func() {
+		if codebaseTransition != nil {
+			codebaseTransition.Abort()
+		}
+	}
 	newFeed := bus.SubscribeAgentFeed(m.registry.Bus(), newID)
-	_, newRelease, err := m.registry.AcquireLifecycle(newID)
+	newLifecycle, newRelease, err := m.registry.AcquireLifecycle(newID)
 	if err != nil {
 		newFeed.Close()
+		abortCodebase()
 		return nil, sessionSwitchError(fmt.Errorf("prepare actor %s: %w", shortID(newID), err), rollbackCreated())
+	}
+	if m.codebaseRuntime != nil {
+		if err := m.codebaseRuntime.Attach(newLifecycle); err != nil {
+			newFeed.Close()
+			newRelease()
+			m.registry.Shutdown(newID)
+			abortCodebase()
+			return nil, sessionSwitchError(fmt.Errorf("attach Codebase hook: %w", err), rollbackCreated())
+		}
 	}
 
 	projection, err := m.projectTranscript(newID)
 	if err != nil {
 		newFeed.Close()
+		if m.codebaseRuntime != nil {
+			m.codebaseRuntime.Detach(newLifecycle)
+		}
 		newRelease()
 		m.registry.Shutdown(newID)
+		abortCodebase()
 		return nil, sessionSwitchError(fmt.Errorf("restore session %s: %w", shortID(newID), err), rollbackCreated())
 	}
 	if m.projectMgr != nil {
@@ -541,8 +616,12 @@ func (m *model) switchSession(newID string) (cmd tea.Cmd, err error) {
 	}
 	if err != nil {
 		newFeed.Close()
+		if m.codebaseRuntime != nil {
+			m.codebaseRuntime.Detach(newLifecycle)
+		}
 		newRelease()
 		m.registry.Shutdown(newID)
+		abortCodebase()
 		return nil, sessionSwitchError(fmt.Errorf("activate session %s: %w", shortID(newID), err), rollbackCreated())
 	}
 
@@ -576,6 +655,11 @@ func (m *model) switchSession(newID string) (cmd tea.Cmd, err error) {
 			m.appendBlock(chatBlock{kind: blockError, content: "restore loop status: " + err.Error()})
 		}
 	}
+	if m.codebaseRuntime != nil {
+		if oldLifecycle, ok := m.registry.Lifecycle(oldID); ok {
+			m.codebaseRuntime.Detach(oldLifecycle)
+		}
+	}
 	if oldRelease != nil {
 		oldRelease()
 	}
@@ -583,6 +667,9 @@ func (m *model) switchSession(newID string) (cmd tea.Cmd, err error) {
 		oldFeed.Close()
 	}
 	m.registry.Shutdown(oldID)
+	if codebaseTransition != nil {
+		codebaseTransition.Commit()
+	}
 	return m.waitForActorEvent(), nil
 }
 
@@ -654,6 +741,14 @@ func (m *model) refreshMenu() {
 	}
 
 	var ranked []rankedItem
+	if m.codebaseRuntime != nil {
+		if rank, matched := nameRank("codebase"); matched {
+			ranked = append(ranked, rankedItem{
+				item: menuItem{value: "/codebase", label: "/codebase", description: "Inspect, index, or disable project Codebase context"},
+				rank: rank,
+			})
+		}
+	}
 	for _, cmd := range m.cmdRegistry.List() {
 		rank, matched := nameRank(cmd.Name())
 		if !matched {

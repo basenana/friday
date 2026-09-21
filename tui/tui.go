@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"slices"
@@ -18,6 +19,7 @@ import (
 	"github.com/basenana/friday/actor"
 	"github.com/basenana/friday/bus"
 	coderagents "github.com/basenana/friday/coder/agents"
+	codebasepkg "github.com/basenana/friday/coder/codebase"
 	codercmds "github.com/basenana/friday/coder/commands"
 	coderloop "github.com/basenana/friday/coder/loop"
 	projectpkg "github.com/basenana/friday/coder/project"
@@ -72,27 +74,63 @@ func Run(sessMgr *sessions.Manager, cfg *config.Config, sessionID string) error 
 }
 
 // RunProject launches the TUI with project-scoped root-session selection.
-func RunProject(projectMgr *projectpkg.Manager, cfg *config.Config, sessionID string) error {
+func RunProject(projectMgr *projectpkg.Manager, cfg *config.Config, sessionID string) (retErr error) {
 	started := time.Now()
+	releaseOwner, err := codebasepkg.AcquireProjectLock(cfg.DataDirPath(), projectMgr.Project().ID(), projectMgr.Project().Root())
+	if err != nil {
+		return err
+	}
+	var registry *actor.Registry
+	var codebaseRuntime *codebasepkg.Runtime
+	var activityFeed *bus.Feed
+	var m *model
+	defer func() {
+		if codebaseRuntime != nil {
+			codebaseRuntime.BeginShutdown()
+		}
+		if m != nil {
+			m.closeSession()
+			m.loopManager.Close()
+		}
+		if registry != nil {
+			registry.ShutdownAll()
+		}
+		if codebaseRuntime != nil {
+			retErr = errors.Join(retErr, codebaseRuntime.Close())
+		}
+		if activityFeed != nil {
+			activityFeed.Close()
+		}
+		releaseOwner()
+	}()
+
 	registryConfig := actor.DefaultRegistryConfig()
 	registryConfig.AgentPlanEntry = true
 	registryConfig.ConfigTools = true
 	registryConfig.Catalog = projectMgr
 	registryConfig.Workdir = projectMgr.Project().Root()
-	registry, err := actor.NewRegistry(projectMgr.Base(), cfg, registryConfig)
+	registry, err = actor.NewRegistry(projectMgr.Base(), cfg, registryConfig)
 	if err != nil {
 		return err
 	}
-	defer registry.ShutdownAll()
+	codebaseRuntime, err = codebasepkg.New(codebasepkg.Options{DataDir: cfg.DataDirPath(), Project: projectMgr.Project(), ProjectManager: projectMgr, ModelPool: registry.ModelPool(), Bus: registry.Bus(), Sandbox: cfg.Sandbox})
+	if err != nil {
+		return err
+	}
+	activityFeed = codebaseRuntime.ActivityFeed()
 
 	cmdRegistry := codercmds.NewRegistry()
 	codercmds.RegisterAll(cmdRegistry)
-	m := loadingModelAt(projectMgr.Base(), registry, cmdRegistry, cfg, sessionID, projectMgr.Project().Root())
-	defer m.loopManager.Close()
-	defer m.closeSession()
+	m = loadingModelAt(projectMgr.Base(), registry, cmdRegistry, cfg, sessionID, projectMgr.Project().Root())
 	m.projectMgr = projectMgr
 	m.runtime = projectMgr
+	m.codebaseRuntime = codebaseRuntime
+	m.codebaseFeed = activityFeed
+	m.codebaseActivities = map[string]codebasepkg.Activity{}
 	m.alternateScreen = useAlternateScreen(cfg.TUI.AlternateScreen)
+	if err := m.preloadInitialSession(); err != nil {
+		return err
+	}
 	m.logInfo("starting TUI",
 		"project_mode", true,
 		"requested_session", sessionID != "",
@@ -181,6 +219,12 @@ type model struct {
 	sessionRelease func()
 	loopManager    *coderloop.Manager
 	workdir        string
+
+	codebaseRuntime    *codebasepkg.Runtime
+	codebaseFeed       *bus.Feed
+	codebaseActivities map[string]codebasepkg.Activity
+	codebaseToken      uint64
+	codebaseDropped    uint64
 
 	cmdRegistry   *codercmds.Registry
 	agentRegistry *coderagents.Registry
@@ -380,12 +424,25 @@ func baseModelAt(sessMgr *sessions.Manager, registry *actor.Registry, cmdRegistr
 	return m
 }
 
+func (m *model) codebaseRunning() bool {
+	for _, activity := range m.codebaseActivities {
+		if activity.State == codebasepkg.ActivityRunning {
+			return true
+		}
+	}
+	return false
+}
+
 func (m *model) Init() tea.Cmd {
 	if m.loading {
 		m.logInfo("initial session load requested", "requested_session", m.requestedSessionID != "")
 		return tea.Batch(textarea.Blink, m.armSpinner(), m.loadInitialSession(), tea.RequestBackgroundColor)
 	}
-	return tea.Batch(textarea.Blink, m.armSpinner(), m.waitForActorEvent(), tea.RequestBackgroundColor)
+	cmds := []tea.Cmd{textarea.Blink, m.armSpinner(), m.waitForActorEvent(), tea.RequestBackgroundColor}
+	if m.codebaseFeed != nil {
+		cmds = append(cmds, waitForCodebaseActivity(m.codebaseFeed, m.codebaseToken))
+	}
+	return tea.Batch(cmds...)
 }
 
 type dispatchQueuedMsg struct{}
@@ -546,6 +603,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		m.subscriptionToken++
+		if m.codebaseFeed != nil {
+			m.codebaseToken++
+		}
 		m.applyProjection(msg.projection)
 		if m.projectMgr != nil {
 			m.promptHistory = append([]string(nil), msg.promptHistory...)
@@ -558,6 +618,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.restorePlanHandoff()
 		}
 		m.layout()
+		if m.codebaseFeed != nil {
+			return m, tea.Batch(m.waitForActorEvent(), waitForCodebaseActivity(m.codebaseFeed, m.codebaseToken))
+		}
 		return m, m.waitForActorEvent()
 	case transcriptReconciledMsg:
 		if msg.token != m.subscriptionToken || msg.sessionID != m.sessionID {
@@ -592,8 +655,6 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.String() == "ctrl+c" {
 			m.logInfo("TUI quit requested", "source", "ctrl+c")
 			m.quitting = true
-			m.loopManager.Close()
-			m.closeSession()
 			return m, tea.Quit
 		}
 		if m.loading || m.fatalErr != nil || m.planCompacting || m.manualCompacting || m.reconciling {
@@ -634,10 +695,72 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.logInfo("actor event feed closed", "subscription_token", msg.token, "active", msg.token == m.subscriptionToken)
 		}
 		return m, nil
+	case codebaseActivitiesMsg:
+		if msg.token != m.codebaseToken || m.codebaseRuntime == nil || m.codebaseFeed == nil {
+			return m, nil
+		}
+		if msg.dropped > m.codebaseDropped {
+			m.codebaseActivities = map[string]codebasepkg.Activity{}
+			for _, activity := range m.codebaseRuntime.ActivitySnapshot() {
+				m.codebaseActivities[activity.OperationID] = activity
+			}
+			m.codebaseDropped = msg.dropped
+		}
+		var cmds []tea.Cmd
+		for _, activity := range msg.activities {
+			if current, ok := m.codebaseActivities[activity.OperationID]; ok && current.Revision >= activity.Revision {
+				continue
+			}
+			m.codebaseActivities[activity.OperationID] = activity
+			if activity.State != codebasepkg.ActivityRunning {
+				delay := 5 * time.Second
+				if activity.State == codebasepkg.ActivityFailed || activity.State == codebasepkg.ActivityTimedOut {
+					delay = 10 * time.Second
+				}
+				op, revision := activity.OperationID, activity.Revision
+				cmds = append(cmds, tea.Tick(delay, func(time.Time) tea.Msg { return codebaseExpireMsg{operationID: op, revision: revision} }))
+			}
+		}
+		m.layout()
+		if m.codebaseRunning() {
+			cmds = append(cmds, m.armSpinner())
+		}
+		cmds = append(cmds, waitForCodebaseActivity(m.codebaseFeed, m.codebaseToken))
+		return m, tea.Batch(cmds...)
+	case codebaseExpireMsg:
+		if activity, ok := m.codebaseActivities[msg.operationID]; ok && activity.Revision == msg.revision && activity.State != codebasepkg.ActivityRunning {
+			delete(m.codebaseActivities, msg.operationID)
+			m.layout()
+		}
+		return m, nil
+	case codebaseFeedClosedMsg:
+		if msg.token == m.codebaseToken {
+			m.codebaseActivities = map[string]codebasepkg.Activity{}
+			m.layout()
+		}
+		return m, nil
+	case sessionSwitchPreparedMsg:
+		if msg.err != nil {
+			m.appendBlock(chatBlock{kind: blockError, content: "switch session: " + msg.err.Error()})
+			return m.dispatchIfIdle()
+		}
+		cmd, err := m.switchSessionPrepared(msg.sessionID, msg.transition)
+		if err != nil {
+			m.appendBlock(chatBlock{kind: blockError, content: err.Error()})
+			return m.dispatchIfIdle()
+		}
+		return m, cmd
+	case codebaseCommandMsg:
+		if msg.err != nil {
+			m.appendBlock(chatBlock{kind: blockError, content: "codebase: " + msg.err.Error()})
+		} else if msg.content != "" {
+			m.appendBlock(chatBlock{kind: blockAssistant, content: msg.content})
+		}
+		return m, nil
 	case spinner.TickMsg:
 		var cmd tea.Cmd
 		m.spinner, cmd = m.spinner.Update(msg)
-		if m.loading || m.running || m.planCompacting || m.manualCompacting {
+		if m.loading || m.running || m.planCompacting || m.manualCompacting || m.codebaseRunning() {
 			return m, cmd
 		}
 		m.spinnerTicking = false // chain dies while idle
@@ -780,8 +903,20 @@ func (m *model) observeActorEvents(batch []events.Event, dropped uint64) {
 	}
 }
 
+func (m *model) preloadInitialSession() error {
+	msg, ok := m.loadInitialSession()().(initialSessionLoadedMsg)
+	if !ok {
+		return fmt.Errorf("initial session loader returned an unexpected message")
+	}
+	updated, _ := m.Update(msg)
+	if next, ok := updated.(*model); ok && next != m {
+		return fmt.Errorf("initial session loader replaced the TUI model")
+	}
+	return m.fatalErr
+}
+
 func (m *model) loadInitialSession() tea.Cmd {
-	sessMgr, runtime, registry, projectMgr := m.sessMgr, m.runtime, m.registry, m.projectMgr
+	sessMgr, runtime, registry, projectMgr, codebaseRuntime := m.sessMgr, m.runtime, m.registry, m.projectMgr, m.codebaseRuntime
 	requested := m.requestedSessionID
 	cfg, workdir, width, height := m.cfg, m.workdir, m.width, m.height
 	return func() tea.Msg {
@@ -809,11 +944,24 @@ func (m *model) loadInitialSession() tea.Cmd {
 			return initialSessionLoadedMsg{sessionID: sessionID, feed: feed, release: release, projection: projection, promptHistory: promptHistory}
 		}
 		if projectMgr != nil {
+			previousCurrent, err := projectMgr.Project().CurrentSessionID()
+			if err != nil {
+				return fail("read current project session", "", err)
+			}
 			sessionID, created, err := prepareInitialProjectSession(projectMgr, requested)
 			if err != nil {
 				return fail("prepare project session", "", err)
 			}
+			activated := false
 			cleanup := func() {
+				if activated {
+					if err := projectMgr.Project().SetCurrentSession(previousCurrent); err != nil {
+						tuiLogger().Warnw("failed to restore current project session",
+							"session_id", previousCurrent,
+							"error", boundedTUILogText(err.Error()),
+						)
+					}
+				}
 				if created {
 					if err := projectMgr.DeleteRoot(sessionID); err != nil {
 						tuiLogger().Warnw("failed to clean up initial project session",
@@ -833,18 +981,42 @@ func (m *model) loadInitialSession() tea.Cmd {
 				return fail("validate session model", sessionID, err)
 			}
 			feed := bus.SubscribeAgentFeed(registry.Bus(), sessionID)
-			_, release, err := registry.AcquireLifecycle(sessionID)
+			lifecycle, release, err := registry.AcquireLifecycle(sessionID)
 			if err != nil {
 				feed.Close()
 				cleanup()
 				return fail("prepare session actor", sessionID, err)
 			}
+			if codebaseRuntime != nil {
+				if err := codebaseRuntime.Attach(lifecycle); err != nil {
+					feed.Close()
+					codebaseRuntime.Detach(lifecycle)
+					release()
+					registry.Shutdown(sessionID)
+					cleanup()
+					return fail("attach Codebase hook", sessionID, err)
+				}
+			}
 			if err := projectMgr.Activate(sessionID); err != nil {
 				feed.Close()
+				if codebaseRuntime != nil {
+					codebaseRuntime.Detach(lifecycle)
+				}
 				release()
 				registry.Shutdown(sessionID)
 				cleanup()
 				return fail("activate project session", sessionID, err)
+			}
+			activated = true
+			if codebaseRuntime != nil {
+				if err := codebaseRuntime.Start(context.Background(), sessionID); err != nil {
+					feed.Close()
+					codebaseRuntime.Detach(lifecycle)
+					release()
+					registry.Shutdown(sessionID)
+					cleanup()
+					return fail("start Codebase runtime", sessionID, err)
+				}
 			}
 			var promptHistory []string
 			entries, historyErr := projectMgr.LoadUserHistory()
@@ -964,7 +1136,6 @@ func removeTextareaBackground(ta *textarea.Model) {
 func (m *model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if msg.String() == "ctrl+c" {
 		m.quitting = true
-		m.closeSession()
 		return m, tea.Quit
 	}
 	if msg.String() == "ctrl+g" {

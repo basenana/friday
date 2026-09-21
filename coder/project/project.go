@@ -11,11 +11,12 @@ import (
 )
 
 type Metadata struct {
-	Version   int       `json:"version"`
-	ID        string    `json:"id"`
-	Root      string    `json:"root"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	Version         int       `json:"version"`
+	ID              string    `json:"id"`
+	Root            string    `json:"root"`
+	CodebaseEnabled bool      `json:"codebase_enabled,omitempty"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
 }
 
 type SessionRef struct {
@@ -34,6 +35,8 @@ type Store interface {
 	RemoveRef(projectID, sessionID string) error
 	LoadUserHistory(projectID string) ([]UserHistoryEntry, error)
 	AppendUserHistory(projectID string, entry UserHistoryEntry) (bool, error)
+	CodebaseEnabled(projectID string) (bool, error)
+	SetCodebaseEnabled(projectID string, enabled bool) error
 }
 
 type Project struct {
@@ -104,6 +107,14 @@ func (p *Project) CurrentSessionID() (string, error) {
 
 func (p *Project) SetCurrentSession(id string) error {
 	return p.store.SetCurrent(p.ID(), id)
+}
+
+func (p *Project) CodebaseEnabled() (bool, error) {
+	return p.store.CodebaseEnabled(p.ID())
+}
+
+func (p *Project) SetCodebaseEnabled(enabled bool) error {
+	return p.store.SetCodebaseEnabled(p.ID(), enabled)
 }
 
 func (p *Project) ListSessionRefs() ([]SessionRef, error) {

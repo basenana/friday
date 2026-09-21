@@ -9,6 +9,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/basenana/friday/actor"
+	codebasepkg "github.com/basenana/friday/coder/codebase"
 	codercmds "github.com/basenana/friday/coder/commands"
 	projectpkg "github.com/basenana/friday/coder/project"
 	"github.com/basenana/friday/config"
@@ -51,14 +52,60 @@ func newLoadedProjectTestModel(t *testing.T) (*model, *projectpkg.Manager, *sess
 	m := loadingModelAt(base, registry, commands, cfg, "", project.Root())
 	m.projectMgr = manager
 	m.runtime = manager
-	loaded := m.loadInitialSession()()
-	updated, _ := m.Update(loaded)
-	m = updated.(*model)
-	if m.fatalErr != nil {
-		t.Fatalf("load project model: %v", m.fatalErr)
+	if err := m.preloadInitialSession(); err != nil {
+		t.Fatalf("load project model: %v", err)
+	}
+	if m.loading {
+		t.Fatal("project model remained in loading state after preflight")
 	}
 	t.Cleanup(m.closeFeed)
 	return m, manager, store
+}
+
+func TestSwitchToManagedIndexPreparesOutsideUpdate(t *testing.T) {
+	m, manager, _ := newLoadedProjectTestModel(t)
+	if err := manager.Project().SetCodebaseEnabled(true); err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := codebasepkg.New(codebasepkg.Options{
+		DataDir:        m.cfg.DataDirPath(),
+		Project:        manager.Project(),
+		ProjectManager: manager,
+		ModelPool:      m.registry.ModelPool(),
+		Bus:            m.registry.Bus(),
+		Sandbox:        m.cfg.Sandbox,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		runtime.BeginShutdown()
+		_ = runtime.Close()
+	})
+	if err := runtime.Start(context.Background(), m.sessionID); err != nil {
+		t.Fatal(err)
+	}
+	m.codebaseRuntime = runtime
+	indexID := runtime.IndexSessionID()
+	if indexID == "" {
+		t.Fatal("missing managed Index Session")
+	}
+	oldID := m.sessionID
+	cmd, err := m.switchSession(indexID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cmd == nil || m.sessionID != oldID {
+		t.Fatalf("switch ran synchronously: cmd=%v session=%q", cmd != nil, m.sessionID)
+	}
+	msg, ok := cmd().(sessionSwitchPreparedMsg)
+	if !ok {
+		t.Fatalf("prepare command returned %T", cmd())
+	}
+	updated, _ := m.Update(msg)
+	if updated.(*model).sessionID != indexID {
+		t.Fatalf("session=%q, want %q", updated.(*model).sessionID, indexID)
+	}
 }
 
 func TestProjectClearCreatesReferencedRoot(t *testing.T) {

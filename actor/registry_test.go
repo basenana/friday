@@ -191,6 +191,17 @@ func newTestRegistry(t *testing.T, cfgMod func(*RegistryConfig)) *Registry {
 	return registry
 }
 
+func TestRegistryModelPoolReturnsOwnedPool(t *testing.T) {
+	r := newTestRegistry(t, nil)
+	t.Cleanup(r.ShutdownAll)
+	if r.ModelPool() == nil {
+		t.Fatal("ModelPool returned nil")
+	}
+	if r.ModelPool() != r.models {
+		t.Fatal("ModelPool returned a different pool")
+	}
+}
+
 func TestRegistry_GetOrCreateIdempotent(t *testing.T) {
 	r := newTestRegistry(t, nil)
 	defer r.ShutdownAll()

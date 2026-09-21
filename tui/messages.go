@@ -13,6 +13,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/basenana/friday/bus"
+	codebasepkg "github.com/basenana/friday/coder/codebase"
 	"github.com/basenana/friday/core/actor/events"
 )
 
@@ -38,6 +39,61 @@ const (
 // an obsolete subscription from the active feed while unblocking the pending
 // waitForActorEvent command.
 type feedClosedMsg struct{ token uint64 }
+
+type codebaseActivitiesMsg struct {
+	token      uint64
+	activities []codebasepkg.Activity
+	dropped    uint64
+}
+type codebaseFeedClosedMsg struct{ token uint64 }
+type codebaseExpireMsg struct {
+	operationID string
+	revision    uint64
+}
+type codebaseCommandMsg struct {
+	content string
+	err     error
+}
+
+type sessionSwitchPreparedMsg struct {
+	sessionID  string
+	transition *codebasepkg.SessionTransition
+	err        error
+}
+
+func waitForCodebaseActivity(f *bus.Feed, token uint64) tea.Cmd {
+	return func() tea.Msg {
+		select {
+		case evt := <-f.Events():
+			activities := make([]codebasepkg.Activity, 0, 32)
+			if activity, ok := decodeCodebaseActivity(evt); ok {
+				activities = append(activities, activity)
+			}
+			timer := time.NewTimer(4 * time.Millisecond)
+			defer timer.Stop()
+			for len(activities) < 32 {
+				select {
+				case next := <-f.Events():
+					if activity, ok := decodeCodebaseActivity(next); ok {
+						activities = append(activities, activity)
+					}
+				case <-timer.C:
+					return codebaseActivitiesMsg{token: token, activities: activities, dropped: f.Dropped()}
+				case <-f.Done():
+					return codebaseActivitiesMsg{token: token, activities: activities, dropped: f.Dropped()}
+				}
+			}
+			return codebaseActivitiesMsg{token: token, activities: activities, dropped: f.Dropped()}
+		case <-f.Done():
+			return codebaseFeedClosedMsg{token: token}
+		}
+	}
+}
+
+func decodeCodebaseActivity(evt events.Event) (codebasepkg.Activity, bool) {
+	var activity codebasepkg.Activity
+	return activity, events.DecodePayload(evt, &activity) == nil
+}
 
 // waitForActorEvent returns a tea.Cmd that waits for one event, then drains a
 // short bounded batch. Bubble Tea runs the returned func on its own goroutine;

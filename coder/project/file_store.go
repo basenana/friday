@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 )
 
 type FileStore struct {
@@ -61,6 +62,53 @@ func (s *FileStore) Ensure(meta Metadata) error {
 			return err
 		}
 		return writeAtomicJSON(s.metaPath(meta.ID), meta, 0o600)
+	})
+}
+
+func (s *FileStore) readMetadata(id string) (Metadata, error) {
+	if !validID(id) {
+		return Metadata{}, fmt.Errorf("invalid project id")
+	}
+	data, err := os.ReadFile(s.metaPath(id))
+	if err != nil {
+		return Metadata{}, err
+	}
+	var meta Metadata
+	if err := json.Unmarshal(data, &meta); err != nil {
+		return Metadata{}, fmt.Errorf("decode project metadata: %w", err)
+	}
+	if meta.Version != 1 || meta.ID != id || strings.TrimSpace(meta.Root) == "" {
+		return Metadata{}, fmt.Errorf("project metadata identity mismatch for %s", id)
+	}
+	return meta, nil
+}
+
+func (s *FileStore) CodebaseEnabled(id string) (bool, error) {
+	meta, err := s.readMetadata(id)
+	return meta.CodebaseEnabled, err
+}
+
+func (s *FileStore) SetCodebaseEnabled(id string, enabled bool) error {
+	return s.withLock(id, func() error {
+		meta, err := s.readMetadata(id)
+		if err != nil {
+			return err
+		}
+		if meta.CodebaseEnabled == enabled {
+			return nil
+		}
+		data, err := os.ReadFile(s.metaPath(id))
+		if err != nil {
+			return err
+		}
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(data, &fields); err != nil {
+			return fmt.Errorf("decode project metadata: %w", err)
+		}
+		updatedAt := time.Now()
+		fields["codebase_enabled"], _ = json.Marshal(enabled)
+		fields["updated_at"], _ = json.Marshal(updatedAt)
+		return writeAtomicJSON(s.metaPath(id), fields, 0o600)
 	})
 }
 

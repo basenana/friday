@@ -342,6 +342,16 @@ func (m *model) updateCommandConfirmation(key tea.KeyPressMsg) (tea.Model, tea.C
 		}
 		return m, nil
 	}
+	if m.codebaseRuntime != nil && c.target == m.codebaseRuntime.IndexSessionID() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		mutation, err := m.codebaseRuntime.PrepareIndexSessionMutation(ctx, c.target)
+		cancel()
+		if err != nil {
+			m.appendBlock(chatBlock{kind: blockError, content: c.action + ": " + err.Error()})
+			return m, nil
+		}
+		defer mutation.Abort()
+	}
 	current := c.target == m.sessionID
 	if current && m.projectMgr != nil {
 		newID, err := m.createProjectRoot(true)

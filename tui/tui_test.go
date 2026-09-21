@@ -17,6 +17,7 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/basenana/friday/actor"
+	codebasepkg "github.com/basenana/friday/coder/codebase"
 	codercmds "github.com/basenana/friday/coder/commands"
 	"github.com/basenana/friday/config"
 	"github.com/basenana/friday/core/actor/events"
@@ -195,6 +196,49 @@ func fillHistory(m *model, count int) {
 			kind:    blockAssistant,
 			content: fmt.Sprintf("message %02d", i),
 		})
+	}
+}
+
+func TestCtrlCDefersSessionCleanupToRunProject(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	released := false
+	originalRelease := m.sessionRelease
+	m.sessionRelease = func() {
+		released = true
+		if originalRelease != nil {
+			originalRelease()
+		}
+	}
+	defer m.closeSession()
+
+	updated, cmd := m.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	if cmd == nil || !updated.(*model).quitting {
+		t.Fatal("ctrl+c did not request quit")
+	}
+	if released {
+		t.Fatal("ctrl+c released the Session before RunProject shutdown")
+	}
+}
+
+func TestActiveCodebaseFeedClosureClearsTransientActivities(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	m.codebaseToken = 7
+	m.codebaseActivities = map[string]codebasepkg.Activity{
+		"running": {OperationID: "running", State: codebasepkg.ActivityRunning},
+	}
+	updated, _ := m.Update(codebaseFeedClosedMsg{token: 7})
+	if len(updated.(*model).codebaseActivities) != 0 {
+		t.Fatalf("activities=%+v", updated.(*model).codebaseActivities)
+	}
+}
+
+func TestProjectCodebaseCommandAppearsInSlashCompletion(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	m.codebaseRuntime = &codebasepkg.Runtime{}
+	m.textarea.SetValue("/codeb")
+	m.refreshMenu()
+	if len(m.menu.items) != 1 || m.menu.items[0].label != "/codebase" {
+		t.Fatalf("menu items=%+v", m.menu.items)
 	}
 }
 
