@@ -202,6 +202,18 @@ func TestRegistryModelPoolReturnsOwnedPool(t *testing.T) {
 	}
 }
 
+func TestRegistryProjectResourcesFlowIntoSetup(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "missing-project-resources")
+	r := newTestRegistry(t, func(cfg *RegistryConfig) {
+		cfg.ProjectResources = missing
+	})
+	defer r.ShutdownAll()
+
+	if _, err := r.GetOrCreate("project-resource-session"); err == nil || !strings.Contains(err.Error(), "project resource") {
+		t.Fatalf("GetOrCreate error = %v, want project resource validation failure", err)
+	}
+}
+
 func TestRegistry_GetOrCreateIdempotent(t *testing.T) {
 	r := newTestRegistry(t, nil)
 	defer r.ShutdownAll()

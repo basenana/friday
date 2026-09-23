@@ -417,6 +417,48 @@ func TestManager_ExistsMissing(t *testing.T) {
 	}
 }
 
+func TestManagerIsActiveRejectsMissingAndArchivedSessions(t *testing.T) {
+	store := newMockStore()
+	mgr := NewManager(store, filepath.Join(t.TempDir(), "current"), "")
+
+	if active, err := mgr.IsActive("missing"); err != nil || active {
+		t.Fatalf("IsActive(missing) = %t, %v; want false, nil", active, err)
+	}
+	sess, id, err := mgr.CreateIsolated()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess.Close()
+	if active, err := mgr.IsActive(id); err != nil || !active {
+		t.Fatalf("IsActive(active) = %t, %v; want true, nil", active, err)
+	}
+	if err := mgr.Archive(id); err != nil {
+		t.Fatal(err)
+	}
+	if active, err := mgr.IsActive(id); err != nil || active {
+		t.Fatalf("IsActive(archived) = %t, %v; want false, nil", active, err)
+	}
+}
+
+func TestManagerArchiveIfExistsIgnoresMissingAndArchivesExisting(t *testing.T) {
+	store := newMockStore()
+	mgr := NewManager(store, filepath.Join(t.TempDir(), "current"), "")
+	if archived, err := mgr.ArchiveIfExists("missing"); err != nil || archived {
+		t.Fatalf("ArchiveIfExists(missing) = %t, %v; want false, nil", archived, err)
+	}
+	sess, id, err := mgr.CreateIsolated()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess.Close()
+	if archived, err := mgr.ArchiveIfExists(id); err != nil || !archived {
+		t.Fatalf("ArchiveIfExists(existing) = %t, %v; want true, nil", archived, err)
+	}
+	if active, err := mgr.IsActive(id); err != nil || active {
+		t.Fatalf("archived session active = %t, %v", active, err)
+	}
+}
+
 func TestManagerRuntimeRenameAndLifecycle(t *testing.T) {
 	store := newMockStore()
 	mgr := NewManager(store, filepath.Join(t.TempDir(), "current"), "")

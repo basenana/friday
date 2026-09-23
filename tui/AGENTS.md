@@ -7,9 +7,14 @@ This package is the interactive terminal frontend. It projects actor events into
 ```go
 func Run(sessMgr *sessions.Manager, cfg *config.Config, sessionID string) error
 func RunProject(projectMgr *projectpkg.Manager, cfg *config.Config, sessionID string) error
+func RunWorktree(sessMgr *sessions.Manager, cfg *config.Config, cwd string) error
 ```
 
-These are the package's two public entry points. Keep setup differences behind them rather than exporting internal model types.
+`RunWorktree` owns one retained runtime per worktree, initially activates the
+main checkout, and keeps background runtimes alive while the foreground tab
+changes. `RunProject` preserves the session-oriented non-Git mode. Keep setup
+differences behind these entry points rather than exporting internal model
+types.
 
 ## Files
 
@@ -23,6 +28,8 @@ These are the package's two public entry points. Keep setup differences behind t
 - `form.go` renders and submits interactive forms.
 - `todo_view.go` renders the current planning TODO list.
 - `command_actions.go` implements TUI-side slash-command actions.
+- `worktree.go`, `worktree_runtime.go`, and `worktree_tabs.go` own Git worktree startup, retained runtimes, navigation, and tab state.
+- `review.go` opens the active checkout in VS Code or renders remote-opening instructions.
 - `detail.go` manages detail panes.
 - `editor.go` launches and receives external-editor input.
 - `clipboard.go` implements platform-aware copy behavior.
@@ -44,6 +51,7 @@ These are the package's two public entry points. Keep setup differences behind t
 - Other form variants use the generic form renderer and its own navigation/submission behavior.
 - Preserve field IDs and option values when changing labels; submissions are contracts with actor tools.
 - Slash commands are parsed by `coder/commands` where applicable, while UI-only actions remain here.
+- `/worktree [requirement]` creates a linked worktree only in Git mode. `/select` switches worktrees in Git mode and sessions in non-Git mode; both navigation actions bypass a running actor's input queue.
 
 ## Terminal constraints
 

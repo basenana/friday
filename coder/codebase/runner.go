@@ -42,7 +42,7 @@ func newRunner(pool *fallback.ModelPool, cfg *sandbox.Config, projectRoot, codeb
 	if err := os.MkdirAll(codebaseDir, 0o700); err != nil {
 		return nil, err
 	}
-	cloned := cloneSandboxConfig(cfg)
+	cloned := sandbox.CloneConfig(cfg)
 	cloned.Sandbox.Filesystem.Write = append(cloned.Sandbox.Filesystem.Write, codebaseDir)
 	if err := cloned.Validate(); err != nil {
 		return nil, fmt.Errorf("validate Codebase sandbox: %w", err)
@@ -78,21 +78,6 @@ func queryOutputLimit(caller int64) int64 {
 		return caller
 	}
 	return maxCodebaseQueryOutputRunes
-}
-
-func cloneSandboxConfig(src *sandbox.Config) *sandbox.Config {
-	if src == nil {
-		src = sandbox.DefaultConfig()
-	}
-	dst := *src
-	dst.Permissions.Allow = append([]string(nil), src.Permissions.Allow...)
-	dst.Permissions.Deny = append([]string(nil), src.Permissions.Deny...)
-	dst.Sandbox.Filesystem.ReadOnly = append([]string(nil), src.Sandbox.Filesystem.ReadOnly...)
-	dst.Sandbox.Filesystem.Deny = append([]string(nil), src.Sandbox.Filesystem.Deny...)
-	dst.Sandbox.Filesystem.Write = append([]string(nil), src.Sandbox.Filesystem.Write...)
-	dst.Sandbox.Filesystem.Protected = append([]string(nil), src.Sandbox.Filesystem.Protected...)
-	dst.Sandbox.Network.Allow = append([]string(nil), src.Sandbox.Network.Allow...)
-	return &dst
 }
 
 func (r *runner) client(mode modeSpec) providers.Client {

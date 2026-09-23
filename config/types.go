@@ -13,6 +13,8 @@ type Config struct {
 	Log           LogConfig           `yaml:"log" json:"log"`
 	Sandbox       *sandbox.Config     `yaml:"sandbox" json:"sandbox"`
 	TUI           TUIConfig           `yaml:"tui" json:"tui"`
+	Editor        EditorConfig        `yaml:"editor" json:"editor"`
+	Worktree      WorktreeConfig      `yaml:"worktree" json:"worktree"`
 	Collaboration CollaborationConfig `yaml:"collaboration" json:"collaboration"`
 
 	// Runtime-only workspace layering metadata. These fields are populated by
@@ -36,6 +38,16 @@ type TUIConfig struct {
 	// alternate screen except in known-incompatible multiplexers such as
 	// Zellij; always/never force the choice.
 	AlternateScreen string `yaml:"alternate_screen" json:"alternate_screen"`
+}
+
+type WorktreeConfig struct {
+	Directory    string `yaml:"directory" json:"directory"`
+	BranchPrefix string `yaml:"branch_prefix" json:"branch_prefix"`
+}
+
+type EditorConfig struct {
+	Command         string `yaml:"command" json:"command"`
+	RemoteAuthority string `yaml:"remote_authority" json:"remote_authority"`
 }
 
 type LogConfig struct {
@@ -79,6 +91,8 @@ func DefaultConfig() *Config {
 			DefaultAgent: "react",
 		},
 		TUI:           TUIConfig{AlternateScreen: "auto"},
+		Editor:        EditorConfig{Command: "code"},
+		Worktree:      WorktreeConfig{Directory: ".friday/worktrees", BranchPrefix: "friday/"},
 		Collaboration: CollaborationConfig{Plan: PlanModeConfig{ReasoningEffort: "medium"}},
 		Sandbox:       sandbox.DefaultConfig(),
 	}

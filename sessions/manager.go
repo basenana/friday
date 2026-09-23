@@ -250,6 +250,23 @@ func (m *Manager) Exists(sessionID string) (bool, error) {
 	return true, nil
 }
 
+// IsActive reports whether sessionID refers to a persisted, non-archived
+// session. Missing sessions are a normal false result so scoped catalogs can
+// repair their soft references without surfacing an error.
+func (m *Manager) IsActive(sessionID string) (bool, error) {
+	if err := m.store.EnsureDir(); err != nil {
+		return false, err
+	}
+	meta, err := m.store.GetMeta(sessionID)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) || os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return !meta.Archived, nil
+}
+
 // CollaborationMode implements collaboration.ModeProvider.
 func (m *Manager) CollaborationMode(sessionID string) collaboration.Mode {
 	meta, err := m.store.GetMeta(sessionID)
@@ -381,6 +398,23 @@ func (m *Manager) Rename(sessionID, requested string) (string, error) {
 func (m *Manager) Archive(sessionID string) error {
 	archived := true
 	return m.UpdateMeta(sessionID, SessionMetaPatch{Archived: &archived})
+}
+
+// ArchiveIfExists archives sessionID when it still names a persisted session.
+// Missing soft references are expected for worktree cleanup and are ignored.
+func (m *Manager) ArchiveIfExists(sessionID string) (bool, error) {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return false, nil
+	}
+	exists, err := m.Exists(sessionID)
+	if err != nil || !exists {
+		return false, err
+	}
+	if err := m.Archive(sessionID); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (m *Manager) DeleteRoot(sessionID string) error {

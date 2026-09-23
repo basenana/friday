@@ -38,6 +38,24 @@ type filesystemPolicy struct {
 	Rules   []filesystemRule
 }
 
+// CloneConfig returns an independent sandbox policy. Callers may add
+// runtime-scoped filesystem capabilities without mutating the shared
+// application configuration used by other agents or dedicated runners.
+func CloneConfig(src *Config) *Config {
+	if src == nil {
+		src = DefaultConfig()
+	}
+	dst := *src
+	dst.Permissions.Allow = append([]string(nil), src.Permissions.Allow...)
+	dst.Permissions.Deny = append([]string(nil), src.Permissions.Deny...)
+	dst.Sandbox.Filesystem.ReadOnly = append([]string(nil), src.Sandbox.Filesystem.ReadOnly...)
+	dst.Sandbox.Filesystem.Deny = append([]string(nil), src.Sandbox.Filesystem.Deny...)
+	dst.Sandbox.Filesystem.Write = append([]string(nil), src.Sandbox.Filesystem.Write...)
+	dst.Sandbox.Filesystem.Protected = append([]string(nil), src.Sandbox.Filesystem.Protected...)
+	dst.Sandbox.Network.Allow = append([]string(nil), src.Sandbox.Network.Allow...)
+	return &dst
+}
+
 func compileFilesystemPolicy(cfg *Config, workdir, homeDir string) (*filesystemPolicy, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("sandbox config is required")
@@ -117,6 +135,11 @@ func expandFilesystemRule(entry, workdir, homeDir string) ([]string, error) {
 	if entry == "" {
 		return nil, fmt.Errorf("path is empty")
 	}
+	if gitPath, ok, err := resolveLinkedWorktreeGitPath(entry, workdir); err != nil {
+		return nil, err
+	} else if ok {
+		entry = gitPath
+	}
 	if (entry == "~" || strings.HasPrefix(entry, "~/")) && normalizeExecutionHome(homeDir) == "" {
 		return nil, fmt.Errorf("HOME is unavailable for %q", entry)
 	}
@@ -145,6 +168,45 @@ func expandFilesystemRule(entry, workdir, homeDir string) ([]string, error) {
 		return nil, err
 	}
 	return []string{expanded}, nil
+}
+
+// resolveLinkedWorktreeGitPath maps the default .git protection rules to the
+// common Git directory when workdir is a linked checkout whose .git is a file.
+func resolveLinkedWorktreeGitPath(entry, workdir string) (string, bool, error) {
+	if entry != ".git/hooks" && entry != ".git/config" {
+		return "", false, nil
+	}
+	dotGit := filepath.Join(workdir, ".git")
+	info, err := os.Stat(dotGit)
+	if err != nil || info.IsDir() {
+		return "", false, nil
+	}
+	data, err := os.ReadFile(dotGit)
+	if err != nil {
+		return "", false, fmt.Errorf("read linked worktree git file: %w", err)
+	}
+	gitDirValue := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(string(data)), "gitdir:"))
+	if gitDirValue == "" || gitDirValue == strings.TrimSpace(string(data)) {
+		return "", false, fmt.Errorf("invalid linked worktree git file %q", dotGit)
+	}
+	gitDir := gitDirValue
+	if !filepath.IsAbs(gitDir) {
+		gitDir = filepath.Join(filepath.Dir(dotGit), gitDir)
+	}
+	commonDir := filepath.Clean(gitDir)
+	commonData, err := os.ReadFile(filepath.Join(gitDir, "commondir"))
+	if err == nil {
+		commonDir = strings.TrimSpace(string(commonData))
+		if commonDir == "" {
+			return "", false, fmt.Errorf("linked worktree commondir is empty")
+		}
+		if !filepath.IsAbs(commonDir) {
+			commonDir = filepath.Join(gitDir, commonDir)
+		}
+	} else if !os.IsNotExist(err) {
+		return "", false, fmt.Errorf("read linked worktree commondir: %w", err)
+	}
+	return filepath.Join(filepath.Clean(commonDir), strings.TrimPrefix(entry, ".git/")), true, nil
 }
 
 func classifyFilesystemObject(info os.FileInfo) filesystemObjectType {

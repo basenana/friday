@@ -1354,6 +1354,133 @@ func TestEventLogRestoresTranscript(t *testing.T) {
 	}
 }
 
+func TestRunFinishedKeepsFormNamedByOpenInterrupt(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	m.currentRunID = "run-waiting"
+	m.form = &formState{id: "form-waiting"}
+
+	m.handleActorEvent(events.NewEvent(events.KindRunFinished, "run-waiting").WithPayload(events.RunFinishedData{
+		StopReason: "end_turn",
+		Interrupts: []events.Interrupt{{Type: "form", ID: "form-waiting", Name: events.CustomFormRequested}},
+	}))
+
+	if m.form == nil || m.form.id != "form-waiting" {
+		t.Fatal("run completion discarded a form that remains an open interrupt")
+	}
+}
+
+func TestApplyProjectionRestoresPendingForm(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	waiting := &formState{id: "form-waiting"}
+
+	m.applyProjection(transcriptProjection{form: waiting})
+
+	if m.form != waiting {
+		t.Fatal("projection did not restore its pending form")
+	}
+}
+
+func TestLiveTranscriptProjectionRestoresOpenForm(t *testing.T) {
+	m, _, store := newTestModel(t)
+	m.closeSession()
+	m.registry.Shutdown(m.sessionID)
+	sink, err := store.OpenEventSink(context.Background(), m.sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawSchema := map[string]any{
+		"title":  "Confirm",
+		"fields": []any{map[string]any{"name": "answer", "label": "Continue?", "type": "text", "required": true}},
+	}
+	persisted := []events.Event{
+		events.NewEvent(events.KindRunStarted, "run-waiting"),
+		events.NewEvent(events.KindCustom, "run-waiting").WithName(events.CustomFormRequested).WithPayload(events.FormRequestedBody{FormID: "form-waiting", Schema: rawSchema}),
+		events.NewEvent(events.KindRunFinished, "run-waiting").WithPayload(events.RunFinishedData{
+			StopReason: "end_turn",
+			Interrupts: []events.Interrupt{{Type: "form", ID: "form-waiting", Name: events.CustomFormRequested}},
+		}),
+	}
+	for _, evt := range persisted {
+		if err := sink.Append(context.Background(), evt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := sink.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	projection, err := buildLiveTranscriptProjection(m.sessMgr, m.cfg, m.workdir, m.width, m.height, m.sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if projection.form == nil || projection.form.id != "form-waiting" {
+		t.Fatal("live projection did not restore the open confirmation form")
+	}
+	for _, block := range projection.messages {
+		if strings.Contains(block.content, "unfinished form expired") {
+			t.Fatal("live projection incorrectly expired an open confirmation form")
+		}
+	}
+}
+
+func TestOverlayLivePendingFormRestoresSchemaMissingFromEventLog(t *testing.T) {
+	projection := transcriptProjection{}
+	err := overlayLivePendingForm(&projection, []events.FormRequestedBody{{
+		FormID: "form-unflushed",
+		Schema: map[string]any{
+			"title":  "Confirm scope",
+			"fields": []any{map[string]any{"name": "answer", "label": "Continue?", "type": "text", "required": true}},
+		},
+	}, {
+		FormID: "form-second",
+		Schema: map[string]any{"title": "Second", "fields": []any{map[string]any{"name": "answer", "type": "text"}}},
+	}}, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if projection.form == nil || projection.form.id != "form-unflushed" || projection.form.title != "Confirm scope" {
+		t.Fatalf("pending form was not restored from live actor snapshot: %#v", projection.form)
+	}
+}
+
+func TestRuntimeTranscriptProjectionPreservesLivePendingFormDuringReconciliation(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	pending := []events.FormRequestedBody{{
+		FormID: "form-live",
+		Schema: map[string]any{
+			"title":  "Confirm change",
+			"fields": []any{map[string]any{"name": "answer", "type": "text"}},
+		},
+	}}
+
+	projection, err := buildRuntimeTranscriptProjection(m.sessMgr, m.cfg, m.workdir, m.width, m.height, m.sessionID, pending)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if projection.form == nil || projection.form.id != "form-live" {
+		t.Fatalf("reconciled form = %#v, want live pending form", projection.form)
+	}
+}
+
+func TestSecondFormRequestDoesNotReplaceVisiblePendingForm(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	first := events.NewEvent(events.KindCustom, "run").WithName(events.CustomFormRequested).WithPayload(events.FormRequestedBody{
+		FormID: "form-first",
+		Schema: map[string]any{"title": "First", "fields": []any{map[string]any{"name": "answer", "type": "text"}}},
+	})
+	second := events.NewEvent(events.KindCustom, "run").WithName(events.CustomFormRequested).WithPayload(events.FormRequestedBody{
+		FormID: "form-second",
+		Schema: map[string]any{"title": "Second", "fields": []any{map[string]any{"name": "answer", "type": "text"}}},
+	})
+
+	m.handleActorEvent(first)
+	m.handleActorEvent(second)
+
+	if m.form == nil || m.form.id != "form-first" {
+		t.Fatalf("visible form = %#v, want first pending form", m.form)
+	}
+}
+
 func TestJSONGridSourceReturnsDecodedRows(t *testing.T) {
 	m, _, _ := newTestModel(t)
 	root := t.TempDir()

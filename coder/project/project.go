@@ -13,10 +13,19 @@ import (
 type Metadata struct {
 	Version         int       `json:"version"`
 	ID              string    `json:"id"`
+	Name            string    `json:"name,omitempty"`
 	Root            string    `json:"root"`
+	Repository      string    `json:"repository,omitempty"`
 	CodebaseEnabled bool      `json:"codebase_enabled,omitempty"`
 	CreatedAt       time.Time `json:"created_at"`
 	UpdatedAt       time.Time `json:"updated_at"`
+}
+
+// Identity identifies a logical project independently of its checkout path.
+type Identity struct {
+	ID         string
+	Name       string
+	Repository string
 }
 
 type SessionRef struct {
@@ -49,11 +58,42 @@ func Open(root string, store Store) (*Project, error) {
 	if err != nil {
 		return nil, err
 	}
+	return OpenWithIdentity(canonical, Identity{
+		ID:         ProjectID(canonical),
+		Name:       filepath.Base(canonical),
+		Repository: canonical,
+	}, store)
+}
+
+func OpenWithIdentity(root string, identity Identity, store Store) (*Project, error) {
+	canonical, err := CanonicalRoot(root)
+	if err != nil {
+		return nil, err
+	}
 	if store == nil {
 		return nil, fmt.Errorf("project store is required")
 	}
+	if !validID(identity.ID) {
+		return nil, fmt.Errorf("project identity id is required")
+	}
+	if strings.TrimSpace(identity.Name) == "" {
+		return nil, fmt.Errorf("project identity name is required")
+	}
+	if strings.TrimSpace(identity.Repository) == "" {
+		return nil, fmt.Errorf("project identity repository is required")
+	}
+	if migrator, ok := store.(interface {
+		MigrateIdentity(string, Identity) error
+	}); ok {
+		if err := migrator.MigrateIdentity(canonical, identity); err != nil {
+			return nil, fmt.Errorf("migrate project identity: %w", err)
+		}
+	}
 	now := time.Now()
-	meta := Metadata{Version: 1, ID: ProjectID(canonical), Root: canonical, CreatedAt: now, UpdatedAt: now}
+	meta := Metadata{
+		Version: 2, ID: identity.ID, Name: identity.Name, Root: canonical, Repository: identity.Repository,
+		CreatedAt: now, UpdatedAt: now,
+	}
 	if err := store.Ensure(meta); err != nil {
 		return nil, err
 	}
@@ -83,19 +123,24 @@ func CanonicalRoot(root string) (string, error) {
 }
 
 func ProjectID(canonicalRoot string) string {
-	base := filepath.Base(canonicalRoot)
-	base = strings.Map(func(r rune) rune {
+	base := ProjectIDPrefix(filepath.Base(canonicalRoot))
+	sum := sha256.Sum256([]byte(canonicalRoot))
+	return fmt.Sprintf("%s-%x", base, sum[:6])
+}
+
+// ProjectIDPrefix returns the safe display prefix used in project IDs.
+func ProjectIDPrefix(name string) string {
+	base := strings.Map(func(r rune) rune {
 		if unicode.IsLetter(r) || unicode.IsDigit(r) || r == '.' || r == '_' || r == '-' {
 			return r
 		}
 		return '_'
-	}, base)
+	}, name)
 	base = strings.Trim(base, "._-")
 	if base == "" {
 		base = "project"
 	}
-	sum := sha256.Sum256([]byte(canonicalRoot))
-	return fmt.Sprintf("%s-%x", base, sum[:6])
+	return base
 }
 
 func (p *Project) ID() string   { return p.meta.ID }

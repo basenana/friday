@@ -1,6 +1,7 @@
 package sandbox
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -9,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/basenana/friday/coder/project"
+	fridayworktree "github.com/basenana/friday/worktree"
 )
 
 // ProjectAllowDoc is the on-disk document for per-project sandbox command
@@ -24,15 +26,22 @@ type ProjectAllowDoc struct {
 const projectAllowVersion = 1
 
 // ProjectAllowPath returns the per-project sandbox allow file path for the
-// project containing workdir. The path is derived from the canonical
-// (symlink-resolved) project root, so opening the same repository through
-// different paths or symlinks yields the same file.
+// project containing workdir. Git checkouts use the logical identity derived
+// from the repository's canonical common directory, so linked worktrees share
+// grants. Non-Git directories retain their canonical-path identity.
 func ProjectAllowPath(dataDir, workdir string) (string, error) {
 	root, err := project.CanonicalRoot(workdir)
 	if err != nil {
 		return "", fmt.Errorf("resolve project root: %w", err)
 	}
-	return filepath.Join(dataDir, "projects", project.ProjectID(root), "sandbox.json"), nil
+	projectID := project.ProjectID(root)
+	if identity, gitErr := fridayworktree.DiscoverProjectIdentity(context.Background(), root); gitErr == nil {
+		if err := project.NewFileStore(filepath.Join(dataDir, "projects")).MigrateIdentity(root, identity); err != nil {
+			return "", fmt.Errorf("migrate project sandbox grants: %w", err)
+		}
+		projectID = identity.ID
+	}
+	return filepath.Join(dataDir, "projects", projectID, "sandbox.json"), nil
 }
 
 // LoadProjectAllow reads the project allow list from path. A missing file is

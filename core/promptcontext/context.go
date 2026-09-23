@@ -11,6 +11,7 @@ type Block string
 
 const (
 	ProjectInstructions Block = "project_instructions"
+	WorktreeContext     Block = "worktree_context"
 	ApprovedPlan        Block = "approved_plan"
 
 	contextMetadataKey   = "friday.context"
@@ -18,7 +19,7 @@ const (
 	blockMetadataPrefix  = "friday.context.block."
 )
 
-var blockOrder = []Block{ProjectInstructions, ApprovedPlan}
+var blockOrder = []Block{ProjectInstructions, WorktreeContext, ApprovedPlan}
 
 // SetBlock upserts one request-local section of Friday's leading built-in
 // context message. Sections are kept in message metadata so independent hooks

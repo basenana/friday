@@ -46,6 +46,20 @@ type codebaseActivitiesMsg struct {
 	dropped    uint64
 }
 type codebaseFeedClosedMsg struct{ token uint64 }
+
+type worktreeStatusMsg struct {
+	token      uint64
+	worktreeID string
+	sessionID  string
+	event      events.Event
+	waiting    bool
+}
+
+type worktreeStatusFeedClosedMsg struct {
+	token      uint64
+	worktreeID string
+	sessionID  string
+}
 type codebaseExpireMsg struct {
 	operationID string
 	revision    uint64

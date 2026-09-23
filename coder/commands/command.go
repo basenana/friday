@@ -34,6 +34,9 @@ type ResumeSessionAction struct{ Target string }
 type RenameSessionAction struct{ Name string }
 type ArchiveSessionAction struct{ Target string }
 type DeleteSessionAction struct{ Target string }
+type CreateWorktreeAction struct{ Requirement string }
+type SelectWorktreeAction struct{ Target string }
+type ReviewWorktreeAction struct{}
 type OpenModelAction struct{}
 type SetModelAction struct{ Target string }
 type OpenEffortAction struct{}
@@ -66,6 +69,9 @@ func (ResumeSessionAction) commandAction()  {}
 func (RenameSessionAction) commandAction()  {}
 func (ArchiveSessionAction) commandAction() {}
 func (DeleteSessionAction) commandAction()  {}
+func (CreateWorktreeAction) commandAction() {}
+func (SelectWorktreeAction) commandAction() {}
+func (ReviewWorktreeAction) commandAction() {}
 func (OpenModelAction) commandAction()      {}
 func (SetModelAction) commandAction()       {}
 func (OpenEffortAction) commandAction()     {}
@@ -102,8 +108,9 @@ type Context struct {
 type RunPolicy string
 
 const (
-	PolicyImmediate RunPolicy = "immediate"
-	PolicyDeferred  RunPolicy = "deferred"
+	PolicyImmediate  RunPolicy = "immediate"
+	PolicyDeferred   RunPolicy = "deferred"
+	PolicyNavigation RunPolicy = "navigation"
 )
 
 type Metadata struct {

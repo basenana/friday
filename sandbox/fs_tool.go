@@ -2009,6 +2009,13 @@ func isWithinWorkdir(workdir, absPath string) bool {
 
 func matchesAnyPath(patterns []string, workdir, absPath string) bool {
 	for _, pattern := range patterns {
+		if gitPath, ok, err := resolveLinkedWorktreeGitPath(strings.TrimSpace(pattern), workdir); err != nil {
+			// A malformed linked-checkout control file must fail closed for
+			// native writes just as command policy compilation does.
+			return true
+		} else if ok {
+			pattern = gitPath
+		}
 		expanded := expandPath(pattern, workdir, "")
 		if !strings.ContainsAny(expanded, "*?[]") && !filepath.IsAbs(expanded) {
 			absPattern, err := filepath.Abs(expanded)

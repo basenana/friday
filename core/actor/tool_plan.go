@@ -90,7 +90,9 @@ Returns answers in the same order as the supplied questions.`),
 			_ = json.Unmarshal(raw, &schemaMap)
 			formID := globalIDGenerator.Next("user-input")
 			waiter := a.prepareFormWait(formID)
-			a.EmitCustom(events.CustomFormRequested, formID, events.FormRequestedBody{FormID: formID, Schema: schemaMap})
+			request := events.FormRequestedBody{FormID: formID, Schema: schemaMap}
+			a.setPendingFormRequest(request)
+			a.EmitCustom(events.CustomFormRequested, formID, request)
 			outcome, err := a.waitForRegisteredForm(ctx, formID, waiter)
 			if err != nil {
 				a.EmitCustom(events.CustomFormCancelled, formID, events.FormCancelledBody{FormID: formID})

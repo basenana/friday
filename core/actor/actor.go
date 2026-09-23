@@ -57,8 +57,10 @@ type Actor struct {
 	cardTools []*coretools.Tool
 
 	// pendingForms maps formID to its waiting channel.
-	pendingForms   map[string]chan FormOutcome
-	pendingFormsMu sync.Mutex
+	pendingForms        map[string]chan FormOutcome
+	pendingFormRequests map[string]events.FormRequestedBody
+	pendingFormOrder    []string
+	pendingFormsMu      sync.Mutex
 
 	// currentRunID is the active turn id (read by event emitters).
 	currentRunID  atomic.Value
@@ -111,6 +113,7 @@ func New(agent agents.Agent, sess *session.Session, opts ...Option) *Actor {
 		sink:                    o.sink,
 		logger:                  o.logger,
 		pendingForms:            make(map[string]chan FormOutcome),
+		pendingFormRequests:     make(map[string]events.FormRequestedBody),
 		filePathValidator:       o.filePathValidator,
 		richPathValidator:       o.richPathValidator,
 		diffSourcePathValidator: o.diffSourcePathValidator,
@@ -224,13 +227,56 @@ func (a *Actor) CancelForm(formID string) error {
 	return a.ResolveForm(formID, FormOutcome{Cancelled: true})
 }
 
+// HasPendingForms reports whether this live actor still owns a form that can
+// accept user input. Persisted form events alone cannot provide this ability
+// after the actor has been reconstructed.
+func (a *Actor) HasPendingForms() bool {
+	a.pendingFormsMu.Lock()
+	defer a.pendingFormsMu.Unlock()
+	return len(a.pendingForms) > 0
+}
+
+// PendingForms returns the form descriptions owned by live waiters. These
+// descriptions are intentionally runtime-only: after actor reconstruction no
+// waiter exists that could accept a restored answer.
+func (a *Actor) PendingForms() []events.FormRequestedBody {
+	a.pendingFormsMu.Lock()
+	defer a.pendingFormsMu.Unlock()
+	forms := make([]events.FormRequestedBody, 0, len(a.pendingFormRequests))
+	for _, id := range a.pendingFormOrder {
+		if form, ok := a.pendingFormRequests[id]; ok {
+			forms = append(forms, form)
+		}
+	}
+	return forms
+}
+
+func (a *Actor) setPendingFormRequest(form events.FormRequestedBody) {
+	a.pendingFormsMu.Lock()
+	if _, ok := a.pendingForms[form.FormID]; ok {
+		a.pendingFormRequests[form.FormID] = form
+	}
+	a.pendingFormsMu.Unlock()
+}
+
+func (a *Actor) deletePendingFormLocked(formID string) {
+	delete(a.pendingForms, formID)
+	delete(a.pendingFormRequests, formID)
+	for i, id := range a.pendingFormOrder {
+		if id == formID {
+			a.pendingFormOrder = append(a.pendingFormOrder[:i], a.pendingFormOrder[i+1:]...)
+			return
+		}
+	}
+}
+
 // ResolveForm satisfies the cardEmitter contract. It is also the
 // backing implementation for SubmitForm / CancelForm.
 func (a *Actor) ResolveForm(formID string, outcome FormOutcome) error {
 	a.pendingFormsMu.Lock()
 	ch, ok := a.pendingForms[formID]
 	if ok {
-		delete(a.pendingForms, formID)
+		a.deletePendingFormLocked(formID)
 	}
 	a.pendingFormsMu.Unlock()
 	if !ok {
@@ -253,6 +299,9 @@ func (a *Actor) WaitForForm(ctx context.Context, formID string) (FormOutcome, er
 func (a *Actor) prepareFormWait(formID string) chan FormOutcome {
 	ch := make(chan FormOutcome, 1)
 	a.pendingFormsMu.Lock()
+	if _, exists := a.pendingForms[formID]; !exists {
+		a.pendingFormOrder = append(a.pendingFormOrder, formID)
+	}
 	a.pendingForms[formID] = ch
 	a.pendingFormsMu.Unlock()
 	return ch
@@ -263,7 +312,7 @@ func (a *Actor) waitForRegisteredForm(ctx context.Context, formID string, ch cha
 	defer func() {
 		a.pendingFormsMu.Lock()
 		if current, ok := a.pendingForms[formID]; ok && current == ch {
-			delete(a.pendingForms, formID)
+			a.deletePendingFormLocked(formID)
 		}
 		a.pendingFormsMu.Unlock()
 	}()
@@ -959,8 +1008,10 @@ func (a *Actor) openInterrupts() []events.Interrupt {
 	a.pendingFormsMu.Lock()
 	defer a.pendingFormsMu.Unlock()
 	out := make([]events.Interrupt, 0, len(a.pendingForms))
-	for id := range a.pendingForms {
-		out = append(out, events.Interrupt{Type: "form", ID: id, Name: events.CustomFormRequested})
+	for _, id := range a.pendingFormOrder {
+		if _, ok := a.pendingForms[id]; ok {
+			out = append(out, events.Interrupt{Type: "form", ID: id, Name: events.CustomFormRequested})
+		}
 	}
 	return out
 }
@@ -989,9 +1040,11 @@ func (a *Actor) cancelPendingForms() {
 		ch chan FormOutcome
 	}
 	waiters := make([]pendingForm, 0, len(a.pendingForms))
-	for id, ch := range a.pendingForms {
-		delete(a.pendingForms, id)
-		waiters = append(waiters, pendingForm{id: id, ch: ch})
+	for _, id := range append([]string(nil), a.pendingFormOrder...) {
+		if ch, ok := a.pendingForms[id]; ok {
+			waiters = append(waiters, pendingForm{id: id, ch: ch})
+			a.deletePendingFormLocked(id)
+		}
 	}
 	a.pendingFormsMu.Unlock()
 

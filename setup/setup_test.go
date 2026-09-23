@@ -11,6 +11,7 @@ import (
 
 	coderagents "github.com/basenana/friday/coder/agents"
 	"github.com/basenana/friday/coder/configtools"
+	"github.com/basenana/friday/coder/worktreectx"
 	"github.com/basenana/friday/config"
 	coreagents "github.com/basenana/friday/core/agents"
 	"github.com/basenana/friday/core/api"
@@ -27,6 +28,79 @@ import (
 type recordingProviderClient struct {
 	mu       sync.Mutex
 	requests []providers.Request
+}
+
+type projectResourceProbeClient struct {
+	paths   map[string]string
+	mu      sync.Mutex
+	results map[string]*tools.Result
+}
+
+type projectAccessProbe struct {
+	name      string
+	tool      string
+	arguments map[string]interface{}
+}
+
+func (c *projectResourceProbeClient) Completion(ctx context.Context, req providers.Request) providers.Response {
+	definitions := make(map[string]*tools.Tool)
+	for _, definition := range req.ToolDefines() {
+		tool, ok := definition.(*tools.Tool)
+		if ok {
+			definitions[tool.Name] = tool
+		}
+	}
+	probes := []projectAccessProbe{
+		{name: "read_codebase", tool: "fs_read", arguments: map[string]interface{}{"path": c.paths["codebase"]}},
+		{name: "write_metadata", tool: "fs_write", arguments: map[string]interface{}{"path": c.paths["metadata"], "content": "changed"}},
+		{name: "write_checkout", tool: "fs_write", arguments: map[string]interface{}{"path": c.paths["checkout"], "content": "owned"}},
+		{name: "read_sibling", tool: "fs_read", arguments: map[string]interface{}{"path": c.paths["sibling"]}},
+		{name: "write_sibling", tool: "fs_write", arguments: map[string]interface{}{"path": c.paths["sibling"], "content": "shared"}},
+	}
+	if path := c.paths["git_config"]; path != "" {
+		probes = append(probes, projectAccessProbe{name: "write_git_config", tool: "fs_write", arguments: map[string]interface{}{"path": path, "content": "blocked"}})
+	}
+	if workdir := c.paths["shell_workdir"]; workdir != "" {
+		probes = append(probes,
+			projectAccessProbe{name: "shell_sibling", tool: "bash", arguments: map[string]interface{}{"command": "touch shell-owned.txt", "workdir": workdir}},
+			projectAccessProbe{name: "background_sibling", tool: "background_task", arguments: map[string]interface{}{"command": "touch background-owned.txt", "workdir": workdir}},
+		)
+	}
+	if path := c.paths["denied"]; path != "" {
+		probes = append(probes, projectAccessProbe{name: "read_denied", tool: "fs_read", arguments: map[string]interface{}{"path": path}})
+	}
+	for _, probe := range probes {
+		tool := definitions[probe.tool]
+		if tool == nil || tool.Handler == nil {
+			continue
+		}
+		result, err := tool.Handler(ctx, &tools.Request{Arguments: probe.arguments})
+		if err != nil {
+			result = tools.NewToolResultError(err.Error())
+		}
+		c.mu.Lock()
+		c.results[probe.name] = result
+		c.mu.Unlock()
+	}
+	resp := providers.NewCommonResponse()
+	resp.Stream <- providers.Delta{Content: "done"}
+	close(resp.Stream)
+	close(resp.Err)
+	return resp
+}
+
+func (c *projectResourceProbeClient) CompletionNonStreaming(context.Context, providers.Request) (string, error) {
+	return "done", nil
+}
+
+func (c *projectResourceProbeClient) StructuredPredict(context.Context, providers.Request, any) error {
+	return nil
+}
+
+func (c *projectResourceProbeClient) result(name string) *tools.Result {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.results[name]
 }
 
 func (c *recordingProviderClient) Completion(_ context.Context, req providers.Request) providers.Response {
@@ -154,6 +228,107 @@ func TestProjectPromptLayersPreserveUserMessage(t *testing.T) {
 		if message.Role == types.RoleAgent && (strings.Contains(message.Content, "# workspace") || strings.Contains(message.Content, canonicalRoot)) {
 			t.Fatalf("bootstrap persisted in durable history: %#v", agentCtx.Session.GetHistory())
 		}
+	}
+}
+
+func TestNewAgentProjectResourceAccessIsReadOnlyAndProjectCodeScoped(t *testing.T) {
+	base := t.TempDir()
+	checkout := filepath.Join(base, "checkout")
+	sibling := filepath.Join(base, "sibling")
+	resources := filepath.Join(base, "data", "projects", "project-id")
+	codebase := filepath.Join(resources, "codebase", "INDEX.md")
+	metadata := filepath.Join(resources, "project.json")
+	for _, dir := range []string{checkout, sibling, filepath.Dir(codebase)} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for path, content := range map[string]string{
+		codebase: "shared index", metadata: "metadata", filepath.Join(sibling, "secret.txt"): "sibling",
+	} {
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	cfg := config.DefaultConfig()
+	cfg.DataDir = filepath.Join(base, "data")
+	cfg.Workspace = filepath.Join(base, "workspace")
+	cfg.Memory.Enabled = false
+	sharedReadOnly := append([]string(nil), cfg.Sandbox.Sandbox.Filesystem.ReadOnly...)
+	sharedWrite := append([]string(nil), cfg.Sandbox.Sandbox.Filesystem.Write...)
+	store := file.NewFileSessionStore(cfg.SessionsPath())
+	mgr := sessions.NewManager(store, filepath.Join(cfg.DataDirPath(), "current"), "")
+	client := &projectResourceProbeClient{
+		paths: map[string]string{
+			"codebase": codebase, "metadata": metadata,
+			"checkout": filepath.Join(checkout, "owned.txt"),
+			"sibling":  filepath.Join(sibling, "secret.txt"),
+		},
+		results: make(map[string]*tools.Result),
+	}
+	pool := fallback.NewModelPool([]fallback.ModelEntry{{Client: client, Name: "probe"}})
+	agentCtx, err := NewAgent(mgr, cfg, WithModelPool(pool), WithTemporary(true), WithWorkdir(checkout), WithProjectResources(resources), WithProjectCodeRoot(base))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer agentCtx.Close()
+	if _, err := api.ReadAllContent(context.Background(), agentCtx.Chat(context.Background(), "probe access")); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, name := range []string{"read_codebase", "write_checkout", "read_sibling", "write_sibling"} {
+		if result := client.result(name); result == nil || result.IsError {
+			t.Fatalf("%s result = %#v, want success", name, result)
+		}
+	}
+	for _, name := range []string{"write_metadata"} {
+		if result := client.result(name); result == nil || !result.IsError {
+			t.Fatalf("%s result = %#v, want policy denial", name, result)
+		}
+	}
+	if got, err := os.ReadFile(metadata); err != nil || string(got) != "metadata" {
+		t.Fatalf("project metadata changed: %q, %v", got, err)
+	}
+	if got, err := os.ReadFile(filepath.Join(checkout, "owned.txt")); err != nil || string(got) != "owned" {
+		t.Fatalf("checkout write = %q, %v", got, err)
+	}
+	if got, err := os.ReadFile(filepath.Join(sibling, "secret.txt")); err != nil || string(got) != "shared" {
+		t.Fatalf("sibling write = %q, %v", got, err)
+	}
+	if len(cfg.Sandbox.Sandbox.Filesystem.ReadOnly) != len(sharedReadOnly) {
+		t.Fatalf("shared sandbox config mutated: %#v", cfg.Sandbox.Sandbox.Filesystem.ReadOnly)
+	}
+	if len(cfg.Sandbox.Sandbox.Filesystem.Write) != len(sharedWrite) {
+		t.Fatalf("shared sandbox write config mutated: %#v", cfg.Sandbox.Sandbox.Filesystem.Write)
+	}
+}
+
+func TestNewAgentInstallsWorktreeContextOnlyWhenConfigured(t *testing.T) {
+	base := t.TempDir()
+	cfg := config.DefaultConfig()
+	cfg.DataDir = filepath.Join(base, "data")
+	cfg.Workspace = filepath.Join(base, "workspace")
+	cfg.Memory.Enabled = false
+	store := file.NewFileSessionStore(cfg.SessionsPath())
+	mgr := sessions.NewManager(store, filepath.Join(cfg.DataDirPath(), "current"), "")
+	client := &recordingProviderClient{}
+	pool := fallback.NewModelPool([]fallback.ModelEntry{{Client: client, Name: "recording"}})
+	info := worktreectx.Context{
+		ProjectName: "project", ProjectRoot: base, WorktreeName: "task", Branch: "friday/task",
+		WorktreeRoot: base, SessionID: "session-task",
+	}
+	agentCtx, err := NewAgent(mgr, cfg, WithModelPool(pool), WithTemporary(true), WithWorkdir(base), WithWorktreeContext(info))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer agentCtx.Close()
+	req := providers.NewRequest("")
+	if err := agentCtx.Session.RunHooks(context.Background(), types.SessionHookBeforeModel, coresession.HookPayload{ModelRequest: req}); err != nil {
+		t.Fatal(err)
+	}
+	if len(req.History()) == 0 || !strings.Contains(req.History()[0].Content, "Worktree session: session-task") {
+		t.Fatalf("worktree context missing: %#v", req.History())
 	}
 }
 

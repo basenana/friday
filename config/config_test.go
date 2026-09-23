@@ -139,6 +139,49 @@ func TestLoadForDirDoesNotSearchParents(t *testing.T) {
 	}
 }
 
+func TestWorktreePathDefaultsToCurrentDirectory(t *testing.T) {
+	cwd := t.TempDir()
+	t.Chdir(cwd)
+
+	cfg := DefaultConfig()
+	if got, want := cfg.WorktreePath(), filepath.Join(cwd, ".friday", "worktrees"); got != want {
+		t.Fatalf("WorktreePath() = %q, want %q", got, want)
+	}
+	if cfg.Worktree.BranchPrefix != "friday/" {
+		t.Fatalf("worktree branch prefix = %q", cfg.Worktree.BranchPrefix)
+	}
+}
+
+func TestWorktreeConfigResolvesDirectoryAndAllowsEmptyPrefix(t *testing.T) {
+	configDir := t.TempDir()
+	cwd := t.TempDir()
+	t.Chdir(cwd)
+	path := filepath.Join(configDir, "friday.yaml")
+	writeTestConfig(t, path, "worktree:\n  directory: $WORKTREE_ROOT/linked\n  branch_prefix: \"\"\n")
+	t.Setenv("WORKTREE_ROOT", "relative")
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := cfg.WorktreePath(), filepath.Join(cwd, "relative", "linked"); got != want {
+		t.Fatalf("WorktreePath() = %q, want %q", got, want)
+	}
+	if cfg.Worktree.BranchPrefix != "" {
+		t.Fatalf("branch prefix = %q, want empty", cfg.Worktree.BranchPrefix)
+	}
+}
+
+func TestWorktreeConfigRejectsInvalidBranchPrefix(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	writeTestConfig(t, path, `{"worktree":{"branch_prefix":"bad..prefix/"}}`)
+
+	_, err := Load(path)
+	if err == nil || !strings.Contains(err.Error(), "worktree.branch_prefix") {
+		t.Fatalf("Load() error = %v, want worktree.branch_prefix validation", err)
+	}
+}
+
 func TestLoadForDirDoesNotHideBrokenProjectConfig(t *testing.T) {
 	home := t.TempDir()
 	project := t.TempDir()

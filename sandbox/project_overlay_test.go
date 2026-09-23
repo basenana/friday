@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -175,6 +176,68 @@ func TestProjectAllowPathStableUnderSymlink(t *testing.T) {
 	}
 	if filepath.Base(filepath.Dir(direct)) != project.ProjectID(canonicalRoot(t, real)) {
 		t.Fatalf("project dir = %q, want id %q", filepath.Base(filepath.Dir(direct)), project.ProjectID(canonicalRoot(t, real)))
+	}
+}
+
+func TestProjectAllowPathStableAcrossGitWorktrees(t *testing.T) {
+	repo := t.TempDir()
+	runOverlayGit(t, repo, "init", "-b", "main")
+	runOverlayGit(t, repo, "config", "user.name", "Friday Tests")
+	runOverlayGit(t, repo, "config", "user.email", "friday@example.invalid")
+	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("initial\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runOverlayGit(t, repo, "add", "README.md")
+	runOverlayGit(t, repo, "commit", "-m", "initial")
+	linked := filepath.Join(t.TempDir(), "linked")
+	runOverlayGit(t, repo, "worktree", "add", "-b", "feature", linked, "HEAD")
+	t.Cleanup(func() { _ = exec.Command("git", "-C", repo, "worktree", "remove", "--force", linked).Run() })
+
+	dataDir := t.TempDir()
+	mainPath, err := ProjectAllowPath(dataDir, repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	linkedPath, err := ProjectAllowPath(dataDir, linked)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mainPath != linkedPath {
+		t.Fatalf("linked checkout allow path = %q, want logical project path %q", linkedPath, mainPath)
+	}
+}
+
+func TestProjectAllowPathMigratesLegacyCheckoutGrantBeforeConfigLoad(t *testing.T) {
+	repo := t.TempDir()
+	runOverlayGit(t, repo, "init", "-b", "main")
+	dataDir := t.TempDir()
+	legacyID := project.ProjectID(canonicalRoot(t, repo))
+	legacyPath := filepath.Join(dataDir, "projects", legacyID, "sandbox.json")
+	if err := os.MkdirAll(filepath.Dir(legacyPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(legacyPath, []byte(`{"version":1,"allow":["gofmt"]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	stablePath, err := ProjectAllowPath(dataDir, repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stablePath == legacyPath {
+		t.Fatal("Git project still resolved to checkout-path identity")
+	}
+	allow, err := LoadProjectAllow(stablePath)
+	if err != nil || len(allow) != 1 || allow[0] != "gofmt" {
+		t.Fatalf("migrated allow = %#v, %v", allow, err)
+	}
+}
+
+func runOverlayGit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %s: %v: %s", strings.Join(args, " "), err, out)
 	}
 }
 

@@ -18,8 +18,10 @@ import (
 
 	"github.com/basenana/friday/bus"
 	coderagents "github.com/basenana/friday/coder/agents"
+	"github.com/basenana/friday/coder/worktreectx"
 	"github.com/basenana/friday/config"
 	coreactor "github.com/basenana/friday/core/actor"
+	"github.com/basenana/friday/core/actor/events"
 	"github.com/basenana/friday/core/collaboration"
 	"github.com/basenana/friday/core/logger"
 	"github.com/basenana/friday/core/planning"
@@ -42,6 +44,14 @@ type RegistryConfig struct {
 	// Workdir is the canonical runtime root used by file validation and agent
 	// tools. Empty preserves the legacy cwd fallback.
 	Workdir string
+	// ProjectResources is an explicit project-owned resource root exposed to
+	// this registry's agents as read-only. Empty preserves ordinary mode.
+	ProjectResources string
+	// ProjectCodeRoot is the logical project's shared writable code root.
+	// Relative tool paths remain anchored to Workdir.
+	ProjectCodeRoot string
+	// WorktreeContext enables immutable request-local worktree guidance.
+	WorktreeContext *worktreectx.Context
 	// IdleTimeout is how long an actor with no activity is kept alive before
 	// being shut down and evicted. Active turns, lifecycle leases, and running
 	// background tasks are never considered idle. Default 5m.
@@ -304,19 +314,27 @@ func (r *Registry) buildActor(sessionID string) (result *coreactor.Actor, result
 	client := r.models.NewClient(policy, providers.ClientPolicy{})
 	var agentCtx *setup.AgentContext
 	var err error
+	agentOptions := []setup.Option{
+		setup.WithProviderClient(client), setup.WithModelPool(r.models), setup.WithSessionPolicy(policy),
+		setup.WithSkillRegistry(r.skills), setup.WithAgentRegistry(r.agents), setup.WithMCPManager(r.mcp),
+		setup.WithWorkdir(r.workdir), setup.WithProjectResources(r.cfg.ProjectResources),
+		setup.WithProjectCodeRoot(r.cfg.ProjectCodeRoot), setup.WithConfigTools(r.cfg.ConfigTools),
+	}
+	if r.cfg.WorktreeContext != nil {
+		agentOptions = append(agentOptions, setup.WithWorktreeContext(*r.cfg.WorktreeContext))
+	}
 	if r.catalog != nil {
 		lifecycle, openErr := r.catalog.OpenRoot(r.ctx, sessionID, client, coresession.WithState(workspace.NewFileState(r.appCfg.StatePath())))
 		if openErr != nil {
 			return nil, fmt.Errorf("open session lifecycle %s: %w", sessionID, openErr)
 		}
-		agentCtx, err = setup.NewAgentWithLifecycle(lifecycle, r.sessMgr, r.appCfg,
-			setup.WithProviderClient(client), setup.WithModelPool(r.models), setup.WithSessionPolicy(policy), setup.WithSkillRegistry(r.skills), setup.WithAgentRegistry(r.agents), setup.WithMCPManager(r.mcp), setup.WithWorkdir(r.workdir), setup.WithConfigTools(r.cfg.ConfigTools))
+		agentCtx, err = setup.NewAgentWithLifecycle(lifecycle, r.sessMgr, r.appCfg, agentOptions...)
 		if err != nil {
 			_ = lifecycle.Close()
 		}
 	} else {
-		agentCtx, err = setup.NewAgent(r.sessMgr, r.appCfg, setup.WithSessionID(sessionID),
-			setup.WithProviderClient(client), setup.WithModelPool(r.models), setup.WithSessionPolicy(policy), setup.WithSkillRegistry(r.skills), setup.WithAgentRegistry(r.agents), setup.WithMCPManager(r.mcp), setup.WithWorkdir(r.workdir), setup.WithConfigTools(r.cfg.ConfigTools))
+		agentOptions = append(agentOptions, setup.WithSessionID(sessionID))
+		agentCtx, err = setup.NewAgent(r.sessMgr, r.appCfg, agentOptions...)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("setup agent for session %s: %w", sessionID, err)
@@ -397,6 +415,33 @@ func (r *Registry) AcquireLifecycle(sessionID string) (sessions.SessionLifecycle
 	var once sync.Once
 	release := func() { once.Do(e.release) }
 	return lifecycle, release, nil
+}
+
+// SessionRunning reports whether the retained actor currently owns an active
+// turn. It is a snapshot used when a UI re-subscribes to a background runtime.
+func (r *Registry) SessionRunning(sessionID string) bool {
+	r.mu.RLock()
+	e := r.entries[sessionID]
+	r.mu.RUnlock()
+	return e != nil && !e.stopped.Load() && e.activeTurns.Load() > 0
+}
+
+// SessionWaitingForInput reports whether the retained actor owns a live form
+// waiter. Unlike persisted form events, this proves the form can still accept
+// a response after the TUI switches back to the session.
+func (r *Registry) SessionWaitingForInput(sessionID string) bool {
+	return len(r.SessionPendingForms(sessionID)) > 0
+}
+
+// SessionPendingForms returns descriptions backed by live actor waiters.
+func (r *Registry) SessionPendingForms(sessionID string) []events.FormRequestedBody {
+	r.mu.RLock()
+	e := r.entries[sessionID]
+	r.mu.RUnlock()
+	if e == nil || e.stopped.Load() || e.actor == nil {
+		return nil
+	}
+	return e.actor.PendingForms()
 }
 
 // DispatchInput delivers one actor inbox envelope. Turn-starting text input

@@ -15,6 +15,7 @@ import (
 	"github.com/basenana/friday/core/actor/events"
 	"github.com/basenana/friday/core/providers"
 	"github.com/basenana/friday/core/providers/fallback"
+	"github.com/basenana/friday/core/tools"
 	"github.com/basenana/friday/core/types"
 	"github.com/basenana/friday/sandbox"
 	"github.com/basenana/friday/sessions"
@@ -81,6 +82,40 @@ func TestEnsureIndexSessionRemovesRootWhenSessionPointerCannotBeWritten(t *testi
 	}
 	if len(items) != 0 {
 		t.Fatalf("orphaned Index roots: %+v", items)
+	}
+}
+
+func TestCodebaseProjectResourceWriterUsesDedicatedClonedPolicy(t *testing.T) {
+	runtime, _ := newRuntimeTestFixture(t)
+	if err := runtime.store.ensureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	sharedWrite := append([]string(nil), runtime.opts.Sandbox.Sandbox.Filesystem.Write...)
+	if err := runtime.ensureRunner(); err != nil {
+		t.Fatal(err)
+	}
+	if len(runtime.opts.Sandbox.Sandbox.Filesystem.Write) != len(sharedWrite) {
+		t.Fatalf("shared sandbox write roots mutated: %#v", runtime.opts.Sandbox.Sandbox.Filesystem.Write)
+	}
+	var writeTool *tools.Tool
+	for _, tool := range runtime.runner.indexTools {
+		if tool.Name == sandbox.FsWriteToolName {
+			writeTool = tool
+			break
+		}
+	}
+	if writeTool == nil {
+		t.Fatal("Codebase runner is missing fs_write")
+	}
+	target := filepath.Join(runtime.store.dir, "knowledge", "shared.md")
+	result, err := writeTool.Handler(context.Background(), &tools.Request{Arguments: map[string]interface{}{
+		"path": target, "content": "shared knowledge",
+	}})
+	if err != nil || result == nil || result.IsError {
+		t.Fatalf("Codebase write result = %#v, %v", result, err)
+	}
+	if got, err := os.ReadFile(target); err != nil || string(got) != "shared knowledge" {
+		t.Fatalf("Codebase write = %q, %v", got, err)
 	}
 }
 

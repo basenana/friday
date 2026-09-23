@@ -1,8 +1,11 @@
 package sandbox
 
 import (
+	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -106,6 +109,76 @@ func TestCompileFilesystemPolicyRejectsBadGlob(t *testing.T) {
 
 	if _, err := compileFilesystemPolicy(cfg, workdir, workdir); err == nil {
 		t.Fatal("expected malformed glob error")
+	}
+}
+
+func TestCompileFilesystemPolicyResolvesProtectedGitPathsInLinkedWorktree(t *testing.T) {
+	root := canonicalTestDir(t)
+	repository := filepath.Join(root, "repository")
+	checkout := filepath.Join(root, "checkout")
+	if err := os.Mkdir(repository, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runGitForPolicyTest(t, repository, "init", "-q")
+	runGitForPolicyTest(t, repository, "-c", "user.name=Friday Test", "-c", "user.email=friday@example.com", "commit", "--allow-empty", "-qm", "initial")
+	runGitForPolicyTest(t, repository, "worktree", "add", "-q", "-b", "linked", checkout)
+
+	policy, err := compileFilesystemPolicy(DefaultConfig(), checkout, root)
+	if err != nil {
+		t.Fatalf("compile policy for linked worktree: %v", err)
+	}
+	assertPolicyRule(t, policy, filepath.Join(repository, ".git", "hooks"), filesystemRuleProtected, filesystemObjectDirectory)
+	assertPolicyRule(t, policy, filepath.Join(repository, ".git", "config"), filesystemRuleProtected, filesystemObjectFile)
+
+	cfg := DefaultConfig()
+	cfg.Sandbox.Filesystem.Write = append(cfg.Sandbox.Filesystem.Write, repository)
+	fs := NewLocalFileSystem(NewExecutor(cfg), checkout)
+	for _, protected := range []string{
+		filepath.Join(repository, ".git", "config"),
+		filepath.Join(repository, ".git", "hooks", "new-hook"),
+	} {
+		if _, err := fs.Resolve(context.Background(), protected, FileAccessWrite); err == nil {
+			t.Fatalf("native filesystem write allowed protected linked-worktree Git path %q", protected)
+		}
+	}
+
+	mainPolicy, err := compileFilesystemPolicy(DefaultConfig(), repository, root)
+	if err != nil {
+		t.Fatalf("compile policy for main checkout: %v", err)
+	}
+	assertPolicyRule(t, mainPolicy, filepath.Join(repository, ".git", "hooks"), filesystemRuleProtected, filesystemObjectDirectory)
+	assertPolicyRule(t, mainPolicy, filepath.Join(repository, ".git", "config"), filesystemRuleProtected, filesystemObjectFile)
+}
+
+func runGitForPolicyTest(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, output)
+	}
+}
+
+func TestCloneConfigForProjectResourcesDoesNotMutateSharedPolicy(t *testing.T) {
+	cfg := DefaultConfig()
+	sharedReadOnly := append([]string(nil), cfg.Sandbox.Filesystem.ReadOnly...)
+	sharedWrite := append([]string(nil), cfg.Sandbox.Filesystem.Write...)
+
+	cloned := CloneConfig(cfg)
+	cloned.Sandbox.Filesystem.ReadOnly = append(cloned.Sandbox.Filesystem.ReadOnly, "/project/resources")
+	cloned.Sandbox.Filesystem.Write = append(cloned.Sandbox.Filesystem.Write, "/project/codebase")
+
+	if len(cfg.Sandbox.Filesystem.ReadOnly) != len(sharedReadOnly) || len(cfg.Sandbox.Filesystem.Write) != len(sharedWrite) {
+		t.Fatalf("shared policy mutated: readonly=%#v write=%#v", cfg.Sandbox.Filesystem.ReadOnly, cfg.Sandbox.Filesystem.Write)
+	}
+	for i := range sharedReadOnly {
+		if cfg.Sandbox.Filesystem.ReadOnly[i] != sharedReadOnly[i] {
+			t.Fatalf("shared readonly[%d] = %q, want %q", i, cfg.Sandbox.Filesystem.ReadOnly[i], sharedReadOnly[i])
+		}
+	}
+	for i := range sharedWrite {
+		if cfg.Sandbox.Filesystem.Write[i] != sharedWrite[i] {
+			t.Fatalf("shared write[%d] = %q, want %q", i, cfg.Sandbox.Filesystem.Write[i], sharedWrite[i])
+		}
 	}
 }
 

@@ -53,10 +53,22 @@ func (s *FileStore) Ensure(meta Metadata) error {
 			if err := json.Unmarshal(data, &existing); err != nil {
 				return fmt.Errorf("decode project metadata: %w", err)
 			}
-			if existing.Version != 1 || existing.ID != meta.ID || existing.Root != meta.Root {
+			switch existing.Version {
+			case 1:
+				if existing.ID != meta.ID || existing.Root != meta.Root {
+					return fmt.Errorf("project identity collision for %s", meta.ID)
+				}
+				meta.CodebaseEnabled = existing.CodebaseEnabled
+				meta.CreatedAt = existing.CreatedAt
+				return writeAtomicJSON(s.metaPath(meta.ID), meta, 0o600)
+			case 2:
+				if existing.ID == meta.ID && existing.Name == meta.Name && existing.Repository == meta.Repository {
+					return nil
+				}
+			default:
 				return fmt.Errorf("project identity collision for %s", meta.ID)
 			}
-			return nil
+			return fmt.Errorf("project identity collision for %s", meta.ID)
 		}
 		if !os.IsNotExist(err) {
 			return err
@@ -77,7 +89,13 @@ func (s *FileStore) readMetadata(id string) (Metadata, error) {
 	if err := json.Unmarshal(data, &meta); err != nil {
 		return Metadata{}, fmt.Errorf("decode project metadata: %w", err)
 	}
-	if meta.Version != 1 || meta.ID != id || strings.TrimSpace(meta.Root) == "" {
+	if meta.ID != id || strings.TrimSpace(meta.Root) == "" {
+		return Metadata{}, fmt.Errorf("project metadata identity mismatch for %s", id)
+	}
+	if meta.Version == 1 {
+		return meta, nil
+	}
+	if meta.Version != 2 || strings.TrimSpace(meta.Name) == "" || strings.TrimSpace(meta.Repository) == "" {
 		return Metadata{}, fmt.Errorf("project metadata identity mismatch for %s", id)
 	}
 	return meta, nil

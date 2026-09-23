@@ -33,10 +33,11 @@ import (
 type selectorKind string
 
 const (
-	selectorResume selectorKind = "resume"
-	selectorModel  selectorKind = "model"
-	selectorEffort selectorKind = "effort"
-	selectorTasks  selectorKind = "tasks"
+	selectorResume   selectorKind = "resume"
+	selectorModel    selectorKind = "model"
+	selectorEffort   selectorKind = "effort"
+	selectorTasks    selectorKind = "tasks"
+	selectorWorktree selectorKind = "worktree"
 )
 
 type selectorItem struct {
@@ -140,6 +141,8 @@ func (m *model) updateSelector(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			task := item.data.(*sandbox.Task)
 			content := fmt.Sprintf("Status: %s\nPID: %d\nCommand: %s\n\n%s", task.Status, task.PID, task.Command, task.Output)
 			m.detail = newDetailState("task · "+shortID(task.ID), content, m.width, m.height)
+		case selectorWorktree:
+			return m, m.selectWorktree(item.value)
 		}
 	default:
 		if s.kind == selectorTasks && strings.EqualFold(key.String(), "x") && len(visible) > 0 {
@@ -304,6 +307,8 @@ func (m *model) openTasksSelector() {
 
 type commandConfirmation struct{ action, target, label string }
 
+const worktreeSessionActionUnavailable = "session command unavailable in worktree mode; use /worktree or /select"
+
 func (c *commandConfirmation) View(width int) string {
 	prompt := fmt.Sprintf("%s session %s?", titleWord(c.action), c.label)
 	if c.action == "stop" {
@@ -340,6 +345,24 @@ func (m *model) updateCommandConfirmation(key tea.KeyPressMsg) (tea.Model, tea.C
 		} else {
 			m.appendBlock(chatBlock{kind: blockDivider, content: "stopped all background tasks"})
 		}
+		return m, nil
+	}
+	if m.worktreeMode {
+		if c.action == "archive" {
+			return m, m.archiveCurrentWorktree()
+		}
+		if c.action == "delete" && m.worktreeRuntime != nil && m.worktreeRuntime.main {
+			if c.target == m.sessionID {
+				return m, m.changeMainWorktreeSession("", "delete")
+			}
+			if err := m.sessMgr.DeleteRoot(c.target); err != nil {
+				m.appendBlock(chatBlock{kind: blockError, content: "delete: " + err.Error()})
+			} else {
+				m.appendBlock(chatBlock{kind: blockDivider, content: "deleted session · " + shortID(c.target)})
+			}
+			return m, nil
+		}
+		m.appendBlock(chatBlock{kind: blockError, content: worktreeSessionActionUnavailable})
 		return m, nil
 	}
 	if m.codebaseRuntime != nil && c.target == m.codebaseRuntime.IndexSessionID() {

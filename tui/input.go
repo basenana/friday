@@ -271,7 +271,43 @@ func (m *model) applyLifecycleAction(action codercmds.Action) (bool, tea.Cmd) {
 }
 
 func (m *model) applySessionAction(action codercmds.Action) (bool, tea.Cmd) {
+	if m.worktreeMode && (m.worktreeRuntime == nil || !m.worktreeRuntime.main) {
+		switch action.(type) {
+		case codercmds.ClearSessionAction, codercmds.OpenResumeAction, codercmds.ResumeSessionAction, codercmds.DeleteSessionAction:
+			m.appendBlock(chatBlock{kind: blockError, content: worktreeSessionActionUnavailable})
+			return true, nil
+		}
+	}
 	switch action := action.(type) {
+	case codercmds.CreateWorktreeAction:
+		if !m.worktreeMode {
+			m.appendBlock(chatBlock{kind: blockError, content: "worktree requires a Git repository"})
+			return true, nil
+		}
+		if strings.TrimSpace(action.Requirement) == "" {
+			m.worktreeRequirement = true
+			m.textarea.Placeholder = "Describe the requirement for the new worktree…"
+			m.appendBlock(chatBlock{kind: blockDivider, content: "new worktree · describe the requirement"})
+			m.layout()
+			return true, nil
+		}
+		return true, m.createWorktree(action.Requirement)
+	case codercmds.SelectWorktreeAction:
+		if !m.worktreeMode {
+			if strings.TrimSpace(action.Target) == "" {
+				return m.applySessionAction(codercmds.OpenResumeAction{})
+			}
+			return m.applySessionAction(codercmds.ResumeSessionAction{Target: action.Target})
+		}
+		m.worktreeRequirement = false
+		m.textarea.Placeholder = "Send a message…  / commands · Ctrl+P image · Ctrl+G editor"
+		if strings.TrimSpace(action.Target) == "" {
+			m.openWorktreeSelector()
+			return true, nil
+		}
+		return true, m.selectWorktree(action.Target)
+	case codercmds.ReviewWorktreeAction:
+		return true, m.openWorktreeReview()
 	case codercmds.CompactSessionAction:
 		m.manualCompacting = true
 		m.layout()
@@ -297,6 +333,9 @@ func (m *model) applySessionAction(action codercmds.Action) (bool, tea.Cmd) {
 		}
 		return true, nil
 	case codercmds.ClearSessionAction:
+		if m.worktreeMode && m.worktreeRuntime != nil && m.worktreeRuntime.main {
+			return true, m.changeMainWorktreeSession("", "clear")
+		}
 		if m.projectMgr != nil {
 			newID, err := m.createProjectRoot(true)
 			if err != nil {
@@ -325,6 +364,14 @@ func (m *model) applySessionAction(action codercmds.Action) (bool, tea.Cmd) {
 		m.openResumeSelector()
 		return true, nil
 	case codercmds.ResumeSessionAction:
+		if m.worktreeMode && m.worktreeRuntime != nil && m.worktreeRuntime.main {
+			meta, err := m.sessMgr.ResolveActiveSession(action.Target)
+			if err != nil {
+				m.appendBlock(chatBlock{kind: blockError, content: err.Error()})
+				return true, nil
+			}
+			return true, m.changeMainWorktreeSession(meta.ID, "resume")
+		}
 		var meta *sessions.SessionMeta
 		var err error
 		if m.projectMgr != nil {
@@ -357,6 +404,10 @@ func (m *model) applySessionAction(action codercmds.Action) (bool, tea.Cmd) {
 		}
 		return true, nil
 	case codercmds.ArchiveSessionAction:
+		if m.worktreeMode && strings.TrimSpace(action.Target) != "" {
+			m.appendBlock(chatBlock{kind: blockError, content: "worktree /archive only archives the current worktree"})
+			return true, nil
+		}
 		m.requestSessionConfirmation("archive", action.Target)
 		return true, nil
 	case codercmds.DeleteSessionAction:
@@ -483,7 +534,7 @@ func (m *model) dispatchIfIdle() (tea.Model, tea.Cmd) {
 }
 
 func (m *model) canDispatchQueued() bool {
-	return !m.running && !m.dispatching && !m.reconciling && !m.planCompacting && !m.manualCompacting && len(m.queued) > 0 && m.form == nil && m.planHandoff == nil &&
+	return !m.running && !m.dispatching && !m.reconciling && !m.planCompacting && !m.manualCompacting && !m.worktreeChanging && len(m.queued) > 0 && m.form == nil && m.planHandoff == nil &&
 		m.commandConfirm == nil && m.selector == nil && m.detail == nil && m.confirm == nil
 }
 
@@ -609,6 +660,16 @@ func (m *model) switchSessionPrepared(newID string, prepared *codebasepkg.Sessio
 		abortCodebase()
 		return nil, sessionSwitchError(fmt.Errorf("restore session %s: %w", shortID(newID), err), rollbackCreated())
 	}
+	var promptHistory []string
+	if m.projectMgr != nil {
+		promptHistory, err = loadSessionPromptHistory(m.projectMgr, newID)
+		if err != nil {
+			newFeed.Close()
+			newRelease()
+			m.registry.Shutdown(newID)
+			return nil, sessionSwitchError(fmt.Errorf("load session history %s: %w", shortID(newID), err), rollbackCreated())
+		}
+	}
 	if m.projectMgr != nil {
 		err = m.projectMgr.Activate(newID)
 	} else {
@@ -628,6 +689,7 @@ func (m *model) switchSessionPrepared(newID string, prepared *codebasepkg.Sessio
 	oldFeed, oldRelease := m.feed, m.sessionRelease
 	m.loopManager.Detach(oldID)
 	m.sessionID, m.feed, m.sessionRelease = newID, newFeed, newRelease
+	m.advanceDispatchForeground()
 	m.resetEventTracking()
 	m.attachments = nil
 	m.composerGeneration++
@@ -647,6 +709,12 @@ func (m *model) switchSessionPrepared(newID string, prepared *codebasepkg.Sessio
 	m.queued = nil
 	m.resetStreaming()
 	m.applyProjection(projection)
+	if m.projectMgr != nil {
+		m.promptHistory = append([]string(nil), promptHistory...)
+	}
+	m.historyIndex = -1
+	m.textarea.Reset()
+	m.menu = menuState{}
 	m.restorePlanHandoff()
 	if lifecycle, ok := m.registry.Lifecycle(newID); ok && lifecycle.Current() != nil {
 		if err := m.loopManager.Attach(context.Background(), lifecycle.Current()); err != nil {
