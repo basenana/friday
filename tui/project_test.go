@@ -164,8 +164,9 @@ func TestProjectClearCreatesReferencedRoot(t *testing.T) {
 	}
 }
 
-func TestProjectPromptHistoryPersistsAcrossSessions(t *testing.T) {
+func TestProjectPromptHistoryIsScopedToSelectedSession(t *testing.T) {
 	m, manager, _ := newLoadedProjectTestModel(t)
+	initialID := m.sessionID
 	if _, err := manager.AppendUserHistory("first prompt", m.sessionID, time.Now()); err != nil {
 		t.Fatal(err)
 	}
@@ -199,8 +200,13 @@ func TestProjectPromptHistoryPersistsAcrossSessions(t *testing.T) {
 	if _, err := m.switchSession(newID); err != nil {
 		t.Fatal(err)
 	}
-	if len(m.promptHistory) != 2 || m.promptHistory[0] != "first prompt" || m.promptHistory[1] != "second prompt" {
-		t.Fatalf("history after session switch = %#v", m.promptHistory)
+	if len(m.promptHistory) != 0 {
+		t.Fatalf("new session inherited previous session history: %#v", m.promptHistory)
+	}
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyUp})
+	m = updated.(*model)
+	if got := m.textarea.Value(); got != "" {
+		t.Fatalf("up after session switch restored previous session prompt %q", got)
 	}
 
 	m.textarea.SetValue("/unknown")
@@ -212,8 +218,14 @@ func TestProjectPromptHistoryPersistsAcrossSessions(t *testing.T) {
 	m.handleCustomEvent(events.NewEvent(events.KindCustom, "accepted-queued").WithName(events.CustomInputAccepted).WithPayload(events.InputAcceptedBody{
 		TurnID: "accepted-queued", Text: "queued prompt",
 	}))
-	if len(m.promptHistory) != 4 {
+	if len(m.promptHistory) != 2 {
 		t.Fatalf("accepted event duplicated project prompt history: %#v", m.promptHistory)
+	}
+	if _, err := m.switchSession(initialID); err != nil {
+		t.Fatal(err)
+	}
+	if len(m.promptHistory) != 2 || m.promptHistory[0] != "first prompt" || m.promptHistory[1] != "second prompt" {
+		t.Fatalf("restored session history = %#v", m.promptHistory)
 	}
 
 	entries, err := manager.LoadUserHistory()

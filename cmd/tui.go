@@ -1,12 +1,16 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"os"
 
 	"github.com/spf13/cobra"
 
 	projectpkg "github.com/basenana/friday/coder/project"
+	"github.com/basenana/friday/config"
+	"github.com/basenana/friday/sessions"
 	"github.com/basenana/friday/tui"
 )
 
@@ -28,12 +32,38 @@ Features:
 		if err != nil {
 			return fmt.Errorf("get project directory: %w", err)
 		}
-		proj, err := projectpkg.Open(cwd, projectpkg.NewFileStore(cfg.ProjectsPath()))
-		if err != nil {
+		return runTUI(cmd.Context(), cwd, tuiSessionID, sessMgr, cfg, tui.RunProject, func(cfg *config.Config, cwd string) error {
+			return tui.RunWorktree(sessMgr, cfg, cwd)
+		})
+	},
+}
+
+func runTUI(
+	ctx context.Context,
+	cwd, sessionID string,
+	manager *sessions.Manager,
+	cfg *config.Config,
+	runProject func(*projectpkg.Manager, *config.Config, string) error,
+	runWorktree func(*config.Config, string) error,
+) error {
+	gitProject, err := classifyProjectDirectory(ctx, cwd)
+	if err != nil {
+		return fmt.Errorf("classify project directory: %w", err)
+	}
+	if gitProject {
+		if sessionID != "" {
+			return errors.New("--session is unavailable in Git worktree mode; use /select to choose a worktree")
+		}
+		if _, err := prepareLogicalProject(ctx, cwd, cfg); err != nil {
 			return fmt.Errorf("open project: %w", err)
 		}
-		return tui.RunProject(projectpkg.NewManager(proj, sessMgr), cfg, tuiSessionID)
-	},
+		return runWorktree(cfg, cwd)
+	}
+	proj, err := prepareLogicalProject(ctx, cwd, cfg)
+	if err != nil {
+		return fmt.Errorf("open project: %w", err)
+	}
+	return runProject(projectpkg.NewManager(proj, manager), cfg, sessionID)
 }
 
 func init() {

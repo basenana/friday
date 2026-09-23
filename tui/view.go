@@ -197,6 +197,9 @@ func (m *model) rebuildTranscript(atBottom bool) {
 // while a run or compaction is in flight. It lives outside the viewport so
 // the transcript itself stays clean for dirty-flag caching.
 func (m *model) renderActivityLine() string {
+	if m.worktreeChanging {
+		return accentStyle.Render(m.spinner.View() + " preparing worktree…")
+	}
 	if m.running {
 		label := m.runActivity
 		if label == "" {
@@ -315,7 +318,11 @@ func (m *model) View() tea.View {
 		m.rebuildTranscript(wasAtBottom)
 	}
 
-	parts := []string{m.viewport.View()}
+	parts := make([]string, 0, 10)
+	if tabs := m.renderWorktreeTabBar(); tabs != "" {
+		parts = append(parts, tabs)
+	}
+	parts = append(parts, m.viewport.View())
 	if activity := m.renderActivityLine(); activity != "" {
 		parts = append(parts, activity)
 	}
@@ -415,6 +422,9 @@ func (m *model) layout() {
 	composerLines := max(m.textarea.Height(), 1)
 	statusLines := max(lipgloss.Height(m.renderStatus()), 1)
 	extra := composerLines + 2 + statusLines // input border + wrapped status
+	if m.worktreeMode && len(m.worktreeTabs) > 0 {
+		extra += 3
+	}
 	if attachments := m.renderAttachments(); attachments != "" {
 		extra += lipgloss.Height(attachments)
 	}

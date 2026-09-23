@@ -135,8 +135,7 @@ func applyProjectSandboxAllow(cfg *Config, cwd string) error {
 	}
 	allowPath, err := sandbox.ProjectAllowPath(cfg.DataDirPath(), cwd)
 	if err != nil {
-		// No usable project root (for example a vanished cwd); skip silently.
-		return nil
+		return fmt.Errorf("resolve project sandbox allowlist: %w", err)
 	}
 	allow, err := sandbox.LoadProjectAllow(allowPath)
 	if err != nil {
@@ -275,7 +274,31 @@ func (c *Config) validate() error {
 			return err
 		}
 	}
+	if !validBranchPrefix(c.Worktree.BranchPrefix) {
+		return fmt.Errorf("invalid worktree.branch_prefix %q: must form a valid Git branch name", c.Worktree.BranchPrefix)
+	}
 	return nil
+}
+
+func validBranchPrefix(prefix string) bool {
+	name := prefix + "probe"
+	if name == "" || strings.HasPrefix(name, "/") || strings.HasSuffix(name, "/") ||
+		strings.HasPrefix(name, ".") || strings.HasSuffix(name, ".") ||
+		strings.Contains(name, "//") || strings.Contains(name, "..") ||
+		strings.Contains(name, "@{") || strings.HasSuffix(name, ".lock") {
+		return false
+	}
+	for _, r := range name {
+		if r < 0x20 || r == 0x7f || strings.ContainsRune(" ~^:?*[\\", r) {
+			return false
+		}
+	}
+	for _, part := range strings.Split(name, "/") {
+		if part == "" || strings.HasPrefix(part, ".") || strings.HasSuffix(part, ".lock") {
+			return false
+		}
+	}
+	return true
 }
 
 func (c *Config) expandEnv() {
@@ -285,6 +308,7 @@ func (c *Config) expandEnv() {
 	}
 	c.DataDir = expandEnvStr(c.DataDir)
 	c.Workspace = expandEnvStr(c.Workspace)
+	c.Worktree.Directory = expandEnvStr(c.Worktree.Directory)
 	expandModelEnv(c.ImageModel)
 }
 
@@ -345,6 +369,18 @@ func (c *Config) ResolvePath(path string) string {
 
 func (c *Config) DataDirPath() string {
 	return c.ResolvePath(c.DataDir)
+}
+
+func (c *Config) WorktreePath() string {
+	path := c.ResolvePath(c.Worktree.Directory)
+	if filepath.IsAbs(path) {
+		return filepath.Clean(path)
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return filepath.Clean(path)
+	}
+	return abs
 }
 
 func (c *Config) WorkspacePath() string {

@@ -160,16 +160,23 @@ func bashDenialResult(result *Result, err error) *tools.Result {
 
 // resolveToolWorkdir resolves the effective workdir for a tool call: the
 // per-call "workdir" argument takes precedence over the base workdir, and the
-// result is always validated (exists, is a directory, absolute). The resolved
-// workdir must stay inside the agent's base workdir so a model-controlled
-// value cannot point the sandbox at arbitrary host directories.
+// result is always validated (exists, is a directory, absolute). Generic
+// callers stay inside the base workdir; executor-backed tools may additionally
+// use an explicit sandbox write root such as a worktree's project code root.
 func resolveToolWorkdir(base string, args map[string]interface{}) (string, error) {
 	return resolveToolWorkdirWithPolicy(base, args, false)
 }
 
 func resolveExecutorToolWorkdir(exec *Executor, base string, args map[string]interface{}) (string, error) {
 	disabled := exec != nil && exec.config != nil && exec.config.IsolationDisabled()
-	return resolveToolWorkdirWithPolicy(base, args, disabled)
+	workdir, err := resolveToolWorkdirWithPolicy(base, args, true)
+	if err != nil || disabled {
+		return workdir, err
+	}
+	if err := validateResolvedToolPath(exec.config, base, workdir, fsAccessWrite); err != nil {
+		return "", fmt.Errorf("invalid workdir: %w", err)
+	}
+	return workdir, nil
 }
 
 func resolveToolWorkdirWithPolicy(base string, args map[string]interface{}, isolationDisabled bool) (string, error) {

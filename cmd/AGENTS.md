@@ -13,7 +13,9 @@ commands share state initialized in `root.go`'s `PersistentPreRunE`.
 | `root.go` | `rootCmd` + `PersistentPreRunE`: load config (`config.LoadForDir`), resolve `-w/--workspace` override, derive TTY (via `tty` subprocess or `FRIDAY_TTY` env), build `sessions.Manager`; `PersistentPostRun` syncs/closes loggers |
 | `chat.go` | `friday chat [message]`: combine args + piped stdin, mutual-exclusion flag validation (`--session` vs `--isolate`/`--temporary`), `--image` ref normalization (URL passthrough; local file → abs path + MIME probe for jpeg/png/gif/webp), stream via `setup.PrintResponse` |
 | `session.go` | `friday sessions` subtree: `list`, `new`, `current`, `use`, `show`, `alias`, `archive`, `unarchive`, `archived`, `delete`, `compact` (ID or alias resolution) |
-| `tui.go` | `friday tui`: opens project (`projectpkg.Open`) and launches `tui.RunProject` |
+| `tui.go` | `friday tui`: Git directories launch the main worktree through `tui.RunWorktree`; non-Git directories retain `tui.RunProject` and `--session` |
+| `project.go` | Opens the logical project shared by all Git worktrees and migrates legacy worktree metadata |
+| `worktrees.go` | `friday worktrees list/remove`: inspect or remove project worktrees; removal archives the associated session and optionally deletes the branch |
 | `daemon.go` | `friday daemon`: session catalog + actor registry (`AgentPlanEntry=true`, `ConfigTools=true`, `Catalog=sessMgr`), runs `fridaydaemon.Server` on `--port` (default 8999), graceful shutdown on SIGINT/SIGTERM with 10s timeout |
 | `heartbeat.go` | `friday heartbeat`: reads workspace `HEARTBEAT.md`, exits if empty, else sends to current session's chat |
 | `sunrise.go` | `friday sunrise`: daily bootstrap — lists active sessions, processes pre-today sessions into memory (`memory.Processor.ProcessSession` on a `setup.WithTemporary(true)` agent), creates a fresh isolated session as current |
@@ -48,6 +50,7 @@ Chat flags: `--session/-s`, `--isolate/-i`, `--temporary/-t`, `--verbose/-v`, `-
 - `chat.go` arg/stdin combination: args only → args; stdin only → stdin; both → `args + "\n\n" + stdin`; neither → usage error.
 - `--image` local files are validated (MIME allowlist) before being sent to the agent; URLs pass through unchanged; `~/` is expanded.
 - `skills delete` deliberately fails for skills installed outside the writable workspace layer (e.g. HOME-installed skills while running in a project).
+- `friday tui` classifies the current directory before launch: Git metadata selects the worktree runtime and the main checkout; non-Git paths retain the session runtime. Git mode rejects `--session` and uses `/select` for worktree navigation.
 - `main.go` prints command errors to stderr and logs via the file logger; when `IS_SANDBOX=1` (friday itself is sandboxed) it logs that all sandbox guards are disabled.
 - `sunrise` compares dates on local-timezone `time.Now().Truncate(24h)`; no timezone normalization.
 

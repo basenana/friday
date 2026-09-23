@@ -191,12 +191,18 @@ friday chat "Write a Go HTTP server"
 
 ```bash
 friday tui
-# Resume a specific session
+# Resume a specific session in a non-Git directory
 friday tui --session <id>
 ```
 
-The TUI restores the session transcript, renders reasoning, tools, rich cards,
-and interactive forms, and supports Codex-style follow-ups:
+In a Git repository, the TUI opens the main worktree and keeps every
+non-removed worktree available as a tab. Use `/worktree [requirement]` to
+create a linked worktree and `/select [name|branch]` to switch worktrees. In a
+non-Git directory, the TUI keeps the session-based behavior and `/select`
+chooses a session; `--session` is supported only in this mode.
+
+The TUI restores transcripts, renders reasoning, tools, rich cards, and
+interactive forms, and supports Codex-style follow-ups:
 
 - `Enter` sends a prompt; while a task is running it steers the task immediately.
 - `Tab` completes slash commands; while running it queues the prompt for the next turn.
@@ -210,6 +216,7 @@ and interactive forms, and supports Codex-style follow-ups:
 | Area | Commands |
 |------|----------|
 | Session | `/clear`, `/resume [id\|name]`, `/rename <name>`, `/archive [id\|name]`, `/delete [id\|name]`, `/quit` |
+| Worktree | `/worktree [requirement]`, `/select [name\|branch]`, `/vscode` |
 | Collaboration | `/plan [task]`, `/plan off` |
 | Model and context | `/model [name]`, `/effort [default\|none\|low\|medium\|high\|xhigh\|max]`, `/status`, `/context`, `/compact` |
 | MCP | `/mcp`, `/mcp inspect <server>`, `/mcp trust <server>`, `/mcp untrust <server>`, `/mcp refresh [server]`, `/mcp reconnect <server>` |
@@ -224,6 +231,10 @@ the running actor. `/effort default` explicitly requests the provider default
 and emits no provider reasoning field. Choices are stored per session.
 `/resume` lists active sessions only; archived sessions remain available
 through the external `friday sessions` CLI.
+
+Outside the TUI, use `friday worktrees list` to inspect project worktrees and
+`friday worktrees remove <id>` to archive its session and remove its checkout.
+The branch is retained unless `--delete-branch` is supplied.
 
 #### Plan Mode
 

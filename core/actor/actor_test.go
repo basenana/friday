@@ -91,6 +91,42 @@ func TestActorPublishPersistsBeforeLiveDelivery(t *testing.T) {
 	<-done
 }
 
+func TestActorReportsPendingFormsUntilResolved(t *testing.T) {
+	a, _ := newTestActor(newMockAgent())
+	if a.HasPendingForms() {
+		t.Fatal("new actor reports a pending form")
+	}
+	a.prepareFormWait("form-waiting")
+	a.setPendingFormRequest(events.FormRequestedBody{
+		FormID: "form-waiting",
+		Schema: map[string]any{"title": "Confirm", "fields": []any{}},
+	})
+	a.prepareFormWait("form-second")
+	a.setPendingFormRequest(events.FormRequestedBody{FormID: "form-second", Schema: map[string]any{"title": "Second", "fields": []any{}}})
+	if !a.HasPendingForms() {
+		t.Fatal("actor did not report its pending form")
+	}
+	pending := a.PendingForms()
+	if len(pending) != 2 || pending[0].FormID != "form-waiting" || pending[0].Schema["title"] != "Confirm" || pending[1].FormID != "form-second" {
+		t.Fatalf("pending form details = %#v", pending)
+	}
+	if err := a.CancelForm("form-waiting"); err != nil {
+		t.Fatal(err)
+	}
+	if !a.HasPendingForms() {
+		t.Fatal("actor lost the remaining pending form")
+	}
+	if pending := a.PendingForms(); len(pending) != 1 || pending[0].FormID != "form-second" {
+		t.Fatalf("remaining pending form details = %#v", pending)
+	}
+	if err := a.CancelForm("form-second"); err != nil {
+		t.Fatal(err)
+	}
+	if a.HasPendingForms() || len(a.PendingForms()) != 0 {
+		t.Fatal("actor still reports resolved forms")
+	}
+}
+
 // TestActor_MultiMessageDrain verifies that three quick user messages
 // are coalesced into a single turn and produce one RUN_STARTED with
 // Batch=3 followed by one RUN_FINISHED.

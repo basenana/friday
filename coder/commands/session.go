@@ -54,6 +54,46 @@ func (deleteCmd) Description() string { return "Permanently delete a session (cu
 func (deleteCmd) Metadata() Metadata {
 	return Metadata{Usage: "/delete [id|name]", Category: "Session", Policy: PolicyDeferred}
 }
+
+type worktreeCmd struct{}
+
+func (worktreeCmd) Name() string      { return "worktree" }
+func (worktreeCmd) Aliases() []string { return nil }
+func (worktreeCmd) Description() string {
+	return "Create and enter a worktree for a requirement"
+}
+func (worktreeCmd) Metadata() Metadata {
+	return Metadata{Usage: "/worktree [requirement]", Category: "Worktree", Policy: PolicyNavigation}
+}
+func (worktreeCmd) Execute(ctx *Context) (*Result, error) {
+	return ResultOf(CreateWorktreeAction{Requirement: strings.TrimSpace(ctx.RawArgs)}), nil
+}
+
+type selectWorktreeCmd struct{}
+
+func (selectWorktreeCmd) Name() string      { return "select" }
+func (selectWorktreeCmd) Aliases() []string { return nil }
+func (selectWorktreeCmd) Description() string {
+	return "Select a session, or a worktree in worktree mode"
+}
+func (selectWorktreeCmd) Metadata() Metadata {
+	return Metadata{Usage: "/select [name|branch]", Category: "Worktree", Policy: PolicyNavigation}
+}
+func (selectWorktreeCmd) Execute(ctx *Context) (*Result, error) {
+	return ResultOf(SelectWorktreeAction{Target: strings.TrimSpace(ctx.RawArgs)}), nil
+}
+
+type reviewWorktreeCmd struct{}
+
+func (reviewWorktreeCmd) Name() string        { return "vscode" }
+func (reviewWorktreeCmd) Aliases() []string   { return nil }
+func (reviewWorktreeCmd) Description() string { return "Open the current worktree in VS Code" }
+func (reviewWorktreeCmd) Metadata() Metadata {
+	return Metadata{Usage: "/vscode", Category: "Worktree", Policy: PolicyImmediate}
+}
+func (reviewWorktreeCmd) Execute(*Context) (*Result, error) {
+	return ResultOf(ReviewWorktreeAction{}), nil
+}
 func (deleteCmd) Execute(ctx *Context) (*Result, error) {
 	return ResultOf(DeleteSessionAction{Target: strings.TrimSpace(ctx.RawArgs)}), nil
 }
@@ -66,4 +106,7 @@ func RegisterSessionCommands(reg *Registry) {
 	reg.Register(renameCmd{})
 	reg.Register(archiveCmd{})
 	reg.Register(deleteCmd{})
+	reg.Register(worktreeCmd{})
+	reg.Register(reviewWorktreeCmd{})
+	reg.Register(selectWorktreeCmd{})
 }

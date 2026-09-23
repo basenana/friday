@@ -54,6 +54,160 @@ func TestCanonicalRootAndProjectID(t *testing.T) {
 	}
 }
 
+func TestProjectIDPrefixSanitizesPathUnsafeNames(t *testing.T) {
+	if got, want := ProjectIDPrefix(" repo\\name "), "repo_name"; got != want {
+		t.Fatalf("ProjectIDPrefix() = %q, want %q", got, want)
+	}
+}
+
+func TestOpenKeepsPathProjectIdentityForNonGitRoot(t *testing.T) {
+	root := t.TempDir()
+	canonical, err := CanonicalRoot(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := Open(root, NewFileStore(filepath.Join(t.TempDir(), "projects")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := p.ID(), ProjectID(canonical); got != want {
+		t.Fatalf("project ID = %q, want path identity %q", got, want)
+	}
+}
+
+func TestOpenWithIdentityPersistsVersion2ProjectMetadata(t *testing.T) {
+	storeRoot := filepath.Join(t.TempDir(), "projects")
+	identity := Identity{ID: "repository-a1b2c3", Name: "repository", Repository: "/repos/repository/.git"}
+	p, err := OpenWithIdentity(t.TempDir(), identity, NewFileStore(storeRoot))
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(storeRoot, p.ID(), "project.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var meta Metadata
+	if err := json.Unmarshal(data, &meta); err != nil {
+		t.Fatal(err)
+	}
+	if meta.Version != 2 || meta.ID != identity.ID || meta.Name != identity.Name || meta.Repository != identity.Repository {
+		t.Fatalf("metadata = %+v, want version-2 identity %+v", meta, identity)
+	}
+}
+
+func TestFileStoreMigrateIdentityPreservesWholeLegacyProject(t *testing.T) {
+	root := t.TempDir()
+	canonical, err := CanonicalRoot(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	projects := filepath.Join(t.TempDir(), "projects")
+	store := NewFileStore(projects)
+	legacy, err := Open(root, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := legacy.SetCodebaseEnabled(true); err != nil {
+		t.Fatal(err)
+	}
+	if err := legacy.AddSession("session-old"); err != nil {
+		t.Fatal(err)
+	}
+	if err := legacy.SetCurrentSession("session-old"); err != nil {
+		t.Fatal(err)
+	}
+	when := time.Unix(1_700_000_000, 0)
+	if _, err := legacy.AppendUserHistory("legacy prompt", "session-old", when); err != nil {
+		t.Fatal(err)
+	}
+	legacyDir := filepath.Join(projects, legacy.ID())
+	for path, content := range map[string]string{
+		filepath.Join(legacyDir, "codebase", "INDEX.md"): "legacy index\n",
+		filepath.Join(legacyDir, "sandbox.json"):         `{"version":1,"allow":["gofmt"]}`,
+	} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	identity := Identity{ID: "stable-repository-a1b2c3", Name: "repository", Repository: filepath.Join(canonical, ".git")}
+	if err := store.MigrateIdentity(root, identity); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MigrateIdentity(root, identity); err != nil {
+		t.Fatalf("idempotent migration: %v", err)
+	}
+	migrated, err := OpenWithIdentity(root, identity, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if enabled, err := migrated.CodebaseEnabled(); err != nil || !enabled {
+		t.Fatalf("Codebase enabled = %v, %v", enabled, err)
+	}
+	if current, err := migrated.CurrentSessionID(); err != nil || current != "session-old" {
+		t.Fatalf("current = %q, %v", current, err)
+	}
+	refs, err := migrated.ListSessionRefs()
+	if err != nil || len(refs) != 1 || refs[0].SessionID != "session-old" {
+		t.Fatalf("refs = %#v, %v", refs, err)
+	}
+	history, err := migrated.LoadUserHistory()
+	if err != nil || len(history) != 1 || history[0].Text != "legacy prompt" {
+		t.Fatalf("history = %#v, %v", history, err)
+	}
+	stableDir := filepath.Join(projects, identity.ID)
+	got, err := os.ReadFile(filepath.Join(stableDir, "codebase", "INDEX.md"))
+	if err != nil || string(got) != "legacy index\n" {
+		t.Fatalf("migrated Codebase index = %q, %v", got, err)
+	}
+	var grants struct {
+		Version int      `json:"version"`
+		Allow   []string `json:"allow"`
+	}
+	got, err = os.ReadFile(filepath.Join(stableDir, "sandbox.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(got, &grants); err != nil || grants.Version != 1 || len(grants.Allow) != 1 || grants.Allow[0] != "gofmt" {
+		t.Fatalf("migrated sandbox grants = %#v, %v", grants, err)
+	}
+	if _, err := os.Stat(legacyDir); err != nil {
+		t.Fatalf("legacy project should remain as a retry/recovery source: %v", err)
+	}
+}
+
+func TestOpenMigratesMatchingVersion1ProjectMetadata(t *testing.T) {
+	root := t.TempDir()
+	canonical, err := CanonicalRoot(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	storeRoot := filepath.Join(t.TempDir(), "projects")
+	id := ProjectID(canonical)
+	path := filepath.Join(storeRoot, id, "project.json")
+	legacy := Metadata{Version: 1, ID: id, Root: canonical, CodebaseEnabled: true, CreatedAt: time.Now().Add(-time.Hour), UpdatedAt: time.Now().Add(-time.Hour)}
+	if err := writeAtomicJSON(path, legacy, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Open(root, NewFileStore(storeRoot)); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var migrated Metadata
+	if err := json.Unmarshal(data, &migrated); err != nil {
+		t.Fatal(err)
+	}
+	if migrated.Version != 2 || migrated.Repository != canonical || !migrated.CodebaseEnabled {
+		t.Fatalf("migrated metadata = %+v", migrated)
+	}
+}
+
 func TestProjectCatalogScopesRootsAndCurrent(t *testing.T) {
 	data := t.TempDir()
 	rootA := filepath.Join(t.TempDir(), "repo")

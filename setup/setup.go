@@ -11,6 +11,7 @@ import (
 	"github.com/basenana/friday/coder/configtools"
 	"github.com/basenana/friday/coder/filetools"
 	coderloop "github.com/basenana/friday/coder/loop"
+	"github.com/basenana/friday/coder/worktreectx"
 	"github.com/basenana/friday/config"
 	"github.com/basenana/friday/core/agents"
 	"github.com/basenana/friday/core/api"
@@ -52,20 +53,23 @@ type AgentContext struct {
 type Option func(*options)
 
 type options struct {
-	sessionID      string
-	isolate        bool
-	temporary      bool
-	verbose        bool
-	extraTools     []*tools.Tool
-	providerClient providers.Client
-	modelPool      *fallback.ModelPool
-	sessionPolicy  *fallback.SessionPolicy
-	skillRegistry  skills.Catalog
-	agentRegistry  coderagents.SpecProvider
-	mcpManager     *fridaymcp.Manager
-	lifecycle      sessions.SessionLifecycle
-	workdir        string
-	configTools    bool
+	sessionID        string
+	isolate          bool
+	temporary        bool
+	verbose          bool
+	extraTools       []*tools.Tool
+	providerClient   providers.Client
+	modelPool        *fallback.ModelPool
+	sessionPolicy    *fallback.SessionPolicy
+	skillRegistry    skills.Catalog
+	agentRegistry    coderagents.SpecProvider
+	mcpManager       *fridaymcp.Manager
+	lifecycle        sessions.SessionLifecycle
+	workdir          string
+	projectResources string
+	projectCodeRoot  string
+	worktreeContext  *worktreectx.Context
+	configTools      bool
 }
 
 type SessionManager interface {
@@ -154,6 +158,25 @@ func WithMCPManager(manager *fridaymcp.Manager) Option {
 // root. Interactive project callers should always set it explicitly.
 func WithWorkdir(workdir string) Option {
 	return func(o *options) { o.workdir = workdir }
+}
+
+// WithProjectResources grants read-only access to one explicitly declared
+// Friday-managed project resource root.
+func WithProjectResources(path string) Option {
+	return func(o *options) { o.projectResources = path }
+}
+
+// WithProjectCodeRoot grants read-write access to the logical project's code
+// directory while keeping relative paths anchored to WithWorkdir.
+func WithProjectCodeRoot(path string) Option {
+	return func(o *options) { o.projectCodeRoot = path }
+}
+
+func WithWorktreeContext(info worktreectx.Context) Option {
+	return func(o *options) {
+		copy := info
+		o.worktreeContext = &copy
+	}
 }
 
 // WithConfigTools exposes agent_config and mcp_config. Interactive coder
@@ -353,6 +376,44 @@ func NewAgent(sessionMgr SessionManager, cfg *config.Config, opts ...Option) (*A
 	if sandboxCfg == nil {
 		sandboxCfg = sandbox.DefaultConfig()
 	}
+	if projectCodeRoot := strings.TrimSpace(options.projectCodeRoot); projectCodeRoot != "" {
+		projectCodeRoot, err = filepath.Abs(projectCodeRoot)
+		if err != nil {
+			return nil, fmt.Errorf("resolve project code root: %w", err)
+		}
+		projectCodeRoot, err = filepath.EvalSymlinks(projectCodeRoot)
+		if err != nil {
+			return nil, fmt.Errorf("resolve project code root symlinks: %w", err)
+		}
+		info, statErr := os.Stat(projectCodeRoot)
+		if statErr != nil {
+			return nil, fmt.Errorf("stat project code root: %w", statErr)
+		}
+		if !info.IsDir() {
+			return nil, fmt.Errorf("project code root is not a directory: %s", projectCodeRoot)
+		}
+		sandboxCfg = sandbox.CloneConfig(sandboxCfg)
+		sandboxCfg.Sandbox.Filesystem.Write = append(sandboxCfg.Sandbox.Filesystem.Write, projectCodeRoot)
+	}
+	if projectResources := strings.TrimSpace(options.projectResources); projectResources != "" {
+		projectResources, err = filepath.Abs(projectResources)
+		if err != nil {
+			return nil, fmt.Errorf("resolve project resources: %w", err)
+		}
+		projectResources, err = filepath.EvalSymlinks(projectResources)
+		if err != nil {
+			return nil, fmt.Errorf("resolve project resource symlinks: %w", err)
+		}
+		info, statErr := os.Stat(projectResources)
+		if statErr != nil {
+			return nil, fmt.Errorf("stat project resources: %w", statErr)
+		}
+		if !info.IsDir() {
+			return nil, fmt.Errorf("project resources are not a directory: %s", projectResources)
+		}
+		sandboxCfg = sandbox.CloneConfig(sandboxCfg)
+		sandboxCfg.Sandbox.Filesystem.ReadOnly = append(sandboxCfg.Sandbox.Filesystem.ReadOnly, projectResources)
+	}
 	sandboxExec := sandbox.NewExecutor(sandboxCfg)
 	// The project allow file lives under DataDir/projects/<projectID>/ on the
 	// HOME side; grants persist there and apply immediately via the executor's
@@ -366,11 +427,22 @@ func NewAgent(sessionMgr SessionManager, cfg *config.Config, opts ...Option) (*A
 	if err != nil {
 		return nil, fmt.Errorf("create file tools: %w", err)
 	}
+	var worktreeHook *worktreectx.Hook
+	if options.worktreeContext != nil {
+		worktreeHook, err = worktreectx.New(*options.worktreeContext)
+		if err != nil {
+			return nil, fmt.Errorf("create worktree context hook: %w", err)
+		}
+	}
 	contextHook := contextmgr.New(client, contextmgr.Config{
 		ContextWindow:      cfg.PrimaryModel().ContextWindow,
 		SessionMemoryStore: sessionMemoryStoreFromManager(sessionMgr),
 		ReservedTokens: func(sess *coreSession.Session) int64 {
-			return fileHook.ReservedTokens(sess) + approvedPlanHook.ReservedTokens(sess)
+			reserved := fileHook.ReservedTokens(sess) + approvedPlanHook.ReservedTokens(sess)
+			if worktreeHook != nil {
+				reserved += worktreeHook.ReservedTokens(sess)
+			}
+			return reserved
 		},
 	})
 	_ = fileHook.BeforeAgent(context.Background(), sess, nil)
@@ -444,13 +516,18 @@ func NewAgent(sessionMgr SessionManager, cfg *config.Config, opts ...Option) (*A
 		// Stable project context is rebuilt after projection so compaction
 		// cannot discard it. The accepted plan is appended after it.
 		fileHook,
+	}
+	if worktreeHook != nil {
+		sharedHooks = append(sharedHooks, worktreeHook)
+	}
+	sharedHooks = append(sharedHooks,
 		approvedPlanHook,
 		subagentHook,
 		// Keep collaboration instructions last so Plan Mode remains the
 		// highest-precedence request-scoped behavioral contract.
 		collaborationHook,
 		planning.TerminalHook{ModeProvider: collaborationProvider(sessionMgr)},
-	}
+	)
 	if configToolsHook != nil {
 		// Configuration tools are appended at a stable final position and are
 		// inherited by forked sessions, as required by coder mode.

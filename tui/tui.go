@@ -32,6 +32,7 @@ import (
 	"github.com/basenana/friday/core/types"
 	"github.com/basenana/friday/sessions"
 	"github.com/basenana/friday/skills"
+	fridayworktree "github.com/basenana/friday/worktree"
 )
 
 // Run launches the interactive TUI. Blocks until the user quits.
@@ -210,15 +211,28 @@ type sessionRuntime interface {
 }
 
 type model struct {
-	sessMgr        *sessions.Manager
-	runtime        sessionRuntime
-	projectMgr     *projectpkg.Manager
-	registry       *actor.Registry
-	sessionID      string
-	feed           *bus.Feed
-	sessionRelease func()
-	loopManager    *coderloop.Manager
-	workdir        string
+	sessMgr               *sessions.Manager
+	runtime               sessionRuntime
+	projectMgr            *projectpkg.Manager
+	registry              *actor.Registry
+	sessionID             string
+	feed                  *bus.Feed
+	sessionRelease        func()
+	loopManager           *coderloop.Manager
+	workdir               string
+	worktreeMode          bool
+	worktreeRequirement   bool
+	worktreeService       *fridayworktree.Service
+	worktreeSupervisor    *worktreeRuntimeSupervisor
+	worktreeRuntime       *worktreeRuntime
+	pendingWorktreePrompt string
+	worktreeChanging      bool
+	worktreeGeneration    uint64
+	worktreeTabs          []worktreeTab
+	worktreeTabHits       []worktreeTabHit
+	worktreeStatusFeeds   map[string]*bus.Feed
+	worktreeStatusSession map[string]string
+	worktreeStatusToken   uint64
 
 	codebaseRuntime    *codebasepkg.Runtime
 	codebaseFeed       *bus.Feed
@@ -283,6 +297,7 @@ type model struct {
 	// follow-up submissions to preserve submit order.
 	dispatching     bool
 	pendingDispatch []bus.Envelope
+	dispatchToken   uint64
 
 	// Transcript rebuild state: View() only re-renders blocks, joins, and
 	// pushes content into the viewport when the transcript actually changed.
@@ -438,10 +453,8 @@ func (m *model) Init() tea.Cmd {
 		m.logInfo("initial session load requested", "requested_session", m.requestedSessionID != "")
 		return tea.Batch(textarea.Blink, m.armSpinner(), m.loadInitialSession(), tea.RequestBackgroundColor)
 	}
-	cmds := []tea.Cmd{textarea.Blink, m.armSpinner(), m.waitForActorEvent(), tea.RequestBackgroundColor}
-	if m.codebaseFeed != nil {
-		cmds = append(cmds, waitForCodebaseActivity(m.codebaseFeed, m.codebaseToken))
-	}
+	cmds := []tea.Cmd{textarea.Blink, m.armSpinner(), tea.RequestBackgroundColor}
+	cmds = append(cmds, m.initialWaitCommands()...)
 	return tea.Batch(cmds...)
 }
 
@@ -473,15 +486,19 @@ type resizeSettledMsg struct{ token int }
 
 // inputDispatchedMsg reports the result of an async user-input dispatch
 // (registry.DispatchInput) back into the update loop.
-type inputDispatchedMsg struct{ err error }
+type inputDispatchedMsg struct {
+	token uint64
+	err   error
+}
 
 // dispatchEnvelope runs the user-input dispatch off the update loop. The
 // registry may need to rebuild an evicted actor, which does disk IO and
 // provider client initialization.
 func (m *model) dispatchEnvelope(env bus.Envelope) tea.Cmd {
 	registry := m.registry
+	token := m.dispatchToken
 	return func() tea.Msg {
-		return inputDispatchedMsg{err: registry.DispatchInput(env)}
+		return inputDispatchedMsg{token: token, err: registry.DispatchInput(env)}
 	}
 }
 
@@ -504,6 +521,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case inputDispatchedMsg:
+		if msg.token != m.dispatchToken {
+			return m, nil
+		}
 		m.dispatching = false
 		var next tea.Cmd
 		if len(m.pendingDispatch) > 0 {
@@ -520,6 +540,35 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.appendBlock(chatBlock{kind: blockError, content: msg.err.Error()})
 		}
 		return m, next
+	case worktreeSwitchMsg:
+		return m, m.handleWorktreeSwitch(msg)
+	case worktreePreparedMsg:
+		m.worktreeChanging = false
+		if cmd := m.commitPreparedWorktree(msg); cmd != nil {
+			return m, cmd
+		}
+		return m.dispatchIfIdle()
+	case worktreeArchivePreparedMsg:
+		return m, m.handleWorktreeArchivePrepared(msg)
+	case worktreeArchiveRemovedMsg:
+		return m, m.handleWorktreeArchiveRemoved(msg)
+	case worktreeStatusMsg:
+		if msg.token != m.worktreeStatusToken || (m.worktreeStatusSession[msg.worktreeID] != "" && m.worktreeStatusSession[msg.worktreeID] != msg.sessionID) {
+			return m, nil
+		}
+		for i := range m.worktreeTabs {
+			if m.worktreeTabs[i].ID == msg.worktreeID {
+				status := nextWorktreeTabStatus(m.worktreeTabs[i].Status, msg.event)
+				if msg.waiting {
+					status = worktreeTabWaiting
+				}
+				m.worktreeTabs[i].Status = status
+				break
+			}
+		}
+		return m, m.waitForWorktreeStatus(msg.worktreeID)
+	case worktreeStatusFeedClosedMsg:
+		return m, nil
 	case loopStateMsg:
 		if msg.err != nil {
 			m.appendBlock(chatBlock{kind: blockError, content: msg.errLabel + ": " + msg.err.Error()})
@@ -543,6 +592,13 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.textarea.CursorEnd()
 		}
 		m.refreshMenu()
+		return m, nil
+	case reviewFinishedMsg:
+		if msg.err != nil {
+			m.appendBlock(chatBlock{kind: blockError, content: "review: " + msg.err.Error()})
+		} else {
+			m.appendBlock(chatBlock{kind: blockDivider, content: "opened worktree review in VS Code"})
+		}
 		return m, nil
 	case clipboardImageLoadedMsg:
 		if msg.generation != m.composerGeneration || msg.sessionID != m.sessionID {
@@ -618,10 +674,14 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.restorePlanHandoff()
 		}
 		m.layout()
-		if m.codebaseFeed != nil {
-			return m, tea.Batch(m.waitForActorEvent(), waitForCodebaseActivity(m.codebaseFeed, m.codebaseToken))
+		waitCmd := tea.Batch(m.initialWaitCommands()...)
+		if prompt := strings.TrimSpace(m.pendingWorktreePrompt); prompt != "" {
+			m.pendingWorktreePrompt = ""
+			m.recordPrompt(prompt)
+			_, promptCmd := m.startUserTurn(prompt, nil)
+			return m, tea.Batch(waitCmd, promptCmd)
 		}
-		return m, m.waitForActorEvent()
+		return m, waitCmd
 	case transcriptReconciledMsg:
 		if msg.token != m.subscriptionToken || msg.sessionID != m.sessionID {
 			return m, nil
@@ -653,12 +713,23 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.dispatchNextQueued()
 	case tea.KeyPressMsg:
 		if msg.String() == "ctrl+c" {
+			if m.worktreeChanging {
+				m.appendBlock(chatBlock{kind: blockError, content: "worktree setup is still finishing; wait for it to complete before quitting"})
+				return m, nil
+			}
 			m.logInfo("TUI quit requested", "source", "ctrl+c")
 			m.quitting = true
 			return m, tea.Quit
 		}
-		if m.loading || m.fatalErr != nil || m.planCompacting || m.manualCompacting || m.reconciling {
+		if m.loading || m.fatalErr != nil || m.planCompacting || m.manualCompacting || m.reconciling || m.worktreeChanging {
 			return m, nil
+		}
+		if msg.Mod.Contains(tea.ModCtrl) && (msg.Code == tea.KeyLeft || msg.Code == tea.KeyRight) && m.worktreeMode {
+			delta := -1
+			if msg.Code == tea.KeyRight {
+				delta = 1
+			}
+			return m, m.switchWorktreeTab(delta)
 		}
 		if m.detail != nil {
 			return m.updateDetail(msg)
@@ -760,7 +831,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case spinner.TickMsg:
 		var cmd tea.Cmd
 		m.spinner, cmd = m.spinner.Update(msg)
-		if m.loading || m.running || m.planCompacting || m.manualCompacting || m.codebaseRunning() {
+		if m.loading || m.running || m.planCompacting || m.manualCompacting || m.codebaseRunning() || m.worktreeChanging {
 			return m, cmd
 		}
 		m.spinnerTicking = false // chain dies while idle
@@ -776,6 +847,13 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.viewport, cmd = m.viewport.Update(msg)
 		}
 		return m, cmd
+	case tea.MouseClickMsg:
+		if m.canSwitchWorktree() && msg.Button == tea.MouseLeft && msg.Y >= 0 && msg.Y < 3 {
+			if target := worktreeTabAt(m.worktreeTabHits, msg.X); target != "" && (m.worktreeRuntime == nil || target != m.worktreeRuntime.id) {
+				return m, m.selectWorktree(target)
+			}
+		}
+		return m, nil
 	case tea.MouseMsg:
 		// Mouse reporting is enabled for wheel scrolling. Click, release, and
 		// motion events are intentionally non-interactive.
@@ -828,7 +906,7 @@ func (m *model) updateActorEvents(msg actorEventsMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *model) reconcileTranscript(watermarkEventID string) tea.Cmd {
-	runtime, cfg := m.runtime, m.cfg
+	runtime, registry, cfg := m.runtime, m.registry, m.cfg
 	workdir, width, height := m.workdir, m.width, m.height
 	sessionID, token := m.sessionID, m.subscriptionToken
 	return func() tea.Msg {
@@ -852,7 +930,11 @@ func (m *model) reconcileTranscript(watermarkEventID string) tea.Cmd {
 				return transcriptReconciledMsg{token: token, sessionID: sessionID, err: fmt.Errorf("event %s is not persisted", shortID(watermarkEventID))}
 			}
 		}
-		projection, err := buildTranscriptProjection(runtime, cfg, workdir, width, height, sessionID)
+		var pendingForms []events.FormRequestedBody
+		if registry != nil {
+			pendingForms = registry.SessionPendingForms(sessionID)
+		}
+		projection, err := buildRuntimeTranscriptProjection(runtime, cfg, workdir, width, height, sessionID, pendingForms)
 		return transcriptReconciledMsg{token: token, sessionID: sessionID, projection: projection, err: err}
 	}
 }
@@ -917,6 +999,8 @@ func (m *model) preloadInitialSession() error {
 
 func (m *model) loadInitialSession() tea.Cmd {
 	sessMgr, runtime, registry, projectMgr, codebaseRuntime := m.sessMgr, m.runtime, m.registry, m.projectMgr, m.codebaseRuntime
+	worktreeService := m.worktreeService
+	worktreeRuntime := m.worktreeRuntime
 	requested := m.requestedSessionID
 	cfg, workdir, width, height := m.cfg, m.workdir, m.width, m.height
 	return func() tea.Msg {
@@ -942,6 +1026,21 @@ func (m *model) loadInitialSession() tea.Cmd {
 				"message_count", len(projection.messages),
 			)
 			return initialSessionLoadedMsg{sessionID: sessionID, feed: feed, release: release, projection: projection, promptHistory: promptHistory}
+		}
+		if worktreeRuntime != nil {
+			sessionID := worktreeRuntime.sessionID
+			if worktreeRuntime.registry != registry || worktreeRuntime.workdir != workdir {
+				return fail("validate worktree runtime", sessionID, fmt.Errorf("active runtime does not match the TUI foreground"))
+			}
+			if err := normalizeSessionModel(runtime, cfg, sessionID); err != nil {
+				return fail("validate session model", sessionID, err)
+			}
+			projection, err := buildTranscriptProjection(runtime, cfg, workdir, width, height, sessionID)
+			if err != nil {
+				return fail("restore transcript", sessionID, err)
+			}
+			feed := bus.SubscribeAgentFeed(worktreeRuntime.bus, sessionID)
+			return succeed(sessionID, feed, nil, projection, projection.promptHistory, false)
 		}
 		if projectMgr != nil {
 			previousCurrent, err := projectMgr.Project().CurrentSessionID()
@@ -1018,17 +1117,28 @@ func (m *model) loadInitialSession() tea.Cmd {
 					return fail("start Codebase runtime", sessionID, err)
 				}
 			}
-			var promptHistory []string
-			entries, historyErr := projectMgr.LoadUserHistory()
+			promptHistory, historyErr := loadSessionPromptHistory(projectMgr, sessionID)
 			if historyErr != nil {
 				tuiLogger().Warnw("failed to load project user history",
 					"session_id", sessionID,
 					"error", boundedTUILogText(historyErr.Error()),
 				)
-			} else {
-				promptHistory = make([]string, 0, len(entries))
-				for _, entry := range entries {
-					promptHistory = append(promptHistory, entry.Text)
+			}
+			if worktreeService != nil {
+				selected, resolveErr := worktreeService.Resolve(context.Background(), workdir)
+				if resolveErr != nil {
+					feed.Close()
+					release()
+					registry.Shutdown(sessionID)
+					cleanup()
+					return fail("resolve worktree association", sessionID, resolveErr)
+				}
+				if associateErr := worktreeService.Associate(workdir, selected.Branch, projectMgr.Project().ID(), sessionID); associateErr != nil {
+					feed.Close()
+					release()
+					registry.Shutdown(sessionID)
+					cleanup()
+					return fail("persist worktree association", sessionID, associateErr)
 				}
 			}
 			return succeed(sessionID, feed, release, projection, promptHistory, created)
@@ -1266,13 +1376,14 @@ func (m *model) submitComposer() (tea.Model, tea.Cmd) {
 	if text == "" && len(m.attachments) == 0 {
 		return m, nil
 	}
-	m.recordPrompt(text)
 	m.textarea.Reset()
 	m.menu = menuState{}
 	if strings.HasPrefix(text, "/") {
+		m.recordPrompt(text)
 		name, _, _ := parseSlash(text)
 		if cmd, ok := m.cmdRegistry.Lookup(name); ok && (m.running || m.dispatching) {
-			if codercmds.CommandMetadata(cmd).Policy == codercmds.PolicyDeferred {
+			policy := codercmds.CommandMetadata(cmd).Policy
+			if policy == codercmds.PolicyDeferred || (policy == codercmds.PolicyNavigation && !m.worktreeMode) {
 				m.queued = append(m.queued, pendingInput{text: text})
 				m.layout()
 				return m, nil
@@ -1295,6 +1406,12 @@ func (m *model) submitComposer() (tea.Model, tea.Cmd) {
 		}
 		return m.handleSlash(text)
 	}
+	if m.worktreeMode && m.worktreeRequirement {
+		m.worktreeRequirement = false
+		m.textarea.Placeholder = "Send a message…  / commands · Ctrl+P image · Ctrl+G editor"
+		return m, m.createWorktree(text)
+	}
+	m.recordPrompt(text)
 	images := append([]types.ImageContent(nil), m.attachments...)
 	m.attachments = nil
 	m.composerGeneration++
@@ -1590,7 +1707,7 @@ func (m *model) handleActorEvent(evt events.Event) tea.Cmd {
 			if d.StopReason == "error" && m.loopActive {
 				m.appendBlock(chatBlock{kind: blockDivider, content: "loop · suspended · send a message or reopen to resume"})
 			}
-			if m.form != nil {
+			if m.form != nil && !containsFormInterrupt(d.Interrupts, m.form.id) {
 				m.appendBlock(chatBlock{kind: blockDivider, content: "unfinished form expired · ask the agent again"})
 				m.form = nil
 			}
@@ -1737,6 +1854,15 @@ func (m *model) handleActorEvent(evt events.Event) tea.Cmd {
 	return cmd
 }
 
+func containsFormInterrupt(interrupts []events.Interrupt, formID string) bool {
+	for _, interrupt := range interrupts {
+		if interrupt.Type == "form" && interrupt.ID == formID {
+			return true
+		}
+	}
+	return false
+}
+
 func (m *model) handleCustomEvent(evt events.Event) tea.Cmd {
 	switch evt.Name {
 	case events.CustomInputAccepted:
@@ -1854,7 +1980,7 @@ func (m *model) handleCustomEvent(evt events.Event) tea.Cmd {
 			form, err := newFormState(d.FormID, d.Schema, m.width)
 			if err != nil {
 				m.appendBlock(chatBlock{kind: blockError, content: "form: " + err.Error()})
-			} else {
+			} else if m.form == nil {
 				m.form = form
 				m.runActivity = "waiting for input"
 				if !m.replaying {
@@ -1870,6 +1996,7 @@ func (m *model) handleCustomEvent(evt events.Event) tea.Cmd {
 			m.appendBlock(chatBlock{kind: blockDivider, content: "form submitted"})
 			if !m.replaying {
 				m.logInfo("form submitted", "run_id", evt.RunID, "form_id", d.FormID)
+				m.restoreNextLivePendingForm()
 			}
 		}
 	case events.CustomFormCancelled:
@@ -1880,6 +2007,7 @@ func (m *model) handleCustomEvent(evt events.Event) tea.Cmd {
 			m.appendBlock(chatBlock{kind: blockDivider, content: "form cancelled"})
 			if !m.replaying {
 				m.logInfo("form cancelled", "run_id", evt.RunID, "form_id", d.FormID)
+				m.restoreNextLivePendingForm()
 			}
 		}
 	case events.CustomPlanProposed:
@@ -1920,6 +2048,23 @@ func (m *model) handleCustomEvent(evt events.Event) tea.Cmd {
 		}
 	}
 	return nil
+}
+
+func (m *model) restoreNextLivePendingForm() {
+	if m.registry == nil || m.sessionID == "" || m.form != nil {
+		return
+	}
+	pending := m.registry.SessionPendingForms(m.sessionID)
+	if len(pending) == 0 {
+		return
+	}
+	form, err := newFormState(pending[0].FormID, pending[0].Schema, m.width)
+	if err != nil {
+		m.appendBlock(chatBlock{kind: blockError, content: "form: " + err.Error()})
+		return
+	}
+	m.form = form
+	m.runActivity = "waiting for input"
 }
 
 func loopPhase(text string) string {
@@ -2135,6 +2280,7 @@ func (m *model) releaseSessionLease() {
 
 func (m *model) closeSession() {
 	m.closeFeed()
+	m.closeWorktreeStatusFeeds()
 	m.releaseSessionLease()
 }
 
