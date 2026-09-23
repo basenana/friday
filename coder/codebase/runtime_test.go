@@ -37,6 +37,11 @@ func (runtimeTestClient) StructuredPredict(context.Context, providers.Request, a
 
 func newRuntimeTestFixture(t *testing.T) (*Runtime, *project.Manager) {
 	t.Helper()
+	return newRuntimeTestFixtureWithClient(t, runtimeTestClient{})
+}
+
+func newRuntimeTestFixtureWithClient(t *testing.T, client providers.Client) (*Runtime, *project.Manager) {
+	t.Helper()
 	data := t.TempDir()
 	root := t.TempDir()
 	projectStore := project.NewFileStore(filepath.Join(data, "projects"))
@@ -47,7 +52,7 @@ func newRuntimeTestFixture(t *testing.T) (*Runtime, *project.Manager) {
 	sessionStore := sessionfile.NewFileSessionStore(filepath.Join(data, "sessions"))
 	base := sessions.NewManager(sessionStore, filepath.Join(data, "current"), "")
 	manager := project.NewManager(proj, base)
-	pool := fallback.NewModelPool([]fallback.ModelEntry{{Name: "test", Client: runtimeTestClient{}}})
+	pool := fallback.NewModelPool([]fallback.ModelEntry{{Name: "test", Client: client}})
 	cfg := sandbox.DefaultConfig()
 	cfg.Sandbox.Enabled = false
 	runtime, err := New(Options{DataDir: data, Project: proj, ProjectManager: manager, ModelPool: pool, Bus: eventbus.NewBus(), Sandbox: cfg})

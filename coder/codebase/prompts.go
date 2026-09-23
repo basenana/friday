@@ -18,9 +18,13 @@ Do not persist source code or function bodies. Do not persist line numbers, exha
 
 const automaticContextContract = `Automatic Context mode provides short automatic baseline context before another Agent's first model call for the turn.
 
-Read the Codebase INDEX first, then follow only knowledge routes relevant to the projected conversation.
+The maintained Markdown knowledge base is the working material. Read the Codebase INDEX first, then follow only knowledge routes relevant to the projected conversation, and return a concise synthesis of the knowledge that bears on it.
 
-Return architecture-level context about relevant modules, responsibilities, dependencies and interactions, conventions, and known uncertainty. Do not modify the repository or Markdown knowledge base.`
+Do not explore the repository to build this baseline. Repository-wide content search, directory traversal, and broad file reading are out of scope; the calling Agent explores the repository with its own tools.
+
+If the knowledge is missing, stale, contradictory, or the question needs a detail it does not carry, say so explicitly: state the coverage gap, name the modules or paths the caller should inspect, and answer with what the knowledge does support. A targeted read of one named document is allowed only when it is required to answer correctly or to resolve a contradiction; if you do it, mark which statements came from the repository rather than from the knowledge base.
+
+Do not modify the repository or Markdown knowledge base.`
 
 const queryContextContract = `Active Query mode answers one explicit semantic query for another Agent.
 

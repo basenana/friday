@@ -2,9 +2,12 @@ package codebase
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/basenana/friday/coder/filetools"
 	"github.com/basenana/friday/core/agents"
@@ -32,6 +35,7 @@ type runner struct {
 	contextTools []*tools.Tool
 	exec         *sandbox.Executor
 	fileHook     *filetools.Hook
+	projectRoot  string
 	codebaseDir  string
 }
 
@@ -56,7 +60,7 @@ func newRunner(pool *fallback.ModelPool, cfg *sandbox.Config, projectRoot, codeb
 	all = append(all, fileHook.Tools()...)
 	readOnly := contextTools(all)
 	readOnly = append(readOnly, newReadOnlyGitTool(exec, projectRoot))
-	return &runner{pool: pool, indexTools: all, contextTools: readOnly, exec: exec, fileHook: fileHook, codebaseDir: codebaseDir}, nil
+	return &runner{pool: pool, indexTools: all, contextTools: readOnly, exec: exec, fileHook: fileHook, projectRoot: projectRoot, codebaseDir: codebaseDir}, nil
 }
 
 func contextTools(all []*tools.Tool) []*tools.Tool {
@@ -85,30 +89,147 @@ func (r *runner) client(mode modeSpec) providers.Client {
 	return r.pool.NewClient(policy, providers.ClientPolicy{})
 }
 
-type contextUsageProxy struct{ root *coresession.Session }
+// maxTokensWarning is written into the assistant content by core/agents/react.go
+// when a model stream is interrupted for exceeding the configured output budget.
+// It is the only in-band truncation signal available to this package; ModelCalls
+// and CompletionTokensLast are logged alongside it because the wording can change.
+const maxTokensWarning = "response interrupted because the model exceeded the configured max tokens"
 
-func (h contextUsageProxy) AfterModelCall(ctx context.Context, _ *coresession.Session, req providers.Request, stats *coresession.ModelCallStats) error {
+const maxOutsideKBSamples = 3
+
+// runStats reports one Codebase Provider run: what it consumed and whether it was
+// cut short, so timeouts, loop-limit exits and prompt-level scope violations stay
+// observable in the run log.
+type runStats struct {
+	ModelCalls           int
+	ToolCalls            int
+	OutsideKBReads       int
+	OutsideKBSamples     []string
+	PromptTokensLast     int64
+	CompletionTokensLast int64
+	OutputChars          int
+	Truncated            bool
+	LoopLimit            bool
+}
+
+// finalizeRunStats completes a run from the raw provider output.
+func finalizeRunStats(stats runStats, raw string, maxLoopTimes int) runStats {
+	stats.Truncated = strings.Contains(raw, maxTokensWarning)
+	stats.LoopLimit = stats.ModelCalls >= maxLoopTimes
+	return stats
+}
+
+// contextUsageProxy forwards usage accounting to the root Session and accumulates
+// the run metrics of the temporary Codebase Provider Session.
+type contextUsageProxy struct {
+	root        *coresession.Session
+	projectRoot string
+	codebaseDir string
+
+	mu    sync.Mutex
+	stats runStats
+}
+
+func (h *contextUsageProxy) AfterModelCall(ctx context.Context, _ *coresession.Session, req providers.Request, stats *coresession.ModelCallStats) error {
+	h.mu.Lock()
+	h.stats.ModelCalls++
+	h.stats.PromptTokensLast = stats.Tokens.PromptTokens
+	h.stats.CompletionTokensLast = stats.Tokens.CompletionTokens
+	h.mu.Unlock()
 	return (usage.Hook{}).AfterModelCall(ctx, h.root, req, stats)
 }
 
-func (r *runner) runContext(ctx context.Context, root *coresession.Session, history []types.Message, spec Spec, metadata string) (string, error) {
-	const automaticMaxTokens int64 = 1200
-	maxTokens := min(spec.Context.MaxOutputTokens, automaticMaxTokens)
-	return r.runContextProvider(ctx, root, history, spec, automaticContextSystemPrompt(spec, r.codebaseDir), metadata, maxTokens, 0)
+func (h *contextUsageProxy) AfterTool(_ context.Context, _ *coresession.Session, payload coresession.ToolPayload) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, execution := range payload.Executions {
+		h.stats.ToolCalls++
+		h.noteOutsideKBRead(execution.Call)
+	}
+	return nil
 }
 
-func (r *runner) runQuery(ctx context.Context, root *coresession.Session, spec Spec, query, metadata string, maxChars int64) (string, error) {
+// noteOutsideKBRead counts read-only tool calls that left the Markdown knowledge
+// base, which is the measured signal for whether the automatic Context contract
+// keeps the provider on the knowledge base instead of the live repository.
+func (h *contextUsageProxy) noteOutsideKBRead(call providers.ToolCall) {
+	switch call.Name {
+	case sandbox.FsReadToolName, sandbox.FsListToolName, sandbox.FsFindToolName, sandbox.FsSearchToolName:
+	default:
+		return
+	}
+	target := toolPathArgument(call.Arguments)
+	if withinKnowledgeBase(h.projectRoot, h.codebaseDir, target) {
+		return
+	}
+	h.stats.OutsideKBReads++
+	if len(h.stats.OutsideKBSamples) < maxOutsideKBSamples {
+		h.stats.OutsideKBSamples = append(h.stats.OutsideKBSamples, strings.TrimSpace(call.Name+" "+target))
+	}
+}
+
+func (h *contextUsageProxy) snapshot() runStats {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	stats := h.stats
+	stats.OutsideKBSamples = append([]string(nil), h.stats.OutsideKBSamples...)
+	return stats
+}
+
+// toolPathArgument returns the location argument of a read-only filesystem call.
+func toolPathArgument(arguments string) string {
+	if strings.TrimSpace(arguments) == "" {
+		return ""
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(arguments), &parsed); err != nil {
+		return ""
+	}
+	for _, key := range []string{"path", "directory"} {
+		if value, ok := parsed[key].(string); ok && strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
+// withinKnowledgeBase reports whether a tool path argument stays inside the
+// knowledge base. Relative paths resolve against the project root, which is the
+// working directory of the Codebase tools.
+func withinKnowledgeBase(projectRoot, codebaseDir, target string) bool {
+	if strings.TrimSpace(codebaseDir) == "" {
+		return false
+	}
+	if strings.TrimSpace(target) == "" {
+		target = "."
+	}
+	if !filepath.IsAbs(target) {
+		target = filepath.Join(projectRoot, target)
+	}
+	rel, err := filepath.Rel(codebaseDir, filepath.Clean(target))
+	if err != nil {
+		return false
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+func (r *runner) runContext(ctx context.Context, root *coresession.Session, history []types.Message, spec Spec, metadata string) (string, runStats, error) {
+	return r.runContextProvider(ctx, root, history, spec, automaticContextSystemPrompt(spec, r.codebaseDir), metadata, spec.Context.MaxOutputTokens, 0)
+}
+
+func (r *runner) runQuery(ctx context.Context, root *coresession.Session, spec Spec, query, metadata string, maxChars int64) (string, runStats, error) {
 	input := metadata + "\n\nSemantic query:\n" + strings.TrimSpace(query)
 	return r.runContextProvider(ctx, root, nil, spec, queryContextSystemPrompt(spec, r.codebaseDir), input, spec.Context.MaxOutputTokens, queryOutputLimit(maxChars))
 }
 
-func (r *runner) runContextProvider(ctx context.Context, root *coresession.Session, history []types.Message, spec Spec, systemPrompt, input string, maxTokens, maxChars int64) (string, error) {
+func (r *runner) runContextProvider(ctx context.Context, root *coresession.Session, history []types.Message, spec Spec, systemPrompt, input string, maxTokens, maxChars int64) (string, runStats, error) {
 	client := r.client(spec.Context.modeSpec)
 	cloned := append([]types.Message(nil), history...)
+	proxy := &contextUsageProxy{root: root, projectRoot: r.projectRoot, codebaseDir: r.codebaseDir}
 	temp := coresession.New(types.NewID(), client,
 		coresession.WithHistory(cloned...),
 		coresession.WithTemporary(true),
-		coresession.WithHooks(contextUsageProxy{root: root}),
+		coresession.WithHooks(proxy),
 	)
 	agent := agents.New(client, agents.Option{
 		SystemPrompt: systemPrompt,
@@ -119,15 +240,18 @@ func (r *runner) runContextProvider(ctx context.Context, root *coresession.Sessi
 	})
 	runCtx, cancel := context.WithTimeout(ctx, spec.Context.Timeout.Duration)
 	defer cancel()
-	out, err := api.ReadAllContent(runCtx, agent.Chat(runCtx, &api.Request{Session: temp, AgentMessage: input}))
+	raw, err := api.ReadAllContent(runCtx, agent.Chat(runCtx, &api.Request{Session: temp, AgentMessage: input}))
+	stats := finalizeRunStats(proxy.snapshot(), raw, spec.Context.MaxLoopTimes)
 	if err != nil {
-		return strings.TrimSpace(out), err
+		stats.OutputChars = len(strings.TrimSpace(raw))
+		return strings.TrimSpace(raw), stats, err
 	}
-	out = boundOutput(out, maxTokens)
+	out := boundOutput(raw, maxTokens)
 	if maxChars > 0 && int64(len(out)) > maxChars {
 		out = boundOutputChars(out, int(maxChars))
 	}
-	return out, nil
+	stats.OutputChars = len(out)
+	return out, stats, nil
 }
 
 type requestInputHook struct {

@@ -27,11 +27,11 @@ index:
 context:
   model: ""
   effort: none
-  max_loop_times: 12
-  max_output_tokens: 4000
-  timeout: 60s
+  max_loop_times: 10
+  max_output_tokens: 10000
+  timeout: 180s
 schedule:
-  idle_delay: 5m
+  idle_delay: 1h
   conversation_pairs: 10
   coverage_page_size: 500
 ---

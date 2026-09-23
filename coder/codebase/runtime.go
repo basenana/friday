@@ -16,6 +16,7 @@ import (
 	coderloop "github.com/basenana/friday/coder/loop"
 	"github.com/basenana/friday/coder/project"
 	"github.com/basenana/friday/core/actor/events"
+	"github.com/basenana/friday/core/logger"
 	"github.com/basenana/friday/core/planning"
 	"github.com/basenana/friday/core/providers/fallback"
 	coresession "github.com/basenana/friday/core/session"
@@ -1004,23 +1005,29 @@ func (r *Runtime) contextEvidence(ctx context.Context, root *coresession.Session
 	} else if !errors.Is(readErr, coresession.ErrRecordNotFound) {
 		loopState = "unknown"
 	}
-	metadata := fmt.Sprintf("Gather repository evidence relevant to the current projected conversation.\nProject: %s\nSession: %s\nOperation: %s\nCollaboration mode: %s\nAutonomous loop state: %s", r.opts.Project.Root(), sessionID, op, mode, loopState)
-	out, err := r.runner.runContext(opCtx, root, history, spec, metadata)
+	metadata := fmt.Sprintf("Summarize the maintained Codebase knowledge relevant to the current projected conversation.\nProject: %s\nSession: %s\nOperation: %s\nCollaboration mode: %s\nAutonomous loop state: %s", r.opts.Project.Root(), sessionID, op, mode, loopState)
+	logRunStart("context", sessionID, op, turn, spec)
+	out, stats, err := r.runner.runContext(opCtx, root, history, spec, metadata)
 	if err != nil {
 		if ctx.Err() != nil {
+			logRunFinish("context", sessionID, op, "cancelled", turn, started, stats, ctx.Err())
 			r.activity.publish(Activity{OperationID: op, Mode: ModeContext, State: ActivityCancelled, Error: ctx.Err().Error(), SessionID: sessionID, Turn: turn, StartedAt: started, CompletedAt: time.Now()})
 			return "", ctx.Err()
 		}
 		state := ActivityFailed
+		stateName := "failed"
 		if errors.Is(err, context.DeadlineExceeded) {
 			state = ActivityTimedOut
+			stateName = "timed_out"
 		}
+		logRunFinish("context", sessionID, op, stateName, turn, started, stats, err)
 		r.activity.publish(Activity{OperationID: op, Mode: ModeContext, State: state, Error: err.Error(), SessionID: sessionID, Turn: turn, StartedAt: started, CompletedAt: time.Now()})
 		return unavailableEvidence(err.Error()), nil
 	}
 	if strings.TrimSpace(out) == "" {
 		out = unavailableEvidence("Context returned no evidence")
 	}
+	logRunFinish("context", sessionID, op, "ready", turn, started, stats, nil)
 	r.activity.publish(Activity{OperationID: op, Mode: ModeContext, State: ActivitySucceeded, Summary: "Codebase context ready", SessionID: sessionID, Turn: turn, StartedAt: started, CompletedAt: time.Now()})
 	return out, nil
 }
@@ -1073,23 +1080,53 @@ func (r *Runtime) queryContext(ctx context.Context, root *coresession.Session, q
 		loopState = "unknown"
 	}
 	metadata := fmt.Sprintf("Project: %s\nSession: %s\nOperation: %s\nCollaboration mode: %s\nAutonomous loop state: %s", r.opts.Project.Root(), sessionID, op, mode, loopState)
-	out, err := r.runner.runQuery(opCtx, root, spec, query, metadata, maxChars)
+	logRunStart("query", sessionID, op, turn, spec)
+	out, stats, err := r.runner.runQuery(opCtx, root, spec, query, metadata, maxChars)
 	if err != nil {
 		state := ActivityFailed
+		stateName := "failed"
 		if errors.Is(err, context.DeadlineExceeded) {
 			state = ActivityTimedOut
+			stateName = "timed_out"
 		} else if ctx.Err() != nil {
 			state = ActivityCancelled
+			stateName = "cancelled"
 			err = ctx.Err()
 		}
+		logRunFinish("query", sessionID, op, stateName, turn, started, stats, err)
 		r.activity.publish(Activity{OperationID: op, Mode: ModeContext, State: state, Error: err.Error(), SessionID: sessionID, Turn: turn, StartedAt: started, CompletedAt: time.Now()})
 		return strings.TrimSpace(out), err
 	}
 	if strings.TrimSpace(out) == "" {
 		return "", fmt.Errorf("Context Provider returned no answer")
 	}
+	logRunFinish("query", sessionID, op, "ready", turn, started, stats, nil)
 	r.activity.publish(Activity{OperationID: op, Mode: ModeContext, State: ActivitySucceeded, Summary: "Codebase query answered", SessionID: sessionID, Turn: turn, StartedAt: started, CompletedAt: time.Now()})
 	return out, nil
+}
+
+// logRunStart and logRunFinish bracket every Codebase Provider run so the run log
+// answers two questions: why a run failed (state, loop_limit, truncated), and
+// whether the automatic Context contract held (outside_kb_reads).
+func logRunStart(mode, sessionID, op string, turn uint64, spec Spec) {
+	logger.New("codebase").Infow("codebase run start",
+		"mode", mode, "session", sessionID, "operation", op, "turn", turn,
+		"max_output_tokens", spec.Context.MaxOutputTokens, "max_loop_times", spec.Context.MaxLoopTimes)
+}
+
+func logRunFinish(mode, sessionID, op, state string, turn uint64, started time.Time, stats runStats, err error) {
+	reason := ""
+	if err != nil {
+		reason = err.Error()
+	}
+	logger.New("codebase").Infow("codebase run finish",
+		"mode", mode, "session", sessionID, "operation", op, "turn", turn, "state", state,
+		"duration_ms", time.Since(started).Milliseconds(),
+		"model_calls", stats.ModelCalls, "tool_calls", stats.ToolCalls,
+		"outside_kb_reads", stats.OutsideKBReads, "outside_kb_samples", strings.Join(stats.OutsideKBSamples, "; "),
+		"prompt_tokens_last", stats.PromptTokensLast, "completion_tokens_last", stats.CompletionTokensLast,
+		"output_chars", stats.OutputChars, "truncated", stats.Truncated, "loop_limit", stats.LoopLimit,
+		"err", reason)
 }
 
 func unavailableEvidence(reason string) string {
