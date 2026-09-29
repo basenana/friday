@@ -139,27 +139,13 @@ func (a *react) reactLoop(ctx context.Context, sess *session.Session, resp *api.
 			keepRun, err = a.doAct(ctx, sess, resp, mergedTools, a.option.MaxLoopTimes-loopTimes, metadata)
 		}
 		if err != nil {
-			if isStreamIdleTimeout(err) {
-				a.logger.Warnw("stream idle timeout, retrying", "session", sess.ID, "error", err)
-				sess.PublishEvent(types.Event{
-					Type: types.EventModelTimeout,
-					Data: map[string]string{"timeout": err.Error()},
-				})
-				loopTimes++
-				if loopTimes > a.option.MaxLoopTimes {
-					publishModelError(err)
-					resp.Fail(err)
-					return
-				}
-				continue
-			}
 			if isMaxTokensError(err) {
 				compactErr := sess.CompactHistoryWithTrigger(ctx, session.CompactTriggerOverflow)
 				if compactErr == nil {
 					loopTimes++ // count the compact-attempt as a loop iteration
 					if loopTimes > a.option.MaxLoopTimes {
 						// Compaction cannot free more context; fail instead of
-						// retrying forever (mirrors the idle-timeout bound above).
+						// retrying forever.
 						publishModelError(err)
 						resp.Fail(err)
 						return
@@ -411,10 +397,11 @@ type streamResult struct {
 }
 
 // consumeStream reads the provider stream until it ends, the context is
-// cancelled, the stream errors, or the idle timeout fires. It mutates acc in
-// place and forwards deltas to resp as they arrive. On an abnormal exit it
-// calls fireModelCall with the error and returns it; on normal stream end it
-// returns nil (the caller fires fireModelCall itself with the final stats).
+// cancelled, or the stream errors. It mutates acc in place and forwards
+// deltas to resp as they arrive. Idle periods only log a periodic warning —
+// they no longer abort the call. On an abnormal exit it calls fireModelCall
+// with the error and returns it; on normal stream end it returns nil (the
+// caller fires fireModelCall itself with the final stats).
 func (a *react) consumeStream(
 	ctx context.Context,
 	sess *session.Session,
@@ -449,11 +436,13 @@ WaitMessage:
 			a.logger.Warnw("still waiting llm completed", "receivedMessage", acc.messages, "session", sess.ID)
 
 		case <-idleTimer.C:
-			a.logger.Errorw("stream idle timeout exceeded",
+			// Log-only heartbeat: a slow upstream can only be waited out — a
+			// fast retry cannot make it faster. Each single call is bounded by
+			// the provider HTTP timeout and the run as a whole by the caller's
+			// context, so keep waiting instead of aborting here.
+			a.logger.Warnw("stream idle, still waiting",
 				"timeout", idleTimeout, "received", acc.messages, "session", sess.ID)
-			idleErr := &StreamIdleTimeoutError{Timeout: idleTimeout, Received: acc.messages}
-			fireModelCall(idleErr)
-			return idleErr
+			idleTimer.Reset(idleTimeout)
 
 		case msg, ok := <-stream.Message():
 			if !ok {
@@ -860,24 +849,26 @@ type Option struct {
 	// exceeds this rough token estimate, the stream is interrupted to prevent
 	// runaway loops (esp. some models that loop forever when context breaks).
 	MaxTokens int64
-	// StreamIdleTimeout is the max duration to wait without any streamed delta.
-	// On idle timeout the loop retries (up to MaxLoopTimes).
+	// StreamIdleTimeout controls the cadence of the log-only idle heartbeat:
+	// when no delta arrives for this long, a warning is logged and the wait
+	// continues. Slow streams are never retried; each single call is bounded
+	// by the provider HTTP timeout. Zero defaults to 3 minutes.
 	StreamIdleTimeout time.Duration
 
 	Tools   []*tools.Tool
 	Invoker *tools.Invoker
 }
 
-// StreamIdleTimeoutError is returned when the LLM stream produces no data for
-// StreamIdleTimeout. The reactLoop treats it as retryable.
-type StreamIdleTimeoutError struct {
-	Timeout  time.Duration
-	Received int
-}
+// PerLoopBudget is the wall-clock budget per agent loop iteration. An agent
+// run's total timeout is MaxLoopTimes x PerLoopBudget — the uniform bound for
+// subagent children and the Codebase Context Provider alike. It is a var so
+// tests can shorten it.
+var PerLoopBudget = 3 * time.Minute
 
-func (e *StreamIdleTimeoutError) Error() string {
-	return fmt.Sprintf("stream idle timeout: no data for %s (%d messages received)", e.Timeout, e.Received)
-}
+// LoopLimit exposes this agent's loop ceiling so callers can budget a whole
+// run (total timeout = LoopLimit() x PerLoopBudget) without depending on the
+// concrete agent type. See core/subagents.
+func (a *react) LoopLimit() int { return a.option.MaxLoopTimes }
 
 // maxOutputTokensOf returns the provider's configured max output tokens, or 0 if
 // the provider does not expose this capability.
@@ -893,11 +884,6 @@ func modelNameOf(llm providers.Client) string {
 		return p.ModelName()
 	}
 	return ""
-}
-
-func isStreamIdleTimeout(err error) bool {
-	var e *StreamIdleTimeoutError
-	return errors.As(err, &e)
 }
 
 // isMaxTokensError checks if the error indicates the message exceeded token limits.

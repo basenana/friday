@@ -17,12 +17,29 @@ import (
 	fridaybus "github.com/basenana/friday/bus"
 	"github.com/basenana/friday/coder/commands"
 	coderloop "github.com/basenana/friday/coder/loop"
+	projectpkg "github.com/basenana/friday/coder/project"
 	"github.com/basenana/friday/core/actor/events"
 	coresession "github.com/basenana/friday/core/session"
 	"github.com/basenana/friday/sessions"
 	sessionfile "github.com/basenana/friday/sessions/file"
 	fridayworktree "github.com/basenana/friday/worktree"
 )
+
+// lifecycleScopeManager returns the session manager of one worktree's scope.
+func lifecycleScopeManager(t *testing.T, projectRoot string, pool *projectpkg.Project, manager *sessions.Manager, meta fridayworktree.Metadata) *projectpkg.Manager {
+	t.Helper()
+	return projectpkg.NewScopedManager(pool, manager, fridayworktree.ScopeForWorktree(meta, projectRoot))
+}
+
+// lifecycleScopeSession reads the session a scope currently resumes.
+func lifecycleScopeSession(t *testing.T, projectRoot string, pool *projectpkg.Project, manager *sessions.Manager, meta fridayworktree.Metadata) string {
+	t.Helper()
+	sessionID, err := lifecycleScopeManager(t, projectRoot, pool, manager, meta).CurrentID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return sessionID
+}
 
 type lifecycleRuntime struct {
 	meta      fridayworktree.Metadata
@@ -50,12 +67,18 @@ func TestProjectWorktreePublicLifecycleContracts(t *testing.T) {
 		"",
 	)
 
+	projectPool, err := projectpkg.Open(service.ProjectCodeRoot(), projectpkg.NewFileStore(filepath.Join(dataDir, "projects")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	projectRoot := service.ProjectCodeRoot()
+
 	createdA, err := service.Create(ctx, "lifecycle A")
 	if err != nil {
 		t.Fatal(err)
 	}
 	metaA := lifecycleMetadata(t, store, createdA.Worktree.Path)
-	runtimeA, made := openLifecycleRuntime(t, store, sessionManager, metaA.ID)
+	runtimeA, made := openLifecycleRuntime(t, store, projectRoot, projectPool, sessionManager, metaA.ID)
 	if !made {
 		t.Fatal("worktree A did not allocate its session")
 	}
@@ -76,7 +99,7 @@ func TestProjectWorktreePublicLifecycleContracts(t *testing.T) {
 		t.Fatalf("execute immediate /worktree navigation: %v", err)
 	}
 	metaB := lifecycleMetadata(t, store, createdB.Worktree.Path)
-	runtimeB, made := openLifecycleRuntime(t, store, sessionManager, metaB.ID)
+	runtimeB, made := openLifecycleRuntime(t, store, projectRoot, projectPool, sessionManager, metaB.ID)
 	if !made {
 		t.Fatal("worktree B did not allocate its session")
 	}
@@ -88,12 +111,12 @@ func TestProjectWorktreePublicLifecycleContracts(t *testing.T) {
 
 	selectA := selectLifecycleNavigation(t, registry, metaA.Name)
 	resolvedA, err := service.Resolve(ctx, selectA)
-	if err != nil || resolvedA.ID != metaA.ID || resolvedA.SessionID != runtimeA.lifecycle.RootID() {
+	if err != nil || resolvedA.ID != metaA.ID || lifecycleScopeSession(t, projectRoot, projectPool, sessionManager, metaA) != runtimeA.lifecycle.RootID() {
 		t.Fatalf("select A = %#v, %v", resolvedA, err)
 	}
 	selectB := selectLifecycleNavigation(t, registry, metaB.Name)
 	resolvedB, err := service.Resolve(ctx, selectB)
-	if err != nil || resolvedB.ID != metaB.ID || resolvedB.SessionID != runtimeB.lifecycle.RootID() {
+	if err != nil || resolvedB.ID != metaB.ID || lifecycleScopeSession(t, projectRoot, projectPool, sessionManager, metaB) != runtimeB.lifecycle.RootID() {
 		t.Fatalf("select B = %#v, %v", resolvedB, err)
 	}
 	assertLifecycleLoopState(t, runtimeA, coderloop.StateActive)
@@ -102,11 +125,11 @@ func TestProjectWorktreePublicLifecycleContracts(t *testing.T) {
 	sessionA, sessionB := runtimeA.lifecycle.RootID(), runtimeB.lifecycle.RootID()
 	closeLifecycleRuntime(t, runtimeA)
 	closeLifecycleRuntime(t, runtimeB)
-	runtimeA, made = openLifecycleRuntime(t, store, sessionManager, metaA.ID)
+	runtimeA, made = openLifecycleRuntime(t, store, projectRoot, projectPool, sessionManager, metaA.ID)
 	if made || runtimeA.lifecycle.RootID() != sessionA {
 		t.Fatalf("restarted A session = %q, made = %t; want %q, false", runtimeA.lifecycle.RootID(), made, sessionA)
 	}
-	runtimeB, made = openLifecycleRuntime(t, store, sessionManager, metaB.ID)
+	runtimeB, made = openLifecycleRuntime(t, store, projectRoot, projectPool, sessionManager, metaB.ID)
 	if made || runtimeB.lifecycle.RootID() != sessionB {
 		t.Fatalf("restarted B session = %q, made = %t; want %q, false", runtimeB.lifecycle.RootID(), made, sessionB)
 	}
@@ -119,11 +142,16 @@ func TestProjectWorktreePublicLifecycleContracts(t *testing.T) {
 	if err := sessionManager.DeleteRoot(sessionB); err != nil {
 		t.Fatal(err)
 	}
+	// The scope still points at the deleted session, so the next open must
+	// allocate a replacement and move the pointer.
+	if err := projectPool.RemoveSession(sessionB); err != nil {
+		t.Fatal(err)
+	}
 	if exists, err := sessionManager.Exists(sessionB); err != nil || exists {
 		t.Fatalf("deleted B session exists = %t, err = %v", exists, err)
 	}
 	selectB = selectLifecycleNavigation(t, registry, metaB.Name)
-	repairedB, made := openLifecycleRuntime(t, store, sessionManager, selectB)
+	repairedB, made := openLifecycleRuntime(t, store, projectRoot, projectPool, sessionManager, metaB.ID)
 	if !made || repairedB.lifecycle.RootID() == sessionB {
 		t.Fatalf("selected B replacement = %q, made = %t; old session = %q", repairedB.lifecycle.RootID(), made, sessionB)
 	}
@@ -137,17 +165,21 @@ func TestProjectWorktreePublicLifecycleContracts(t *testing.T) {
 	}
 	listedA := lifecycleListedWorktree(t, listed, metaA.ID)
 	listedB := lifecycleListedWorktree(t, listed, metaB.ID)
-	if listedA.SessionID != sessionA || listedB.SessionID != replacementB || listedA.Stale || listedB.Stale {
-		t.Fatalf("listed worktrees A=%+v B=%+v", listedA, listedB)
+	listedASession := lifecycleScopeSession(t, projectRoot, projectPool, sessionManager, metaA)
+	listedBSession := lifecycleScopeSession(t, projectRoot, projectPool, sessionManager, metaB)
+	if listedASession != sessionA || listedBSession != replacementB || listedA.Stale || listedB.Stale {
+		t.Fatalf("listed worktrees A=%+v (%q) B=%+v (%q)", listedA, listedASession, listedB, listedBSession)
 	}
-	for _, sessionID := range []string{listedA.SessionID, listedB.SessionID} {
+	for _, sessionID := range []string{listedASession, listedBSession} {
 		if active, err := sessionManager.IsActive(sessionID); err != nil || !active {
 			t.Fatalf("listed session %q active = %t, err = %v", sessionID, active, err)
 		}
 	}
 
 	closeLifecycleRuntime(t, repairedB)
-	if err := service.Remove(ctx, metaB.ID, fridayworktree.RemoveOptions{Sessions: sessionManager}); err != nil {
+	if err := service.Remove(ctx, metaB.ID, fridayworktree.RemoveOptions{
+		Sessions: lifecycleScopeManager(t, projectRoot, projectPool, sessionManager, metaB),
+	}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(metaB.Path); !os.IsNotExist(err) {
@@ -166,7 +198,10 @@ func TestProjectWorktreePublicLifecycleContracts(t *testing.T) {
 	}
 
 	closeLifecycleRuntime(t, runtimeA)
-	if err := service.Remove(ctx, metaA.ID, fridayworktree.RemoveOptions{DeleteBranch: true, Sessions: sessionManager}); err != nil {
+	if err := service.Remove(ctx, metaA.ID, fridayworktree.RemoveOptions{
+		DeleteBranch: true,
+		Sessions:     lifecycleScopeManager(t, projectRoot, projectPool, sessionManager, metaA),
+	}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(metaA.Path); !os.IsNotExist(err) {
@@ -227,11 +262,32 @@ func lifecycleMetadata(t *testing.T, store fridayworktree.Store, target string) 
 	return meta
 }
 
-func openLifecycleRuntime(t *testing.T, store fridayworktree.Store, manager *sessions.Manager, worktreeID string) (*lifecycleRuntime, bool) {
+// openLifecycleRuntime serves one worktree through its scope session pool: the
+// scope's current pointer decides the session, and a scope without a usable
+// session allocates one.
+func openLifecycleRuntime(t *testing.T, store fridayworktree.Store, projectRoot string, pool *projectpkg.Project, manager *sessions.Manager, worktreeID string) (*lifecycleRuntime, bool) {
 	t.Helper()
 	meta := lifecycleMetadata(t, store, worktreeID)
-	catalog := fridayworktree.NewSessionCatalog(store, meta.ID, manager)
-	lifecycle, _, made, err := catalog.EnsureRoot(context.Background(), nil)
+	scoped := lifecycleScopeManager(t, projectRoot, pool, manager, meta)
+	sessionID, err := scoped.CurrentID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	made := sessionID == ""
+	if made {
+		created, err := scoped.CreateRoot(context.Background(), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sessionID = created.RootID()
+		if err := created.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err := scoped.Activate(sessionID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	lifecycle, err := scoped.OpenRoot(context.Background(), sessionID, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

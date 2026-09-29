@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	projectpkg "github.com/basenana/friday/coder/project"
 	"github.com/basenana/friday/core/types"
 	"github.com/basenana/friday/sessions"
 	sessionfile "github.com/basenana/friday/sessions/file"
@@ -37,27 +38,37 @@ func TestWorktreesListPrintsDeterministicProjectStateWithoutConversationContent(
 	if err := sessionStore.AppendMessages(healthyID, types.Message{Role: types.RoleUser, Content: "TOP SECRET conversation content"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := service.Associate(repo, "main", service.RepositoryID(), healthyID); err != nil {
+	if err := service.Associate(repo, "main"); err != nil {
 		t.Fatal(err)
 	}
 	linked, err := service.Create(context.Background(), "linked checkout")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := service.Associate(linked.Worktree.Path, linked.Worktree.Branch, service.RepositoryID(), "missing-session"); err != nil {
-		t.Fatal(err)
-	}
 	stale, err := service.Create(context.Background(), "stale checkout")
 	if err != nil {
-		t.Fatal(err)
-	}
-	if err := service.Associate(stale.Worktree.Path, stale.Worktree.Branch, service.RepositoryID(), ""); err != nil {
 		t.Fatal(err)
 	}
 	runCommandGit(t, repo, "worktree", "remove", stale.Worktree.Path)
 
 	metadata, err := fridayworktree.NewStore(cfg.ProjectsPath(), service.RepositoryID())
 	if err != nil {
+		t.Fatal(err)
+	}
+	linkedMeta, err := metadata.Get(linked.Worktree.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	project, err := prepareLogicalProject(context.Background(), repo, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Session ownership lives in the project session pool: the main checkout
+	// resumes a healthy session, the linked checkout points at a missing one.
+	if err := project.SetCurrentSession(projectpkg.MainScope, healthyID); err != nil {
+		t.Fatal(err)
+	}
+	if err := project.SetCurrentSession(linkedMeta.ID, "missing-session"); err != nil {
 		t.Fatal(err)
 	}
 	items, err := metadata.List()
@@ -70,9 +81,10 @@ func TestWorktreesListPrintsDeterministicProjectStateWithoutConversationContent(
 	rows := make([]expectedRow, 0, len(items))
 	for _, item := range items {
 		health, current, staleMarker := "none", "-", "-"
-		if item.SessionID == healthyID {
+		switch worktreeScope(service, fridayworktree.Worktree{ID: item.ID, Name: item.Name, Path: item.Path}) {
+		case projectpkg.MainScope:
 			health = "healthy"
-		} else if item.SessionID != "" {
+		case linkedMeta.ID:
 			health = "missing"
 		}
 		resolvedRepo, _ := filepath.EvalSymlinks(repo)

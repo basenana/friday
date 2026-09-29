@@ -271,13 +271,6 @@ func (m *model) applyLifecycleAction(action codercmds.Action) (bool, tea.Cmd) {
 }
 
 func (m *model) applySessionAction(action codercmds.Action) (bool, tea.Cmd) {
-	if m.worktreeMode && (m.worktreeRuntime == nil || !m.worktreeRuntime.main) {
-		switch action.(type) {
-		case codercmds.ClearSessionAction, codercmds.OpenResumeAction, codercmds.ResumeSessionAction, codercmds.DeleteSessionAction:
-			m.appendBlock(chatBlock{kind: blockError, content: worktreeSessionActionUnavailable})
-			return true, nil
-		}
-	}
 	switch action := action.(type) {
 	case codercmds.CreateWorktreeAction:
 		if !m.worktreeMode {
@@ -333,9 +326,6 @@ func (m *model) applySessionAction(action codercmds.Action) (bool, tea.Cmd) {
 		}
 		return true, nil
 	case codercmds.ClearSessionAction:
-		if m.worktreeMode && m.worktreeRuntime != nil && m.worktreeRuntime.main {
-			return true, m.changeMainWorktreeSession("", "clear")
-		}
 		if m.projectMgr != nil {
 			newID, err := m.createProjectRoot(true)
 			if err != nil {
@@ -364,14 +354,6 @@ func (m *model) applySessionAction(action codercmds.Action) (bool, tea.Cmd) {
 		m.openResumeSelector()
 		return true, nil
 	case codercmds.ResumeSessionAction:
-		if m.worktreeMode && m.worktreeRuntime != nil && m.worktreeRuntime.main {
-			meta, err := m.sessMgr.ResolveActiveSession(action.Target)
-			if err != nil {
-				m.appendBlock(chatBlock{kind: blockError, content: err.Error()})
-				return true, nil
-			}
-			return true, m.changeMainWorktreeSession(meta.ID, "resume")
-		}
 		var meta *sessions.SessionMeta
 		var err error
 		if m.projectMgr != nil {
@@ -404,10 +386,6 @@ func (m *model) applySessionAction(action codercmds.Action) (bool, tea.Cmd) {
 		}
 		return true, nil
 	case codercmds.ArchiveSessionAction:
-		if m.worktreeMode && strings.TrimSpace(action.Target) != "" {
-			m.appendBlock(chatBlock{kind: blockError, content: "worktree /archive only archives the current worktree"})
-			return true, nil
-		}
 		m.requestSessionConfirmation("archive", action.Target)
 		return true, nil
 	case codercmds.DeleteSessionAction:
@@ -583,12 +561,13 @@ func (m *model) switchSessionPrepared(newID string, prepared *codebasepkg.Sessio
 			return nil, containsErr
 		}
 		if !has {
-			return nil, fmt.Errorf("session is not referenced by this project: %s", shortID(newID))
+			return nil, fmt.Errorf("session is not referenced by this scope: %s", shortID(newID))
 		}
 		if _, err = m.projectMgr.GetMeta(newID); err != nil {
 			return nil, fmt.Errorf("prepare session %s: %w", shortID(newID), err)
 		}
 	} else {
+		// Standalone session runtime without a project session pool.
 		_, created, err = m.sessMgr.GetOrCreateDetachedByID(newID)
 		if err != nil {
 			return nil, fmt.Errorf("prepare session %s: %w", shortID(newID), err)
@@ -737,6 +716,15 @@ func (m *model) switchSessionPrepared(newID string, prepared *codebasepkg.Sessio
 	m.registry.Shutdown(oldID)
 	if codebaseTransition != nil {
 		codebaseTransition.Commit()
+	}
+	if m.worktreeMode && m.worktreeRuntime != nil && m.worktreeRuntime.registry == m.registry {
+		// One runtime serves the whole scope, so switching a session keeps the
+		// runtime and only moves its foreground binding.
+		m.worktreeRuntime.sessionID = newID
+		m.projectMgr = m.worktreeRuntime.manager
+		m.refreshWorktreeTabs()
+		statusWaits := m.resetWorktreeStatusFeeds()
+		return tea.Batch(append([]tea.Cmd{m.waitForActorEvent()}, statusWaits...)...), nil
 	}
 	return m.waitForActorEvent(), nil
 }

@@ -15,11 +15,14 @@ import (
 // Metadata is the durable association between a logical project and one Git worktree.
 // Git state is discovered at runtime and is deliberately not stored here.
 type Metadata struct {
-	Version    int       `json:"version"`
-	ID         string    `json:"id"`
-	Name       string    `json:"name"`
-	Path       string    `json:"path"`
-	Branch     string    `json:"branch"`
+	Version int    `json:"version"`
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Path    string `json:"path"`
+	Branch  string `json:"branch"`
+	// SessionID is a legacy read-only input. Older versions recorded the single
+	// session owned by this checkout here; AdoptSessions moves it into the
+	// project session pool and clears it, and nothing writes it again.
 	SessionID  string    `json:"session_id,omitempty"`
 	CreatedAt  time.Time `json:"created_at"`
 	LastUsedAt time.Time `json:"last_used_at"`

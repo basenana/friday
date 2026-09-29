@@ -1043,7 +1043,7 @@ func (m *model) loadInitialSession() tea.Cmd {
 			return succeed(sessionID, feed, nil, projection, projection.promptHistory, false)
 		}
 		if projectMgr != nil {
-			previousCurrent, err := projectMgr.Project().CurrentSessionID()
+			previousCurrent, err := projectMgr.Project().CurrentSessionID(projectpkg.MainScope)
 			if err != nil {
 				return fail("read current project session", "", err)
 			}
@@ -1054,7 +1054,7 @@ func (m *model) loadInitialSession() tea.Cmd {
 			activated := false
 			cleanup := func() {
 				if activated {
-					if err := projectMgr.Project().SetCurrentSession(previousCurrent); err != nil {
+					if err := projectMgr.Project().SetCurrentSession(projectpkg.MainScope, previousCurrent); err != nil {
 						tuiLogger().Warnw("failed to restore current project session",
 							"session_id", previousCurrent,
 							"error", boundedTUILogText(err.Error()),
@@ -1133,7 +1133,7 @@ func (m *model) loadInitialSession() tea.Cmd {
 					cleanup()
 					return fail("resolve worktree association", sessionID, resolveErr)
 				}
-				if associateErr := worktreeService.Associate(workdir, selected.Branch, projectMgr.Project().ID(), sessionID); associateErr != nil {
+				if associateErr := worktreeService.Associate(workdir, selected.Branch); associateErr != nil {
 					feed.Close()
 					release()
 					registry.Shutdown(sessionID)

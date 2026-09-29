@@ -166,6 +166,8 @@ func (m *model) openResumeSelector() {
 	var metas []sessions.SessionMeta
 	var err error
 	if m.projectMgr != nil {
+		// Scope-local listing: a worktree runtime only ever lists the sessions
+		// of its own scope, so another checkout or project cannot leak in here.
 		metas, err = m.projectMgr.List(true)
 	} else {
 		metas, err = m.sessMgr.GetStore().ListActive()
@@ -307,8 +309,6 @@ func (m *model) openTasksSelector() {
 
 type commandConfirmation struct{ action, target, label string }
 
-const worktreeSessionActionUnavailable = "session command unavailable in worktree mode; use /worktree or /select"
-
 func (c *commandConfirmation) View(width int) string {
 	prompt := fmt.Sprintf("%s session %s?", titleWord(c.action), c.label)
 	if c.action == "stop" {
@@ -347,23 +347,11 @@ func (m *model) updateCommandConfirmation(key tea.KeyPressMsg) (tea.Model, tea.C
 		}
 		return m, nil
 	}
-	if m.worktreeMode {
-		if c.action == "archive" {
-			return m, m.archiveCurrentWorktree()
-		}
-		if c.action == "delete" && m.worktreeRuntime != nil && m.worktreeRuntime.main {
-			if c.target == m.sessionID {
-				return m, m.changeMainWorktreeSession("", "delete")
-			}
-			if err := m.sessMgr.DeleteRoot(c.target); err != nil {
-				m.appendBlock(chatBlock{kind: blockError, content: "delete: " + err.Error()})
-			} else {
-				m.appendBlock(chatBlock{kind: blockDivider, content: "deleted session · " + shortID(c.target)})
-			}
-			return m, nil
-		}
-		m.appendBlock(chatBlock{kind: blockError, content: worktreeSessionActionUnavailable})
-		return m, nil
+	// Archiving a linked worktree removes its checkout. Archiving the main
+	// checkout archives one session of the project scope, so it uses the same
+	// path as every other scope below.
+	if m.worktreeMode && c.action == "archive" && m.worktreeRuntime != nil && !m.worktreeRuntime.main {
+		return m, m.archiveCurrentWorktree()
 	}
 	if m.codebaseRuntime != nil && c.target == m.codebaseRuntime.IndexSessionID() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

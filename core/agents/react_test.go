@@ -319,8 +319,49 @@ func (f *idleFakeLLM) StructuredPredict(context.Context, providers.Request, any)
 	return errors.New("not implemented")
 }
 
+// delayedFakeLLM streams one delta, stays idle past the configured idle
+// heartbeat, then streams a final delta and closes — a slow but healthy call.
+type delayedFakeLLM struct {
+	idle  time.Duration
+	mu    sync.Mutex
+	calls int
+}
+
+func (f *delayedFakeLLM) Completion(ctx context.Context, _ providers.Request) providers.Response {
+	f.mu.Lock()
+	f.calls++
+	f.mu.Unlock()
+	resp := providers.NewCommonResponse()
+	go func() {
+		defer close(resp.Stream)
+		defer close(resp.Err)
+		select {
+		case resp.Stream <- providers.Delta{Content: "first "}:
+		case <-ctx.Done():
+			return
+		}
+		select {
+		case <-time.After(f.idle):
+		case <-ctx.Done():
+			return
+		}
+		select {
+		case resp.Stream <- providers.Delta{Content: "last"}:
+		case <-ctx.Done():
+		}
+	}()
+	return resp
+}
+
+func (f *delayedFakeLLM) CompletionNonStreaming(context.Context, providers.Request) (string, error) {
+	return "", errors.New("not implemented")
+}
+func (f *delayedFakeLLM) StructuredPredict(context.Context, providers.Request, any) error {
+	return errors.New("not implemented")
+}
+
 func TestReact_StreamIdleTimeout(t *testing.T) {
-	llm := &idleFakeLLM{canceled: make(chan int, 8)}
+	llm := &delayedFakeLLM{idle: 150 * time.Millisecond}
 	sess := session.New("sess-idle", llm)
 
 	agent := New(llm, Option{
@@ -334,18 +375,21 @@ func TestReact_StreamIdleTimeout(t *testing.T) {
 		Session:     sess,
 		UserMessage: "Say hi.",
 	})
-	// ReadAllContent returns when the response closes; the react loop should retry
-	// and eventually exhaust MaxLoopTimes and close the response.
-	_, _ = api.ReadAllContent(ctx, resp)
-
-	// The agent should have invoked the LLM at least twice (1 retry after idle timeout).
+	// The idle heartbeat is log-only: the slow stream is waited out, not retried.
+	content, err := api.ReadAllContent(ctx, resp)
+	if err != nil {
+		t.Fatalf("idle stream should be waited out, got error: %v", err)
+	}
+	if content != "first last" {
+		t.Fatalf("content=%q, want the complete slow response", content)
+	}
+	// Exactly one LLM call: an idle timeout must not trigger a retry.
 	llm.mu.Lock()
 	calls := llm.calls
 	llm.mu.Unlock()
-	if calls < 2 {
-		t.Fatalf("expected at least 2 llm calls after idle timeout retry, got %d", calls)
+	if calls != 1 {
+		t.Fatalf("expected exactly 1 llm call with no idle retry, got %d", calls)
 	}
-	waitForCanceledCall(t, llm.canceled, 0)
 }
 
 // emptyFakeLLM immediately closes the stream with zero tokens, simulating an empty response.
@@ -448,22 +492,6 @@ func TestIsMaxTokensError(t *testing.T) {
 		if got != tt.match {
 			t.Errorf("isMaxTokensError(%q) = %v, want %v", tt.errMsg, got, tt.match)
 		}
-	}
-}
-
-func TestIsStreamIdleTimeout(t *testing.T) {
-	if !isStreamIdleTimeout(&StreamIdleTimeoutError{Timeout: time.Second, Received: 2}) {
-		t.Fatalf("expected StreamIdleTimeoutError to be detected")
-	}
-	if isStreamIdleTimeout(errors.New("other")) {
-		t.Fatalf("plain error should not match")
-	}
-	wrapped := errors.New("wrap: ") // not unwrapped
-	_ = wrapped
-	if isStreamIdleTimeout(errors.New("stream idle timeout: text")) {
-		// Note: isStreamIdleTimeout uses errors.As, so a non-wrapped plain error
-		// with the same text should NOT match. This confirms behavior.
-		t.Fatalf("stringly-typed error should not be matched by errors.As")
 	}
 }
 

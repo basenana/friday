@@ -2,6 +2,7 @@ package codebase
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/basenana/friday/core/agents"
 	"github.com/basenana/friday/core/logger"
 	"github.com/basenana/friday/core/providers"
 	"github.com/basenana/friday/core/providers/fallback"
@@ -97,10 +99,68 @@ func automaticSpec(maxLoopTimes int, maxOutputTokens int64) Spec {
 	return Spec{
 		Version: 1,
 		Index:   modeSpec{Effort: "default", MaxLoopTimes: 100, MaxOutputTokens: 8192},
-		Context: contextSpec{
-			modeSpec: modeSpec{Effort: "none", MaxLoopTimes: maxLoopTimes, MaxOutputTokens: maxOutputTokens},
-			Timeout:  duration{time.Minute},
-		},
+		Context: modeSpec{Effort: "none", MaxLoopTimes: maxLoopTimes, MaxOutputTokens: maxOutputTokens},
+	}
+}
+
+func TestContextRunTimeoutScalesWithMaxLoopTimes(t *testing.T) {
+	previous := agents.PerLoopBudget
+	agents.PerLoopBudget = time.Minute
+	defer func() { agents.PerLoopBudget = previous }()
+
+	spec := automaticSpec(10, 10000) // 1m per loop
+	if got := contextRunTimeout(spec); got != 10*time.Minute {
+		t.Fatalf("run timeout=%v, want 10m (10 loops x 1m)", got)
+	}
+	spec.Context.MaxLoopTimes = 3
+	if got := contextRunTimeout(spec); got != 3*time.Minute {
+		t.Fatalf("run timeout=%v, want 3m (3 loops x 1m)", got)
+	}
+}
+
+// blockingProvider never emits data and only closes its streams when the
+// context ends, so the observed run duration measures the applied timeout.
+type blockingProvider struct{}
+
+func (b *blockingProvider) Completion(ctx context.Context, _ providers.Request) providers.Response {
+	resp := providers.NewCommonResponse()
+	resp.Stream = make(chan providers.Delta)
+	resp.Err = make(chan error)
+	go func() {
+		<-ctx.Done()
+		close(resp.Stream)
+		close(resp.Err)
+	}()
+	return resp
+}
+
+func (b *blockingProvider) CompletionNonStreaming(context.Context, providers.Request) (string, error) {
+	return "", nil
+}
+
+func (b *blockingProvider) StructuredPredict(context.Context, providers.Request, any) error { return nil }
+
+func TestContextProviderAppliesLoopScaledTimeout(t *testing.T) {
+	previous := agents.PerLoopBudget
+	agents.PerLoopBudget = 100 * time.Millisecond
+	defer func() { agents.PerLoopBudget = previous }()
+
+	r := newRunnerTestFixture(t, &blockingProvider{})
+	spec := automaticSpec(3, 10000)
+
+	start := time.Now()
+	_, _, err := r.runContext(context.Background(), coresession.New("root", nil), nil, spec, "metadata")
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Fatal("expected the blocked run to time out")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err=%v, want context deadline exceeded", err)
+	}
+	// The deadline is 3 loops x 100ms = 300ms; a single-loop budget would
+	// have fired at ~100ms. Allow scheduling slack on the lower bound only.
+	if elapsed < 250*time.Millisecond {
+		t.Fatalf("run ended after %v, want at least ~300ms (3 loops x 100ms)", elapsed)
 	}
 }
 

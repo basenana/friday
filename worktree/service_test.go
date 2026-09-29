@@ -234,10 +234,10 @@ func TestRegistryAssociatesAndReportsStaleWorktree(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.Associate(created.Worktree.Path, created.Worktree.Branch, "project-1", "session-1"); err != nil {
+	if err := svc.Associate(created.Worktree.Path, created.Worktree.Branch); err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.Associate(created.Worktree.Path, "friday/renamed", "project-1", "session-1"); err != nil {
+	if err := svc.Associate(created.Worktree.Path, "friday/renamed"); err != nil {
 		t.Fatal(err)
 	}
 	items, err := svc.List(context.Background())
@@ -245,8 +245,11 @@ func TestRegistryAssociatesAndReportsStaleWorktree(t *testing.T) {
 		t.Fatal(err)
 	}
 	associated, err := svc.Resolve(context.Background(), created.Worktree.Branch)
-	if err != nil || associated.ProjectID != svc.ProjectIdentity().ID || associated.SessionID != "session-1" {
+	if err != nil || associated.ProjectID != svc.ProjectIdentity().ID {
 		t.Fatalf("association = %#v, %v; items=%#v", associated, err, items)
+	}
+	if associated.SessionID != "" {
+		t.Fatalf("association still records a session: %#v", associated)
 	}
 	runGit(t, repo, "worktree", "remove", created.Worktree.Path)
 	items, err = svc.List(context.Background())
@@ -310,23 +313,14 @@ func TestServiceRemoveRetainsBranchAndArchivesReferencedSession(t *testing.T) {
 		t.Fatal(err)
 	}
 	manager := sessions.NewManager(sessionfile.NewFileSessionStore(filepath.Join(data, "sessions")), filepath.Join(data, "current"), "")
-	lifecycle, err := manager.CreateRoot(context.Background(), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	sessionID := lifecycle.RootID()
-	if err := lifecycle.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if err := svc.Associate(created.Worktree.Path, created.Worktree.Branch, svc.RepositoryID(), sessionID); err != nil {
-		t.Fatal(err)
-	}
+	pool := newScopePool(t, data, repo, manager, worktreeID(created.Worktree.Path))
+	sessionID := createScopePoolRoot(t, pool)
 	meta, err := svc.store.Get(created.Worktree.Path)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if err := svc.Remove(context.Background(), meta.ID, RemoveOptions{Sessions: manager}); err != nil {
+	if err := svc.Remove(context.Background(), meta.ID, RemoveOptions{Sessions: pool}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(created.Worktree.Path); !os.IsNotExist(err) {
@@ -357,17 +351,15 @@ func TestServiceRemoveStaleMetadataSkipsGitAndMissingSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.Associate(created.Worktree.Path, created.Worktree.Branch, svc.RepositoryID(), "missing-session"); err != nil {
-		t.Fatal(err)
-	}
 	meta, err := svc.store.Get(created.Worktree.Path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	runGit(t, repo, "worktree", "remove", created.Worktree.Path)
 	manager := sessions.NewManager(sessionfile.NewFileSessionStore(filepath.Join(data, "sessions")), filepath.Join(data, "current"), "")
+	pool := newScopePool(t, data, repo, manager, worktreeID(created.Worktree.Path))
 
-	if err := svc.Remove(context.Background(), meta.ID, RemoveOptions{Sessions: manager}); err != nil {
+	if err := svc.Remove(context.Background(), meta.ID, RemoveOptions{Sessions: pool}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := svc.store.Get(meta.ID); err == nil {
@@ -598,7 +590,7 @@ func TestServiceRemoveRefusesDirtyMainCurrentAmbiguousAndRunningTargets(t *testi
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := svc.Associate(repo, "main", svc.RepositoryID(), ""); err != nil {
+		if err := svc.Associate(repo, "main"); err != nil {
 			t.Fatal(err)
 		}
 		entries, err := svc.store.List()
@@ -728,4 +720,28 @@ func runGit(t *testing.T, dir string, args ...string) {
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git %s: %v: %s", strings.Join(args, " "), err, out)
 	}
+}
+
+// newScopePool returns the scope-local session pool of one checkout using the
+// same project store the command layer uses.
+func newScopePool(t *testing.T, data, root string, manager *sessions.Manager, scope string) *project.Manager {
+	t.Helper()
+	proj, err := project.Open(root, project.NewFileStore(filepath.Join(data, "projects")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return project.NewScopedManager(proj, manager, scope)
+}
+
+func createScopePoolRoot(t *testing.T, pool *project.Manager) string {
+	t.Helper()
+	lifecycle, err := pool.CreateRoot(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := lifecycle.RootID()
+	if err := lifecycle.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return id
 }

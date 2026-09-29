@@ -66,7 +66,7 @@ func RunWorktree(sessMgr *sessions.Manager, cfg *config.Config, cwd string) erro
 	if err != nil {
 		return err
 	}
-	if err := service.Associate(current.Path, current.Branch, service.ProjectIdentity().ID, current.SessionID); err != nil {
+	if err := service.Associate(current.Path, current.Branch); err != nil {
 		return err
 	}
 	supervisor, err := newWorktreeRuntimeSupervisor(service, sessMgr, cfg)
@@ -88,8 +88,8 @@ func RunWorktree(sessMgr *sessions.Manager, cfg *config.Config, cwd string) erro
 	commands := codercmds.NewRegistry()
 	codercmds.RegisterAll(commands)
 	m := loadingModelAt(sessMgr, active.registry, commands, cfg, active.sessionID, active.workdir)
-	m.runtime = sessMgr
-	m.projectMgr = nil
+	m.runtime = active.manager
+	m.projectMgr = active.manager
 	m.loopManager = active.loop
 	m.worktreeMode = true
 	m.worktreeService = service
@@ -130,7 +130,7 @@ func defaultWorktreeTarget(ctx context.Context, service *fridayworktree.Service)
 			continue
 		}
 		if !item.Registered {
-			if err := service.Associate(item.Path, item.Branch, service.ProjectIdentity().ID, item.SessionID); err != nil {
+			if err := service.Associate(item.Path, item.Branch); err != nil {
 				return "", fmt.Errorf("register main worktree: %w", err)
 			}
 		}
@@ -206,25 +206,6 @@ func (m *model) archiveCurrentWorktree() tea.Cmd {
 		return worktreeArchivePreparedMsg{token: token, runtime: prepared, removeID: removeID, err: err}
 	}
 	return tea.Batch(operation, m.armSpinner())
-}
-
-func (m *model) changeMainWorktreeSession(targetSession, action string) tea.Cmd {
-	m.worktreeChanging = true
-	m.worktreeGeneration++
-	token := m.worktreeGeneration
-	supervisor := m.worktreeSupervisor
-	worktreeID := ""
-	if m.worktreeRuntime != nil {
-		worktreeID = m.worktreeRuntime.id
-	}
-	width, height := m.width, m.height
-	return func() tea.Msg {
-		if supervisor == nil || worktreeID == "" {
-			return worktreePreparedMsg{token: token, err: errors.New("main worktree runtime is unavailable")}
-		}
-		prepared, err := supervisor.prepareMainSession(context.Background(), worktreeID, targetSession, action, width, height)
-		return worktreePreparedMsg{token: token, runtime: prepared, err: err}
-	}
 }
 
 func (m *model) handleWorktreeArchivePrepared(msg worktreeArchivePreparedMsg) tea.Cmd {
@@ -375,7 +356,7 @@ func (m *model) commitPreparedWorktree(msg worktreePreparedMsg) tea.Cmd {
 		newFeed = bus.SubscribeAgentFeed(target.bus, target.sessionID)
 	}
 	oldFeed := m.feed
-	m.registry, m.runtime, m.projectMgr = target.registry, m.sessMgr, nil
+	m.registry, m.runtime, m.projectMgr = target.registry, target.manager, target.manager
 	m.feed, m.sessionRelease, m.loopManager = newFeed, nil, target.loop
 	m.worktreeRuntime = target
 	m.sessionID, m.workdir = target.sessionID, target.workdir

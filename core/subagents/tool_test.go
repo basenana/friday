@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/basenana/friday/core/agents"
 	"github.com/basenana/friday/core/api"
 	"github.com/basenana/friday/core/session"
 	"github.com/basenana/friday/core/tools"
@@ -402,6 +403,76 @@ func (f *fakeAgent) Chat(ctx context.Context, req *api.Request) *api.Response {
 		resp.Close()
 	}()
 	return resp
+}
+
+// loopLimitFakeAgent is a fakeAgent that exposes a loop ceiling like *agents.react.
+type loopLimitFakeAgent struct {
+	fakeAgent
+	loops int
+}
+
+func (a *loopLimitFakeAgent) LoopLimit() int { return a.loops }
+
+func TestChildTotalTimeoutFollowsLoopLimit(t *testing.T) {
+	if _, ok := childTotalTimeout(&fakeAgent{response: "x"}); ok {
+		t.Fatal("agents without LoopLimit must run under the parent context only")
+	}
+	previous := agents.PerLoopBudget
+	agents.PerLoopBudget = 10 * time.Millisecond
+	defer func() { agents.PerLoopBudget = previous }()
+
+	timeout, ok := childTotalTimeout(&loopLimitFakeAgent{loops: 3})
+	if !ok || timeout != 30*time.Millisecond {
+		t.Fatalf("childTotalTimeout=%v ok=%v, want 30ms (3 loops x 10ms)", timeout, ok)
+	}
+}
+
+func TestSubagentChildRunBoundedByTotalTimeout(t *testing.T) {
+	previous := agents.PerLoopBudget
+	agents.PerLoopBudget = 40 * time.Millisecond
+	defer func() { agents.PerLoopBudget = previous }()
+
+	hanging := &loopLimitFakeAgent{loops: 2}
+	hanging.chatFunc = func(ctx context.Context, _ *api.Request) *api.Response {
+		resp := api.NewResponse()
+		go func() {
+			// Never closes the response so the consumer deadline is the only exit.
+			<-ctx.Done()
+		}()
+		return resp
+	}
+
+	sess := newTestSession(t)
+	handler := callSubagentTool([]ExpertAgent{{Name: "worker", Agent: hanging}}, sess, nil)
+
+	parent, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	start := time.Now()
+	result, err := handler(parent, &tools.Request{
+		SessionID: sess.Root.ID,
+		Arguments: map[string]any{"tasks": []any{
+			map[string]any{"agent_name": "worker", "task": "hang until bounded"},
+		}},
+	})
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+	if result == nil || !result.IsError {
+		t.Fatalf("hanging child should fail the batch task: %+v", result)
+	}
+	// The child total timeout (2 loops x 40ms) must fire well before the 5s
+	// parent deadline; otherwise the bound is not being applied.
+	if elapsed >= time.Second {
+		t.Fatalf("child run was not bounded by its total timeout (took %v)", elapsed)
+	}
+	if elapsed < 70*time.Millisecond {
+		t.Fatalf("child run ended too early (%v), want ~80ms (2 loops x 40ms)", elapsed)
+	}
+	text := result.Content[0].(tools.TextContent).Text
+	if !strings.Contains(text, "context deadline exceeded") {
+		t.Fatalf("batch result should report the deadline, got: %s", text)
+	}
 }
 
 type recordingForker struct {

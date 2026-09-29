@@ -16,6 +16,18 @@ changes. `RunProject` preserves the session-oriented non-Git mode. Keep setup
 differences behind these entry points rather than exporting internal model
 types.
 
+Git mode and project mode share one session model: every runtime is bound to a
+`coder/project` scope (`project.MainScope` for the main checkout, otherwise the
+worktree ID) and its registry catalog is that scope's `project.Manager`. One
+runtime therefore hosts every session of its scope, so `/resume`, `/clear`,
+`/new`, and `/delete` are plain `switchSessionPrepared`/`AcquireLifecycle`
+operations inside a scope and never cross scope boundaries. Switching worktree
+tabs keeps the existing prepare/commit atomicity via
+`worktreeRuntimeSupervisor`; only the scope current pointer or a dead
+foreground session forces a replacement runtime. `worktree.json.session_id` is
+legacy read-only input, adopted into the scope pool at startup and then
+cleared.
+
 ## Files
 
 - `tui.go` creates the Bubble Tea v2 program and owns the main model/update lifecycle.

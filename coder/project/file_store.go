@@ -23,7 +23,18 @@ func (s *FileStore) projectDir(id string) string { return filepath.Join(s.basePa
 func (s *FileStore) metaPath(id string) string {
 	return filepath.Join(s.projectDir(id), "project.json")
 }
-func (s *FileStore) currentPath(id string) string { return filepath.Join(s.projectDir(id), "current") }
+
+// currentPath resolves the pointer file of one scope. The main scope keeps the
+// pre-scope file name, so existing project directories stay readable.
+func (s *FileStore) currentPath(id, scope string) (string, error) {
+	if scope == MainScope {
+		return filepath.Join(s.projectDir(id), "current"), nil
+	}
+	if !validID(scope) {
+		return "", fmt.Errorf("invalid session scope")
+	}
+	return filepath.Join(s.projectDir(id), "current."+scope), nil
+}
 func (s *FileStore) refsDir(id string) string     { return filepath.Join(s.projectDir(id), "sessions") }
 func (s *FileStore) refPath(id, sessionID string) string {
 	return filepath.Join(s.refsDir(id), sessionID+".json")
@@ -130,8 +141,12 @@ func (s *FileStore) SetCodebaseEnabled(id string, enabled bool) error {
 	})
 }
 
-func (s *FileStore) Current(id string) (string, error) {
-	data, err := os.ReadFile(s.currentPath(id))
+func (s *FileStore) Current(id, scope string) (string, error) {
+	path, err := s.currentPath(id, scope)
+	if err != nil {
+		return "", err
+	}
+	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
 		return "", nil
 	}
@@ -141,9 +156,13 @@ func (s *FileStore) Current(id string) (string, error) {
 	return strings.TrimSpace(string(data)), nil
 }
 
-func (s *FileStore) SetCurrent(id, sessionID string) error {
+func (s *FileStore) SetCurrent(id, scope, sessionID string) error {
+	path, err := s.currentPath(id, scope)
+	if err != nil {
+		return err
+	}
 	return s.withLock(id, func() error {
-		return writeAtomic(s.currentPath(id), []byte(strings.TrimSpace(sessionID)+"\n"), 0o600)
+		return writeAtomic(path, []byte(strings.TrimSpace(sessionID)+"\n"), 0o600)
 	})
 }
 
@@ -198,6 +217,12 @@ func (s *FileStore) HasRef(id, sessionID string) (bool, error) {
 func (s *FileStore) AddRef(id string, ref SessionRef) error {
 	if !validID(ref.SessionID) {
 		return fmt.Errorf("invalid session id")
+	}
+	if ref.Scope != MainScope && !validID(ref.Scope) {
+		return fmt.Errorf("invalid session scope")
+	}
+	if ref.Scope == "" {
+		ref.Scope = MainScope
 	}
 	return s.withLock(id, func() error {
 		if err := os.MkdirAll(s.refsDir(id), 0o700); err != nil {

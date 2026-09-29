@@ -68,7 +68,7 @@ func (i *Invoker) Invoke(ctx context.Context, tool *Tool, request *Request) (*Re
 		return result, nil
 	}
 
-	callCtx, cancel, effective, _ := i.executionContext(ctx, declared)
+	callCtx, cancel, effective, _ := i.executionContext(ctx, tool, declared)
 	defer cancel()
 	if result := invocationContextResult(tool.Name, callCtx, effective, 0, nil); result != nil {
 		return result, nil
@@ -187,7 +187,13 @@ func (i *Invoker) resolveDeclaredTimeout(tool *Tool, request *Request) (time.Dur
 	return timeout, nil
 }
 
-func (i *Invoker) executionContext(parent context.Context, declared time.Duration) (context.Context, context.CancelFunc, time.Duration, TimeoutKind) {
+// executionContext derives the per-invocation deadline. Self-budgeting tools
+// flagged with NoHardLimit (and without a declared timeout) run under the
+// caller's context only; every other tool is bounded by the hard limit.
+func (i *Invoker) executionContext(parent context.Context, tool *Tool, declared time.Duration) (context.Context, context.CancelFunc, time.Duration, TimeoutKind) {
+	if declared == 0 && tool.NoHardLimit() {
+		return parent, func() {}, 0, ""
+	}
 	hardLimit := i.hardLimit
 	if hardLimit <= 0 {
 		hardLimit = MaxToolExecutionDuration

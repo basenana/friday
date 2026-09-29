@@ -36,20 +36,6 @@ type worktreeRuntimeTestFixture struct {
 	mainID     string
 }
 
-type failNextWorktreeMetadataUpdateStore struct {
-	fridayworktree.Store
-	err      error
-	failNext bool
-}
-
-func (s *failNextWorktreeMetadataUpdateStore) UpdateMetadata(id string, update func(*fridayworktree.Metadata) error) error {
-	if s.failNext {
-		s.failNext = false
-		return s.err
-	}
-	return s.Store.UpdateMetadata(id, update)
-}
-
 type hookProbeRequest struct{ tools []*tools.Tool }
 
 func (r *hookProbeRequest) GetUserMessage() string       { return "probe" }
@@ -85,7 +71,7 @@ func newWorktreeRuntimeTestFixture(t *testing.T) *worktreeRuntimeTestFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := service.Associate(current.Path, current.Branch, service.ProjectIdentity().ID, ""); err != nil {
+	if err := service.Associate(current.Path, current.Branch); err != nil {
 		t.Fatal(err)
 	}
 	worktreeStore, err := fridayworktree.NewStore(cfg.ProjectsPath(), service.ProjectIdentity().ID)
@@ -391,7 +377,7 @@ func TestWorktreeRuntimeSupervisorConcurrentActivationReusesRuntime(t *testing.T
 	}
 }
 
-func TestWorktreeRuntimeSupervisorReplacesRuntimeWhenSessionReferenceChanges(t *testing.T) {
+func TestWorktreeRuntimeSupervisorReplacesRuntimeWhenForegroundSessionBecomesUnusable(t *testing.T) {
 	fixture := newWorktreeRuntimeTestFixture(t)
 	ctx := context.Background()
 	stale, err := fixture.supervisor.Activate(ctx, fixture.mainID)
@@ -414,27 +400,27 @@ func TestWorktreeRuntimeSupervisorReplacesRuntimeWhenSessionReferenceChanges(t *
 	case <-time.After(5 * time.Second):
 		t.Fatal("obsolete loop did not start")
 	}
-	replacementLifecycle, err := fixture.sessions.CreateRoot(ctx, nil)
-	if err != nil {
+	// The scope keeps its own pool: retiring the runtime session leaves the
+	// scope pointer dangling, so re-activation must build a fresh runtime.
+	if err := fixture.sessions.Archive(stale.sessionID); err != nil {
 		t.Fatal(err)
 	}
-	replacementID := replacementLifecycle.RootID()
-	if err := replacementLifecycle.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if err := fixture.supervisor.store.UpdateSession(fixture.mainID, replacementID); err != nil {
-		t.Fatal(err)
-	}
-
 	replacement, err := fixture.supervisor.Activate(ctx, fixture.mainID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if replacement == stale {
-		t.Fatal("activation reused a runtime bound to the previous session")
+		t.Fatal("activation reused a runtime whose foreground session became unusable")
 	}
-	if replacement.sessionID != replacementID {
-		t.Fatalf("replacement session = %q, want %q", replacement.sessionID, replacementID)
+	if replacement.sessionID == stale.sessionID {
+		t.Fatalf("replacement session = %q, want a new session", replacement.sessionID)
+	}
+	current, err := replacement.manager.CurrentID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current != replacement.sessionID {
+		t.Fatalf("scope current = %q, want %q", current, replacement.sessionID)
 	}
 	if fixture.supervisor.active != replacement || fixture.supervisor.runtimes[fixture.mainID] != replacement {
 		t.Fatal("replacement runtime was not published consistently")
@@ -459,15 +445,7 @@ func TestWorktreeRuntimeSupervisorDoesNotCloseObsoleteRuntimeBeforeReplacementCo
 	if err != nil {
 		t.Fatal(err)
 	}
-	replacementLifecycle, err := fixture.sessions.CreateRoot(ctx, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	replacementID := replacementLifecycle.RootID()
-	if err := replacementLifecycle.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if err := fixture.supervisor.store.UpdateSession(fixture.mainID, replacementID); err != nil {
+	if err := fixture.sessions.Archive(stale.sessionID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -482,6 +460,39 @@ func TestWorktreeRuntimeSupervisorDoesNotCloseObsoleteRuntimeBeforeReplacementCo
 	release()
 	if prepared.runtime == stale {
 		t.Fatal("replacement preparation reused stale runtime")
+	}
+}
+
+func TestWorktreeRuntimeSupervisorKeepsRetainedRuntimeForItsScope(t *testing.T) {
+	fixture := newWorktreeRuntimeTestFixture(t)
+	ctx := context.Background()
+	retained, err := fixture.supervisor.Activate(ctx, fixture.mainID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := retained.manager.CreateRoot(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherID := other.RootID()
+	if err := other.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := retained.manager.Project().SetCurrentSession(projectpkg.MainScope, otherID); err != nil {
+		t.Fatal(err)
+	}
+
+	// One runtime serves its whole scope, so an activation keeps the retained
+	// runtime and its in-flight work instead of rebuilding for the pointer.
+	again, err := fixture.supervisor.Activate(ctx, fixture.mainID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again != retained || fixture.supervisor.runtimes[fixture.mainID] != retained {
+		t.Fatal("activation rebuilt a runtime that still served its scope")
+	}
+	if retained.sessionID == "" {
+		t.Fatal("retained runtime lost its foreground session")
 	}
 }
 
@@ -866,130 +877,13 @@ func TestArchiveLinkedWorktreeReturnsToMainAndKeepsBranch(t *testing.T) {
 	}
 }
 
-func TestArchiveMainWorktreeReplacesSessionWithoutRemovingCheckout(t *testing.T) {
-	fixture := newWorktreeRuntimeTestFixture(t)
-	mainRuntime, err := fixture.supervisor.Activate(context.Background(), fixture.mainID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	oldSession, mainPath := mainRuntime.sessionID, mainRuntime.workdir
-
-	prepared, removeID, err := fixture.supervisor.prepareArchive(context.Background(), fixture.mainID, 100, 40)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if removeID != "" || prepared.runtime.id != fixture.mainID || prepared.runtime.sessionID == oldSession {
-		t.Fatalf("main archive replacement: remove=%q runtime=%#v old=%q", removeID, prepared.runtime, oldSession)
-	}
-	if err := fixture.supervisor.commitActivation(prepared); err != nil {
-		t.Fatal(err)
-	}
-	prepared.feed.Close()
-	if active, err := fixture.sessions.IsActive(oldSession); err != nil || active {
-		t.Fatalf("old main session active=%v err=%v", active, err)
-	}
-	if info, err := os.Stat(mainPath); err != nil || !info.IsDir() {
-		t.Fatalf("main checkout missing after archive: info=%v err=%v", info, err)
-	}
-	meta, err := fixture.supervisor.store.Get(fixture.mainID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if meta.SessionID != prepared.runtime.sessionID {
-		t.Fatalf("main metadata session=%q want=%q", meta.SessionID, prepared.runtime.sessionID)
-	}
-}
-
-func TestArchiveMainPrepareFailurePreservesOldRuntimeAndSession(t *testing.T) {
-	fixture := newWorktreeRuntimeTestFixture(t)
-	mainRuntime, err := fixture.supervisor.Activate(context.Background(), fixture.mainID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	oldSession := mainRuntime.sessionID
-	wantErr := errors.New("injected replacement attach failure")
-	fixture.supervisor.attachRuntime = func(_ context.Context, runtime *worktreeRuntime) error {
-		if runtime != mainRuntime {
-			return wantErr
-		}
-		return nil
-	}
-
-	if _, _, err := fixture.supervisor.prepareArchive(context.Background(), fixture.mainID, 100, 40); !errors.Is(err, wantErr) {
-		t.Fatalf("prepare archive error = %v, want %v", err, wantErr)
-	}
-	if active, err := fixture.sessions.IsActive(oldSession); err != nil || !active {
-		t.Fatalf("old main session active=%v err=%v", active, err)
-	}
-	meta, err := fixture.supervisor.store.Get(fixture.mainID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if meta.SessionID != oldSession {
-		t.Fatalf("main metadata session=%q want old session %q", meta.SessionID, oldSession)
-	}
-	if fixture.supervisor.active != mainRuntime || fixture.supervisor.runtimes[fixture.mainID] != mainRuntime {
-		t.Fatal("failed archive preparation displaced the old main runtime")
-	}
-	if _, release, err := mainRuntime.registry.AcquireLifecycle(oldSession); err != nil {
-		t.Fatalf("old main registry is unavailable: %v", err)
-	} else {
-		release()
-	}
-}
-
-func TestArchiveMainCommitAfterSupervisorCloseCleansReplacement(t *testing.T) {
-	fixture := newWorktreeRuntimeTestFixture(t)
-	if _, err := fixture.supervisor.Activate(context.Background(), fixture.mainID); err != nil {
-		t.Fatal(err)
-	}
-	prepared, _, err := fixture.supervisor.prepareArchive(context.Background(), fixture.mainID, 100, 40)
-	if err != nil {
-		t.Fatal(err)
-	}
-	newSession := prepared.runtime.sessionID
-	prepared.feed.Close()
-	if err := fixture.supervisor.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if err := fixture.supervisor.commitActivation(prepared); err == nil {
-		t.Fatal("commit after supervisor close succeeded")
-	}
-	if active, err := fixture.sessions.IsActive(newSession); err != nil || active {
-		t.Fatalf("replacement session active=%v err=%v after rejected commit", active, err)
-	}
-}
-
-func TestArchiveMainMetadataCommitFailureAbortsCodebaseTransition(t *testing.T) {
-	fixture := newWorktreeRuntimeTestFixture(t)
-	mainRuntime, err := fixture.supervisor.Activate(context.Background(), fixture.mainID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	prepared, _, err := fixture.supervisor.prepareArchive(context.Background(), fixture.mainID, 100, 40)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer prepared.feed.Close()
-	wantErr := errors.New("injected metadata commit failure")
-	fixture.supervisor.store = &failNextWorktreeMetadataUpdateStore{Store: fixture.supervisor.store, err: wantErr, failNext: true}
-	if err := fixture.supervisor.commitActivation(prepared); !errors.Is(err, wantErr) {
-		t.Fatalf("commit error = %v, want %v", err, wantErr)
-	}
-	transition, err := fixture.supervisor.codebaseRuntime.PrepareSessionSwitch(context.Background(), mainRuntime.sessionID)
-	if err != nil {
-		t.Fatalf("Codebase transition remained locked after failed archive commit: %v", err)
-	}
-	transition.Abort()
-}
-
 func newWorktreeRuntimeTestModel(t *testing.T, fixture *worktreeRuntimeTestFixture, runtime *worktreeRuntime) *model {
 	t.Helper()
 	commands := codercmds.NewRegistry()
 	codercmds.RegisterAll(commands)
 	m := baseModelAt(fixture.sessions, runtime.registry, commands, fixture.cfg, runtime.sessionID, runtime.workdir)
-	m.runtime = fixture.sessions
-	m.projectMgr = nil
+	m.runtime = runtime.manager
+	m.projectMgr = runtime.manager
 	m.worktreeMode = true
 	m.worktreeSupervisor = fixture.supervisor
 	m.worktreeRuntime = runtime

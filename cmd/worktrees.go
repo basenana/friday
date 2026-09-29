@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 
 	codebasepkg "github.com/basenana/friday/coder/codebase"
+	projectpkg "github.com/basenana/friday/coder/project"
 	"github.com/basenana/friday/config"
 	"github.com/basenana/friday/sessions"
 	fridayworktree "github.com/basenana/friday/worktree"
@@ -48,18 +49,33 @@ var worktreesRemoveCmd = &cobra.Command{
 	},
 }
 
-func openWorktreeService(ctx context.Context, cwd string, cfg *config.Config) (*fridayworktree.Service, error) {
+// openWorktreeService opens the logical project and its worktree store, and
+// adopts legacy one-session-per-worktree references into the project session
+// pool. Adoption is idempotent, so every entrypoint can call it.
+func openWorktreeService(ctx context.Context, cwd string, cfg *config.Config, manager *sessions.Manager) (*fridayworktree.Service, fridayworktree.Store, *projectpkg.Project, error) {
 	if cfg == nil {
-		return nil, fmt.Errorf("configuration is unavailable")
+		return nil, nil, nil, fmt.Errorf("configuration is unavailable")
 	}
-	if _, err := prepareLogicalProject(ctx, cwd, cfg); err != nil {
-		return nil, err
+	project, err := prepareLogicalProject(ctx, cwd, cfg)
+	if err != nil {
+		return nil, nil, nil, err
 	}
-	return fridayworktree.Open(ctx, cwd, cfg.WorktreePath(), cfg.Worktree.BranchPrefix, cfg.DataDirPath())
+	service, err := fridayworktree.Open(ctx, cwd, cfg.WorktreePath(), cfg.Worktree.BranchPrefix, cfg.DataDirPath())
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	store, err := fridayworktree.NewStore(cfg.ProjectsPath(), service.ProjectIdentity().ID)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if err := fridayworktree.AdoptSessions(ctx, store, service.ProjectCodeRoot(), project, manager); err != nil {
+		return nil, nil, nil, fmt.Errorf("adopt legacy worktree sessions: %w", err)
+	}
+	return service, store, project, nil
 }
 
 func runWorktreesList(ctx context.Context, cwd string, cfg *config.Config, manager *sessions.Manager, out io.Writer) error {
-	service, err := openWorktreeService(ctx, cwd, cfg)
+	service, _, project, err := openWorktreeService(ctx, cwd, cfg, manager)
 	if err != nil {
 		return err
 	}
@@ -72,7 +88,11 @@ func runWorktreesList(ctx context.Context, cwd string, cfg *config.Config, manag
 		return err
 	}
 	for _, item := range items {
-		health, err := worktreeSessionHealth(manager, item.SessionID)
+		sessionID, err := project.CurrentSessionID(worktreeScope(service, item))
+		if err != nil {
+			return fmt.Errorf("inspect session for worktree %s: %w", item.ID, err)
+		}
+		health, err := sessionHealth(manager, sessionID)
 		if err != nil {
 			return fmt.Errorf("inspect session for worktree %s: %w", item.ID, err)
 		}
@@ -88,7 +108,15 @@ func runWorktreesList(ctx context.Context, cwd string, cfg *config.Config, manag
 	return nil
 }
 
-func worktreeSessionHealth(manager *sessions.Manager, sessionID string) (string, error) {
+// worktreeScope resolves the session scope of one worktree through the single
+// shared rule: the main checkout uses the project scope, every linked checkout
+// uses its own.
+func worktreeScope(service *fridayworktree.Service, item fridayworktree.Worktree) string {
+	return fridayworktree.ScopeForWorktree(
+		fridayworktree.Metadata{ID: item.ID, Name: item.Name, Path: item.Path}, service.ProjectCodeRoot())
+}
+
+func sessionHealth(manager *sessions.Manager, sessionID string) (string, error) {
 	if sessionID == "" {
 		return "none", nil
 	}
@@ -120,13 +148,20 @@ func yesMarker(value bool) string {
 }
 
 func runWorktreesRemove(ctx context.Context, cwd string, cfg *config.Config, manager *sessions.Manager, id string, deleteBranch bool) error {
-	service, err := openWorktreeService(ctx, cwd, cfg)
+	service, store, project, err := openWorktreeService(ctx, cwd, cfg, manager)
 	if err != nil {
 		return err
 	}
+	// The id may name a checkout that is already gone, so scope resolution runs
+	// from stored metadata instead of live Git state.
+	meta, err := store.Get(id)
+	if err != nil {
+		return err
+	}
+	pool := projectpkg.NewScopedManager(project, manager, fridayworktree.ScopeForWorktree(meta, service.ProjectCodeRoot()))
 	return service.Remove(ctx, id, fridayworktree.RemoveOptions{
 		DeleteBranch: deleteBranch,
-		Sessions:     manager,
+		Sessions:     pool,
 		AcquireProjectLock: func() (func(), error) {
 			return codebasepkg.AcquireProjectLock(cfg.DataDirPath(), service.ProjectIdentity().ID, cwd)
 		},

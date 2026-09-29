@@ -54,9 +54,20 @@ type Created struct {
 }
 
 type RemoveOptions struct {
-	DeleteBranch       bool
-	Sessions           *sessions.Manager
+	DeleteBranch bool
+	// Sessions owns the scope-local session pool of the removed checkout. Every
+	// session the scope references becomes unreachable once the checkout is
+	// gone, so all of them are archived.
+	Sessions           ScopeSessions
 	AcquireProjectLock func() (release func(), err error)
+}
+
+// ScopeSessions is the scope-local session surface used while removing a
+// checkout. The project session manager and a scope-bound project manager both
+// satisfy it.
+type ScopeSessions interface {
+	List(activeOnly bool) ([]sessions.SessionMeta, error)
+	Archive(id string) error
 }
 
 func Open(ctx context.Context, cwd, root, prefix, dataDir string) (*Service, error) {
@@ -331,9 +342,9 @@ func (s *Service) Remove(ctx context.Context, target string, options RemoveOptio
 			return fmt.Errorf("remove checkout %s: %w; commit or stash local changes, then retry", meta.Path, err)
 		}
 	}
-	if options.Sessions != nil && meta.SessionID != "" {
-		if _, err := options.Sessions.ArchiveIfExists(meta.SessionID); err != nil {
-			return fmt.Errorf("archive worktree session %s: %w", meta.SessionID, err)
+	if options.Sessions != nil {
+		if err := archiveScopeSessions(options.Sessions); err != nil {
+			return err
 		}
 	}
 	if err := s.store.Remove(meta.ID); err != nil {
@@ -355,14 +366,33 @@ func (s *Service) Remove(ctx context.Context, target string, options RemoveOptio
 
 func sameCanonicalPath(a, b string) bool { return filepath.Clean(a) == filepath.Clean(b) }
 
-func (s *Service) Associate(path, branch, _ string, sessionID string) error {
-	meta, err := s.store.Ensure(Metadata{
+// archiveScopeSessions archives every session owned by one scope. Removal runs
+// before the checkout metadata is dropped, so a failure keeps the metadata
+// that a retry needs.
+func archiveScopeSessions(pool ScopeSessions) error {
+	metas, err := pool.List(false)
+	if err != nil {
+		return fmt.Errorf("list worktree sessions: %w", err)
+	}
+	for _, meta := range metas {
+		if meta.Archived {
+			continue
+		}
+		if err := pool.Archive(meta.ID); err != nil {
+			return fmt.Errorf("archive worktree session %s: %w", meta.ID, err)
+		}
+	}
+	return nil
+}
+
+// Associate records the checkout in the worktree store. Session ownership
+// deliberately does not live here any more: a worktree's sessions belong to the
+// project session pool under the worktree scope.
+func (s *Service) Associate(path, branch string) error {
+	_, err := s.store.Ensure(Metadata{
 		ID: worktreeID(path), Name: filepath.Base(filepath.Clean(path)), Path: path, Branch: branch,
 	})
-	if err != nil {
-		return err
-	}
-	return s.store.UpdateSession(meta.ID, sessionID)
+	return err
 }
 
 func (s *Service) forget(path string) error {
@@ -499,7 +529,7 @@ func (s *Service) Create(ctx context.Context, requirement string) (*Created, err
 			return nil, fmt.Errorf("create worktree: %w", err)
 		}
 		created := &Created{Worktree: Worktree{Path: path, HEAD: head, Branch: branch}, service: s, branch: true, path: true}
-		if err := s.Associate(path, branch, "", ""); err != nil {
+		if err := s.Associate(path, branch); err != nil {
 			rollbackErr := created.Rollback(ctx)
 			if rollbackErr != nil {
 				return nil, fmt.Errorf("persist worktree registry: %w; cleanup: %v", err, rollbackErr)

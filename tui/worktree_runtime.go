@@ -21,7 +21,6 @@ import (
 	"github.com/basenana/friday/core/collaboration"
 	"github.com/basenana/friday/core/planning"
 	"github.com/basenana/friday/core/providers"
-	coresession "github.com/basenana/friday/core/session"
 	"github.com/basenana/friday/core/types"
 	"github.com/basenana/friday/sessions"
 	"github.com/basenana/friday/setup"
@@ -36,13 +35,18 @@ type worktreeRuntime struct {
 	main             bool
 	workdir          string
 	projectResources string
-	sessionID        string
-	catalog          sessions.RootCatalog
-	registry         *actor.Registry
-	bus              *eventbus.Bus
-	loop             *coderloop.Manager
-	lifecycle        sessions.SessionLifecycle
-	release          func()
+	// sessionID is the foreground session of this runtime. One runtime serves a
+	// whole scope, so the model keeps it in sync when the scope switches
+	// sessions inside this runtime.
+	sessionID string
+	// manager is the scope-bound project session manager. It is the registry
+	// catalog of this runtime and the scope's session pool.
+	manager   *projectpkg.Manager
+	registry  *actor.Registry
+	bus       *eventbus.Bus
+	loop      *coderloop.Manager
+	lifecycle sessions.SessionLifecycle
+	release   func()
 	// replaces remains live until this runtime is successfully published. A
 	// prepared replacement must not interrupt in-flight work in the runtime it
 	// supersedes.
@@ -55,7 +59,6 @@ type preparedWorktreeRuntime struct {
 	runtime     *worktreeRuntime
 	feed        *bus.Feed
 	revision    uint64
-	mainArchive *mainArchivePreparation
 	requirement string
 	projection  transcriptProjection
 	history     []string
@@ -66,36 +69,28 @@ type preparedWorktreeRuntime struct {
 	running     bool
 }
 
-type mainArchivePreparation struct {
-	oldRuntime *worktreeRuntime
-	oldSession string
-	candidate  *worktreeRuntimeCandidate
-	action     string
-}
-
-// fixedRootCatalog lets a replacement runtime be fully prepared before the
-// worktree's durable session reference is committed.
-type fixedRootCatalog struct {
-	sessions *sessions.Manager
-	rootID   string
-}
-
-func (c *fixedRootCatalog) CreateRoot(ctx context.Context, client providers.Client, opts ...coresession.Option) (sessions.SessionLifecycle, error) {
-	return c.sessions.OpenRoot(ctx, c.rootID, client, opts...)
-}
-
-func (c *fixedRootCatalog) OpenRoot(ctx context.Context, id string, client providers.Client, opts ...coresession.Option) (sessions.SessionLifecycle, error) {
-	if strings.TrimSpace(id) != c.rootID {
-		return nil, fmt.Errorf("session is not owned by prepared worktree runtime: %s", id)
-	}
-	return c.sessions.OpenRoot(ctx, c.rootID, client, opts...)
-}
-
 type worktreeRuntimeCandidate struct {
-	runtime           *worktreeRuntime
-	built             bool
-	sessionMade       bool
-	previousSessionID string
+	runtime *worktreeRuntime
+	built   bool
+}
+
+// foregroundLifecycle returns the lifecycle of the session this runtime
+// currently serves. A runtime hosts every session of its scope, so the
+// build-time lease is only the fallback when the foreground session was
+// switched inside the same registry.
+func (r *worktreeRuntime) foregroundLifecycle() (sessions.SessionLifecycle, error) {
+	if r == nil {
+		return nil, errors.New("worktree runtime is unavailable")
+	}
+	if r.registry != nil && strings.TrimSpace(r.sessionID) != "" {
+		if lifecycle, ok := r.registry.Lifecycle(r.sessionID); ok && lifecycle.Current() != nil {
+			return lifecycle, nil
+		}
+	}
+	if r.lifecycle != nil && r.lifecycle.Current() != nil {
+		return r.lifecycle, nil
+	}
+	return nil, errors.New("restored session is unavailable")
 }
 
 // worktreeRuntimeSupervisor owns every opened runtime for one logical Git
@@ -153,8 +148,9 @@ func newWorktreeRuntimeSupervisor(service *fridayworktree.Service, sessMgr *sess
 }
 
 // Restore discovers registered, non-stale worktrees and retains one runtime
-// for each. Recoverable loops resume through the same Attach path used by an
-// explicit activation; worktrees without loop state remain idle.
+// for each. Legacy worktree session references are adopted into the project
+// session pool first. Recoverable loops resume through the same Attach path
+// used by an explicit activation; worktrees without loop state remain idle.
 func (s *worktreeRuntimeSupervisor) Restore(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -163,6 +159,9 @@ func (s *worktreeRuntimeSupervisor) Restore(ctx context.Context) error {
 	defer s.transitionMu.Unlock()
 	if s.isClosed() {
 		return errors.New("worktree runtime supervisor is closed")
+	}
+	if err := s.adoptLegacySessions(ctx); err != nil {
+		return err
 	}
 	worktrees, err := s.service.List(ctx)
 	if err != nil {
@@ -197,10 +196,11 @@ func (s *worktreeRuntimeSupervisor) Restore(ctx context.Context) error {
 		}
 		candidates = append(candidates, candidate)
 		runtime := candidate.runtime
-		if runtime == nil || runtime.loop == nil || runtime.lifecycle == nil || runtime.lifecycle.Current() == nil {
-			return discard(fmt.Errorf("restore worktree %s: restored session is unavailable", meta.ID))
+		lifecycle, err := runtime.foregroundLifecycle()
+		if err != nil {
+			return discard(fmt.Errorf("restore worktree %s: %w", meta.ID, err))
 		}
-		active, err := runtime.loop.IsActive(ctx, runtime.lifecycle.Current())
+		active, err := runtime.loop.IsActive(ctx, lifecycle.Current())
 		if err != nil {
 			return discard(fmt.Errorf("inspect worktree loop %s: %w", meta.ID, err))
 		}
@@ -212,6 +212,20 @@ func (s *worktreeRuntimeSupervisor) Restore(ctx context.Context) error {
 	}
 	for _, candidate := range candidates {
 		s.installCandidate(candidate)
+	}
+	return nil
+}
+
+// adoptLegacySessions imports older one-session-per-worktree references into
+// the project session pool. It is idempotent, and after the first successful
+// run every legacy reference is empty so the call becomes a no-op.
+func (s *worktreeRuntimeSupervisor) adoptLegacySessions(ctx context.Context) error {
+	project, err := projectpkg.OpenWithIdentity(s.service.ProjectCodeRoot(), s.service.ProjectIdentity(), projectpkg.NewFileStore(s.config.ProjectsPath()))
+	if err != nil {
+		return fmt.Errorf("open project for session adoption: %w", err)
+	}
+	if err := fridayworktree.AdoptSessions(ctx, s.store, s.service.ProjectCodeRoot(), project, s.sessions); err != nil {
+		return fmt.Errorf("adopt legacy worktree sessions: %w", err)
 	}
 	return nil
 }
@@ -313,13 +327,11 @@ func (s *worktreeRuntimeSupervisor) resolveRuntime(ctx context.Context, worktree
 		return &worktreeRuntimeCandidate{runtime: runtime}, nil
 	}
 
-	runtime, sessionMade, err := s.buildRuntime(ctx, meta)
+	runtime, err = s.buildRuntime(ctx, meta)
 	if err != nil {
 		return nil, err
 	}
-	candidate := &worktreeRuntimeCandidate{
-		runtime: runtime, built: true, sessionMade: sessionMade, previousSessionID: meta.SessionID,
-	}
+	candidate := &worktreeRuntimeCandidate{runtime: runtime, built: true}
 	if err := s.store.Touch(meta.ID); err != nil {
 		cleanupErr := s.discardCandidate(candidate)
 		return nil, errors.Join(fmt.Errorf("touch worktree metadata: %w", err), cleanupErr)
@@ -327,86 +339,93 @@ func (s *worktreeRuntimeSupervisor) resolveRuntime(ctx context.Context, worktree
 	return candidate, nil
 }
 
+// runtimeReusable reports whether a retained runtime still serves its scope.
+// One runtime hosts every session of its scope, so a retained runtime stays
+// valid until its foreground session becomes unusable.
 func (s *worktreeRuntimeSupervisor) runtimeReusable(ctx context.Context, meta fridayworktree.Metadata, runtime *worktreeRuntime) (bool, error) {
 	if runtime == nil || runtime.registry == nil || runtime.lifecycle == nil || runtime.loop == nil {
-		return false, nil
-	}
-	if strings.TrimSpace(meta.SessionID) == "" || runtime.sessionID != meta.SessionID {
 		return false, nil
 	}
 	if err := ctx.Err(); err != nil {
 		return false, err
 	}
-	active, err := s.sessions.IsActive(meta.SessionID)
+	sessionID := strings.TrimSpace(runtime.sessionID)
+	if sessionID == "" {
+		return false, nil
+	}
+	if _, err := runtime.foregroundLifecycle(); err != nil {
+		return false, nil
+	}
+	active, err := s.sessions.IsActive(sessionID)
 	if err != nil {
 		return false, fmt.Errorf("validate worktree session: %w", err)
 	}
-	if !active || runtime.lifecycle.Current() == nil || runtime.lifecycle.Current().ID != meta.SessionID {
+	if !active {
 		return false, nil
 	}
-	_, release, err := runtime.registry.AcquireLifecycle(meta.SessionID)
-	if err != nil {
+	if _, release, err := runtime.registry.AcquireLifecycle(sessionID); err != nil {
 		return false, nil
+	} else {
+		release()
 	}
-	release()
 	return true, nil
 }
 
-func (s *worktreeRuntimeSupervisor) buildRuntime(ctx context.Context, meta fridayworktree.Metadata) (_ *worktreeRuntime, sessionMade bool, retErr error) {
+func (s *worktreeRuntimeSupervisor) buildRuntime(ctx context.Context, meta fridayworktree.Metadata) (*worktreeRuntime, error) {
 	project, err := projectpkg.OpenWithIdentity(meta.Path, s.service.ProjectIdentity(), projectpkg.NewFileStore(s.config.ProjectsPath()))
 	if err != nil {
-		return nil, false, fmt.Errorf("open worktree project: %w", err)
+		return nil, fmt.Errorf("open worktree project: %w", err)
 	}
-	catalog := fridayworktree.NewSessionCatalog(s.store, meta.ID, s.sessions)
-	bootstrap, sessionID, made, err := catalog.EnsureRoot(ctx, nil)
+	manager := projectpkg.NewScopedManager(project, s.sessions, fridayworktree.ScopeForWorktree(meta, s.service.ProjectCodeRoot()))
+	sessionID, err := s.ensureScopeSession(ctx, manager)
 	if err != nil {
-		return nil, false, err
+		return nil, err
 	}
-	sessionMade = made
-	var builtRuntime *worktreeRuntime
-	cleanupSession := func() {
-		if !sessionMade {
-			return
-		}
-		if cleanupErr := s.sessions.DeleteRoot(sessionID); cleanupErr != nil {
-			retErr = errors.Join(retErr, fmt.Errorf("delete new worktree session: %w", cleanupErr))
-		}
-		if cleanupErr := s.store.UpdateMetadata(meta.ID, func(current *fridayworktree.Metadata) error {
-			if current.SessionID == sessionID {
-				current.SessionID = meta.SessionID
-			}
-			return nil
-		}); cleanupErr != nil {
-			retErr = errors.Join(retErr, fmt.Errorf("clear new worktree session reference: %w", cleanupErr))
-		}
-	}
-	defer func() {
-		if retErr == nil {
-			return
-		}
-		if builtRuntime != nil {
-			closeWorktreeRuntime(builtRuntime)
-		}
-		cleanupSession()
-	}()
-	if bootstrap != nil {
-		if closeErr := bootstrap.Close(); closeErr != nil {
-			return nil, sessionMade, fmt.Errorf("close worktree session bootstrap: %w", closeErr)
-		}
-	}
-	builtRuntime, err = s.buildRuntimeWithCatalog(ctx, meta, project, catalog, sessionID)
-	if err != nil {
-		return nil, sessionMade, err
-	}
-	return builtRuntime, sessionMade, nil
+	return s.buildRuntimeWithManager(ctx, meta, project, manager, sessionID)
 }
 
-func (s *worktreeRuntimeSupervisor) buildRuntimeWithCatalog(ctx context.Context, meta fridayworktree.Metadata, project *projectpkg.Project, catalog sessions.RootCatalog, sessionID string) (*worktreeRuntime, error) {
+// ensureScopeSession returns the current session of one scope and creates the
+// first one when the scope has none yet. The scope pointer is the only durable
+// state a runtime needs, so a soft or dangling pointer simply yields a fresh
+// session.
+func (s *worktreeRuntimeSupervisor) ensureScopeSession(ctx context.Context, manager *projectpkg.Manager) (string, error) {
+	current, err := manager.CurrentID()
+	if err != nil {
+		return "", fmt.Errorf("resolve worktree scope session: %w", err)
+	}
+	if current != "" {
+		return current, nil
+	}
+	lifecycle, err := manager.CreateRoot(ctx, nil)
+	if err != nil {
+		return "", fmt.Errorf("create worktree scope session: %w", err)
+	}
+	id := lifecycle.RootID()
+	if err := lifecycle.Close(); err != nil {
+		return "", fmt.Errorf("close worktree scope session bootstrap: %w", err)
+	}
+	if err := manager.Activate(id); err != nil {
+		return "", fmt.Errorf("activate worktree scope session: %w", err)
+	}
+	return id, nil
+}
+
+// scopeManagerFor returns the scope-bound session manager of one worktree. It
+// lets removal archive a scope without a retained runtime.
+func (s *worktreeRuntimeSupervisor) scopeManagerFor(meta fridayworktree.Metadata) (*projectpkg.Manager, error) {
+	project, err := projectpkg.OpenWithIdentity(s.service.ProjectCodeRoot(), s.service.ProjectIdentity(), projectpkg.NewFileStore(s.config.ProjectsPath()))
+	if err != nil {
+		return nil, fmt.Errorf("open worktree project: %w", err)
+	}
+	return projectpkg.NewScopedManager(project, s.sessions, fridayworktree.ScopeForWorktree(meta, s.service.ProjectCodeRoot())), nil
+}
+
+func (s *worktreeRuntimeSupervisor) buildRuntimeWithManager(ctx context.Context, meta fridayworktree.Metadata, project *projectpkg.Project, manager *projectpkg.Manager, sessionID string) (*worktreeRuntime, error) {
 	resources := filepath.Join(s.config.ProjectsPath(), project.ID())
 	registryConfig := actor.DefaultRegistryConfig()
 	registryConfig.AgentPlanEntry = true
 	registryConfig.ConfigTools = true
-	registryConfig.Catalog = catalog
+	registryConfig.Catalog = manager
 	registryConfig.Workdir = project.Root()
 	registryConfig.ProjectResources = resources
 	registryConfig.ProjectCodeRoot = s.service.ProjectCodeRoot()
@@ -439,7 +458,7 @@ func (s *worktreeRuntimeSupervisor) buildRuntimeWithCatalog(ctx context.Context,
 	)
 	builtRuntime := &worktreeRuntime{
 		id: meta.ID, main: samePath(meta.Path, s.service.ProjectCodeRoot()), workdir: project.Root(), projectResources: resources,
-		sessionID: sessionID, catalog: catalog, registry: registry,
+		sessionID: sessionID, manager: manager, registry: registry,
 		bus: registry.Bus(), loop: loop, lifecycle: lifecycle, release: release,
 	}
 	if err := s.attachCodebase(ctx, project, builtRuntime); err != nil {
@@ -548,6 +567,10 @@ func (s *worktreeRuntimeSupervisor) prepareCreatedActivation(ctx context.Context
 }
 
 func (s *worktreeRuntimeSupervisor) prepareRuntimeActivation(ctx context.Context, runtime *worktreeRuntime, width, height int, requirement string) (*preparedWorktreeRuntime, error) {
+	lifecycle, err := runtime.foregroundLifecycle()
+	if err != nil {
+		return nil, err
+	}
 	feed := bus.SubscribeAgentFeed(runtime.bus, runtime.sessionID)
 	keepFeed := false
 	defer func() {
@@ -568,7 +591,7 @@ func (s *worktreeRuntimeSupervisor) prepareRuntimeActivation(ctx context.Context
 	if err != nil {
 		return nil, fmt.Errorf("restore plan: %w", err)
 	}
-	loopActive, err := runtime.loop.IsActive(ctx, runtime.lifecycle.Current())
+	loopActive, err := runtime.loop.IsActive(ctx, lifecycle.Current())
 	if err != nil {
 		return nil, fmt.Errorf("restore loop status: %w", err)
 	}
@@ -591,9 +614,6 @@ func (s *worktreeRuntimeSupervisor) commitActivation(prepared *preparedWorktreeR
 	}
 	s.transitionMu.Lock()
 	defer s.transitionMu.Unlock()
-	if prepared.mainArchive != nil {
-		return s.commitMainArchive(prepared)
-	}
 	if s.isClosed() {
 		return errors.New("worktree runtime supervisor is closed")
 	}
@@ -608,9 +628,6 @@ func (s *worktreeRuntimeSupervisor) commitActivation(prepared *preparedWorktreeR
 	meta, err := s.store.Get(runtime.id)
 	if err != nil {
 		return fmt.Errorf("validate prepared worktree: %w", err)
-	}
-	if meta.SessionID != runtime.sessionID {
-		return errors.New("prepared worktree activation is stale: session reference changed")
 	}
 	reusable, err := s.runtimeReusable(context.Background(), meta, runtime)
 	if err != nil {
@@ -638,91 +655,12 @@ func (s *worktreeRuntimeSupervisor) commitActivation(prepared *preparedWorktreeR
 	return nil
 }
 
-func (s *worktreeRuntimeSupervisor) commitMainArchive(prepared *preparedWorktreeRuntime) (retErr error) {
-	archive := prepared.mainArchive
-	runtime := prepared.runtime
-	discard := true
-	defer func() {
-		if discard {
-			retErr = errors.Join(retErr, s.discardCandidate(archive.candidate))
-		}
-	}()
-
-	s.mu.Lock()
-	revision := s.revision
-	retained := s.runtimes[runtime.id]
-	active := s.active
-	s.mu.Unlock()
-	if prepared.revision != revision || retained != archive.oldRuntime || active != archive.oldRuntime {
-		return errors.New("prepared main worktree archive is stale")
-	}
-	meta, err := s.store.Get(runtime.id)
-	if err != nil {
-		return fmt.Errorf("validate prepared main worktree archive: %w", err)
-	}
-	if meta.SessionID != archive.oldSession {
-		return errors.New("prepared main worktree archive is stale: session reference changed")
-	}
-	activeSession, err := s.sessions.IsActive(runtime.sessionID)
-	if err != nil || !activeSession {
-		return errors.Join(errors.New("prepared main worktree replacement session is unavailable"), err)
-	}
-	if _, release, err := runtime.registry.AcquireLifecycle(runtime.sessionID); err != nil {
-		return errors.New("prepared main worktree replacement runtime is unavailable")
-	} else {
-		release()
-	}
-	codebaseTransition, err := s.prepareCodebaseTransition(context.Background(), runtime)
-	if err != nil {
-		return fmt.Errorf("prepare Codebase worktree transition: %w", err)
-	}
-	transitionCommitted := false
-	defer func() {
-		if codebaseTransition != nil && !transitionCommitted {
-			codebaseTransition.Abort()
-		}
-	}()
-	if err := s.store.UpdateMetadata(runtime.id, func(current *fridayworktree.Metadata) error {
-		if current.SessionID != archive.oldSession {
-			return errors.New("prepared main worktree archive is stale: session reference changed")
-		}
-		current.SessionID = runtime.sessionID
-		return nil
-	}); err != nil {
-		return fmt.Errorf("commit main worktree session reference: %w", err)
-	}
-	var mutationErr error
-	switch archive.action {
-	case "archive":
-		_, mutationErr = s.sessions.ArchiveIfExists(archive.oldSession)
-	case "delete":
-		mutationErr = s.sessions.DeleteRoot(archive.oldSession)
-	}
-	if mutationErr != nil {
-		rollbackErr := s.store.UpdateMetadata(runtime.id, func(current *fridayworktree.Metadata) error {
-			if current.SessionID == runtime.sessionID {
-				current.SessionID = archive.oldSession
-			}
-			return nil
-		})
-		return errors.Join(fmt.Errorf("%s main worktree session: %w", archive.action, mutationErr), rollbackErr)
-	}
-	s.installCandidate(archive.candidate)
-	s.publish(runtime)
-	if codebaseTransition != nil {
-		codebaseTransition.Commit()
-	}
-	transitionCommitted = true
-	s.closeCommittedReplacement(runtime)
-	discard = false
-	return nil
-}
-
 func (s *worktreeRuntimeSupervisor) defaultAttachRuntime(ctx context.Context, runtime *worktreeRuntime) error {
-	if runtime == nil || runtime.loop == nil || runtime.lifecycle == nil || runtime.lifecycle.Current() == nil {
-		return errors.New("restored session is unavailable")
+	lifecycle, err := runtime.foregroundLifecycle()
+	if err != nil {
+		return err
 	}
-	return runtime.loop.Attach(ctx, runtime.lifecycle.Current())
+	return runtime.loop.Attach(ctx, lifecycle.Current())
 }
 
 func (s *worktreeRuntimeSupervisor) attach(ctx context.Context, runtime *worktreeRuntime) error {
@@ -771,7 +709,7 @@ func (s *worktreeRuntimeSupervisor) closeCommittedReplacement(runtime *worktreeR
 	closeWorktreeRuntime(obsolete)
 }
 
-func (s *worktreeRuntimeSupervisor) discardCandidate(candidate *worktreeRuntimeCandidate) (retErr error) {
+func (s *worktreeRuntimeSupervisor) discardCandidate(candidate *worktreeRuntimeCandidate) error {
 	if candidate == nil || !candidate.built || candidate.runtime == nil {
 		return nil
 	}
@@ -779,21 +717,7 @@ func (s *worktreeRuntimeSupervisor) discardCandidate(candidate *worktreeRuntimeC
 		s.codebaseRuntime.Detach(candidate.runtime.lifecycle)
 	}
 	closeWorktreeRuntime(candidate.runtime)
-	if !candidate.sessionMade {
-		return nil
-	}
-	if err := s.sessions.DeleteRoot(candidate.runtime.sessionID); err != nil {
-		retErr = errors.Join(retErr, fmt.Errorf("delete new worktree session: %w", err))
-	}
-	if err := s.store.UpdateMetadata(candidate.runtime.id, func(meta *fridayworktree.Metadata) error {
-		if meta.SessionID == candidate.runtime.sessionID {
-			meta.SessionID = candidate.previousSessionID
-		}
-		return nil
-	}); err != nil {
-		retErr = errors.Join(retErr, fmt.Errorf("restore worktree session reference: %w", err))
-	}
-	return retErr
+	return nil
 }
 
 func (s *worktreeRuntimeSupervisor) publish(runtime *worktreeRuntime) {
@@ -826,9 +750,9 @@ func (s *worktreeRuntimeSupervisor) runtimeSnapshot() map[string]*worktreeRuntim
 	return out
 }
 
-// prepareArchive prepares the foreground transition for archiving one
-// worktree. Linked worktrees transition to main and are returned for removal;
-// main replaces only its archived session and keeps the checkout.
+// prepareArchive prepares the foreground transition to the main checkout
+// before one linked worktree is removed. Archiving the main checkout itself is
+// an ordinary session archive, so it never reaches this path.
 func (s *worktreeRuntimeSupervisor) prepareArchive(ctx context.Context, worktreeID string, width, height int) (*preparedWorktreeRuntime, string, error) {
 	items, err := s.service.List(ctx)
 	if err != nil {
@@ -847,78 +771,11 @@ func (s *worktreeRuntimeSupervisor) prepareArchive(ctx context.Context, worktree
 	if mainID == "" {
 		return nil, "", errors.New("main worktree is unavailable")
 	}
-	if !targetMain {
-		prepared, err := s.prepareActivation(ctx, mainID, width, height, "")
-		return prepared, worktreeID, err
+	if targetMain {
+		return nil, "", errors.New("the main checkout cannot be archived; archive its session instead")
 	}
-	prepared, err := s.prepareMainArchive(ctx, worktreeID, width, height)
-	return prepared, "", err
-}
-
-func (s *worktreeRuntimeSupervisor) prepareMainArchive(ctx context.Context, worktreeID string, width, height int) (*preparedWorktreeRuntime, error) {
-	return s.prepareMainSession(ctx, worktreeID, "", "archive", width, height)
-}
-
-func (s *worktreeRuntimeSupervisor) prepareMainSession(ctx context.Context, worktreeID, targetSession, action string, width, height int) (*preparedWorktreeRuntime, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	s.transitionMu.Lock()
-	defer s.transitionMu.Unlock()
-	if s.isClosed() {
-		return nil, errors.New("worktree runtime supervisor is closed")
-	}
-	meta, err := s.store.Get(worktreeID)
-	if err != nil {
-		return nil, err
-	}
-	s.mu.Lock()
-	old := s.runtimes[meta.ID]
-	if old == nil || s.active != old {
-		s.mu.Unlock()
-		return nil, errors.New("main worktree runtime is not active")
-	}
-	s.mu.Unlock()
-	revision := s.currentRevision()
-	newSession := strings.TrimSpace(targetSession)
-	sessionMade := false
-	if newSession == "" {
-		bootstrap, createErr := s.sessions.CreateRoot(ctx, nil)
-		if createErr != nil {
-			return nil, fmt.Errorf("create main worktree replacement session: %w", createErr)
-		}
-		newSession = bootstrap.RootID()
-		sessionMade = true
-		if closeErr := bootstrap.Close(); closeErr != nil {
-			_ = s.sessions.DeleteRoot(newSession)
-			return nil, fmt.Errorf("close main worktree replacement bootstrap: %w", closeErr)
-		}
-	} else if active, activeErr := s.sessions.IsActive(newSession); activeErr != nil || !active {
-		return nil, errors.Join(errors.New("main worktree target session is unavailable"), activeErr)
-	}
-	project, err := projectpkg.OpenWithIdentity(meta.Path, s.service.ProjectIdentity(), projectpkg.NewFileStore(s.config.ProjectsPath()))
-	if err != nil {
-		_ = s.sessions.DeleteRoot(newSession)
-		return nil, fmt.Errorf("open main worktree replacement project: %w", err)
-	}
-	catalog := &fixedRootCatalog{sessions: s.sessions, rootID: newSession}
-	runtime, err := s.buildRuntimeWithCatalog(ctx, meta, project, catalog, newSession)
-	candidate := &worktreeRuntimeCandidate{runtime: runtime, built: runtime != nil, sessionMade: sessionMade, previousSessionID: meta.SessionID}
-	if err != nil {
-		if sessionMade {
-			if deleteErr := s.sessions.DeleteRoot(newSession); deleteErr != nil {
-				err = errors.Join(err, fmt.Errorf("delete main worktree replacement session: %w", deleteErr))
-			}
-		}
-		return nil, fmt.Errorf("replace main worktree session: %w", err)
-	}
-	prepared, err := s.prepareRuntimeActivation(ctx, runtime, width, height, "")
-	if err != nil {
-		return nil, errors.Join(err, s.discardCandidate(candidate))
-	}
-	prepared.revision = revision
-	prepared.mainArchive = &mainArchivePreparation{oldRuntime: old, oldSession: meta.SessionID, candidate: candidate, action: action}
-	return prepared, nil
+	prepared, err := s.prepareActivation(ctx, mainID, width, height, "")
+	return prepared, worktreeID, err
 }
 
 func (s *worktreeRuntimeSupervisor) removeArchived(ctx context.Context, worktreeID string) error {
@@ -939,13 +796,23 @@ func (s *worktreeRuntimeSupervisor) removeArchived(ctx context.Context, worktree
 	delete(s.runtimes, worktreeID)
 	s.revision++
 	s.mu.Unlock()
+	meta, err := s.store.Get(worktreeID)
+	if err != nil {
+		return fmt.Errorf("load worktree before removal: %w", err)
+	}
+	pool, err := s.scopeManagerFor(meta)
+	if err != nil {
+		return err
+	}
 	if runtime != nil {
 		if s.codebaseRuntime != nil {
 			s.codebaseRuntime.Detach(runtime.lifecycle)
 		}
 		closeWorktreeRuntime(runtime)
 	}
-	return s.service.Remove(ctx, worktreeID, fridayworktree.RemoveOptions{Sessions: s.sessions})
+	// Every session of the removed scope becomes unreachable, so removal
+	// archives the whole scope instead of a single legacy reference.
+	return s.service.Remove(ctx, worktreeID, fridayworktree.RemoveOptions{Sessions: pool})
 }
 
 // Close stops all loop managers before releasing lifecycle leases and shutting

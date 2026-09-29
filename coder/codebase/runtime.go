@@ -1111,7 +1111,8 @@ func (r *Runtime) queryContext(ctx context.Context, root *coresession.Session, q
 func logRunStart(mode, sessionID, op string, turn uint64, spec Spec) {
 	logger.New("codebase").Infow("codebase run start",
 		"mode", mode, "session", sessionID, "operation", op, "turn", turn,
-		"max_output_tokens", spec.Context.MaxOutputTokens, "max_loop_times", spec.Context.MaxLoopTimes)
+		"max_output_tokens", spec.Context.MaxOutputTokens, "max_loop_times", spec.Context.MaxLoopTimes,
+		"timeout_ms", contextRunTimeout(spec).Milliseconds())
 }
 
 func logRunFinish(mode, sessionID, op, state string, turn uint64, started time.Time, stats runStats, err error) {

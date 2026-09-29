@@ -110,10 +110,10 @@ func TestFileStoreMigrateIdentityPreservesWholeLegacyProject(t *testing.T) {
 	if err := legacy.SetCodebaseEnabled(true); err != nil {
 		t.Fatal(err)
 	}
-	if err := legacy.AddSession("session-old"); err != nil {
+	if err := legacy.AddSession(MainScope, "session-old"); err != nil {
 		t.Fatal(err)
 	}
-	if err := legacy.SetCurrentSession("session-old"); err != nil {
+	if err := legacy.SetCurrentSession(MainScope, "session-old"); err != nil {
 		t.Fatal(err)
 	}
 	when := time.Unix(1_700_000_000, 0)
@@ -147,7 +147,7 @@ func TestFileStoreMigrateIdentityPreservesWholeLegacyProject(t *testing.T) {
 	if enabled, err := migrated.CodebaseEnabled(); err != nil || !enabled {
 		t.Fatalf("Codebase enabled = %v, %v", enabled, err)
 	}
-	if current, err := migrated.CurrentSessionID(); err != nil || current != "session-old" {
+	if current, err := migrated.CurrentSessionID(MainScope); err != nil || current != "session-old" {
 		t.Fatalf("current = %q, %v", current, err)
 	}
 	refs, err := migrated.ListSessionRefs()

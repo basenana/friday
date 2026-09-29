@@ -18,15 +18,27 @@ import (
 )
 
 // Manager provides project-scoped root-session selection while delegating all
-// real session persistence to the existing sessions.Manager.
+// real session persistence to the existing sessions.Manager. One manager is
+// bound to one scope: the reserved main scope of the project main checkout, or
+// the scope of one feature worktree.
 type Manager struct {
 	project  *Project
 	sessions *sessions.Manager
+	scope    string
 }
 
 func NewManager(project *Project, manager *sessions.Manager) *Manager {
 	return &Manager{project: project, sessions: manager}
 }
+
+// NewScopedManager returns a manager whose session visibility is limited to one
+// scope. Session entities stay in the global session store; only ownership and
+// the current-session pointer are scope-local.
+func NewScopedManager(project *Project, manager *sessions.Manager, scope string) *Manager {
+	return &Manager{project: project, sessions: manager, scope: normalizeScope(scope)}
+}
+
+func (m *Manager) Scope() string { return m.scope }
 
 func (m *Manager) Project() *Project { return m.project }
 
@@ -36,7 +48,7 @@ func (m *Manager) CreateRoot(ctx context.Context, client providers.Client, opts 
 		return nil, err
 	}
 	id := lifecycle.RootID()
-	if err := m.project.AddSession(id); err != nil {
+	if err := m.project.AddSession(m.scope, id); err != nil {
 		_ = lifecycle.Close()
 		cleanupErr := m.sessions.DeleteRoot(id)
 		if cleanupErr != nil {
@@ -48,22 +60,22 @@ func (m *Manager) CreateRoot(ctx context.Context, client providers.Client, opts 
 }
 
 func (m *Manager) OpenRoot(ctx context.Context, id string, client providers.Client, opts ...coresession.Option) (sessions.SessionLifecycle, error) {
-	has, err := m.project.HasSession(id)
+	has, err := m.Contains(id)
 	if err != nil {
 		return nil, err
 	}
 	if !has {
-		return nil, fmt.Errorf("session is not referenced by project: %s", id)
+		return nil, fmt.Errorf("session is not available in this scope: %s", id)
 	}
 	return m.sessions.OpenRoot(ctx, id, client, opts...)
 }
 
 func (m *Manager) CurrentID() (string, error) {
-	id, err := m.project.CurrentSessionID()
+	id, err := m.project.CurrentSessionID(m.scope)
 	if err != nil || id == "" {
 		return "", err
 	}
-	has, err := m.project.HasSession(id)
+	has, err := m.Contains(id)
 	if err != nil || !has {
 		return "", err
 	}
@@ -81,12 +93,12 @@ func (m *Manager) CurrentID() (string, error) {
 }
 
 func (m *Manager) Activate(id string) error {
-	has, err := m.project.HasSession(id)
+	has, err := m.Contains(id)
 	if err != nil {
 		return err
 	}
 	if !has {
-		return fmt.Errorf("session is not referenced by project: %s", id)
+		return fmt.Errorf("session is not available in this scope: %s", id)
 	}
 	meta, err := m.sessions.GetStore().GetMeta(id)
 	if err != nil {
@@ -95,10 +107,17 @@ func (m *Manager) Activate(id string) error {
 	if meta.Archived {
 		return fmt.Errorf("cannot activate archived session: %s", id)
 	}
-	return m.project.SetCurrentSession(id)
+	return m.project.SetCurrentSession(m.scope, id)
 }
 
-func (m *Manager) Contains(id string) (bool, error) { return m.project.HasSession(id) }
+// Contains reports whether one session is visible in this scope.
+func (m *Manager) Contains(id string) (bool, error) {
+	scope, ok, err := m.project.SessionScope(id)
+	if err != nil {
+		return false, err
+	}
+	return ok && scope == m.scope, nil
+}
 
 func (m *Manager) List(activeOnly bool) ([]sessions.SessionMeta, error) {
 	refs, err := m.project.ListSessionRefs()
@@ -107,6 +126,9 @@ func (m *Manager) List(activeOnly bool) ([]sessions.SessionMeta, error) {
 	}
 	result := make([]sessions.SessionMeta, 0, len(refs))
 	for _, ref := range refs {
+		if normalizeScope(ref.Scope) != m.scope {
+			continue
+		}
 		meta, err := m.sessions.GetStore().GetMeta(ref.SessionID)
 		if err != nil {
 			continue
@@ -143,7 +165,7 @@ func (m *Manager) Resolve(target string) (*sessions.SessionMeta, error) {
 	if len(matches) > 1 {
 		return nil, fmt.Errorf("ambiguous session prefix %q", target)
 	}
-	return nil, fmt.Errorf("session not found in project: %s", target)
+	return nil, fmt.Errorf("session not found in this scope: %s", target)
 }
 
 func normalizeName(name string) string {
@@ -162,11 +184,11 @@ func normalizeName(name string) string {
 }
 
 func (m *Manager) Rename(id, requested string) (string, error) {
-	if has, err := m.project.HasSession(id); err != nil || !has {
+	if has, err := m.Contains(id); err != nil || !has {
 		if err != nil {
 			return "", err
 		}
-		return "", fmt.Errorf("session is not referenced by project: %s", id)
+		return "", fmt.Errorf("session is not available in this scope: %s", id)
 	}
 	base := normalizeName(requested)
 	if base == "" {
@@ -190,21 +212,21 @@ func (m *Manager) Rename(id, requested string) (string, error) {
 }
 
 func (m *Manager) Archive(id string) error {
-	if has, err := m.project.HasSession(id); err != nil || !has {
+	if has, err := m.Contains(id); err != nil || !has {
 		if err != nil {
 			return err
 		}
-		return fmt.Errorf("session is not referenced by project: %s", id)
+		return fmt.Errorf("session is not available in this scope: %s", id)
 	}
 	return m.sessions.Archive(id)
 }
 
 func (m *Manager) DeleteRoot(id string) error {
-	if has, err := m.project.HasSession(id); err != nil || !has {
+	if has, err := m.Contains(id); err != nil || !has {
 		if err != nil {
 			return err
 		}
-		return fmt.Errorf("session is not referenced by project: %s", id)
+		return fmt.Errorf("session is not available in this scope: %s", id)
 	}
 	if err := m.sessions.DeleteRoot(id); err != nil {
 		return err
@@ -212,9 +234,9 @@ func (m *Manager) DeleteRoot(id string) error {
 	if err := m.project.RemoveSession(id); err != nil {
 		return err
 	}
-	current, err := m.project.CurrentSessionID()
+	current, err := m.project.CurrentSessionID(m.scope)
 	if err == nil && current == id {
-		return m.project.SetCurrentSession("")
+		return m.project.SetCurrentSession(m.scope, "")
 	}
 	return err
 }

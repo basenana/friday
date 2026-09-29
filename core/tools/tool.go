@@ -36,6 +36,7 @@ type Tool struct {
 	Examples       []map[string]interface{} `json:"-"`
 	Handler        ToolHandlerFunc          `json:"-"`
 	timeoutPolicy  *TimeoutPolicy
+	noHardLimit    bool
 }
 
 func (t *Tool) JsonSchema() map[string]interface{} {
@@ -264,6 +265,20 @@ func (t *Tool) TimeoutPolicy() (TimeoutPolicy, bool) {
 	}
 	return *t.timeoutPolicy, true
 }
+
+// WithToolNoHardLimit exempts a tool from the Invoker's hard execution limit.
+// Only use this for LLM-orchestration tools that manage their own budget
+// (e.g. subagent runners bounded by their own total timeout of loop count x
+// per-loop budget). When exempt and no timeout is declared, the caller's
+// context is the only deadline.
+func WithToolNoHardLimit() ToolOption {
+	return func(t *Tool) {
+		t.noHardLimit = true
+	}
+}
+
+// NoHardLimit reports whether the tool opted out of the Invoker hard limit.
+func (t *Tool) NoHardLimit() bool { return t != nil && t.noHardLimit }
 
 // WithExample adds one complete, valid invocation example. Providers append
 // examples to the model-visible description in a consistent format.

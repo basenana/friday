@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/basenana/friday/coder/filetools"
 	"github.com/basenana/friday/core/agents"
@@ -222,8 +223,18 @@ func (r *runner) runQuery(ctx context.Context, root *coresession.Session, spec S
 	return r.runContextProvider(ctx, root, nil, spec, queryContextSystemPrompt(spec, r.codebaseDir), input, spec.Context.MaxOutputTokens, queryOutputLimit(maxChars))
 }
 
+// contextRunTimeout bounds one Context Provider run. The total budget scales
+// with the configured loop limit: max_loop_times x agents.PerLoopBudget (3m).
+// The user's only tuning knob is max_loop_times; the per-loop budget is a code
+// constant shared repo-wide. Note that the codebase_context_query tool stays
+// under the tools.Invoker 30m hard limit, so when max_loop_times x 3m exceeds
+// 30m the query path is intentionally cut short there.
+func contextRunTimeout(spec Spec) time.Duration {
+	return time.Duration(spec.Context.MaxLoopTimes) * agents.PerLoopBudget
+}
+
 func (r *runner) runContextProvider(ctx context.Context, root *coresession.Session, history []types.Message, spec Spec, systemPrompt, input string, maxTokens, maxChars int64) (string, runStats, error) {
-	client := r.client(spec.Context.modeSpec)
+	client := r.client(spec.Context)
 	cloned := append([]types.Message(nil), history...)
 	proxy := &contextUsageProxy{root: root, projectRoot: r.projectRoot, codebaseDir: r.codebaseDir}
 	temp := coresession.New(types.NewID(), client,
@@ -238,7 +249,7 @@ func (r *runner) runContextProvider(ctx context.Context, root *coresession.Sessi
 		Tools:        r.contextTools,
 		Invoker:      tools.NewInvoker(),
 	})
-	runCtx, cancel := context.WithTimeout(ctx, spec.Context.Timeout.Duration)
+	runCtx, cancel := context.WithTimeout(ctx, contextRunTimeout(spec))
 	defer cancel()
 	raw, err := api.ReadAllContent(runCtx, agent.Chat(runCtx, &api.Request{Session: temp, AgentMessage: input}))
 	stats := finalizeRunStats(proxy.snapshot(), raw, spec.Context.MaxLoopTimes)

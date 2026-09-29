@@ -12,52 +12,138 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/basenana/friday/bus"
 	codercmds "github.com/basenana/friday/coder/commands"
+	projectpkg "github.com/basenana/friday/coder/project"
 	coderloop "github.com/basenana/friday/coder/loop"
 	"github.com/basenana/friday/core/actor/events"
 )
 
-func TestLinkedWorktreeRejectsOrdinarySessionMutationActions(t *testing.T) {
-	tests := []struct {
-		name   string
-		action func(*model) codercmds.Action
-	}{
-		{name: "clear", action: func(*model) codercmds.Action { return codercmds.ClearSessionAction{SessionID: "replacement-session"} }},
-		{name: "open resume", action: func(*model) codercmds.Action { return codercmds.OpenResumeAction{} }},
-		{name: "resume", action: func(m *model) codercmds.Action {
-			lifecycle, err := m.sessMgr.CreateRoot(context.Background(), nil)
-			if err != nil {
-				t.Fatal(err)
-			}
-			t.Cleanup(func() { _ = lifecycle.Close() })
-			return codercmds.ResumeSessionAction{Target: lifecycle.RootID()}
-		}},
-		{name: "delete", action: func(*model) codercmds.Action { return codercmds.DeleteSessionAction{} }},
+func TestLinkedWorktreeSessionActionsStayInTheirScope(t *testing.T) {
+	fixture := newWorktreeRuntimeTestFixture(t)
+	ctx := context.Background()
+	main, err := fixture.supervisor.Activate(ctx, fixture.mainID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	linked, err := fixture.supervisor.Create(ctx, "linked scope actions")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if linked.main {
+		t.Fatal("fixture linked runtime is marked main")
+	}
+	mainCurrent, err := main.manager.Project().CurrentSessionID(projectpkg.MainScope)
+	if err != nil {
+		t.Fatal(err)
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			m, _, _ := newLoadedProjectTestModel(t)
-			m.worktreeMode = true
-			m.projectMgr = nil
-			m.worktreeRuntime = &worktreeRuntime{id: "retained-runtime", main: false}
-			oldSessionID, oldRegistry, oldFeed := m.sessionID, m.registry, m.feed
-			oldRuntime := m.worktreeRuntime
-
-			handled, cmd := m.applySessionAction(tt.action(m))
-			if !handled || cmd != nil {
-				t.Fatalf("handled=%v cmd=%v, want handled with no command", handled, cmd)
-			}
-			if m.sessionID != oldSessionID || m.registry != oldRegistry || m.feed != oldFeed || m.worktreeRuntime != oldRuntime {
-				t.Fatal("rejected session action changed the retained worktree binding")
-			}
-			if m.selector != nil || m.commandConfirm != nil {
-				t.Fatalf("rejected session action opened UI state: selector=%#v confirmation=%#v", m.selector, m.commandConfirm)
-			}
-			if len(m.messages) == 0 || m.messages[len(m.messages)-1].kind != blockError || m.messages[len(m.messages)-1].content != "session command unavailable in worktree mode; use /worktree or /select" {
-				t.Fatalf("rejection message = %#v", m.messages)
-			}
-		})
+	assertScope := func(t *testing.T, m *model) {
+		t.Helper()
+		if m.worktreeRuntime != linked || m.registry != linked.registry {
+			t.Fatal("session action replaced the retained linked runtime")
+		}
+		current, err := linked.manager.Project().CurrentSessionID(linked.manager.Scope())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if current != m.sessionID {
+			t.Fatalf("linked scope current = %q, want %q", current, m.sessionID)
+		}
+		untouched, err := main.manager.Project().CurrentSessionID(projectpkg.MainScope)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if untouched != mainCurrent {
+			t.Fatalf("main scope current = %q, want %q", untouched, mainCurrent)
+		}
 	}
+
+	t.Run("clear", func(t *testing.T) {
+		m := newWorktreeRuntimeTestModel(t, fixture, linked)
+		oldSession := m.sessionID
+		handled, _ := m.applySessionAction(codercmds.ClearSessionAction{})
+		if !handled || lastBlockIsError(m) {
+			t.Fatalf("linked /clear handled=%v messages=%#v", handled, m.messages)
+		}
+		if m.sessionID == oldSession {
+			t.Fatal("linked /clear did not create a session in the linked scope")
+		}
+		if active, err := fixture.sessions.IsActive(oldSession); err != nil || !active {
+			t.Fatalf("previous linked session active=%v err=%v", active, err)
+		}
+		assertScope(t, m)
+	})
+
+	t.Run("resume", func(t *testing.T) {
+		m := newWorktreeRuntimeTestModel(t, fixture, linked)
+		target, err := linked.manager.CreateRoot(ctx, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		targetID := target.RootID()
+		if err := target.Close(); err != nil {
+			t.Fatal(err)
+		}
+		handled, _ := m.applySessionAction(codercmds.ResumeSessionAction{Target: targetID})
+		if !handled || lastBlockIsError(m) {
+			t.Fatalf("linked /resume handled=%v messages=%#v", handled, m.messages)
+		}
+		if m.sessionID != targetID {
+			t.Fatalf("linked /resume session=%q want=%q", m.sessionID, targetID)
+		}
+		assertScope(t, m)
+	})
+
+	t.Run("delete replaces the current session", func(t *testing.T) {
+		m := newWorktreeRuntimeTestModel(t, fixture, linked)
+		oldSession := m.sessionID
+		m.applySessionAction(codercmds.DeleteSessionAction{})
+		updated, _ := m.updateCommandConfirmation(tea.KeyPressMsg{Code: 'y', Text: "y"})
+		m = updated.(*model)
+		if m.sessionID == oldSession {
+			t.Fatal("linked /delete did not install a replacement session")
+		}
+		if exists, err := fixture.sessions.Exists(oldSession); err != nil || exists {
+			t.Fatalf("deleted session exists=%v err=%v", exists, err)
+		}
+		assertScope(t, m)
+	})
+
+	t.Run("resume picker lists only this scope", func(t *testing.T) {
+		global, err := fixture.sessions.CreateRoot(ctx, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		globalID := global.RootID()
+		if err := global.Close(); err != nil {
+			t.Fatal(err)
+		}
+		scoped, err := linked.manager.CreateRoot(ctx, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		scopedID := scoped.RootID()
+		if err := scoped.Close(); err != nil {
+			t.Fatal(err)
+		}
+
+		m := newWorktreeRuntimeTestModel(t, fixture, linked)
+		handled, _ := m.applySessionAction(codercmds.OpenResumeAction{})
+		if !handled || m.selector == nil || m.selector.kind != selectorResume {
+			t.Fatalf("linked /resume picker: handled=%v selector=%#v", handled, m.selector)
+		}
+		listed := make(map[string]bool, len(m.selector.items))
+		for _, item := range m.selector.items {
+			listed[item.value] = true
+		}
+		if !listed[scopedID] {
+			t.Fatalf("linked picker omitted its own session: %#v", m.selector.items)
+		}
+		for _, unwanted := range []string{globalID, main.sessionID} {
+			if listed[unwanted] {
+				t.Fatalf("linked picker leaked session %q: %#v", unwanted, m.selector.items)
+			}
+		}
+	})
 }
 
 func TestMainWorktreeAllowsOrdinarySessionMutationActions(t *testing.T) {
@@ -79,7 +165,7 @@ func TestMainWorktreeAllowsOrdinarySessionMutationActions(t *testing.T) {
 	})
 
 	t.Run("resume", func(t *testing.T) {
-		lifecycle, err := fixture.sessions.CreateRoot(context.Background(), nil)
+		lifecycle, err := active.manager.CreateRoot(context.Background(), nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -88,6 +174,22 @@ func TestMainWorktreeAllowsOrdinarySessionMutationActions(t *testing.T) {
 		handled, cmd := m.applySessionAction(codercmds.ResumeSessionAction{Target: lifecycle.RootID()})
 		if !handled || cmd == nil || lastBlockIsError(m) {
 			t.Fatalf("main /resume handled=%v cmd=%v messages=%#v", handled, cmd, m.messages)
+		}
+	})
+
+	t.Run("resume rejects a session outside the scope", func(t *testing.T) {
+		lifecycle, err := fixture.sessions.CreateRoot(context.Background(), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = lifecycle.Close() })
+		m := newWorktreeRuntimeTestModel(t, fixture, active)
+		handled, _ := m.applySessionAction(codercmds.ResumeSessionAction{Target: lifecycle.RootID()})
+		if !handled || !lastBlockIsError(m) {
+			t.Fatalf("out-of-scope /resume handled=%v messages=%#v", handled, m.messages)
+		}
+		if m.sessionID != active.sessionID {
+			t.Fatalf("rejected /resume changed session: %q", m.sessionID)
 		}
 	})
 
@@ -100,7 +202,7 @@ func TestMainWorktreeAllowsOrdinarySessionMutationActions(t *testing.T) {
 	})
 }
 
-func TestMainWorktreeSessionCommandsRebindRuntime(t *testing.T) {
+func TestMainWorktreeSessionCommandsKeepTheRuntime(t *testing.T) {
 	t.Run("clear keeps the previous session active", func(t *testing.T) {
 		fixture := newWorktreeRuntimeTestFixture(t)
 		active, err := fixture.supervisor.Activate(context.Background(), fixture.mainID)
@@ -109,15 +211,19 @@ func TestMainWorktreeSessionCommandsRebindRuntime(t *testing.T) {
 		}
 		oldSession := active.sessionID
 		m := newWorktreeRuntimeTestModel(t, fixture, active)
-		_, cmd := m.applySessionAction(codercmds.ClearSessionAction{})
-		m = applyPreparedWorktreeCommand(t, m, cmd)
+		if _, cmd := m.applySessionAction(codercmds.ClearSessionAction{}); cmd == nil {
+			t.Fatal("/clear did not return a foreground command")
+		}
 		if m.sessionID == oldSession {
 			t.Fatal("/clear did not bind a new main-worktree session")
 		}
 		if active, err := fixture.sessions.IsActive(oldSession); err != nil || !active {
 			t.Fatalf("previous session active=%v err=%v", active, err)
 		}
-		assertWorktreeSession(t, fixture, m.sessionID)
+		if m.worktreeRuntime != active || m.registry != active.registry || m.loopManager != active.loop {
+			t.Fatal("/clear rebuilt the retained runtime instead of switching its session")
+		}
+		assertWorktreeScopeSession(t, active, m.sessionID)
 	})
 
 	t.Run("resume binds the selected session", func(t *testing.T) {
@@ -126,7 +232,7 @@ func TestMainWorktreeSessionCommandsRebindRuntime(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		target, err := fixture.sessions.CreateRoot(context.Background(), nil)
+		target, err := active.manager.CreateRoot(context.Background(), nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -135,12 +241,16 @@ func TestMainWorktreeSessionCommandsRebindRuntime(t *testing.T) {
 			t.Fatal(err)
 		}
 		m := newWorktreeRuntimeTestModel(t, fixture, active)
-		_, cmd := m.applySessionAction(codercmds.ResumeSessionAction{Target: targetID})
-		m = applyPreparedWorktreeCommand(t, m, cmd)
+		if _, cmd := m.applySessionAction(codercmds.ResumeSessionAction{Target: targetID}); cmd == nil {
+			t.Fatal("/resume did not return a foreground command")
+		}
 		if m.sessionID != targetID {
 			t.Fatalf("/resume session=%q want=%q", m.sessionID, targetID)
 		}
-		assertWorktreeSession(t, fixture, targetID)
+		if m.worktreeRuntime != active || m.registry != active.registry {
+			t.Fatal("/resume rebuilt the retained runtime instead of switching its session")
+		}
+		assertWorktreeScopeSession(t, active, targetID)
 	})
 
 	t.Run("delete replaces and removes the current session", func(t *testing.T) {
@@ -152,42 +262,33 @@ func TestMainWorktreeSessionCommandsRebindRuntime(t *testing.T) {
 		oldSession := active.sessionID
 		m := newWorktreeRuntimeTestModel(t, fixture, active)
 		m.applySessionAction(codercmds.DeleteSessionAction{})
-		updated, cmd := m.updateCommandConfirmation(tea.KeyPressMsg{Code: 'y', Text: "y"})
+		updated, _ := m.updateCommandConfirmation(tea.KeyPressMsg{Code: 'y', Text: "y"})
 		m = updated.(*model)
-		m = applyPreparedWorktreeCommand(t, m, cmd)
 		if m.sessionID == oldSession {
 			t.Fatal("/delete did not install a replacement session")
 		}
 		if exists, err := fixture.sessions.Exists(oldSession); err != nil || exists {
 			t.Fatalf("deleted session exists=%v err=%v", exists, err)
 		}
-		assertWorktreeSession(t, fixture, m.sessionID)
+		assertWorktreeScopeSession(t, active, m.sessionID)
 	})
-}
-
-func applyPreparedWorktreeCommand(t *testing.T, m *model, cmd tea.Cmd) *model {
-	t.Helper()
-	prepared := worktreePreparedFromCommand(t, cmd)
-	if prepared.err != nil {
-		t.Fatal(prepared.err)
-	}
-	updated, _ := m.Update(prepared)
-	return updated.(*model)
-}
-
-func assertWorktreeSession(t *testing.T, fixture *worktreeRuntimeTestFixture, want string) {
-	t.Helper()
-	meta, err := fixture.supervisor.store.Get(fixture.mainID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if meta.SessionID != want {
-		t.Fatalf("main worktree session=%q want=%q", meta.SessionID, want)
-	}
 }
 
 func lastBlockIsError(m *model) bool {
 	return len(m.messages) > 0 && m.messages[len(m.messages)-1].kind == blockError
+}
+
+// assertWorktreeScopeSession asserts the scope pointer that now owns session
+// selection for one worktree.
+func assertWorktreeScopeSession(t *testing.T, runtime *worktreeRuntime, want string) {
+	t.Helper()
+	current, err := runtime.manager.Project().CurrentSessionID(runtime.manager.Scope())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current != want {
+		t.Fatalf("scope %q current=%q want=%q", runtime.manager.Scope(), current, want)
+	}
 }
 
 func TestReviewActionInOrdinarySSHShowsLocalVSCodeInstructions(t *testing.T) {

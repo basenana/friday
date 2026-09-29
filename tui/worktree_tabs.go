@@ -227,7 +227,13 @@ func (m *model) refreshWorktreeTabs() {
 		if !item.Registered || item.Stale {
 			continue
 		}
+		// The session a tab shows is the retained runtime's foreground session;
+		// worktree metadata no longer records one.
+		session := item.SessionID
 		status := old[item.ID]
+		if runtime := runtimes[item.ID]; runtime != nil {
+			session = runtime.sessionID
+		}
 		if status == "" {
 			status = worktreeTabIdle
 			if runtime := runtimes[item.ID]; runtime != nil && runtime.registry.SessionRunning(runtime.sessionID) {
@@ -238,7 +244,7 @@ func (m *model) refreshWorktreeTabs() {
 		if label == "" {
 			label = item.Name
 		}
-		tabs = append(tabs, worktreeTab{ID: item.ID, Label: label, Path: item.Path, Session: item.SessionID, Status: status})
+		tabs = append(tabs, worktreeTab{ID: item.ID, Label: label, Path: item.Path, Session: session, Status: status})
 	}
 	m.worktreeTabs = tabs
 }

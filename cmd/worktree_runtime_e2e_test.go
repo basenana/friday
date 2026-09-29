@@ -12,6 +12,7 @@ import (
 	"time"
 
 	codebasepkg "github.com/basenana/friday/coder/codebase"
+	projectpkg "github.com/basenana/friday/coder/project"
 	"github.com/basenana/friday/config"
 	"github.com/basenana/friday/core/types"
 	"github.com/basenana/friday/sessions"
@@ -71,18 +72,36 @@ func runProjectWorktreeCommandsLifecycleE2E(t *testing.T) {
 	}
 	sessionA := createCommandLifecycleRoot(t, manager)
 	sessionB := createCommandLifecycleRoot(t, manager)
-	if err := service.Associate(metaA.Path, metaA.Branch, service.ProjectIdentity().ID, sessionA); err != nil {
+	if err := service.Associate(metaA.Path, metaA.Branch); err != nil {
 		t.Fatal(err)
 	}
-	if err := service.Associate(metaB.Path, metaB.Branch, service.ProjectIdentity().ID, sessionB); err != nil {
+	if err := service.Associate(metaB.Path, metaB.Branch); err != nil {
 		t.Fatal(err)
 	}
+	// Session ownership lives in the project session pool: each linked checkout
+	// owns its own scope, and every scope keeps its own current pointer.
+	project, err := projectpkg.OpenWithIdentity(repo, service.ProjectIdentity(), projectpkg.NewFileStore(cfg.ProjectsPath()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, scope := range []struct {
+		id      string
+		session string
+	}{{metaA.ID, sessionA}, {metaB.ID, sessionB}} {
+		if err := project.AddSession(scope.id, scope.session); err != nil {
+			t.Fatal(err)
+		}
+		if err := project.SetCurrentSession(scope.id, scope.session); err != nil {
+			t.Fatal(err)
+		}
+	}
+	legacySession := createCommandLifecycleRoot(t, manager)
 	if err := sessionStore.AppendMessages(sessionB, types.Message{Role: types.RoleUser, Content: "TOP SECRET lifecycle content"}); err != nil {
 		t.Fatal(err)
 	}
 
 	legacyPath := filepath.Join(cfg.DataDirPath(), "worktrees", service.RepositoryID(), "registry.json")
-	writeCommandLegacyRegistry(t, legacyPath, repo, "main", "legacy-main-session", time.Date(2026, 9, 20, 8, 0, 0, 0, time.UTC))
+	writeCommandLegacyRegistry(t, legacyPath, repo, "main", legacySession, time.Date(2026, 9, 20, 8, 0, 0, 0, time.UTC))
 	installCommandLifecycleGlobalsCleanup(t)
 	listOutput, err := executeCommandLifecycleCobra(t, configPath, "worktrees", "list")
 	if err != nil {
@@ -90,7 +109,7 @@ func runProjectWorktreeCommandsLifecycleE2E(t *testing.T) {
 	}
 	for _, want := range []string{
 		"ID\tNAME\tBRANCH\tPATH\tSESSION\tCURRENT\tSTALE",
-		metaA.ID + "\t", metaB.ID + "\t", "\thealthy\t", "\tmissing\tyes\t-",
+		metaA.ID + "\t", metaB.ID + "\t", "\thealthy\t", "\thealthy\tyes\t-",
 	} {
 		if !strings.Contains(listOutput, want) {
 			t.Fatalf("worktrees list missing %q:\n%s", want, listOutput)
@@ -107,8 +126,30 @@ func runProjectWorktreeCommandsLifecycleE2E(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list entrypoint did not migrate legacy metadata: %v", err)
 	}
-	if migratedMain.SessionID != "legacy-main-session" {
-		t.Fatalf("migrated main session = %q", migratedMain.SessionID)
+	if migratedMain.SessionID != "" {
+		t.Fatalf("legacy worktree session reference was not adopted: %q", migratedMain.SessionID)
+	}
+	if scope, ok, err := project.SessionScope(legacySession); err != nil || !ok || scope != projectpkg.MainScope {
+		t.Fatalf("adopted main session scope = %q, %t, %v", scope, ok, err)
+	}
+	if current, err := project.CurrentSessionID(projectpkg.MainScope); err != nil || current != legacySession {
+		t.Fatalf("main scope current = %q, %v", current, err)
+	}
+
+	// Health is read from the scope pointer, so a dangling pointer reports a
+	// missing session instead of a healthy one.
+	if err := project.SetCurrentSession(metaB.ID, "missing-session"); err != nil {
+		t.Fatal(err)
+	}
+	missingOutput, err := executeCommandLifecycleCobra(t, configPath, "worktrees", "list")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(missingOutput, "\tmissing\t") {
+		t.Fatalf("worktrees list did not report a dangling scope pointer:\n%s", missingOutput)
+	}
+	if err := project.SetCurrentSession(metaB.ID, sessionB); err != nil {
+		t.Fatal(err)
 	}
 
 	releaseOwner, err := codebasepkg.AcquireProjectLock(cfg.DataDirPath(), service.ProjectIdentity().ID, repo)

@@ -15,7 +15,7 @@ commands share state initialized in `root.go`'s `PersistentPreRunE`.
 | `session.go` | `friday sessions` subtree: `list`, `new`, `current`, `use`, `show`, `alias`, `archive`, `unarchive`, `archived`, `delete`, `compact` (ID or alias resolution) |
 | `tui.go` | `friday tui`: Git directories launch the main worktree through `tui.RunWorktree`; non-Git directories retain `tui.RunProject` and `--session` |
 | `project.go` | Opens the logical project shared by all Git worktrees and migrates legacy worktree metadata |
-| `worktrees.go` | `friday worktrees list/remove`: inspect or remove project worktrees; removal archives the associated session and optionally deletes the branch |
+| `worktrees.go` | `friday worktrees list/remove`: inspect or remove project worktrees; it adopts legacy worktree sessions into the project session pool, reports health from the scope current pointer, and removal archives the whole worktree scope before optionally deleting the branch |
 | `daemon.go` | `friday daemon`: session catalog + actor registry (`AgentPlanEntry=true`, `ConfigTools=true`, `Catalog=sessMgr`), runs `fridaydaemon.Server` on `--port` (default 8999), graceful shutdown on SIGINT/SIGTERM with 10s timeout |
 | `heartbeat.go` | `friday heartbeat`: reads workspace `HEARTBEAT.md`, exits if empty, else sends to current session's chat |
 | `sunrise.go` | `friday sunrise`: daily bootstrap — lists active sessions, processes pre-today sessions into memory (`memory.Processor.ProcessSession` on a `setup.WithTemporary(true)` agent), creates a fresh isolated session as current |

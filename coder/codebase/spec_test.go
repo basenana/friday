@@ -22,8 +22,8 @@ func TestDefaultSpecRoundTrip(t *testing.T) {
 	if spec.Version != 1 || spec.Index.MaxLoopTimes != 100 || spec.Schedule.IdleDelay.Duration != time.Hour {
 		t.Fatalf("unexpected default spec: %+v", spec)
 	}
-	if spec.Context.Timeout.Duration != 3*time.Minute {
-		t.Fatalf("default Context timeout=%v, want 3m", spec.Context.Timeout.Duration)
+	if strings.Contains(defaultSpecFile, "timeout:") {
+		t.Fatal("default spec template still carries the removed context timeout field")
 	}
 	if spec.Context.MaxLoopTimes != 10 {
 		t.Fatalf("default Context max_loop_times=%d, want 10", spec.Context.MaxLoopTimes)
@@ -59,7 +59,6 @@ func TestSpecRejectsUnknownFieldsAndInvalidValues(t *testing.T) {
 		"unknown field":     strings.Replace(base, "version: 1", "version: 1\nextra: true", 1),
 		"bad version":       strings.Replace(base, "version: 1", "version: 2", 1),
 		"empty body":        strings.Split(base, "---\n")[0] + "---\n",
-		"bad timeout":       strings.Replace(base, "timeout: 180s", "timeout: 0s", 1),
 		"bad loop":          strings.Replace(base, "max_loop_times: 10\n", "max_loop_times: 0\n", 1),
 		"bad effort":        strings.Replace(base, "effort: default", "effort: impossible", 1),
 		"unknown model":     strings.Replace(base, "model: \"\"", "model: missing", 1),
@@ -75,5 +74,26 @@ func TestSpecRejectsUnknownFieldsAndInvalidValues(t *testing.T) {
 				t.Fatal("expected validation error")
 			}
 		})
+	}
+}
+
+// Existing spec files written before context.timeout was removed must keep
+// loading: the field is accepted and ignored.
+func TestSpecToleratesLegacyContextTimeout(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "AGENT-SPEC.md")
+	content := strings.Replace(defaultSpecFile,
+		"max_output_tokens: 10000\nschedule:", "max_output_tokens: 10000\n  timeout: 180s\nschedule:", 1)
+	if !strings.Contains(content, "timeout: 180s") {
+		t.Fatal("test setup failed to inject the legacy timeout field")
+	}
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	spec, err := loadSpec(path, fallback.NewModelPool(nil))
+	if err != nil {
+		t.Fatalf("legacy spec with context.timeout should load: %v", err)
+	}
+	if spec.Context.MaxLoopTimes != 10 || spec.Context.MaxOutputTokens != 10000 || spec.Context.Effort != "none" {
+		t.Fatalf("legacy spec context degraded: %+v", spec.Context)
 	}
 }

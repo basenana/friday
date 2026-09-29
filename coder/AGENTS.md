@@ -60,8 +60,19 @@ func (m *Manager) Start(ctx context.Context, sess *session.Session, task string)
 
 // coder/project
 func NewManager(project *Project, manager *sessions.Manager) *Manager
+func NewScopedManager(project *Project, manager *sessions.Manager, scope string) *Manager
 func (m *Manager) OpenRoot(ctx context.Context, id string, client providers.Client, opts ...coresession.Option) (sessions.SessionLifecycle, error)
 ```
+
+`project.Manager` is the only `sessions.RootCatalog` in the application. It is
+bound to one session scope: `MainScope` (the empty string) is the project main
+checkout and every legacy reference without a scope, while a worktree scope is
+the worktree ID. A session reference (`SessionRef`, `sessions/<id>.json`) may
+carry `scope`; a missing scope means `MainScope`. Each scope keeps its own
+current session pointer under the project directory: `current` for the main
+scope and `current.<scope>` for worktree scopes. Session visibility is
+"reference exists and scope matches", so `OpenRoot`, `List`, `Resolve`,
+`Archive`, and `DeleteRoot` never cross scopes.
 
 ## Agent specifications
 

@@ -42,7 +42,10 @@ func New(host, apiKey string, model Model) providers.Client {
 		transport.Proxy = http.ProxyURL(proxyURL)
 	}
 
-	httpClient := &http.Client{Transport: transport, Timeout: time.Hour}
+	// Covers the whole request including streaming body reads: one LLM API
+	// call — dead stream or very long generation — is hard-bounded at 15m.
+	// This is the only per-call bound now that stream idle is log-only.
+	httpClient := &http.Client{Transport: transport, Timeout: 15 * time.Minute}
 	sdkClient := openaisdk.NewClient(
 		option.WithBaseURL(host),
 		option.WithAPIKey(apiKey),

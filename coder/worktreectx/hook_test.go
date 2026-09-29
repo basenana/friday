@@ -52,3 +52,34 @@ func TestNewRejectsIncompleteWorktreeContext(t *testing.T) {
 		t.Fatal("expected incomplete context to fail")
 	}
 }
+
+func TestHookRendersTheLiveSessionID(t *testing.T) {
+	hook, err := New(Context{
+		ProjectName: "repo", ProjectRoot: "/repo",
+		WorktreeName: "main", Branch: "main",
+		WorktreeRoot: "/repo", SessionID: "build-time-session",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := providers.NewRequest("")
+	if err := hook.BeforeModel(context.Background(), coresession.New("switched-session", nil), req); err != nil {
+		t.Fatal(err)
+	}
+	content := req.History()[0].Content
+	if !strings.Contains(content, "Worktree session: switched-session") {
+		t.Fatalf("context kept the stale session:\n%s", content)
+	}
+	if strings.Contains(content, "build-time-session") {
+		t.Fatalf("context still contains the build-time session:\n%s", content)
+	}
+
+	// A request without a live session keeps the build-time binding.
+	fallback := providers.NewRequest("")
+	if err := hook.BeforeModel(context.Background(), nil, fallback); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(fallback.History()[0].Content, "Worktree session: build-time-session") {
+		t.Fatalf("fallback context lost the session binding:\n%s", fallback.History()[0].Content)
+	}
+}

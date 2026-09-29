@@ -152,12 +152,12 @@ func runProjectWorktreeRuntimeLifecycleE2E(t *testing.T) {
 		t.Fatal("selecting B did not install a replacement session")
 	}
 	assertLifecycleE2EFeedClosed(t, feedA)
-	metaB, err := restarted.store.Get(recoveredB.id)
+	currentB, err := replacementB.manager.CurrentID()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if metaB.SessionID != replacementB.sessionID {
-		t.Fatalf("B metadata session = %q, want replacement %q", metaB.SessionID, replacementB.sessionID)
+	if currentB != replacementB.sessionID {
+		t.Fatalf("B scope current = %q, want replacement %q", currentB, replacementB.sessionID)
 	}
 	if _, err := replacementB.lifecycle.Current().ReadRecord(ctx, coderloop.StateNamespace); !errors.Is(err, coresession.ErrRecordNotFound) {
 		t.Fatalf("replacement B inherited deleted loop state: %v", err)

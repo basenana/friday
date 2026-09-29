@@ -327,8 +327,13 @@ func TestNewAgentInstallsWorktreeContextOnlyWhenConfigured(t *testing.T) {
 	if err := agentCtx.Session.RunHooks(context.Background(), types.SessionHookBeforeModel, coresession.HookPayload{ModelRequest: req}); err != nil {
 		t.Fatal(err)
 	}
-	if len(req.History()) == 0 || !strings.Contains(req.History()[0].Content, "Worktree session: session-task") {
+	// The session line renders from the live session, so a runtime that hosts
+	// several sessions never advertises a stale binding.
+	if len(req.History()) == 0 || !strings.Contains(req.History()[0].Content, "Worktree session: "+agentCtx.Session.ID) {
 		t.Fatalf("worktree context missing: %#v", req.History())
+	}
+	if strings.Contains(req.History()[0].Content, "Worktree session: session-task") {
+		t.Fatalf("worktree context kept the configured placeholder session: %#v", req.History())
 	}
 }
 

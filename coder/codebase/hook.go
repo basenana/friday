@@ -100,6 +100,11 @@ func hasTool(existing []*tools.Tool, name string) bool {
 	return false
 }
 
+// contextQueryTool exposes the Context Provider to coding agents. The tool
+// call deliberately stays under the tools.Invoker 30m hard limit (it is NOT
+// marked WithToolNoHardLimit), so a query run is cut short at 30m even when
+// the spec-derived total timeout (max_loop_times x agents.PerLoopBudget)
+// would allow longer; raise max_loop_times beyond 10 only with that in mind.
 func (h *Hook) contextQueryTool() *tools.Tool {
 	return tools.NewTool(codebaseContextQueryToolName,
 		tools.WithDescription("Query the project-scoped Codebase Context Provider for architecture, module relationships, canonical patterns, unusual logic or naming, or historical rationale. The query must be self-contained."),

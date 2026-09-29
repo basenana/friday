@@ -69,6 +69,46 @@ func TestInvokerClassifiesInvocationDeadlines(t *testing.T) {
 	}
 }
 
+// A tool flagged WithToolNoHardLimit manages its own budget: the invoker must
+// let it run past the hard limit, with the caller's context as the only deadline.
+func TestInvokerNoHardLimitRunsPastHardLimit(t *testing.T) {
+	invoker := NewInvoker(WithInvokerHardLimit(25 * time.Millisecond))
+
+	exempt := NewTool("exempt",
+		WithToolNoHardLimit(),
+		WithToolHandler(func(ctx context.Context, _ *Request) (*Result, error) {
+			select {
+			case <-time.After(100 * time.Millisecond):
+				return NewToolResultText("done"), nil
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}),
+	)
+	result, err := invoker.Invoke(context.Background(), exempt, &Request{})
+	if err != nil {
+		t.Fatalf("Invoke() error = %v", err)
+	}
+	if result == nil || result.IsError || result.Status != ResultStatusSuccess || resultText(result) != "done" {
+		t.Fatalf("exempt tool result = %+v, want success", result)
+	}
+
+	// Without the flag the same slow handler is still cut at the hard limit.
+	plain := NewTool("plain",
+		WithToolHandler(func(ctx context.Context, _ *Request) (*Result, error) {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}),
+	)
+	result, err = invoker.Invoke(context.Background(), plain, &Request{})
+	if err != nil {
+		t.Fatalf("Invoke() error = %v", err)
+	}
+	if result == nil || !result.TimedOut || result.TimeoutKind != TimeoutKindHardLimit || result.ErrorCode != "tool_timeout" {
+		t.Fatalf("plain tool result = %+v, want hard-limit timeout", result)
+	}
+}
+
 func TestInvokerRejectsDeclaredTimeoutAboveMaximumWithoutCallingHandler(t *testing.T) {
 	called := false
 	tool := NewTool("limited",

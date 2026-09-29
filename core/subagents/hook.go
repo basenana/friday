@@ -87,6 +87,7 @@ func (a *Subagents) buildExploreTool(sess *session.Session) *tools.Tool {
 			"Trace the authentication call path and report the relevant files and control flow.",
 			"Inspect cache invalidation behavior and report correctness risks with file references.",
 		}}),
+		tools.WithToolNoHardLimit(),
 		tools.WithToolHandler(callExploreToolWithForker(a.option.SelfAgent, sess, a.option.SessionForker, a.option.ExploreTools, a.parallel)),
 	)
 }
@@ -129,6 +130,7 @@ func (a *Subagents) buildRunTaskTool(sess *session.Session, current ...ExpertAge
 			map[string]interface{}{"agent_name": experts[0].Name, "task": "Analyze the implementation path and report concrete risks with file references."},
 			map[string]interface{}{"agent_name": experts[0].Name, "task": "Independently inspect the test coverage and report missing scenarios."},
 		}}),
+		tools.WithToolNoHardLimit(),
 		tools.WithToolHandler(callSubagentToolWithForker(experts, sess, a.option.SessionForker, a.option.ExpertTools, a.parallel)),
 	)
 }

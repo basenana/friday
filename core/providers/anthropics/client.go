@@ -552,7 +552,10 @@ func newClient(host, apiKey string, model Model) *client {
 	}
 	cli := &http.Client{
 		Transport: tp,
-		Timeout:   time.Hour,
+		// Covers the whole request including streaming body reads: one LLM API
+		// call — dead stream or very long generation — is hard-bounded at 15m.
+		// This is the only per-call bound now that stream idle is log-only.
+		Timeout: 15 * time.Minute,
 	}
 
 	anthropicClient := anthropic.NewClient(

@@ -159,12 +159,12 @@ func TestWorktreeRuntimeSupervisorRecoveryReplacesInvalidSessionWithoutLoopState
 			if restored.sessionID == oldSessionID {
 				t.Fatal("invalid session reference was not replaced")
 			}
-			meta, err := restarted.store.Get(fixture.mainID)
+			current, err := restored.manager.CurrentID()
 			if err != nil {
 				t.Fatal(err)
 			}
-			if meta.SessionID != restored.sessionID {
-				t.Fatalf("persisted replacement session = %q, want %q", meta.SessionID, restored.sessionID)
+			if current != restored.sessionID {
+				t.Fatalf("persisted replacement session = %q, want %q", current, restored.sessionID)
 			}
 			if _, err := restored.lifecycle.Current().ReadRecord(ctx, coderloop.StateNamespace); !errors.Is(err, coresession.ErrRecordNotFound) {
 				t.Fatalf("replacement inherited loop state: %v", err)

@@ -28,16 +28,21 @@ type Identity struct {
 	Repository string
 }
 
+// MainScope is the reserved scope of the project main checkout. Session
+// references written before scopes existed belong to it.
+const MainScope = ""
+
 type SessionRef struct {
 	Version   int       `json:"version"`
 	SessionID string    `json:"session_id"`
+	Scope     string    `json:"scope,omitempty"`
 	AddedAt   time.Time `json:"added_at"`
 }
 
 type Store interface {
 	Ensure(Metadata) error
-	Current(projectID string) (string, error)
-	SetCurrent(projectID, sessionID string) error
+	Current(projectID, scope string) (string, error)
+	SetCurrent(projectID, scope, sessionID string) error
 	ListRefs(projectID string) ([]SessionRef, error)
 	HasRef(projectID, sessionID string) (bool, error)
 	AddRef(projectID string, ref SessionRef) error
@@ -146,12 +151,15 @@ func ProjectIDPrefix(name string) string {
 func (p *Project) ID() string   { return p.meta.ID }
 func (p *Project) Root() string { return p.meta.Root }
 
-func (p *Project) CurrentSessionID() (string, error) {
-	return p.store.Current(p.ID())
+// CurrentSessionID returns the current session pointer of one scope. The main
+// checkout keeps its established "current" file; every other scope keeps its
+// own "current.<scope>" file.
+func (p *Project) CurrentSessionID(scope string) (string, error) {
+	return p.store.Current(p.ID(), normalizeScope(scope))
 }
 
-func (p *Project) SetCurrentSession(id string) error {
-	return p.store.SetCurrent(p.ID(), id)
+func (p *Project) SetCurrentSession(scope, id string) error {
+	return p.store.SetCurrent(p.ID(), normalizeScope(scope), id)
 }
 
 func (p *Project) CodebaseEnabled() (bool, error) {
@@ -170,12 +178,35 @@ func (p *Project) HasSession(id string) (bool, error) {
 	return p.store.HasRef(p.ID(), id)
 }
 
-func (p *Project) AddSession(id string) error {
+// SessionScope returns the scope a session reference belongs to. A missing
+// reference reports false.
+func (p *Project) SessionScope(id string) (string, bool, error) {
+	refs, err := p.store.ListRefs(p.ID())
+	if err != nil {
+		return "", false, err
+	}
+	for _, ref := range refs {
+		if ref.SessionID == id {
+			return normalizeScope(ref.Scope), true, nil
+		}
+	}
+	return "", false, nil
+}
+
+func (p *Project) AddSession(scope, id string) error {
 	if strings.TrimSpace(id) == "" {
 		return fmt.Errorf("session id is required")
 	}
-	return p.store.AddRef(p.ID(), SessionRef{Version: 1, SessionID: id, AddedAt: time.Now()})
+	scope = normalizeScope(scope)
+	if scope != MainScope && !validID(scope) {
+		return fmt.Errorf("invalid session scope")
+	}
+	return p.store.AddRef(p.ID(), SessionRef{Version: 1, SessionID: id, Scope: scope, AddedAt: time.Now()})
 }
+
+// normalizeScope keeps the reserved main scope and every named scope in one
+// canonical form so scope comparisons never depend on surrounding whitespace.
+func normalizeScope(scope string) string { return strings.TrimSpace(scope) }
 
 func (p *Project) RemoveSession(id string) error {
 	return p.store.RemoveRef(p.ID(), id)

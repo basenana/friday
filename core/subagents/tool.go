@@ -7,7 +7,9 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
+	"github.com/basenana/friday/core/agents"
 	"github.com/basenana/friday/core/api"
 	"github.com/basenana/friday/core/session"
 	"github.com/basenana/friday/core/tools"
@@ -260,6 +262,27 @@ func formatBatchResults(toolName string, results []batchTaskResult) (string, int
 	return strings.TrimSpace(buf.String()), succeeded
 }
 
+// childTotalTimeout bounds one subagent run as a whole: its loop limit times
+// the shared per-loop budget (agents.PerLoopBudget). It is the child's total
+// deadline, never a per-API-call one. Agents that do not expose a loop limit
+// run under the parent context only.
+func childTotalTimeout(agent agents.Agent) (time.Duration, bool) {
+	limiter, ok := agent.(interface{ LoopLimit() int })
+	if !ok || limiter.LoopLimit() <= 0 {
+		return 0, false
+	}
+	return time.Duration(limiter.LoopLimit()) * agents.PerLoopBudget, true
+}
+
+// runContextForChild returns the context for consuming a child agent's Chat
+// response, bounded by the child's total timeout when available.
+func runContextForChild(ctx context.Context, agent agents.Agent) (context.Context, context.CancelFunc) {
+	if timeout, ok := childTotalTimeout(agent); ok {
+		return context.WithTimeout(ctx, timeout)
+	}
+	return context.WithCancel(ctx)
+}
+
 func executeExploreTask(ctx context.Context, self *ExpertAgent, sess *session.Session, forker SessionForker, exploreTools []*tools.Tool, task string, index, total int) (output string, retErr error) {
 	subSession, release, err := forkSubSession(sess, forker)
 	if err != nil {
@@ -296,7 +319,9 @@ func executeExploreTask(ctx context.Context, self *ExpertAgent, sess *session.Se
 		sess.PublishEvent(subagentEvent(types.EventSubagentFinish, "explore", eventOutput, subSession.ID, index, total))
 	}()
 
-	content, err := api.ReadAllContent(ctx, self.Agent.Chat(ctx, &api.Request{
+	runCtx, cancelRun := runContextForChild(ctx, self.Agent)
+	defer cancelRun()
+	content, err := api.ReadAllContent(runCtx, self.Agent.Chat(runCtx, &api.Request{
 		Session: subSession, UserMessage: injectExploreReportRequest(task), Tools: exploreTools,
 	}))
 	if err != nil {
@@ -346,7 +371,9 @@ func executeExpertTask(ctx context.Context, agents []ExpertAgent, sess *session.
 		sess.PublishEvent(subagentEvent(types.EventSubagentFinish, task.Agent, eventOutput, subSession.ID, index, total))
 	}()
 
-	content, err := api.ReadAllContent(ctx, agent.Agent.Chat(ctx, &api.Request{
+	runCtx, cancelRun := runContextForChild(ctx, agent.Agent)
+	defer cancelRun()
+	content, err := api.ReadAllContent(runCtx, agent.Agent.Chat(runCtx, &api.Request{
 		Session: subSession, UserMessage: injectStructuredReportRequest(task.Task), Tools: subagentTools,
 	}))
 	if err != nil {

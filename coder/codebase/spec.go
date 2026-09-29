@@ -10,6 +10,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/basenana/friday/core/logger"
 	"github.com/basenana/friday/core/providers"
 	"github.com/basenana/friday/core/providers/fallback"
 	"gopkg.in/yaml.v3"
@@ -29,7 +30,6 @@ context:
   effort: none
   max_loop_times: 10
   max_output_tokens: 10000
-  timeout: 180s
 schedule:
   idle_delay: 1h
   conversation_pairs: 10
@@ -59,9 +59,19 @@ type modeSpec struct {
 	MaxOutputTokens int64  `yaml:"max_output_tokens"`
 }
 
-type contextSpec struct {
+// legacyContextSpec decodes the superseded context.timeout field so existing
+// spec files keep loading. The value is ignored; only a warning is logged.
+type legacyContextSpec struct {
 	modeSpec `yaml:",inline"`
-	Timeout  duration `yaml:"timeout"`
+	Timeout  *duration `yaml:"timeout"`
+}
+
+// legacyTolerantSpec mirrors Spec with the legacy-tolerant context section.
+type legacyTolerantSpec struct {
+	Version  int              `yaml:"version"`
+	Index    modeSpec         `yaml:"index"`
+	Context  legacyContextSpec `yaml:"context"`
+	Schedule scheduleSpec     `yaml:"schedule"`
 }
 
 type scheduleSpec struct {
@@ -73,7 +83,7 @@ type scheduleSpec struct {
 type Spec struct {
 	Version  int          `yaml:"version"`
 	Index    modeSpec     `yaml:"index"`
-	Context  contextSpec  `yaml:"context"`
+	Context  modeSpec     `yaml:"context"`
 	Schedule scheduleSpec `yaml:"schedule"`
 	Body     string       `yaml:"-"`
 }
@@ -126,10 +136,10 @@ func loadSpec(path string, pool *fallback.ModelPool) (Spec, error) {
 			return Spec{}, fmt.Errorf("decode Codebase AGENT-SPEC: explicit YAML document boundaries are not allowed")
 		}
 	}
-	var spec Spec
+	var legacy legacyTolerantSpec
 	dec := yaml.NewDecoder(bytes.NewReader(front))
 	dec.KnownFields(true)
-	if err := dec.Decode(&spec); err != nil {
+	if err := dec.Decode(&legacy); err != nil {
 		return Spec{}, fmt.Errorf("decode Codebase AGENT-SPEC: %w", err)
 	}
 	var trailing any
@@ -138,6 +148,17 @@ func loadSpec(path string, pool *fallback.ModelPool) (Spec, error) {
 			err = fmt.Errorf("multiple YAML documents")
 		}
 		return Spec{}, fmt.Errorf("decode Codebase AGENT-SPEC: %w", err)
+	}
+	if legacy.Context.Timeout != nil {
+		logger.New("codebase").Warnw("context.timeout in the Codebase AGENT-SPEC is no longer used; ignoring it",
+			"timeout", legacy.Context.Timeout.Duration, "max_loop_times", legacy.Context.MaxLoopTimes,
+			"note", "the Context Provider total timeout is now max_loop_times x the per-loop budget")
+	}
+	spec := Spec{
+		Version:  legacy.Version,
+		Index:    legacy.Index,
+		Context:  legacy.Context.modeSpec,
+		Schedule: legacy.Schedule,
 	}
 	spec.Body = strings.TrimSpace(string(body))
 	if err := validateSpec(spec, pool); err != nil {
@@ -173,7 +194,7 @@ func validateSpec(spec Spec, pool *fallback.ModelPool) error {
 			models[entry.Name] = true
 		}
 	}
-	for name, mode := range map[string]modeSpec{"index": spec.Index, "context": spec.Context.modeSpec} {
+	for name, mode := range map[string]modeSpec{"index": spec.Index, "context": spec.Context} {
 		if mode.Model != "" && !models[mode.Model] {
 			return fmt.Errorf("%s selects unknown model %q", name, mode.Model)
 		}
@@ -186,9 +207,6 @@ func validateSpec(spec Spec, pool *fallback.ModelPool) error {
 		if mode.MaxOutputTokens < 256 || mode.MaxOutputTokens > 65536 {
 			return fmt.Errorf("%s max_output_tokens must be 256-65536", name)
 		}
-	}
-	if spec.Context.Timeout.Duration < time.Second || spec.Context.Timeout.Duration > 10*time.Minute {
-		return fmt.Errorf("context timeout must be 1s-10m")
 	}
 	if spec.Schedule.IdleDelay.Duration < time.Minute || spec.Schedule.IdleDelay.Duration > 24*time.Hour {
 		return fmt.Errorf("idle_delay must be 1m-24h")
