@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/basenana/friday/core/session"
 	"github.com/basenana/friday/core/tools"
@@ -39,13 +40,19 @@ func (h *Hook) BeforeAgent(_ context.Context, _ *session.Session, req session.Ag
 }
 
 func newAgentTool(store Store) *tools.Tool {
+	modelDescription := "Configured model name; empty inherits the session model."
+	if catalog, ok := store.(interface{ ModelNames() []string }); ok {
+		if names := catalog.ModelNames(); len(names) > 0 {
+			modelDescription = "Configured model name; empty inherits the session model. Must be one of: " + strings.Join(names, ", ")
+		}
+	}
 	return tools.NewTool(AgentToolName,
 		tools.WithDescription("List, inspect, create, update, or delete declarative subagent configurations. Changes become available through hot reload on the next agent turn."),
 		tools.WithString("action", tools.Required(), tools.Enum("list", "get", "create", "update", "delete"), tools.Description("Configuration operation to perform.")),
 		tools.WithString("name", tools.Description("Lowercase agent name. Required except for list.")),
 		tools.WithString("description", tools.Description("Short routing description. Used by create/update.")),
 		tools.WithString("instructions", tools.Description("Complete agent system instructions. Required by create; optional replacement for update.")),
-		tools.WithString("model", tools.Description("Configured model name; empty inherits the session model.")),
+		tools.WithString("model", tools.Description(modelDescription)),
 		tools.WithString("effort", tools.Enum("", "default", "none", "low", "medium", "high", "xhigh", "max"), tools.Description("Reasoning effort override.")),
 		tools.WithInteger("max_loop_times", tools.Min(1), tools.Description("Positive maximum agent loop count.")),
 		tools.WithBoolean("confirm_delete", tools.Description("Must be true for delete.")),

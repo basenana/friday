@@ -30,6 +30,16 @@ type Store interface {
 	DeleteMCP(string) error
 }
 
+// ModelCatalog resolves agent model selections against the configured model
+// pool. A spec model name is a routing key, not a free-form string: the
+// fallback client matches configured endpoints by exact model name, so names
+// outside the catalog have no endpoint and would silently route to the
+// primary model. *config.Config satisfies this interface.
+type ModelCatalog interface {
+	HasModelName(name string) bool
+	ModelNames() []string
+}
+
 type AgentInput struct {
 	Name         string
 	Description  string
@@ -42,15 +52,43 @@ type AgentInput struct {
 type FileStore struct {
 	agentPaths []string
 	mcpRoots   []workspace.ResourceRoot
-	hasModel   func(string) bool
+	catalog    ModelCatalog
 }
 
-func NewFileStore(agentPaths []string, mcpRoots []workspace.ResourceRoot, hasModel func(string) bool) *FileStore {
+func NewFileStore(agentPaths []string, mcpRoots []workspace.ResourceRoot, catalog ModelCatalog) *FileStore {
 	return &FileStore{
 		agentPaths: append([]string(nil), agentPaths...),
 		mcpRoots:   append([]workspace.ResourceRoot(nil), mcpRoots...),
-		hasModel:   hasModel,
+		catalog:    catalog,
 	}
+}
+
+// ModelNames returns the configured model names exposed by the catalog, or
+// nil when no catalog is wired.
+func (s *FileStore) ModelNames() []string {
+	if s == nil || s.catalog == nil {
+		return nil
+	}
+	return s.catalog.ModelNames()
+}
+
+// resolveModel canonicalizes a requested model name to the configured
+// catalog entry. Matching accepts different casing but stores the configured
+// spelling so runtime routing (exact-name matching) keeps working. A nil
+// catalog accepts any non-empty name.
+func (s *FileStore) resolveModel(name string) (string, error) {
+	if name == "" || s.catalog == nil {
+		return name, nil
+	}
+	if s.catalog.HasModelName(name) {
+		return name, nil
+	}
+	for _, candidate := range s.catalog.ModelNames() {
+		if strings.EqualFold(candidate, name) {
+			return candidate, nil
+		}
+	}
+	return "", fmt.Errorf("unknown model %q; available models: %s", name, strings.Join(s.catalog.ModelNames(), ", "))
 }
 
 func (s *FileStore) ListAgents() ([]*coderagents.AgentSpec, error) {
@@ -74,7 +112,12 @@ func (s *FileStore) GetAgent(name string) (*coderagents.AgentSpec, error) {
 }
 
 func (s *FileStore) CreateAgent(input AgentInput) (*coderagents.AgentSpec, error) {
-	if err := validateAgentInput(input, true, s.hasModel); err != nil {
+	model, err := s.resolveModel(input.Model)
+	if err != nil {
+		return nil, err
+	}
+	input.Model = model
+	if err := validateAgentInput(&input, true); err != nil {
 		return nil, err
 	}
 	registry, err := coderagents.NewLoader(s.agentPaths...).Load()
@@ -105,7 +148,12 @@ func (s *FileStore) UpdateAgent(name string, fields map[string]any) (*coderagent
 	}
 	input := AgentInput{Name: current.Name, Description: current.Description, Instructions: current.SystemPrompt, Model: current.Model, Effort: current.Effort, MaxLoopTimes: current.MaxLoopTimes}
 	applyAgentFields(&input, fields)
-	if err := validateAgentInput(input, true, s.hasModel); err != nil {
+	model, err := s.resolveModel(input.Model)
+	if err != nil {
+		return nil, err
+	}
+	input.Model = model
+	if err := validateAgentInput(&input, true); err != nil {
 		return nil, err
 	}
 	root, err := s.writableAgentRoot()
@@ -155,21 +203,21 @@ func (s *FileStore) writableAgentRoot() (string, error) {
 	return root, nil
 }
 
-func validateAgentInput(input AgentInput, requireInstructions bool, hasModel func(string) bool) error {
+func validateAgentInput(input *AgentInput, requireInstructions bool) error {
 	if !validName(input.Name) {
 		return fmt.Errorf("invalid agent name %q", input.Name)
 	}
 	if requireInstructions && strings.TrimSpace(input.Instructions) == "" {
 		return errors.New("agent instructions are required")
 	}
-	if input.Model != "" && hasModel != nil && !hasModel(input.Model) {
-		return fmt.Errorf("unknown model %q", input.Model)
-	}
+	// Match the loader's frontmatter semantics: effort is case-insensitive and
+	// stored lowercased.
+	input.Effort = strings.ToLower(strings.TrimSpace(input.Effort))
 	if input.Effort != "" && !providers.IsValidReasoningEffort(input.Effort) {
 		return fmt.Errorf("invalid reasoning effort %q", input.Effort)
 	}
 	if input.MaxLoopTimes < 0 {
-		return errors.New("max_loop_times must be positive")
+		return errors.New("max_loop_times must be a positive integer")
 	}
 	return nil
 }

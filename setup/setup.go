@@ -364,7 +364,7 @@ func NewAgent(sessionMgr SessionManager, cfg *config.Config, opts ...Option) (*A
 	skillHook := skills.NewHook(skillRegistry)
 	var configToolsHook *configtools.Hook
 	if options.configTools {
-		configToolsHook = configtools.NewHook(configtools.NewFileStore(cfg.AgentPaths(), ws.MCPRoots(), cfg.HasModelName))
+		configToolsHook = configtools.NewHook(configtools.NewFileStore(cfg.AgentPaths(), ws.MCPRoots(), cfg))
 	}
 
 	approvedPlanHook := planning.NewApprovedPlanContextHook(planRepositoryFromManager(sessionMgr))
