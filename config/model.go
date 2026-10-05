@@ -159,6 +159,9 @@ func (c *Config) normalizeOptionalModels() {
 	if c.ImageModel != nil && strings.TrimSpace(c.ImageModel.Model) == "" {
 		c.ImageModel = nil
 	}
+	if c.DecisionModel != nil && strings.TrimSpace(c.DecisionModel.Model) == "" {
+		c.DecisionModel = nil
+	}
 }
 
 // IsConfigured returns true only when the required model name is set.

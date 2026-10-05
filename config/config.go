@@ -175,6 +175,9 @@ func loadFile(configPath string, missingOK, projectDefaults bool) (*Config, erro
 	if cfg.ImageModel != nil {
 		cfg.ImageModel.Model = ""
 	}
+	if cfg.DecisionModel != nil {
+		cfg.DecisionModel.Model = ""
+	}
 	if projectDefaults {
 		cfg.Workspace = "workspace"
 	}
@@ -310,6 +313,7 @@ func (c *Config) expandEnv() {
 	c.Workspace = expandEnvStr(c.Workspace)
 	c.Worktree.Directory = expandEnvStr(c.Worktree.Directory)
 	expandModelEnv(c.ImageModel)
+	expandDecisionModelEnv(c.DecisionModel)
 }
 
 func (c *Config) resolveRelativePaths(baseDir string) {
@@ -343,6 +347,16 @@ func expandModelEnv(m *ModelConfig) {
 	m.Key = expandEnvStr(m.Key)
 	m.BaseURL = expandEnvStr(m.BaseURL)
 	m.Input = expandEnvStr(m.Input)
+	m.Model = expandEnvStr(m.Model)
+	m.Proxy = expandEnvStr(m.Proxy)
+}
+
+func expandDecisionModelEnv(m *DecisionModelConfig) {
+	if m == nil {
+		return
+	}
+	m.Key = expandEnvStr(m.Key)
+	m.BaseURL = expandEnvStr(m.BaseURL)
 	m.Model = expandEnvStr(m.Model)
 	m.Proxy = expandEnvStr(m.Proxy)
 }

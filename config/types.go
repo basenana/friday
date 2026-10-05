@@ -3,19 +3,20 @@ package config
 import "github.com/basenana/friday/sandbox"
 
 type Config struct {
-	Model         *ModelConfig        `yaml:"model" json:"model"`
-	Models        []ModelConfig       `yaml:"models" json:"models"`
-	ImageModel    *ModelConfig        `yaml:"image_model" json:"image_model"`
-	DataDir       string              `yaml:"data_dir" json:"data_dir"`
-	Workspace     string              `yaml:"workspace" json:"workspace"`
-	Memory        MemoryConfig        `yaml:"memory" json:"memory"`
-	Session       SessionConfig       `yaml:"session" json:"session"`
-	Log           LogConfig           `yaml:"log" json:"log"`
-	Sandbox       *sandbox.Config     `yaml:"sandbox" json:"sandbox"`
-	TUI           TUIConfig           `yaml:"tui" json:"tui"`
-	Editor        EditorConfig        `yaml:"editor" json:"editor"`
-	Worktree      WorktreeConfig      `yaml:"worktree" json:"worktree"`
-	Collaboration CollaborationConfig `yaml:"collaboration" json:"collaboration"`
+	Model         *ModelConfig         `yaml:"model" json:"model"`
+	Models        []ModelConfig        `yaml:"models" json:"models"`
+	ImageModel    *ModelConfig         `yaml:"image_model" json:"image_model"`
+	DecisionModel *DecisionModelConfig `yaml:"decision_model" json:"decision_model"`
+	DataDir       string               `yaml:"data_dir" json:"data_dir"`
+	Workspace     string               `yaml:"workspace" json:"workspace"`
+	Memory        MemoryConfig         `yaml:"memory" json:"memory"`
+	Session       SessionConfig        `yaml:"session" json:"session"`
+	Log           LogConfig            `yaml:"log" json:"log"`
+	Sandbox       *sandbox.Config      `yaml:"sandbox" json:"sandbox"`
+	TUI           TUIConfig            `yaml:"tui" json:"tui"`
+	Editor        EditorConfig         `yaml:"editor" json:"editor"`
+	Worktree      WorktreeConfig       `yaml:"worktree" json:"worktree"`
+	Collaboration CollaborationConfig  `yaml:"collaboration" json:"collaboration"`
 
 	// Runtime-only workspace layering metadata. These fields are populated by
 	// LoadForDir and intentionally stay out of serialized configuration files.
@@ -69,6 +70,15 @@ type ModelConfig struct {
 	ReasoningSplit  bool    `yaml:"reasoning_split" json:"reasoning_split"`
 }
 
+type DecisionModelConfig struct {
+	Provider string `yaml:"provider" json:"provider"`
+	BaseURL  string `yaml:"base_url" json:"base_url"`
+	Key      string `yaml:"key" json:"key"`
+	Model    string `yaml:"model" json:"model"`
+	QPM      int64  `yaml:"qpm" json:"qpm"`
+	Proxy    string `yaml:"proxy" json:"proxy"`
+}
+
 type MemoryConfig struct {
 	Enabled bool `yaml:"enabled" json:"enabled"`
 	Days    int  `yaml:"days" json:"days"`
@@ -80,10 +90,11 @@ type SessionConfig struct {
 
 func DefaultConfig() *Config {
 	return &Config{
-		Model:      DefaultModelConfig(),
-		ImageModel: DefaultImageModelConfig(),
-		DataDir:    "~/.friday",
-		Workspace:  "~/.friday/workspace",
+		Model:         DefaultModelConfig(),
+		ImageModel:    DefaultImageModelConfig(),
+		DecisionModel: DefaultDecisionModelConfig(),
+		DataDir:       "~/.friday",
+		Workspace:     "~/.friday/workspace",
 		Memory: MemoryConfig{
 			Enabled: true,
 		},
@@ -120,6 +131,15 @@ func DefaultImageModelConfig() *ModelConfig {
 		MaxTokens:     4096,
 		Temperature:   0.7,
 		QPM:           60,
+	}
+}
+
+// DefaultDecisionModelConfig returns an inactive OpenRouter decision model template.
+func DefaultDecisionModelConfig() *DecisionModelConfig {
+	return &DecisionModelConfig{
+		Provider: "openrouter",
+		BaseURL:  "https://openrouter.ai/api/v1",
+		QPM:      20,
 	}
 }
 

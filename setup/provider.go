@@ -13,6 +13,7 @@ import (
 	"github.com/basenana/friday/core/providers/fallback"
 	"github.com/basenana/friday/core/providers/openai"
 	"github.com/basenana/friday/core/providers/openairesponse"
+	"github.com/basenana/friday/core/providers/openrouterdecision"
 	"github.com/basenana/friday/core/types"
 )
 
@@ -171,6 +172,29 @@ func CreateProviderClientFromModel(modelCfg config.ModelConfig) (providers.Clien
 		}), nil
 	default:
 		return nil, fmt.Errorf("unknown provider: %s", modelCfg.Provider)
+	}
+}
+
+func CreateDecisionProvider(cfg *config.Config) (providers.DecisionProvider, error) {
+	if cfg == nil || cfg.DecisionModel == nil || !cfg.DecisionModel.IsConfigured() {
+		return nil, fmt.Errorf("decision model is not configured")
+	}
+	return CreateDecisionProviderFromModel(*cfg.DecisionModel)
+}
+
+func CreateDecisionProviderFromModel(modelCfg config.DecisionModelConfig) (providers.DecisionProvider, error) {
+	if !modelCfg.IsConfigured() {
+		return nil, fmt.Errorf("decision model is not configured")
+	}
+	switch modelCfg.EffectiveProvider() {
+	case "openrouter":
+		return openrouterdecision.New(modelCfg.EffectiveBaseURL(), modelCfg.Key, openrouterdecision.Model{
+			Name:  modelCfg.Model,
+			QPM:   modelCfg.QPM,
+			Proxy: modelCfg.Proxy,
+		}), nil
+	default:
+		return nil, fmt.Errorf("unknown decision provider: %s", modelCfg.EffectiveProvider())
 	}
 }
 

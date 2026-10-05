@@ -11,8 +11,9 @@ that needs model or path information.
 | File | Responsibility |
 |---|---|
 | `config.go` | `Load`/`LoadForDir` discovery + decoding, env expansion, relative-path resolution, validation, defaults; project sandbox allowlist merge; path getters; `WriteConfig`/`WriteDefaultConfig`; `LogPath` |
-| `types.go` | `Config` struct + nested types (`ModelConfig`, `MemoryConfig`, `SessionConfig`, `LogConfig`, `TUIConfig`, `CollaborationConfig`); `DefaultConfig`, `applyRuntimeDefaults` |
-| `model.go` | Model catalog: `ModelIdentity`, `CanonicalProvider`, `EffectiveBaseURL`, `ChatModels` (ordered, deduped), `PreferModel`, `PrimaryModel`, `ResolveImageModel`, optional-model normalization |
+| `types.go` | `Config` struct + nested types (`ModelConfig`, `DecisionModelConfig`, `MemoryConfig`, `SessionConfig`, `LogConfig`, `TUIConfig`, `CollaborationConfig`); defaults and `applyRuntimeDefaults` |
+| `model.go` | Chat/image model catalog: `ModelIdentity`, `CanonicalProvider`, `EffectiveBaseURL`, `ChatModels` (ordered, deduped), `PreferModel`, `PrimaryModel`, `ResolveImageModel`, optional-model normalization |
+| `decision.go` | Independent decision-model configuration helpers and OpenRouter defaults |
 
 ## Key API (verbatim signatures)
 
@@ -50,14 +51,20 @@ func (c *Config) PrimaryModel() ModelConfig
 func (m ModelConfig) IsConfigured() bool
 func (m ModelConfig) HasInput(kind string) bool
 func (c *Config) ResolveImageModel(modelOverride string) (ModelConfig, error)
+
+// decision.go
+func (m DecisionModelConfig) IsConfigured() bool
+func (m DecisionModelConfig) EffectiveProvider() string
+func (m DecisionModelConfig) EffectiveBaseURL() string
 ```
 
 ## Behavior invariants
 
 - Discovery precedence: explicit path > `cwd/.friday/config.json|friday.yaml` > HOME `~/.friday/…` > built-in defaults. Only the current directory is checked — parents are never searched (`TestLoadForDirDoesNotSearchParents`).
 - Format is chosen strictly by `.json` suffix; everything else parses as YAML.
-- Env expansion (`os.Expand` semantics) is applied to Key/BaseURL/Input/Model/Proxy and DataDir/Workspace **before** path resolution; names that expand to an unset env var become unconfigured in `normalizeOptionalModels`.
-- A missing model name means an unconfigured model: `loadFile` clears default model names before decode, and `normalizeOptionalModels` drops unnamed entries.
+- Env expansion (`os.Expand` semantics) is applied to model Key/BaseURL/Input/Model/Proxy, decision-model Key/BaseURL/Model/Proxy, and DataDir/Workspace **before** path resolution; names that expand to an unset env var become unconfigured in `normalizeOptionalModels`.
+- A missing model name means an unconfigured model: `loadFile` clears default model names before decode, and `normalizeOptionalModels` drops unnamed chat, image, and decision model pointers.
+- `decision_model` is an independent optional block: its editable default template uses provider `openrouter`, base URL `https://openrouter.ai/api/v1`, QPM 20, and an empty model. It never participates in `ChatModels`, `ModelNames`, `PreferModel`, image resolution, or reasoning-effort validation.
 - Catalog order: `model` (first choice) then `models`; exact provider/server/model duplicates are dropped keeping the first; the same model name on different servers stays as fallback candidates.
 - Project-scoped configs: `Workspace` defaults to `workspace` relative to the project config dir; workspace files fall back to the HOME workspace file-by-file (`WorkspaceFallbackPaths`); agent paths become HOME agents + project agents (project overrides HOME by name).
 - Project allowlist: `applyProjectSandboxAllow` merges `<DataDir>/projects/<ProjectID(cwd)>/sandbox.json` grants into the sandbox allow list. The file lives on the HOME side so a sandboxed agent cannot escalate itself; deny rules are unaffected; an invalid file fails loud (never silently ignored). Skipped when the process itself is sandboxed (`IS_SANDBOX=1` exact value).
@@ -70,5 +77,6 @@ func (c *Config) ResolveImageModel(modelOverride string) (ModelConfig, error)
 
 - `config_test.go` — LoadForDir precedence, empty project falls back to HOME, relative paths, no parent search, corrupt project config fails loud, sandboxed-process disables project allow, allowlist merge/invalid/symlink behavior.
 - `model_test.go` — `HasInput`, required model name, endpoint dedup vs same-name-different-server, nil primary model, optional models, `PreferModel` stable partition, alternate_screen validation, plan effort default+validation, `ResolveImageModel` selection paths, env expansion in image model.
+- `decision_test.go` — inactive defaults, JSON/YAML optional normalization, env expansion and default inheritance, and exclusion from the chat catalog.
 
 All tests are filesystem/pure-function; no network, ports, or git required.

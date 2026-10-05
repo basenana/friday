@@ -13,7 +13,7 @@ sunrise), `actor.Registry`, and the TUI/daemon paths.
 | File | Responsibility |
 |---|---|
 | `setup.go` | `AgentContext` aggregate + `NewAgent`/`NewAgentWithLifecycle` wiring order, `Option` setters, hook composition, `Chat`/`ChatWithImageRefs`, `PrintResponse`, `Close` |
-| `provider.go` | Provider construction: `CreateProviderClient`, `CreateModelPool` (one leaf client per catalog entry, pooled view sharing transports), `CreateProviderClientFromModel` (anthropic/openai/openai-response), image analyzer with config-signature caching |
+| `provider.go` | Provider construction: chat clients/model pools, independent OpenRouter decision provider factories, and image analyzer with config-signature caching |
 | `memory_hook.go` | `BeforeModel` hook re-injecting the latest workspace memory into every request history at compose time (re-read from disk; persisted history is never modified) |
 | `tool_retry.go` | Tool invocation retry middleware: default 3 attempts, 500ms base exponential backoff + jitter, 30s cap; honors `Retryable()` errors and `result.Retryable`; context cancellation never retries |
 | `tool_trace.go` | Tool invocation trace middleware + `ToolTraceEvent` (start/end/error, invocation IDs, retry chains, redacted+budgeted params/results), evidence context propagation |
@@ -51,6 +51,8 @@ Options: `WithSessionID`, `WithIsolate`, `WithTemporary`, `WithVerbose`,
 func CreateProviderClient(cfg *config.Config) (providers.Client, error)
 func CreateModelPool(cfg *config.Config) (*fallback.ModelPool, error)
 func CreateProviderClientFromModel(modelCfg config.ModelConfig) (providers.Client, error)
+func CreateDecisionProvider(cfg *config.Config) (providers.DecisionProvider, error)
+func CreateDecisionProviderFromModel(modelCfg config.DecisionModelConfig) (providers.DecisionProvider, error)
 
 // Session selection contract
 type SessionManager interface {
@@ -66,6 +68,7 @@ type SessionManager interface {
 ## Behavior invariants
 
 - Client construction order: `WithProviderClient` wins; else `WithModelPool`; else build pool from config. Session-policy fallback comes from the client view (`SessionPolicy()`) or a fresh default.
+- Decision providers are created only through the explicit decision factories. They are not part of the chat model pool and are not injected into `AgentContext`, sessions, actors, the TUI, or the daemon.
 - Session selection priority: explicit lifecycle (`Current()`) > `WithSessionID` > isolated > temporary > current. When setup owns the session (no lifecycle), `sessionMgr.SetLLM` is called on the built client; with a lifecycle it is skipped.
 - MCP ownership: `WithMCPManager` leaves ownership to the caller (typically `actor.Registry`); otherwise setup builds + warms the manager and closes it in `Close`. Build failure degrades to a warning + nil tools.
 - Hook order (registration order): `sessionusage.Hook`, planning, mcp, skills, memory (**before** the context manager so projection counts memory messages), contextmgr, refocus, filetools (**after** projection so stable workspace/project context is rebuilt and compaction cannot drop it; it also appends the coding baseline before higher-precedence guidance), approved-plan, subagents, collaboration (**last** = highest request-scoped precedence for Plan mode), `planning.TerminalHook`, then optional configTools (stable final position, inherited by forked sessions). `loopHook` registers separately via `sess.RegisterHook`. `replaceSessionHooks` clears existing hooks first.
@@ -79,7 +82,7 @@ type SessionManager interface {
 ## Tests
 
 - `setup_test.go` — image ref appending, workspace loads system prompt, disk agents reuse primary client/prompt + run_task registration, config tools require explicit enable, runtime model/effort restoration, per-request memory injection, managed-session hook installation.
-- `provider_test.go` — openai-response provider + `responses` alias, model pool carries runtime metadata.
+- `provider_test.go` — chat-provider aliases/runtime metadata plus explicit decision factory validation and local-server round trips.
 - `memory_hook_test.go` — fresh memory per request, no-op without memory, trace sink disabled without log config.
 - `tool_trace_test.go` — start/fail events, retry evidence, redaction/caps, backoff jitter, default policy constants, no retry after cancellation.
 
