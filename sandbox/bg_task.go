@@ -51,14 +51,15 @@ type TaskManager struct {
 	mu    sync.RWMutex
 	tasks map[string]*managedTask
 	exec  *Executor
+	gate  *CommandGate
 	store TaskStore
 }
 
 // NewPersistentTaskManager restores task snapshots from store. Records left
 // running by a previous process are terminalized as interrupted; process IDs
 // are never reused for signalling after restart.
-func NewPersistentTaskManager(exec *Executor, store TaskStore) (*TaskManager, error) {
-	tm := NewTaskManager(exec)
+func NewPersistentTaskManager(exec *Executor, store TaskStore, gate *CommandGate) (*TaskManager, error) {
+	tm := NewTaskManager(exec, gate)
 	tm.store = store
 	if store == nil {
 		return tm, nil
@@ -98,10 +99,14 @@ func (tm *TaskManager) persist(task *Task) error {
 	return tm.store.Upsert(context.Background(), task)
 }
 
-func NewTaskManager(exec *Executor) *TaskManager {
+func NewTaskManager(exec *Executor, gate *CommandGate) *TaskManager {
+	if exec != nil && gate == nil {
+		gate = NewCommandGate(exec, nil, nil)
+	}
 	return &TaskManager{
 		tasks: make(map[string]*managedTask),
 		exec:  exec,
+		gate:  gate,
 	}
 }
 
@@ -111,20 +116,20 @@ func generateTaskID() string {
 	return hex.EncodeToString(b)
 }
 
-func (tm *TaskManager) Start(command, workdir string) (*Task, error) {
-	decision, reason, err := tm.exec.CheckPermission(command)
-	if err != nil {
-		return nil, fmt.Errorf("permission check failed: %w", err)
-	}
-	if decision == Deny {
-		return nil, fmt.Errorf("permission denied: %s", reason)
-	}
-
-	dir, err := ValidateWorkdir(workdir)
+func (tm *TaskManager) Start(ctx context.Context, req CommandRequest) (*Task, error) {
+	dir, err := ValidateWorkdir(req.Workdir)
 	if err != nil {
 		return nil, fmt.Errorf("invalid workdir: %w", err)
 	}
+	req.Workdir = dir
+	if err := tm.gate.Authorize(ctx, req); err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 
+	command := req.Command
 	opts := ExecOptions{Workdir: dir}
 	wrappedCmd, cleanup, err := tm.exec.WrapCommand(command, opts)
 	if err != nil {
@@ -458,8 +463,9 @@ Current working directory: %s
 Use this only when a command should outlive a normal synchronous bash call. Pass raw shell text without an outer bash -c. Use list_tasks to check status, wait_task to wait for output, or kill_task to terminate it. Relative workdir values are resolved from the agent working directory.
 
 Commands are executed with the same safety restrictions as the bash tool:
-- Commands must be in the allow list
-- Dangerous commands are blocked
+- Commands in the allow list run directly; other commands may be automatically assessed when automation is enabled
+- Commands requiring approval or that cannot be assessed safely use the existing approval flow when available
+- Explicitly denied and dangerous commands are blocked
 - File system and network access may be restricted`, workdir)),
 		tools.WithString("command", tools.Required(), tools.MinLength(1), tools.Description("Raw non-interactive shell command to run in the background.")),
 		tools.WithString("workdir", tools.Description("Working directory, relative to the agent root or an allowed absolute path. Defaults to the agent root.")),
@@ -480,7 +486,9 @@ func backgroundTaskHandler(tm *TaskManager, defaultWorkdir string) tools.ToolHan
 			return tools.NewToolResultActionableError(err.Error(), "use an existing directory inside the agent workdir and retry"), nil
 		}
 
-		task, err := tm.Start(command, workdir)
+		task, err := tm.Start(ctx, CommandRequest{
+			Command: command, Workdir: workdir, Mode: CommandBackground, SessionID: req.SessionID,
+		})
 		if err != nil {
 			return tools.NewToolResultActionableError(err.Error(), "use an allowed command and an existing workdir, then retry"), nil
 		}

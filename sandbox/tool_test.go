@@ -22,7 +22,7 @@ func TestBashToolKeepsFunctionalOptions(t *testing.T) {
 
 func TestCommandToolDefinitionsAreModelReady(t *testing.T) {
 	exec := NewExecutor(DefaultConfig())
-	manager := NewTaskManager(exec)
+	manager := NewTaskManager(exec, nil)
 	toolList := []*tools.Tool{NewBashTool(exec, t.TempDir(), nil)}
 	toolList = append(toolList, NewBackgroundTaskTools(manager, t.TempDir())...)
 	for _, tool := range toolList {
@@ -265,7 +265,7 @@ func TestBashToolApprovalPersistExecutesAndWritesOverlay(t *testing.T) {
 	overlay := approvalOverlayPath(t)
 	approver := NewCommandApprover(exec.Permission(), overlay)
 	approver.Bind(&fakePrompter{queue: []string{approvalValuePersist}})
-	tool := NewBashTool(exec, t.TempDir(), approver)
+	tool := NewBashTool(exec, t.TempDir(), NewCommandGate(exec, approver, nil))
 
 	result, err := tools.NewInvoker().Invoke(context.Background(), tool, &tools.Request{
 		Arguments: map[string]interface{}{"command": "printf via-approval"},
@@ -289,7 +289,7 @@ func TestBashToolApprovalDeniedByUser(t *testing.T) {
 	exec := approvalTestExecutor([]string{"echo"}, nil)
 	approver := NewCommandApprover(exec.Permission(), approvalOverlayPath(t))
 	approver.Bind(&fakePrompter{queue: []string{approvalValueDeny}})
-	tool := NewBashTool(exec, t.TempDir(), approver)
+	tool := NewBashTool(exec, t.TempDir(), NewCommandGate(exec, approver, nil))
 
 	result, err := tools.NewInvoker().Invoke(context.Background(), tool, &tools.Request{
 		Arguments: map[string]interface{}{"command": "printf denied"},

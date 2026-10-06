@@ -120,7 +120,7 @@ func newBashFsTools(t *testing.T, exec *sandbox.Executor, workdir string) []*too
 func newAllTools(t *testing.T, cfg *E2EConfig, exec *sandbox.Executor, workdir string) []*tools.Tool {
 	t.Helper()
 	out := newBashFsTools(t, exec, workdir)
-	tm := sandbox.NewTaskManager(exec)
+	tm := sandbox.NewTaskManager(exec, nil)
 	out = append(out, sandbox.NewBackgroundTaskTools(tm, workdir)...)
 
 	if img, ok := cfg.Models["image"]; ok && img.IsConfigured() {

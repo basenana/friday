@@ -2,6 +2,7 @@ package setup
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -59,6 +60,7 @@ type options struct {
 	verbose          bool
 	extraTools       []*tools.Tool
 	providerClient   providers.Client
+	decisionProvider providers.DecisionProvider
 	modelPool        *fallback.ModelPool
 	sessionPolicy    *fallback.SessionPolicy
 	skillRegistry    skills.Catalog
@@ -118,6 +120,13 @@ func WithExtraTools(t []*tools.Tool) Option {
 func WithProviderClient(c providers.Client) Option {
 	return func(o *options) {
 		o.providerClient = c
+	}
+}
+
+// withDecisionProvider supplies a pre-built decision provider to setup tests.
+func withDecisionProvider(p providers.DecisionProvider) Option {
+	return func(o *options) {
+		o.decisionProvider = p
 	}
 }
 
@@ -376,6 +385,16 @@ func NewAgent(sessionMgr SessionManager, cfg *config.Config, opts ...Option) (*A
 	if sandboxCfg == nil {
 		sandboxCfg = sandbox.DefaultConfig()
 	}
+	decisionProvider := options.decisionProvider
+	if decisionProvider == nil && cfg.DecisionModel != nil && cfg.DecisionModel.IsConfigured() {
+		decisionProvider, err = CreateDecisionProvider(cfg)
+		if err != nil {
+			return nil, fmt.Errorf("create decision provider: %w", err)
+		}
+	}
+	if sandboxCfg.Automation.Enabled && decisionProvider == nil {
+		return nil, errors.New("sandbox automation requires a configured decision model")
+	}
 	if projectCodeRoot := strings.TrimSpace(options.projectCodeRoot); projectCodeRoot != "" {
 		projectCodeRoot, err = filepath.Abs(projectCodeRoot)
 		if err != nil {
@@ -423,6 +442,14 @@ func NewAgent(sessionMgr SessionManager, cfg *config.Config, opts ...Option) (*A
 	if allowPath, allowErr := sandbox.ProjectAllowPath(cfg.DataDirPath(), workdir); allowErr == nil {
 		approver = sandbox.NewCommandApprover(sandboxExec.Permission(), allowPath)
 	}
+	var commandAutomation *sandbox.CommandAutomation
+	if sandboxCfg.Automation.Enabled {
+		commandAutomation, err = sandbox.NewCommandAutomation(decisionProvider, sandboxCfg.Automation.Threshold)
+		if err != nil {
+			return nil, fmt.Errorf("create sandbox automation: %w", err)
+		}
+	}
+	commandGate := sandbox.NewCommandGate(sandboxExec, approver, commandAutomation)
 	fileHook, err := filetools.New(sandboxExec, workdir)
 	if err != nil {
 		return nil, fmt.Errorf("create file tools: %w", err)
@@ -437,6 +464,7 @@ func NewAgent(sessionMgr SessionManager, cfg *config.Config, opts ...Option) (*A
 	contextHook := contextmgr.New(client, contextmgr.Config{
 		ContextWindow:      cfg.PrimaryModel().ContextWindow,
 		SessionMemoryStore: sessionMemoryStoreFromManager(sessionMgr),
+		DecisionProvider:   decisionProvider,
 		ReservedTokens: func(sess *coreSession.Session) int64 {
 			reserved := fileHook.ReservedTokens(sess) + approvedPlanHook.ReservedTokens(sess)
 			if worktreeHook != nil {
@@ -449,9 +477,9 @@ func NewAgent(sessionMgr SessionManager, cfg *config.Config, opts ...Option) (*A
 	allTools = append(allTools, fileHook.Tools()...)
 	imageTool := sandbox.NewImageTool(sandboxExec, workdir, newImageAnalyzer(cfg))
 	allTools = append(allTools, imageTool)
-	bashTool := sandbox.NewBashTool(sandboxExec, workdir, approver)
+	bashTool := sandbox.NewBashTool(sandboxExec, workdir, commandGate)
 	allTools = append(allTools, bashTool)
-	taskManager, err := sandbox.NewPersistentTaskManager(sandboxExec, sandbox.NewSessionTaskStore(sess))
+	taskManager, err := sandbox.NewPersistentTaskManager(sandboxExec, sandbox.NewSessionTaskStore(sess), commandGate)
 	if err != nil {
 		return nil, fmt.Errorf("restore background tasks: %w", err)
 	}

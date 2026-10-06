@@ -65,18 +65,14 @@ func NewExecutor(cfg *Config) *Executor {
 	}
 }
 
-// Run executes a command with sandboxing and permission checks
+// Run executes a command with sandboxing and permission checks.
 func (e *Executor) Run(ctx context.Context, cmd string, opts ExecOptions) (*Result, error) {
-	// 1. Check permissions
 	if !e.config.IsolationDisabled() {
 		decision, err := e.perm.CheckWithReason(cmd)
 		if decision == Deny {
 			var denied *DeniedError
 			if errors.As(err, &denied) {
-				return &Result{
-					ExitCode: 1,
-					Stderr:   denied.Error(),
-				}, denied
+				return &Result{ExitCode: 1, Stderr: denied.Error()}, denied
 			}
 			return nil, fmt.Errorf("permission check failed: %w", err)
 		}
@@ -84,8 +80,13 @@ func (e *Executor) Run(ctx context.Context, cmd string, opts ExecOptions) (*Resu
 			return nil, fmt.Errorf("permission check failed: %w", err)
 		}
 	}
+	return e.runAuthorized(ctx, cmd, opts)
+}
 
-	// 2. Set default timeout
+// runAuthorized executes a command after CommandGate has authorized this
+// invocation. It remains package-private so callers cannot bypass policy.
+func (e *Executor) runAuthorized(ctx context.Context, cmd string, opts ExecOptions) (*Result, error) {
+	// 1. Set default timeout
 	if opts.Timeout == 0 {
 		opts.Timeout = e.parseTimeout()
 	}

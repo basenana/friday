@@ -134,48 +134,55 @@ func (a *CommandApprover) Prompter() FormPrompter {
 	return a.prompter
 }
 
-// Request executes command through exec, requesting interactive approval
-// when the command is denied only because it is missing from the allow list.
-// After an approval the command is retried immediately within the same call,
-// so the tool returns real command output without an extra model round trip.
-// Explicit deny-rule denials and non-permission errors are returned as-is.
-func (a *CommandApprover) Request(ctx context.Context, exec *Executor, command string, opts ExecOptions) (*Result, error) {
-	result, err := exec.Run(ctx, command, opts)
+// Authorize requests grants for each missing executable in command. Explicit
+// deny rules and parse failures are never promptable.
+func (a *CommandApprover) Authorize(ctx context.Context, command string) error {
 	for attempts := 0; ; attempts++ {
-		if err == nil {
-			return result, nil
+		decision, err := a.perm.CheckWithReason(command)
+		if err == nil && decision == Allow {
+			return nil
 		}
 		var denied *DeniedError
 		if !errors.As(err, &denied) {
-			return result, err
+			return err
 		}
 		if denied.ExplicitDeny {
-			return result, denied
+			return denied
 		}
 		if attempts >= maxApprovalRounds {
-			return result, fmt.Errorf("command %q is still not in the allow list after %d approval rounds: %w", denied.Command, maxApprovalRounds, denied)
+			return fmt.Errorf("command %q is still not in the allow list after %d approval rounds: %w", denied.Command, maxApprovalRounds, denied)
 		}
 
-		decision, derr := a.approve(ctx, denied)
-		if derr != nil {
-			return result, derr
+		approval, err := a.approve(ctx, denied)
+		if err != nil {
+			return err
 		}
-		switch decision {
+		switch approval {
 		case ApprovalPersist:
 			if a.overlayPath == "" {
-				return result, fmt.Errorf("cannot persist approval for %q: project allow path is unavailable", denied.Command)
+				return fmt.Errorf("cannot persist approval for %q: project allow path is unavailable", denied.Command)
 			}
-			if perr := AppendProjectAllow(a.overlayPath, denied.Command); perr != nil {
-				return result, fmt.Errorf("persist sandbox approval for %q: %w", denied.Command, perr)
+			if err := AppendProjectAllow(a.overlayPath, denied.Command); err != nil {
+				return fmt.Errorf("persist sandbox approval for %q: %w", denied.Command, err)
 			}
 			a.perm.Grant(denied.Command)
 		case ApprovalOnce:
 			a.perm.Grant(denied.Command)
 		default:
-			return result, denied
+			return denied
 		}
-		result, err = exec.Run(ctx, command, opts)
 	}
+}
+
+// Request preserves the legacy authorize-and-run behavior.
+func (a *CommandApprover) Request(ctx context.Context, exec *Executor, command string, opts ExecOptions) (*Result, error) {
+	if err := a.Authorize(ctx, command); err != nil {
+		if IsDenied(err) {
+			return &Result{ExitCode: 1, Stderr: err.Error()}, err
+		}
+		return nil, err
+	}
+	return exec.Run(ctx, command, opts)
 }
 
 // approve raises the approval form and waits for the user's decision.

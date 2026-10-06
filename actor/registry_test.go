@@ -591,8 +591,8 @@ func TestRegistryRunningBackgroundTaskPreventsIdleEviction(t *testing.T) {
 	sandboxCfg := sandbox.DefaultConfig()
 	sandboxCfg.Sandbox.Enabled = false
 	sandboxCfg.Permissions.Allow = append(sandboxCfg.Permissions.Allow, "sleep")
-	tasks := sandbox.NewTaskManager(sandbox.NewExecutor(sandboxCfg))
-	task, err := tasks.Start("sleep 10", t.TempDir())
+	tasks := sandbox.NewTaskManager(sandbox.NewExecutor(sandboxCfg), nil)
+	task, err := tasks.Start(context.Background(), sandbox.CommandRequest{Command: "sleep 10", Workdir: t.TempDir(), Mode: sandbox.CommandBackground})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -677,7 +677,7 @@ func TestRegistryRestoresCompletedBackgroundTasksAfterRebuild(t *testing.T) {
 	r.mu.Lock()
 	tasks := r.entries[sessionID].agentCtx.TaskManager
 	r.mu.Unlock()
-	task, err := tasks.Start("echo registry-persisted", t.TempDir())
+	task, err := tasks.Start(context.Background(), sandbox.CommandRequest{Command: "echo registry-persisted", Workdir: t.TempDir(), Mode: sandbox.CommandBackground})
 	if err != nil {
 		t.Fatal(err)
 	}

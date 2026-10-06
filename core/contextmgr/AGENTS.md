@@ -5,6 +5,7 @@ This package keeps model requests within provider context limits while retaining
 ## Files
 
 - `manager.go` computes budgets, projects history, truncates large tool results, and triggers soft/hard compaction.
+- `decision_compact.go` optional DecisionProvider-guided micro-compaction: pairs only old tool calls whose matching results also live in the old slice, sends two `Noul` questions per pair (call+result) with goals capped to the last three plain-text user messages (500 runes each), 30 s provider timeout, per-pair 0.5 keep threshold, and falls back to the deterministic path on provider or structural failure. Malformed per-pair answers conservatively keep that pair; parent cancellation aborts projection.
 - `refocus.go` implements explicit objective refocusing from a user-supplied structured summary.
 - `session_memory.go` generates and persists rolling session memory.
 - Tests cover threshold boundaries, projection, rollback, refocus validation, and memory scheduling.
@@ -29,7 +30,7 @@ Important defaults from `manager.go`:
 
 - Budget calculations include stable reserved tokens injected after projection, such as an approved plan.
 - Below the soft threshold, preserve history and avoid unnecessary summaries.
-- Above the soft threshold, micro-compaction trims oversized tool results and projects a smaller request.
+- Above the soft threshold, micro-compaction trims oversized tool results and projects a smaller request. When `Config.DecisionProvider` is set, the soft path additionally consults the provider to drop paired old call/result messages whose removal still leaves ≥20% savings; the deterministic branch remains the source of truth (every fallback path rebuilds the same frozen prefix, and the provider is never invoked again on subsequent calls once the prefix is committed). Pair collection is bounded by the old-message slice (the last four conversation groups are always untouched), boundary pairs that straddle the old/tail split are conservatively kept, and per-pair malformed answers keep only the affected pair.
 - Above the hard threshold, hard compaction summarizes older groups while preserving recent groups and leading context.
 - Projection affects the provider request; durable history changes only through explicit successful compaction.
 - Failed summarization must not destroy or partially replace the current history.

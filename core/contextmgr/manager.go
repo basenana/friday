@@ -31,6 +31,7 @@ type Config struct {
 	SessionMemoryThreshold int64
 
 	SessionMemoryStore SessionMemoryStore
+	DecisionProvider   providers.DecisionProvider
 	// ReservedTokens reports stable request-scoped context that is injected
 	// after projection, such as an accepted implementation plan.
 	ReservedTokens func(*session.Session) int64
@@ -129,7 +130,11 @@ func (m *Manager) BeforeModel(ctx stdctx.Context, sess *session.Session, req pro
 		var applied bool
 		tokensBefore := projectedTokens
 		startedAt := time.Now()
-		projected, projectedTokens, applied = m.applyMicroCompact(sess, st, history, projectedTokens)
+		var compactErr error
+		projected, projectedTokens, applied, compactErr = m.applyMicroCompact(ctx, sess, st, history, projectedTokens)
+		if compactErr != nil {
+			return compactErr
+		}
 		if applied {
 			sess.PublishEvent(types.Event{
 				Type: types.EventCompactFinish,
@@ -163,10 +168,45 @@ func (m *Manager) BeforeModel(ctx stdctx.Context, sess *session.Session, req pro
 	return nil
 }
 
-func (m *Manager) applyMicroCompact(sess *session.Session, st *session.ContextState, history []types.Message, fullTokens int64) ([]types.Message, int64, bool) {
+func (m *Manager) applyMicroCompact(ctx stdctx.Context, sess *session.Session, st *session.ContextState, history []types.Message, fullTokens int64) ([]types.Message, int64, bool, error) {
+	if micro, ok := frozenMicroCompactProjection(st, history); ok {
+		m.logger.Infow("using frozen microcompact",
+			"session", sess.ID,
+			"projected_messages", len(micro),
+			"projected_tokens", countTokens(nil, micro),
+		)
+		return micro, fullTokens, true, nil
+	}
+
+	if m.cfg.DecisionProvider != nil {
+		micro, prefix, sourceMessages, savedTokens, decided, err := m.buildDecisionProjection(ctx, sess, history)
+		if err != nil {
+			return nil, 0, false, err
+		}
+		if decided {
+			microTokens := fullTokens - savedTokens
+			if fullTokens > 0 && float64(microTokens)/float64(fullTokens) < 0.8 {
+				st.MicroCompactPrefix = cloneMessages(prefix)
+				st.MicroCompactSourceMessages = sourceMessages
+				m.logger.Infow("[COMPACT] decision microcompact applied",
+					"session", sess.ID,
+					"projected_tokens", microTokens,
+					"saved_tokens", savedTokens,
+				)
+				return micro, microTokens, true, nil
+			}
+			m.logger.Warnw("decision microcompact not beneficial, keeping full projection",
+				"session", sess.ID,
+				"full_tokens", fullTokens,
+				"micro_tokens", microTokens,
+			)
+			return history, fullTokens, false, nil
+		}
+	}
+
 	micro, savedTokens := m.buildMicroProjected(sess.ID, st, history)
 	if savedTokens < 0 {
-		return micro, fullTokens, true // already micro compact
+		return micro, fullTokens, true, nil // already micro compact
 	}
 
 	microTokens := fullTokens - savedTokens
@@ -176,7 +216,7 @@ func (m *Manager) applyMicroCompact(sess *session.Session, st *session.ContextSt
 			"projected_tokens", microTokens,
 			"saved_tokens", fullTokens-microTokens,
 		)
-		return micro, microTokens, true
+		return micro, microTokens, true, nil
 	}
 
 	m.logger.Warnw("microcompact not beneficial, keeping full projection",
@@ -184,7 +224,7 @@ func (m *Manager) applyMicroCompact(sess *session.Session, st *session.ContextSt
 		"full_tokens", fullTokens,
 		"micro_tokens", microTokens,
 	)
-	return history, fullTokens, false
+	return history, fullTokens, false, nil
 }
 
 func (m *Manager) buildMicroProjected(sessionID string, st *session.ContextState, history []types.Message) ([]types.Message, int64) {

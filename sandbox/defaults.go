@@ -115,5 +115,6 @@ func DefaultConfig() *Config {
 				Timeout: "5m",
 			},
 		},
+		Automation: AutomationConfig{Threshold: 0.6},
 	}
 }

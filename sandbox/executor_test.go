@@ -296,6 +296,24 @@ func TestTruncateOutputLines(t *testing.T) {
 	}
 }
 
+func TestRunAuthorizedSkipsOnlyPermissionCheck(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Sandbox.Enabled = false
+	cfg.Permissions.Allow = nil
+	exec := NewExecutor(cfg)
+
+	if _, err := exec.Run(context.Background(), "printf authorized", ExecOptions{}); !IsDenied(err) {
+		t.Fatalf("Run error = %v, want permission denial", err)
+	}
+	result, err := exec.runAuthorized(context.Background(), "printf authorized", ExecOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Stdout != "authorized" {
+		t.Fatalf("stdout = %q, want authorized", result.Stdout)
+	}
+}
+
 func TestParseTimeoutConfig(t *testing.T) {
 	tests := []struct {
 		config string

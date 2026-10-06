@@ -17,8 +17,8 @@ const (
 
 Use this for builds, tests, Git, grep, pipelines, and shell workflows that the native filesystem tools do not express. Prefer fs_list, fs_find, fs_search, fs_read, fs_write, fs_edit, and fs_delete for file operations because they provide structured results and stronger path checks.
 Commands are executed with safety restrictions:
-- Commands must be in the allow list
-- Dangerous commands are blocked
+- Commands in the allow list run directly; other commands may be automatically assessed when automation is enabled
+- Explicitly denied and dangerous commands are blocked
 - File system and network access may be restricted
 - Commands have a timeout of at most 15 minutes; use background_task for longer work
 
@@ -27,13 +27,13 @@ Usage notes:
 - Pipes, redirects, and compound commands are supported
 - Avoid using bash commands that require interactive input
 - If a command fails, analyze the error and try a different approach
-- A command denied only because it is missing from the allow list automatically asks the user for approval (project-wide or one-time) and is retried as soon as it is approved
+- Commands that require approval or cannot be assessed safely ask the user for project-wide or one-time approval when an interactive session is available
 - Relative workdir values are resolved from the agent working directory`
 )
 
-// NewBashTool creates a new bash tool. approver may be nil, in which case
-// missing-allowlist denials fall back to the headless actionable error.
-func NewBashTool(exec *Executor, workdir string, approver *CommandApprover) *tools.Tool {
+// NewBashTool creates a new bash tool. A nil gate preserves headless static
+// permission behavior.
+func NewBashTool(exec *Executor, workdir string, gate *CommandGate) *tools.Tool {
 	return tools.NewTool(bashToolName,
 		tools.WithDescription(bashToolDescription),
 		tools.WithString("command", tools.Required(), tools.MinLength(1), tools.Description("Raw shell command text. Do not add an outer bash -c wrapper.")),
@@ -41,12 +41,15 @@ func NewBashTool(exec *Executor, workdir string, approver *CommandApprover) *too
 		tools.WithString("workdir", tools.Description("Working directory, relative to the agent root or an allowed absolute path. Defaults to the agent root.")),
 		tools.WithExample(map[string]interface{}{"command": "go test ./core/actor", "workdir": ".", "timeout": "5m"}),
 		tools.WithToolTimeout(exec.parseTimeout(), "timeout"),
-		tools.WithToolHandler(bashToolHandler(exec, workdir, approver)),
+		tools.WithToolHandler(bashToolHandler(exec, workdir, gate)),
 	)
 }
 
 // bashToolHandler creates the handler for the bash tool
-func bashToolHandler(exec *Executor, baseWorkdir string, approver *CommandApprover) tools.ToolHandlerFunc {
+func bashToolHandler(exec *Executor, baseWorkdir string, gate *CommandGate) tools.ToolHandlerFunc {
+	if gate == nil {
+		gate = NewCommandGate(exec, nil, nil)
+	}
 	return func(ctx context.Context, req *tools.Request) (*tools.Result, error) {
 		// Extract command (required)
 		command, ok := req.Arguments["command"].(string)
@@ -69,30 +72,22 @@ func bashToolHandler(exec *Executor, baseWorkdir string, approver *CommandApprov
 			Timeout: tools.MaxDeclaredToolTimeout,
 		}
 
-		// Execute command
-		result, err := exec.Run(ctx, command, opts)
-		if err != nil {
-			if errors.Is(err, ErrSandboxUnavailable) {
-				return tools.NewToolResultActionableError(err.Error(), "enable a supported OS sandbox or explicitly run Friday inside a trusted outer sandbox"), nil
-			}
-			if IsDenied(err) {
-				if approver != nil {
-					// Missing-allowlist denials go through the interactive
-					// approval flow; on approval the command is retried here
-					// and its real output is returned to the model.
-					result, err = approver.Request(ctx, exec, command, opts)
-					if err == nil {
-						return bashOutputResult(result), nil
-					}
-					if !IsDenied(err) && !IsApprovalDenied(err) {
-						return nil, err // approval infrastructure failure
-					}
-				}
-				return bashDenialResult(result, err), nil
+		if err := gate.Authorize(ctx, CommandRequest{
+			Command: command, Workdir: workdir, Mode: CommandForeground, SessionID: req.SessionID,
+		}); err != nil {
+			if IsDenied(err) || IsApprovalDenied(err) || IsApprovalTimeout(err) {
+				return bashDenialResult(nil, err), nil
 			}
 			return nil, err
 		}
 
+		result, err := exec.runAuthorized(ctx, command, opts)
+		if err != nil {
+			if errors.Is(err, ErrSandboxUnavailable) {
+				return tools.NewToolResultActionableError(err.Error(), "enable a supported OS sandbox or explicitly run Friday inside a trusted outer sandbox"), nil
+			}
+			return nil, err
+		}
 		return bashOutputResult(result), nil
 	}
 }

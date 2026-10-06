@@ -20,7 +20,11 @@ func newTestTaskManager() *TaskManager {
 	cfg.Sandbox.Enabled = false
 	cfg.Permissions.Allow = append(cfg.Permissions.Allow, "sleep", "echo", "sh", "true", "false", "cat", "pwd", "python3")
 	exec := NewExecutor(cfg)
-	return NewTaskManager(exec)
+	return NewTaskManager(exec, nil)
+}
+
+func startTestTask(tm *TaskManager, command, workdir string) (*Task, error) {
+	return tm.Start(context.Background(), CommandRequest{Command: command, Workdir: workdir, Mode: CommandBackground})
 }
 
 func waitForTask(t *testing.T, tm *TaskManager, id string) *Task {
@@ -50,7 +54,7 @@ func waitForTaskTimeout(t *testing.T, tm *TaskManager, id string, timeout time.D
 func TestTaskManagerStart(t *testing.T) {
 	tm := newTestTaskManager()
 
-	task, err := tm.Start("echo hello", "")
+	task, err := startTestTask(tm, "echo hello", "")
 	if err != nil {
 		t.Fatalf("Start failed: %v", err)
 	}
@@ -77,7 +81,7 @@ func TestTaskManagerStart(t *testing.T) {
 func TestTaskManagerGet(t *testing.T) {
 	tm := newTestTaskManager()
 
-	task, err := tm.Start("echo hello", "")
+	task, err := startTestTask(tm, "echo hello", "")
 	if err != nil {
 		t.Fatalf("Start failed: %v", err)
 	}
@@ -99,8 +103,8 @@ func TestTaskManagerGet(t *testing.T) {
 func TestTaskManagerList(t *testing.T) {
 	tm := newTestTaskManager()
 
-	task1, _ := tm.Start("echo one", "")
-	task2, _ := tm.Start("echo two", "")
+	task1, _ := startTestTask(tm, "echo one", "")
+	task2, _ := startTestTask(tm, "echo two", "")
 
 	waitForTask(t, tm, task1.ID)
 	waitForTask(t, tm, task2.ID)
@@ -124,7 +128,7 @@ func TestTaskManagerList(t *testing.T) {
 func TestTaskManagerWait(t *testing.T) {
 	tm := newTestTaskManager()
 
-	task, err := tm.Start("echo hello", "")
+	task, err := startTestTask(tm, "echo hello", "")
 	if err != nil {
 		t.Fatalf("Start failed: %v", err)
 	}
@@ -146,7 +150,7 @@ func TestTaskManagerWait(t *testing.T) {
 func TestTaskManagerWaitTimeout(t *testing.T) {
 	tm := newTestTaskManager()
 
-	task, err := tm.Start("sleep 10", "")
+	task, err := startTestTask(tm, "sleep 10", "")
 	if err != nil {
 		t.Fatalf("Start failed: %v", err)
 	}
@@ -162,7 +166,7 @@ func TestTaskManagerWaitTimeout(t *testing.T) {
 
 func TestWaitTaskToolTimeoutDoesNotKillBackgroundTask(t *testing.T) {
 	tm := newTestTaskManager()
-	task, err := tm.Start("sleep 10", "")
+	task, err := startTestTask(tm, "sleep 10", "")
 	if err != nil {
 		t.Fatalf("Start failed: %v", err)
 	}
@@ -195,7 +199,7 @@ func TestTaskManagerWaitNotFound(t *testing.T) {
 func TestTaskManagerKill(t *testing.T) {
 	tm := newTestTaskManager()
 
-	task, err := tm.Start("sleep 60", "")
+	task, err := startTestTask(tm, "sleep 60", "")
 	if err != nil {
 		t.Fatalf("Start failed: %v", err)
 	}
@@ -220,7 +224,7 @@ func TestTaskManagerKillProcessGroup(t *testing.T) {
 	pidFile.Close()
 	defer os.Remove(pidFile.Name())
 
-	task, err := tm.Start(fmt.Sprintf("sh -c 'sleep 60 & child=$!; echo $child > %q; wait'", pidFile.Name()), "")
+	task, err := startTestTask(tm, fmt.Sprintf("sh -c 'sleep 60 & child=$!; echo $child > %q; wait'", pidFile.Name()), "")
 	if err != nil {
 		t.Fatalf("Start failed: %v", err)
 	}
@@ -287,7 +291,7 @@ func TestTaskManagerKillNotFound(t *testing.T) {
 func TestTaskManagerKillNotRunning(t *testing.T) {
 	tm := newTestTaskManager()
 
-	task, _ := tm.Start("echo done", "")
+	task, _ := startTestTask(tm, "echo done", "")
 	waitForTask(t, tm, task.ID)
 
 	err := tm.Kill(task.ID)
@@ -299,8 +303,8 @@ func TestTaskManagerKillNotRunning(t *testing.T) {
 func TestTaskManagerKillAll(t *testing.T) {
 	tm := newTestTaskManager()
 
-	task1, _ := tm.Start("sleep 60", "")
-	task2, _ := tm.Start("sleep 60", "")
+	task1, _ := startTestTask(tm, "sleep 60", "")
+	task2, _ := startTestTask(tm, "sleep 60", "")
 	defer tm.KillAll()
 
 	tm.KillAll()
@@ -322,9 +326,9 @@ func TestTaskManagerPermissionDenied(t *testing.T) {
 	cfg.Permissions.Allow = []string{}
 	cfg.Permissions.Deny = []string{"sudo"}
 	exec := NewExecutor(cfg)
-	tm := NewTaskManager(exec)
+	tm := NewTaskManager(exec, nil)
 
-	_, err := tm.Start("echo hello", "")
+	_, err := startTestTask(tm, "echo hello", "")
 	if err == nil {
 		t.Fatal("expected permission denied error")
 	}
@@ -333,7 +337,7 @@ func TestTaskManagerPermissionDenied(t *testing.T) {
 func TestTaskManagerFailedTask(t *testing.T) {
 	tm := newTestTaskManager()
 
-	task, err := tm.Start("false", "")
+	task, err := startTestTask(tm, "false", "")
 	if err != nil {
 		t.Fatalf("Start failed: %v", err)
 	}
@@ -359,7 +363,7 @@ func TestTaskManagerOutputTruncation(t *testing.T) {
 		script.WriteString("echo line\n")
 	}
 
-	task, err := tm.Start(script.String(), "")
+	task, err := startTestTask(tm, script.String(), "")
 	if err != nil {
 		t.Fatalf("Start failed: %v", err)
 	}
@@ -374,7 +378,7 @@ func TestTaskManagerOutputTruncation(t *testing.T) {
 func TestTaskManagerCollectsTrailingOutput(t *testing.T) {
 	tm := newTestTaskManager()
 
-	task, err := tm.Start("sh -c 'echo first; echo second 1>&2; echo third'", "")
+	task, err := startTestTask(tm, "sh -c 'echo first; echo second 1>&2; echo third'", "")
 	if err != nil {
 		t.Fatalf("Start failed: %v", err)
 	}
@@ -408,7 +412,7 @@ func TestTaskManagerScannerErrorIncludedInOutput(t *testing.T) {
 		t.Fatalf("Close failed: %v", err)
 	}
 
-	task, err := tm.Start(fmt.Sprintf("python3 %q", scriptFile.Name()), "")
+	task, err := startTestTask(tm, fmt.Sprintf("python3 %q", scriptFile.Name()), "")
 	if err != nil {
 		t.Fatalf("Start failed: %v", err)
 	}
@@ -423,7 +427,7 @@ func TestTaskManagerWorkdir(t *testing.T) {
 	tm := newTestTaskManager()
 
 	dir, _ := os.Getwd()
-	task, err := tm.Start("pwd", "")
+	task, err := startTestTask(tm, "pwd", "")
 	if err != nil {
 		t.Fatalf("Start failed: %v", err)
 	}
@@ -439,7 +443,7 @@ func TestBackgroundTaskHandlerConfinesAndResolvesWorkdir(t *testing.T) {
 	cfg.Sandbox.Enabled = false
 	cfg.Permissions.Allow = append(cfg.Permissions.Allow, "printf")
 	exec := NewExecutor(cfg)
-	manager := NewTaskManager(exec)
+	manager := NewTaskManager(exec, nil)
 	root := t.TempDir()
 	nested := filepath.Join(root, "nested")
 	if err := os.Mkdir(nested, 0o755); err != nil {

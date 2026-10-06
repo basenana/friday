@@ -13,11 +13,11 @@ import (
 func TestPersistentTaskManagerRestoresCompletedTask(t *testing.T) {
 	sess := coresession.New("task-session", nil)
 	store := NewSessionTaskStore(sess)
-	tm, err := NewPersistentTaskManager(newTestTaskManager().exec, store)
+	tm, err := NewPersistentTaskManager(newTestTaskManager().exec, store, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	task, err := tm.Start("echo persisted-output", t.TempDir())
+	task, err := startTestTask(tm, "echo persisted-output", t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -26,7 +26,7 @@ func TestPersistentTaskManagerRestoresCompletedTask(t *testing.T) {
 		t.Fatalf("completed status = %q", completed.Status)
 	}
 
-	restored, err := NewPersistentTaskManager(newTestTaskManager().exec, store)
+	restored, err := NewPersistentTaskManager(newTestTaskManager().exec, store, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,7 +50,7 @@ func TestPersistentTaskManagerMarksStaleRunningTaskInterrupted(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	tm, err := NewPersistentTaskManager(nil, store)
+	tm, err := NewPersistentTaskManager(nil, store, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

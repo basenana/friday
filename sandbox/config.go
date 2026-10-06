@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,8 +20,16 @@ const maxConfigFileSize = 1 << 20 // 1 MiB
 type Config struct {
 	Permissions PermissionsConfig `json:"permissions" yaml:"permissions"`
 	Sandbox     SandboxConfig     `json:"sandbox" yaml:"sandbox"`
+	Automation  AutomationConfig  `json:"automation" yaml:"automation"`
 
 	isolationDisabled bool
+}
+
+// AutomationConfig controls model-assisted authorization for commands that
+// are not covered by the static allow list.
+type AutomationConfig struct {
+	Enabled   bool    `json:"enabled" yaml:"enabled"`
+	Threshold float64 `json:"threshold" yaml:"threshold"`
 }
 
 // PermissionsConfig defines allow/deny rules for commands
@@ -182,6 +191,9 @@ func containsFilesystemRoot(roots []string, target string) bool {
 
 // Validate checks the config for invalid values
 func (c *Config) Validate() error {
+	if math.IsNaN(c.Automation.Threshold) || math.IsInf(c.Automation.Threshold, 0) || c.Automation.Threshold < 0 || c.Automation.Threshold > 1 {
+		return fmt.Errorf("invalid automation.threshold: must be between 0 and 1")
+	}
 	if c.Sandbox.Defaults.Timeout != "" {
 		timeout, err := time.ParseDuration(c.Sandbox.Defaults.Timeout)
 		if err != nil {

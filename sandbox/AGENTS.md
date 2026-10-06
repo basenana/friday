@@ -27,6 +27,9 @@ constructs these tools and exposes them to agents.
 | `config.go`, `defaults.go` | Config loading/validation/runtime defaults and default policies |
 | `utils.go` | Home/path expansion and memory-limit parsing |
 | `process_group_unix.go`, `process_group_darwin.go`, `process_group_linux.go`, `process_group_windows.go` | Platform session/process-group setup and process-tree termination |
+| `automation.go` | `CommandAutomation`: pre-launch risk assessment via `providers.DecisionProvider`, 15 s business timeout, three Noul questions (`environment_damage`/`data_loss`/`remote_side_effect`) |
+| `command_gate.go` | `CommandGate`: shared pre-launch gate (cancel → static permission → automation → approver) used by bash and background-task managers |
+| `bg_task_automation_test.go` | Automation-gate coverage for background tasks (low-risk auto-pass, provider failure path, parent-cancel rejection) |
 
 ## Key API
 
@@ -78,7 +81,11 @@ type FileSystem interface {
     Remove(context.Context, string) error
     Mkdir(context.Context, string) error
 }
-func NewBashTool(exec *Executor, workdir string, approver *CommandApprover) *tools.Tool
+func NewCommandAutomation(provider providers.DecisionProvider, threshold float64) (*CommandAutomation, error)
+func NewCommandGate(exec *Executor, approver *CommandApprover, automation *CommandAutomation) *CommandGate
+func NewBashTool(exec *Executor, workdir string, gate *CommandGate) *tools.Tool
+func NewTaskManager(exec *Executor, gate *CommandGate) *TaskManager
+func NewPersistentTaskManager(exec *Executor, store TaskStore, gate *CommandGate) (*TaskManager, error)
 func NewFsTools(exec *Executor, workdir string) []*tools.Tool
 func NewFsToolsWithFileSystem(fs FileSystem, workdir string) []*tools.Tool
 func NewLocalFileSystem(exec *Executor, workdir string) FileSystem
@@ -92,6 +99,8 @@ func NewBackgroundTaskTools(tm *TaskManager, workdir string) []*tools.Tool
 - Approval uses the `questions` form variant, at most three rounds, and a one-minute wait. Timeout emits `form.cancelled` and denies. Unbound/headless mode returns an actionable `friday sandbox allow <command>` suggestion.
 - Executor fails closed when configured isolation is unavailable. Tool timeouts must be positive and no greater than `coretools.MaxDeclaredToolTimeout`; timeout exit code is 124. Cancellation/timeout kills the whole process group.
 - Each output stream is captured to at most 8 MiB, then rendered as the last 300 lines / 512 KiB with a truncation marker and flags.
+- `CommandAutomation` is opt-in via `sandbox.automation.enabled`; when off, the gate preserves legacy semantics (foreground missing-allow may prompt, background missing-allow denies directly). When on, the gate runs automation only for missing-allow, never for explicit denies, parse failures, `sandbox unavailable`, or parent-context cancellation. Low-risk assessments auto-pass for a single invocation without writing any allow-list; high-risk or provider-failure paths delegate to the existing approver and reject on headless when the approver is unbound.
+- The shared `CommandGate` is the single pre-launch checkpoint used by both the bash tool and the persistent background-task manager; authorization happens before any `WrapCommand`, task map write, or `cmd.Start` so cancellation and denial never spawn a process.
 - Sandboxed children inherit only PATH, TERM, TZ, LANG, HOME, LC_* plus explicit overrides; isolation-disabled mode inherits `os.Environ()`. `Sandbox.Enabled=false` disables only Seatbelt/bubblewrap. `IS_SANDBOX=1` trusts an outer sandbox and disables all Friday command, filesystem, and network policy layers.
 - Both native backends compile the same command-start filesystem snapshot. Priority is deny > protected/readonly > workdir/write > default readonly. Relative paths use workdir, `~/` uses execution HOME, canonical targets deduplicate, dangling symlinks fail closed, and `filepath.Match` globs are non-recursive. Missing literals and zero-match globs produce no rule and do not protect future objects.
 - Seatbelt is deny-by-default, restricts process operations to same-sandbox targets, and grants only the standard device matrix. Bubblewrap uses PID/IPC/network namespaces, drops all capabilities, creates a private `/dev`, and overlays nested readonly/protected and deny mounts after writable roots. `FRIDAY_SANDBOX_PROC_BIND` is an explicit degraded mode that expands `/proc` visibility.

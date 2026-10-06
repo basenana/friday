@@ -1,6 +1,7 @@
 package sandbox
 
 import (
+	"math"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -23,6 +24,53 @@ func TestConfigValidateRejectsInvalidFilesystemPatterns(t *testing.T) {
 			field.set(&cfg.Sandbox.Filesystem, []string{"[unterminated"})
 			if err := cfg.Validate(); err == nil {
 				t.Fatal("Validate() accepted malformed filesystem glob")
+			}
+		})
+	}
+}
+
+func TestAutomationConfigDefaultsAndValidation(t *testing.T) {
+	cfg := DefaultConfig()
+	if cfg.Automation.Enabled {
+		t.Fatal("automation must be disabled by default")
+	}
+	if cfg.Automation.Threshold != 0.6 {
+		t.Fatalf("default automation threshold = %v, want 0.6", cfg.Automation.Threshold)
+	}
+
+	for _, threshold := range []float64{-0.1, 1.1, math.NaN(), math.Inf(1), math.Inf(-1)} {
+		cfg := DefaultConfig()
+		cfg.Automation.Threshold = threshold
+		if err := cfg.Validate(); err == nil {
+			t.Fatalf("Validate() accepted automation threshold %v", threshold)
+		}
+	}
+}
+
+func TestLoadConfigAutomationOverrides(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		ext  string
+		data string
+	}{
+		{name: "json", ext: ".json", data: `{"automation":{"enabled":true,"threshold":0.25}}`},
+		{name: "yaml", ext: ".yaml", data: "automation:\n  enabled: true\n  threshold: 0.25\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("IS_SANDBOX", "")
+			path := filepath.Join(t.TempDir(), "sandbox"+tc.ext)
+			if err := os.WriteFile(path, []byte(tc.data), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := LoadConfig(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !cfg.Automation.Enabled || cfg.Automation.Threshold != 0.25 {
+				t.Fatalf("automation = %#v, want enabled with threshold 0.25", cfg.Automation)
+			}
+			if len(cfg.Permissions.Allow) == 0 || len(cfg.Permissions.Deny) == 0 {
+				t.Fatal("automation override changed permission defaults")
 			}
 		})
 	}
@@ -106,6 +154,7 @@ func TestLoadConfig_JSONLoadsFullConfig(t *testing.T) {
 			Allow: []string{"bash", "go"},
 			Deny:  []string{"sudo"},
 		},
+		Automation: AutomationConfig{Threshold: 0.6},
 		Sandbox: SandboxConfig{
 			Enabled: false,
 			Filesystem: FilesystemConfig{
