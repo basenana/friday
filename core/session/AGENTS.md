@@ -9,7 +9,7 @@ This package is the core session model used by every agent. It owns synchronized
 - `compact.go` implements history compaction and summary replacement.
 - `compact_events.go` publishes compaction lifecycle events.
 - `context_state.go` stores prompt budgets, projections, pending summaries, and session memory.
-- `records.go` defines durable/session records and metadata conversion.
+- `records.go` defines opaque namespaced session records and metadata conversion. Namespaces belong to their consuming packages; `core/contextmgr` privately uses `decisioncache` for the current user-epoch decision cache.
 - `token_calibrate.go` calibrates token estimates from provider usage.
 
 ## Key API

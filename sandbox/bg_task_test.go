@@ -444,14 +444,25 @@ func TestBackgroundTaskHandlerConfinesAndResolvesWorkdir(t *testing.T) {
 	cfg.Permissions.Allow = append(cfg.Permissions.Allow, "printf")
 	exec := NewExecutor(cfg)
 	manager := NewTaskManager(exec, nil)
-	root := t.TempDir()
+	// Production canonicalizes every workdir through ValidateWorkdir
+	// (filepath.EvalSymlinks). On macOS /tmp is a symlink to /private/tmp, so
+	// t.TempDir()'s lexical /tmp/... path diverges from the canonical
+	// /private/tmp/... the runtime records. Mirror that canonicalization here
+	// so the recorded Workdir matches.
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	nested := filepath.Join(root, "nested")
 	if err := os.Mkdir(nested, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	// Use the current volume root so the path exists on every platform but
+	// remains outside both the base workdir and the default /tmp write root.
+	outside := filepath.VolumeName(root) + string(filepath.Separator)
 
 	denied, err := backgroundTaskHandler(manager, root)(context.Background(), &tools.Request{Arguments: map[string]any{
-		"command": "printf nope", "workdir": t.TempDir(),
+		"command": "printf nope", "workdir": outside,
 	}})
 	if err != nil || !denied.IsError {
 		t.Fatalf("outside workdir result=%+v err=%v", denied, err)
@@ -464,12 +475,8 @@ func TestBackgroundTaskHandlerConfinesAndResolvesWorkdir(t *testing.T) {
 		t.Fatalf("relative workdir result=%+v err=%v", started, err)
 	}
 	tasks := manager.List("")
-	wantWorkdir, err := filepath.EvalSymlinks(nested)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(tasks) != 1 || tasks[0].Workdir != wantWorkdir {
-		t.Fatalf("tasks = %#v, want workdir %q", tasks, wantWorkdir)
+	if len(tasks) != 1 || tasks[0].Workdir != nested {
+		t.Fatalf("tasks = %#v, want workdir %q", tasks, nested)
 	}
 	manager.KillAll()
 }

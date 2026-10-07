@@ -19,6 +19,21 @@ func mustGenerateProfile(t *testing.T, s *Seatbelt, workdir string) string {
 	return profile
 }
 
+// canonicalTempDir mirrors the production path canonicalization (ValidateWorkdir
+// and resolveSymlinkedPath both run filepath.EvalSymlinks). On macOS that turns
+// /tmp/... into /private/tmp/... because /tmp is a symlink. Use this helper in
+// every assertion that compares a t.TempDir-derived path against a policy or
+// generated profile, otherwise the comparison silently diverges from the
+// canonicalized path the production code emits.
+func canonicalTempDir(t *testing.T, dir string) string {
+	t.Helper()
+	resolved, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatalf("canonicalTempDir(%q): %v", dir, err)
+	}
+	return resolved
+}
+
 func TestGenerateProfileIsDenyByDefault(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.Sandbox.Filesystem = FilesystemConfig{}
@@ -62,7 +77,7 @@ func TestGenerateProfileNetworkSwitch(t *testing.T) {
 }
 
 func TestGenerateProfileUsesCompiledFilesystemRules(t *testing.T) {
-	workdir := t.TempDir()
+	workdir := canonicalTempDir(t, t.TempDir())
 	denied := filepath.Join(workdir, "secret")
 	protected := filepath.Join(workdir, "one.pem")
 	if err := os.WriteFile(denied, []byte("x"), 0o600); err != nil {
@@ -89,7 +104,7 @@ func TestGenerateProfileUsesCompiledFilesystemRules(t *testing.T) {
 }
 
 func TestGenerateProfileRestrictsWritesToCompiledRoots(t *testing.T) {
-	root := t.TempDir()
+	root := canonicalTempDir(t, t.TempDir())
 	workdir := filepath.Join(root, "project")
 	writeRoot := filepath.Join(root, "allowed")
 	if err := os.Mkdir(workdir, 0o755); err != nil {

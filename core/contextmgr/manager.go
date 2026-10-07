@@ -179,11 +179,14 @@ func (m *Manager) applyMicroCompact(ctx stdctx.Context, sess *session.Session, s
 	}
 
 	if m.cfg.DecisionProvider != nil {
-		micro, prefix, sourceMessages, savedTokens, decided, err := m.buildDecisionProjection(ctx, sess, history)
+		micro, prefix, sourceMessages, savedTokens, cacheEpoch, cacheAdditions, decided, err := m.buildDecisionProjection(ctx, sess, history)
 		if err != nil {
 			return nil, 0, false, err
 		}
 		if decided {
+			if err := mergeDecisionCache(ctx, sess, cacheEpoch, cacheAdditions); err != nil {
+				m.logger.Warnw("failed to persist decision cache", "session", sess.ID, "error", err)
+			}
 			microTokens := fullTokens - savedTokens
 			if fullTokens > 0 && float64(microTokens)/float64(fullTokens) < 0.8 {
 				st.MicroCompactPrefix = cloneMessages(prefix)

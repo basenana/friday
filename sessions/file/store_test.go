@@ -19,6 +19,7 @@ import (
 	"github.com/basenana/friday/core/contextmgr"
 	corelogger "github.com/basenana/friday/core/logger"
 	"github.com/basenana/friday/core/planning"
+	"github.com/basenana/friday/core/providers"
 	"github.com/basenana/friday/core/types"
 	"github.com/basenana/friday/sessions"
 )
@@ -823,6 +824,77 @@ func TestSessionRecordsPersistAcrossReload(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(store.sessionDir("record-session"), "state", "file_instructions.test.json")); err != nil {
 		t.Fatalf("record file: %v", err)
+	}
+}
+
+type persistedDecisionProvider struct {
+	mu    sync.Mutex
+	calls int
+}
+
+func (p *persistedDecisionProvider) Evaluate(_ context.Context, req providers.DecisionRequest) (providers.DecisionResponse, error) {
+	p.mu.Lock()
+	p.calls++
+	p.mu.Unlock()
+	answers := make(map[string]providers.DecisionAnswer, len(req.Questions))
+	for key := range req.Questions {
+		answers[key] = providers.NoulAnswer{Noul: 1}
+	}
+	return providers.DecisionResponse{Answers: answers}, nil
+}
+
+func (p *persistedDecisionProvider) callCount() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.calls
+}
+
+func TestDecisionCachePersistsAcrossFileSessionReload(t *testing.T) {
+	ctx := context.Background()
+	store := NewFileSessionStore(t.TempDir())
+	sess, err := store.Create("decision-cache-session", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	messages := []*types.Message{
+		{Role: types.RoleUser, Content: "old goal"},
+		{Role: types.RoleAssistant, ToolCalls: []types.ToolCall{{ID: "call-old", Name: "fs_read", Arguments: `{"path":"private"}`}}},
+		{Role: types.RoleTool, ToolResult: &types.ToolResult{CallID: "call-old", Content: "PRIVATE-RESULT-" + strings.Repeat("x", 1000), Success: true}},
+		{Role: types.RoleAssistant, Content: "old answer"},
+	}
+	for i := 0; i < 4; i++ {
+		messages = append(messages,
+			&types.Message{Role: types.RoleUser, Content: fmt.Sprintf("recent %d", i)},
+			&types.Message{Role: types.RoleAssistant, Content: "answer"},
+		)
+	}
+	sess.AppendMessage(messages...)
+
+	provider := &persistedDecisionProvider{}
+	manager := contextmgr.New(nil, contextmgr.Config{ContextWindow: 1000, SoftThresholdRatio: 0.01, HardThresholdRatio: 2, MaxToolResultChars: 20, DecisionProvider: provider})
+	first := providers.NewRequest("", sess.GetHistory()...)
+	if err := manager.BeforeModel(ctx, sess, first); err != nil {
+		t.Fatal(err)
+	}
+	cachePath := filepath.Join(store.sessionDir(sess.ID), "state", "decisioncache.json")
+	data, err := os.ReadFile(cachePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "PRIVATE-RESULT") || strings.Contains(string(data), `"private"`) {
+		t.Fatalf("decision cache leaked tool content: %s", data)
+	}
+
+	reloaded, err := store.Load(sess.ID, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second := providers.NewRequest("", reloaded.GetHistory()...)
+	if err := manager.BeforeModel(ctx, reloaded, second); err != nil {
+		t.Fatal(err)
+	}
+	if got := provider.callCount(); got != 1 {
+		t.Fatalf("Evaluate calls after reload = %d, want 1", got)
 	}
 }
 

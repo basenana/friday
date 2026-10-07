@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/basenana/friday/core/providers"
@@ -15,6 +17,7 @@ import (
 const (
 	decisionCompactTimeout   = 30 * time.Second
 	decisionCompactThreshold = 0.5
+	decisionBatchPairLimit   = 50
 	decisionGoalLimit        = 500
 	decisionGoalCount        = 3
 )
@@ -55,6 +58,20 @@ type decisionToolPair struct {
 	ResultChars  int
 	AssistantIdx int
 	ResultIdx    int
+	Call         types.ToolCall
+	Result       types.ToolResult
+}
+
+type decisionBatch struct {
+	Index int
+	Pairs []decisionToolPair
+}
+
+type decisionBatchResult struct {
+	Index   int
+	Actions map[string]decisionPairAction
+	Cache   map[string]decisionCachedAction
+	Err     error
 }
 
 type decisionPairAction uint8
@@ -65,9 +82,22 @@ const (
 	decisionDropCall
 )
 
-func (m *Manager) buildDecisionProjection(ctx context.Context, sess *session.Session, history []types.Message) ([]types.Message, []types.Message, int, int64, bool, error) {
+func (m *Manager) buildDecisionProjection(
+	ctx context.Context,
+	sess *session.Session,
+	history []types.Message,
+) (
+	projected []types.Message,
+	prefix []types.Message,
+	sourceMessages int,
+	savedTokens int64,
+	cacheEpoch string,
+	cacheAdditions map[string]decisionCachedAction,
+	decided bool,
+	err error,
+) {
 	if err := ctx.Err(); err != nil {
-		return nil, nil, 0, 0, false, err
+		return nil, nil, 0, 0, "", nil, false, err
 	}
 	groups := groupHistory(history)
 	tailStart := len(groups) - projectionTailGroups
@@ -78,78 +108,181 @@ func (m *Manager) buildDecisionProjection(ctx context.Context, sess *session.Ses
 	tailMessages := flattenGroups(groups[tailStart:])
 	pairs := collectDecisionPairs(oldMessages)
 	if len(pairs) == 0 {
-		return nil, nil, 0, 0, false, nil
+		return nil, nil, 0, 0, "", nil, false, nil
 	}
 
-	request := providers.DecisionRequest{
-		SessionID: sess.ID,
-		State: decisionCompactState{
-			Context: "Coding-assistant conversation micro-compaction. Decide whether old paired tool calls and their full results still matter. Dropped information can usually be recovered by running the tool again.",
-			Goal:    decisionGoal(history),
-			History: decisionHistory(oldMessages, pairs),
-		},
-		Questions: decisionQuestions(pairs),
+	epoch, cacheEnabled := decisionEpochKey(sess.ID, history)
+	cache := decisionEpochCache{Decisions: make(map[string]decisionCachedAction)}
+	if cacheEnabled {
+		cache = loadDecisionCache(ctx, sess, epoch)
 	}
-
-	decisionCtx, cancel := context.WithTimeout(ctx, decisionCompactTimeout)
-	response, err := m.cfg.DecisionProvider.Evaluate(decisionCtx, request)
-	cancel()
-	if ctx.Err() != nil {
-		return nil, nil, 0, 0, false, ctx.Err()
-	}
-	if err != nil {
-		m.logger.Warnw("decision microcompact failed; using deterministic projection", "session", sess.ID, "error", err)
-		return nil, nil, 0, 0, false, nil
-	}
-
 	actions := make(map[string]decisionPairAction, len(pairs))
+	unresolved := make([]decisionToolPair, 0, len(pairs))
 	for _, pair := range pairs {
-		callValue, callOK := decisionNoul(response.Answers["call_"+pair.TemporaryID])
-		resultValue, resultOK := decisionNoul(response.Answers["result_"+pair.TemporaryID])
-		switch {
-		case !callOK || !resultOK:
+		hash := decisionPairHash(pair.Call, pair.Result)
+		cached, ok := cache.Decisions[pair.ID]
+		if ok && cached.PairHash == hash {
+			if action, valid := decisionActionFromCache(cached.Action); valid {
+				actions[pair.ID] = action
+				continue
+			}
+		}
+		unresolved = append(unresolved, pair)
+	}
+
+	additions := make(map[string]decisionCachedAction, len(unresolved))
+	if len(unresolved) > 0 {
+		batches := make([]decisionBatch, 0, (len(unresolved)+decisionBatchPairLimit-1)/decisionBatchPairLimit)
+		for start := 0; start < len(unresolved); start += decisionBatchPairLimit {
+			end := start + decisionBatchPairLimit
+			if end > len(unresolved) {
+				end = len(unresolved)
+			}
+			batches = append(batches, decisionBatch{Index: len(batches), Pairs: unresolved[start:end]})
+		}
+
+		results := make(chan decisionBatchResult, len(batches))
+		var wg sync.WaitGroup
+		wg.Add(len(batches))
+		for _, batch := range batches {
+			batch := batch
+			go func() {
+				defer wg.Done()
+				results <- m.evaluateDecisionBatch(ctx, sess.ID, history, oldMessages, batch)
+			}()
+		}
+		wg.Wait()
+		close(results)
+
+		ordered := make([]decisionBatchResult, 0, len(batches))
+		for result := range results {
+			ordered = append(ordered, result)
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, nil, 0, 0, "", nil, false, err
+		}
+		sort.Slice(ordered, func(i, j int) bool { return ordered[i].Index < ordered[j].Index })
+		for _, result := range ordered {
+			if result.Err != nil {
+				m.logger.Warnw("decision microcompact batch failed; keeping batch", "session", sess.ID, "batch", result.Index, "error", result.Err)
+				continue
+			}
+			for id, action := range result.Actions {
+				actions[id] = action
+			}
+			for id, action := range result.Cache {
+				additions[id] = action
+			}
+		}
+	}
+	for _, pair := range pairs {
+		if _, ok := actions[pair.ID]; !ok {
 			actions[pair.ID] = decisionKeep
-		case resultValue >= decisionCompactThreshold:
-			actions[pair.ID] = decisionKeep
-		case callValue >= decisionCompactThreshold:
-			actions[pair.ID] = decisionDropResult
-		default:
-			actions[pair.ID] = decisionDropCall
 		}
 	}
 
-	prefix, err := m.rebuildDecisionPrefix(oldMessages, tailMessages, pairs, actions)
+	prefix, err = m.rebuildDecisionPrefix(oldMessages, tailMessages, pairs, actions)
 	if err != nil {
 		m.logger.Warnw("decision microcompact reconstruction failed; using deterministic projection", "session", sess.ID, "error", err)
-		return nil, nil, 0, 0, false, nil
+		return nil, nil, 0, 0, "", nil, false, nil
 	}
 
-	var saved int64
 	for _, msg := range oldMessages {
-		saved += msg.FuzzyTokens()
+		savedTokens += msg.FuzzyTokens()
 	}
 	for _, msg := range prefix {
-		saved -= msg.FuzzyTokens()
+		savedTokens -= msg.FuzzyTokens()
 	}
-	if saved < 0 {
-		saved = 0
+	if savedTokens < 0 {
+		savedTokens = 0
 	}
-	projected := make([]types.Message, 0, len(prefix)+len(tailMessages))
+	projected = make([]types.Message, 0, len(prefix)+len(tailMessages))
 	projected = append(projected, cloneMessages(prefix)...)
 	projected = append(projected, cloneMessages(tailMessages)...)
-	return projected, prefix, len(oldMessages), saved, true, nil
+	if !cacheEnabled {
+		epoch = ""
+		additions = nil
+	}
+	return projected, prefix, len(oldMessages), savedTokens, epoch, additions, true, nil
+}
+
+func (m *Manager) evaluateDecisionBatch(ctx context.Context, sessionID string, history, oldMessages []types.Message, batch decisionBatch) decisionBatchResult {
+	request := providers.DecisionRequest{
+		SessionID: sessionID,
+		State: decisionCompactState{
+			Context: "Coding-assistant conversation micro-compaction. Decide whether old paired tool calls and their full results still matter. Dropped information can usually be recovered by running the tool again.",
+			Goal:    decisionGoal(history),
+			History: decisionHistory(oldMessages, batch.Pairs),
+		},
+		Questions: decisionQuestions(batch.Pairs),
+	}
+	decisionCtx, cancel := context.WithTimeout(ctx, decisionCompactTimeout)
+	response, err := m.cfg.DecisionProvider.Evaluate(decisionCtx, request)
+	cancel()
+	result := decisionBatchResult{Index: batch.Index, Err: err}
+	if err != nil {
+		return result
+	}
+	result.Actions = make(map[string]decisionPairAction, len(batch.Pairs))
+	result.Cache = make(map[string]decisionCachedAction, len(batch.Pairs))
+	for _, pair := range batch.Pairs {
+		callValue, callOK := decisionNoul(response.Answers["call_"+pair.TemporaryID])
+		resultValue, resultOK := decisionNoul(response.Answers["result_"+pair.TemporaryID])
+		if !callOK || !resultOK {
+			result.Actions[pair.ID] = decisionKeep
+			continue
+		}
+		action := decisionKeep
+		switch {
+		case resultValue >= decisionCompactThreshold:
+			action = decisionKeep
+		case callValue >= decisionCompactThreshold:
+			action = decisionDropResult
+		default:
+			action = decisionDropCall
+		}
+		result.Actions[pair.ID] = action
+		result.Cache[pair.ID] = decisionCachedAction{PairHash: decisionPairHash(pair.Call, pair.Result), Action: decisionActionName(action)}
+	}
+	return result
+}
+
+func decisionActionName(action decisionPairAction) string {
+	switch action {
+	case decisionKeep:
+		return "keep"
+	case decisionDropResult:
+		return "drop_result"
+	case decisionDropCall:
+		return "drop_call"
+	default:
+		return ""
+	}
+}
+
+func decisionActionFromCache(action string) (decisionPairAction, bool) {
+	switch action {
+	case "keep":
+		return decisionKeep, true
+	case "drop_result":
+		return decisionDropResult, true
+	case "drop_call":
+		return decisionDropCall, true
+	default:
+		return decisionKeep, false
+	}
 }
 
 func collectDecisionPairs(messages []types.Message) []decisionToolPair {
 	type callLocation struct {
 		message int
-		name    string
+		call    types.ToolCall
 	}
 	calls := make(map[string]callLocation)
 	for messageIdx, msg := range messages {
 		for _, call := range msg.ToolCalls {
 			if call.ID != "" {
-				calls[call.ID] = callLocation{message: messageIdx, name: call.Name}
+				calls[call.ID] = callLocation{message: messageIdx, call: call}
 			}
 		}
 	}
@@ -168,10 +301,12 @@ func collectDecisionPairs(messages []types.Message) []decisionToolPair {
 		pairs = append(pairs, decisionToolPair{
 			ID:           msg.ToolResult.CallID,
 			TemporaryID:  fmt.Sprintf("t%d", len(pairs)+1),
-			ToolName:     location.name,
+			ToolName:     location.call.Name,
 			ResultChars:  len([]rune(msg.ToolResult.Content)),
 			AssistantIdx: location.message,
 			ResultIdx:    resultIdx,
+			Call:         location.call,
+			Result:       *msg.ToolResult,
 		})
 	}
 	return pairs
