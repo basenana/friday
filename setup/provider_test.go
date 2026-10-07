@@ -68,13 +68,15 @@ func TestCreateDecisionProviderRequiresConfiguredModel(t *testing.T) {
 }
 
 func TestCreateDecisionProviderRejectsUnknownProvider(t *testing.T) {
-	_, err := CreateDecisionProviderFromModel(config.DecisionModelConfig{Provider: "other", Model: "judge"})
-	if err == nil || !strings.Contains(err.Error(), "unknown decision provider: other") {
-		t.Fatalf("error = %v", err)
+	for _, provider := range []string{"other", "openrouter"} {
+		_, err := CreateDecisionProviderFromModel(config.DecisionModelConfig{Provider: provider, Model: "judge"})
+		if err == nil || !strings.Contains(err.Error(), "unknown decision provider: "+provider) {
+			t.Fatalf("provider %q: error = %v", provider, err)
+		}
 	}
 }
 
-func TestCreateDecisionProviderEvaluatesThroughOpenRouterAdapter(t *testing.T) {
+func TestCreateDecisionProviderEvaluatesThroughJevAdapter(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v1/systemone" {
 			t.Errorf("path = %q", r.URL.Path)

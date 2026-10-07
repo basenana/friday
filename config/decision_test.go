@@ -74,7 +74,7 @@ func TestLoadDecisionModelInheritsDefaultsAndExpandsEnvironment(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := DecisionModelConfig{
-		Provider: "openrouter",
+		Provider: "jev",
 		BaseURL:  "https://decision.example/v1",
 		Key:      "decision-key",
 		Model:    "typesafe/jev-test",

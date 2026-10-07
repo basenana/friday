@@ -68,7 +68,7 @@ func TestNewAgentRejectsInvalidDecisionProviderConfiguration(t *testing.T) {
 func TestNewAgentDoesNotEvaluateInjectedDecisionProviderDuringSetup(t *testing.T) {
 	mgr, cfg, pool := newDecisionSetupFixture(t)
 	cfg.Sandbox.Automation.Enabled = true
-	cfg.DecisionModel = &config.DecisionModelConfig{Provider: "openrouter", Model: "judge"}
+	cfg.DecisionModel = &config.DecisionModelConfig{Provider: "jev", Model: "judge"}
 	provider := &setupDecisionProvider{}
 
 	agentCtx, err := NewAgent(mgr, cfg, WithModelPool(pool), withDecisionProvider(provider))
