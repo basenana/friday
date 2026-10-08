@@ -26,6 +26,8 @@ github.com/bahlo/generic-list-go v0.2.0 h1:5sz/EEAK+ls5wF+NeqDpk5+iNdMDXrh3z3nPn
 github.com/bahlo/generic-list-go v0.2.0/go.mod h1:2KvAjgMlE5NNynlg/5iLrrCCZ2+5xWbdbCW3pNTGyYg=
 github.com/basenana/friday/core v0.0.0-20260918112627-c57b27b6d491 h1:VtQiHGqq1x8YMC93y3bFDRoQ7KM5WEJ4NaiWWzWRTsU=
 github.com/basenana/friday/core v0.0.0-20260918112627-c57b27b6d491/go.mod h1:HlvYSwgUzvAp1zJiNoOCHD4Zlu7jzb/wRFQU4HpHk7Y=
+github.com/basenana/friday/core v0.0.0-20261008112813-171331c05751 h1:OknyYfIVOzh1v0cRB7o0zi3uoEEsk8O6XLCPuvh3wJc=
+github.com/basenana/friday/core v0.0.0-20261008112813-171331c05751/go.mod h1:HlvYSwgUzvAp1zJiNoOCHD4Zlu7jzb/wRFQU4HpHk7Y=
 github.com/buger/jsonparser v1.1.1 h1:2PnMjfWD7wBILjqQbt530v576A/cAbQvEW9gGIpYMUs=
 github.com/buger/jsonparser v1.1.1/go.mod h1:6RYKKt7H4d4+iWqouImQ9R2FZql3VbhNgx27UK13J/0=
 github.com/charmbracelet/colorprofile v0.4.3 h1:QPa1IWkYI+AOB+fE+mg/5/4HRMZcaXex9t5KX76i20Q=
