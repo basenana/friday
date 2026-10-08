@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -12,9 +13,10 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/basenana/friday/bus"
 	codercmds "github.com/basenana/friday/coder/commands"
-	projectpkg "github.com/basenana/friday/coder/project"
 	coderloop "github.com/basenana/friday/coder/loop"
+	projectpkg "github.com/basenana/friday/coder/project"
 	"github.com/basenana/friday/core/actor/events"
+	"github.com/basenana/friday/core/types"
 )
 
 func TestLinkedWorktreeSessionActionsStayInTheirScope(t *testing.T) {
@@ -442,18 +444,100 @@ func TestOrdinaryModeRejectsWorktreeAndSelectOpensSessionSelector(t *testing.T) 
 	}
 }
 
-func TestBareWorktreeWaitsForRequirement(t *testing.T) {
+func TestBareWorktreeOpensRequirementInDraftTab(t *testing.T) {
 	m, _, _ := newLoadedProjectTestModel(t)
 	m.worktreeMode = true
+	m.width, m.height = 100, 30
+	m.worktreeTabs = []worktreeTab{{ID: "main", Label: "main"}}
+	originalSession := m.sessionID
+	originalMessages := len(m.messages)
 	handled, _ := m.applySessionAction(codercmds.CreateWorktreeAction{})
 	if !handled || !m.worktreeRequirement {
 		t.Fatalf("bare /worktree did not enter requirement mode: handled=%v mode=%v", handled, m.worktreeRequirement)
 	}
-	if len(m.messages) == 0 || m.messages[len(m.messages)-1].content != "new worktree · describe the requirement" {
-		t.Fatalf("bare /worktree did not show requirement prompt: %#v", m.messages)
+	if len(m.worktreeTabs) != 2 || m.worktreeTabs[1].Label != "New worktree" {
+		t.Fatalf("bare /worktree tabs = %#v", m.worktreeTabs)
+	}
+	if m.sessionID != originalSession || len(m.messages) != originalMessages {
+		t.Fatalf("draft tab changed current worktree: session=%q messages=%d", m.sessionID, len(m.messages))
 	}
 	if got := m.textarea.Placeholder; got != "Describe the requirement for the new worktree…" {
 		t.Fatalf("bare /worktree placeholder = %q", got)
+	}
+}
+
+func TestEscapeClosesWorktreeDraftTab(t *testing.T) {
+	m, _, _ := newLoadedProjectTestModel(t)
+	m.worktreeMode = true
+	m.worktreeTabs = []worktreeTab{{ID: "main", Label: "main"}}
+	m.textarea.SetValue("current draft")
+	m.attachments = []types.ImageContent{{Filename: "current.png"}}
+	m.applySessionAction(codercmds.CreateWorktreeAction{})
+	if m.textarea.Value() != "" || len(m.attachments) != 0 {
+		t.Fatalf("worktree draft reused current composer: text=%q attachments=%#v", m.textarea.Value(), m.attachments)
+	}
+	m.textarea.SetValue("unfinished requirement")
+
+	updated, cmd := m.updateKey(tea.KeyPressMsg{Code: tea.KeyEsc})
+	m = updated.(*model)
+	if cmd != nil || m.worktreeRequirement {
+		t.Fatalf("escape left worktree draft active: cmd=%v requirement=%v", cmd, m.worktreeRequirement)
+	}
+	if len(m.worktreeTabs) != 1 || m.worktreeTabs[0].ID != "main" {
+		t.Fatalf("escape left draft tab: %#v", m.worktreeTabs)
+	}
+	if got := m.textarea.Value(); got != "current draft" {
+		t.Fatalf("escape restored composer text %q", got)
+	}
+	if len(m.attachments) != 1 || m.attachments[0].Filename != "current.png" {
+		t.Fatalf("escape restored attachments %#v", m.attachments)
+	}
+}
+
+func TestWorktreeDraftTabHidesCurrentTranscript(t *testing.T) {
+	m, _, _ := newLoadedProjectTestModel(t)
+	m.worktreeMode = true
+	m.width, m.height = 100, 30
+	m.worktreeTabs = []worktreeTab{{ID: "main", Label: "main"}}
+	m.appendBlock(chatBlock{kind: blockAssistant, content: "CURRENT_WORKTREE_TRANSCRIPT"})
+	m.applySessionAction(codercmds.CreateWorktreeAction{})
+
+	view := terminalSafe(m.View().Content)
+	if strings.Contains(view, "CURRENT_WORKTREE_TRANSCRIPT") {
+		t.Fatalf("draft tab exposed current transcript:\n%s", view)
+	}
+	for _, want := range []string{"Describe the requirement", "Esc"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("draft tab missing %q:\n%s", want, view)
+		}
+	}
+}
+
+func TestWorktreeCreationFailureStaysVisibleInDraftTab(t *testing.T) {
+	m, _, _ := newLoadedProjectTestModel(t)
+	m.worktreeMode = true
+	m.width, m.height = 100, 30
+	m.worktreeTabs = []worktreeTab{{ID: "main", Label: "main"}}
+	originalMessages := len(m.messages)
+	m.applySessionAction(codercmds.CreateWorktreeAction{})
+	m.textarea.SetValue("retry this requirement")
+	updated, cmd := m.submitComposer()
+	m = updated.(*model)
+	if cmd == nil {
+		t.Fatal("requirement did not start worktree creation")
+	}
+
+	updated, _ = m.Update(worktreePreparedMsg{token: m.worktreeGeneration, err: errors.New("creation failed")})
+	m = updated.(*model)
+	view := terminalSafe(m.View().Content)
+	if !strings.Contains(view, "creation failed") {
+		t.Fatalf("draft tab hid creation failure:\n%s", view)
+	}
+	if got := m.textarea.Value(); got != "retry this requirement" {
+		t.Fatalf("creation failure lost requirement %q", got)
+	}
+	if len(m.messages) != originalMessages {
+		t.Fatalf("creation failure changed current transcript: before=%d after=%d", originalMessages, len(m.messages))
 	}
 }
 

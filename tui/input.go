@@ -278,9 +278,8 @@ func (m *model) applySessionAction(action codercmds.Action) (bool, tea.Cmd) {
 			return true, nil
 		}
 		if strings.TrimSpace(action.Requirement) == "" {
-			m.worktreeRequirement = true
+			m.setWorktreeDraft(true)
 			m.textarea.Placeholder = "Describe the requirement for the new worktree…"
-			m.appendBlock(chatBlock{kind: blockDivider, content: "new worktree · describe the requirement"})
 			m.layout()
 			return true, nil
 		}
@@ -292,7 +291,7 @@ func (m *model) applySessionAction(action codercmds.Action) (bool, tea.Cmd) {
 			}
 			return m.applySessionAction(codercmds.ResumeSessionAction{Target: action.Target})
 		}
-		m.worktreeRequirement = false
+		m.setWorktreeDraft(false)
 		m.textarea.Placeholder = "Send a message…  / commands · Ctrl+P image · Ctrl+G editor"
 		if strings.TrimSpace(action.Target) == "" {
 			m.openWorktreeSelector()

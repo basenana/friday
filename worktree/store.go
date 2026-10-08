@@ -340,8 +340,8 @@ func normalizeMetadata(meta Metadata) (Metadata, error) {
 	}
 	meta.Name = strings.TrimSpace(meta.Name)
 	meta.Branch = strings.TrimSpace(meta.Branch)
-	if meta.Name == "" || meta.Branch == "" {
-		return Metadata{}, fmt.Errorf("worktree name and branch are required")
+	if meta.Name == "" {
+		return Metadata{}, fmt.Errorf("worktree name is required")
 	}
 	path, err := canonicalWorktreePath(meta.Path)
 	if err != nil {

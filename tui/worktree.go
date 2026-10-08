@@ -154,6 +154,9 @@ func samePath(a, b string) bool {
 }
 
 func (m *model) createWorktree(requirement string) tea.Cmd {
+	if m.worktreeRequirement {
+		m.worktreeDraftError = ""
+	}
 	m.worktreeChanging = true
 	m.worktreeGeneration++
 	token := m.worktreeGeneration
@@ -262,7 +265,7 @@ func (m *model) handleWorktreeArchiveRemoved(msg worktreeArchiveRemovedMsg) tea.
 
 func (m *model) canSwitchWorktree() bool {
 	return m.worktreeMode && !m.loading && m.fatalErr == nil && !m.planCompacting &&
-		!m.manualCompacting && !m.reconciling && !m.worktreeChanging
+		!m.manualCompacting && !m.reconciling && !m.worktreeChanging && !m.worktreeRequirement
 }
 
 func (m *model) openWorktreeSelector() {
@@ -305,7 +308,7 @@ func (m *model) handleWorktreeSwitch(msg worktreeSwitchMsg) tea.Cmd {
 	}
 	if samePath(msg.path, m.workdir) {
 		m.worktreeChanging = false
-		m.worktreeRequirement = false
+		m.setWorktreeDraft(false)
 		return nil
 	}
 	token := msg.token
@@ -328,26 +331,26 @@ func (m *model) commitPreparedWorktree(msg worktreePreparedMsg) tea.Cmd {
 		return nil
 	}
 	if msg.err != nil {
-		m.appendBlock(chatBlock{kind: blockError, content: "switch worktree: " + msg.err.Error()})
+		m.showWorktreeError("switch worktree: " + msg.err.Error())
 		return nil
 	}
 	prepared := msg.runtime
 	if prepared == nil || prepared.runtime == nil {
-		m.appendBlock(chatBlock{kind: blockError, content: "switch worktree: prepared runtime is unavailable"})
+		m.showWorktreeError("switch worktree: prepared runtime is unavailable")
 		return nil
 	}
 	if m.worktreeSupervisor == nil {
 		if prepared.feed != nil {
 			prepared.feed.Close()
 		}
-		m.appendBlock(chatBlock{kind: blockError, content: "switch worktree: worktree runtime supervisor is unavailable"})
+		m.showWorktreeError("switch worktree: worktree runtime supervisor is unavailable")
 		return nil
 	}
 	if err := m.worktreeSupervisor.commitActivation(prepared); err != nil {
 		if prepared.feed != nil {
 			prepared.feed.Close()
 		}
-		m.appendBlock(chatBlock{kind: blockError, content: "switch worktree: " + err.Error()})
+		m.showWorktreeError("switch worktree: " + err.Error())
 		return nil
 	}
 	target := prepared.runtime
@@ -365,7 +368,7 @@ func (m *model) commitPreparedWorktree(msg worktreePreparedMsg) tea.Cmd {
 	m.promptHistory, m.historyIndex = append([]string(nil), prepared.history...), -1
 	m.textarea.Reset()
 	m.menu = menuState{}
-	m.worktreeRequirement = false
+	m.finishWorktreeDraft()
 	m.loopActive = prepared.loopActive
 	m.textarea.Placeholder = "Send a message…  / commands · Ctrl+P image · Ctrl+G editor"
 	m.subscriptionToken++
@@ -391,4 +394,12 @@ func (m *model) commitPreparedWorktree(msg worktreePreparedMsg) tea.Cmd {
 		return tea.Batch(waitCmd, promptCmd)
 	}
 	return waitCmd
+}
+
+func (m *model) showWorktreeError(content string) {
+	if m.worktreeRequirement {
+		m.worktreeDraftError = content
+		return
+	}
+	m.appendBlock(chatBlock{kind: blockError, content: content})
 }

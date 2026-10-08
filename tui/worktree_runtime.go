@@ -167,6 +167,15 @@ func (s *worktreeRuntimeSupervisor) Restore(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("list worktrees for restore: %w", err)
 	}
+	for i := range worktrees {
+		if worktrees[i].Stale || worktrees[i].Registered {
+			continue
+		}
+		if err := s.service.Associate(worktrees[i].Path, worktrees[i].Branch); err != nil {
+			return fmt.Errorf("register worktree %s for restore: %w", worktrees[i].Path, err)
+		}
+		worktrees[i].Registered = true
+	}
 	metadata, err := s.store.List()
 	if err != nil {
 		return fmt.Errorf("list worktree metadata for restore: %w", err)
