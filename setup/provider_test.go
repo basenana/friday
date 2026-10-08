@@ -68,11 +68,9 @@ func TestCreateDecisionProviderRequiresConfiguredModel(t *testing.T) {
 }
 
 func TestCreateDecisionProviderRejectsUnknownProvider(t *testing.T) {
-	for _, provider := range []string{"other", "openrouter"} {
-		_, err := CreateDecisionProviderFromModel(config.DecisionModelConfig{Provider: provider, Model: "judge"})
-		if err == nil || !strings.Contains(err.Error(), "unknown decision provider: "+provider) {
-			t.Fatalf("provider %q: error = %v", provider, err)
-		}
+	_, err := CreateDecisionProviderFromModel(config.DecisionModelConfig{Provider: "other", Model: "judge"})
+	if err == nil || !strings.Contains(err.Error(), "unknown decision provider: other") {
+		t.Fatalf("error = %v", err)
 	}
 }
 
@@ -89,7 +87,7 @@ func TestCreateDecisionProviderEvaluatesThroughJevAdapter(t *testing.T) {
 	defer server.Close()
 
 	provider, err := CreateDecisionProvider(&config.Config{DecisionModel: &config.DecisionModelConfig{
-		Provider: "openrouter",
+		Provider: "jev",
 		BaseURL:  server.URL + "/api/v1/",
 		Key:      "decision-key",
 		Model:    "jev-test",

@@ -134,10 +134,10 @@ func DefaultImageModelConfig() *ModelConfig {
 	}
 }
 
-// DefaultDecisionModelConfig returns an inactive OpenRouter decision model template.
+// DefaultDecisionModelConfig returns an inactive Jev decision model template.
 func DefaultDecisionModelConfig() *DecisionModelConfig {
 	return &DecisionModelConfig{
-		Provider: "openrouter",
+		Provider: "jev",
 		BaseURL:  "https://openrouter.ai/api/v1",
 		QPM:      20,
 	}

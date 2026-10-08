@@ -13,7 +13,7 @@ that needs model or path information.
 | `config.go` | `Load`/`LoadForDir` discovery + decoding, env expansion, relative-path resolution, validation, defaults; project sandbox allowlist merge; path getters; `WriteConfig`/`WriteDefaultConfig`; `LogPath` |
 | `types.go` | `Config` struct + nested types (`ModelConfig`, `DecisionModelConfig`, `MemoryConfig`, `SessionConfig`, `LogConfig`, `TUIConfig`, `CollaborationConfig`); defaults and `applyRuntimeDefaults` |
 | `model.go` | Chat/image model catalog: `ModelIdentity`, `CanonicalProvider`, `EffectiveBaseURL`, `ChatModels` (ordered, deduped), `PreferModel`, `PrimaryModel`, `ResolveImageModel`, optional-model normalization |
-| `decision.go` | Independent decision-model configuration helpers and OpenRouter defaults |
+| `decision.go` | Independent decision-model configuration helpers and Jev defaults |
 
 ## Key API (verbatim signatures)
 
@@ -64,7 +64,7 @@ func (m DecisionModelConfig) EffectiveBaseURL() string
 - Format is chosen strictly by `.json` suffix; everything else parses as YAML.
 - Env expansion (`os.Expand` semantics) is applied to model Key/BaseURL/Input/Model/Proxy, decision-model Key/BaseURL/Model/Proxy, and DataDir/Workspace **before** path resolution; names that expand to an unset env var become unconfigured in `normalizeOptionalModels`.
 - A missing model name means an unconfigured model: `loadFile` clears default model names before decode, and `normalizeOptionalModels` drops unnamed chat, image, and decision model pointers.
-- `decision_model` is an independent optional block: its editable default template uses provider `openrouter`, base URL `https://openrouter.ai/api/v1`, QPM 20, and an empty model. It never participates in `ChatModels`, `ModelNames`, `PreferModel`, image resolution, or reasoning-effort validation. Setting `decision_model.model` enables `contextmgr` Jev micro-compaction; sandbox command automation remains separately opt-in through `sandbox.automation.enabled` and fails fast if enabled without a configured decision model.
+- `decision_model` is an independent optional block: its editable default template uses provider `jev`, base URL `https://openrouter.ai/api/v1`, QPM 20, and an empty model. It never participates in `ChatModels`, `ModelNames`, `PreferModel`, image resolution, or reasoning-effort validation. Setting `decision_model.model` enables `contextmgr` Jev micro-compaction; sandbox command automation remains separately opt-in through `sandbox.automation.enabled` and fails fast if enabled without a configured decision model.
 - Catalog order: `model` (first choice) then `models`; exact provider/server/model duplicates are dropped keeping the first; the same model name on different servers stays as fallback candidates.
 - Project-scoped configs: `Workspace` defaults to `workspace` relative to the project config dir; workspace files fall back to the HOME workspace file-by-file (`WorkspaceFallbackPaths`); agent paths become HOME agents + project agents (project overrides HOME by name).
 - Project allowlist: `applyProjectSandboxAllow` merges `<DataDir>/projects/<ProjectID(cwd)>/sandbox.json` grants into the sandbox allow list. The file lives on the HOME side so a sandboxed agent cannot escalate itself; deny rules are unaffected; an invalid file fails loud (never silently ignored). Skipped when the process itself is sandboxed (`IS_SANDBOX=1` exact value).

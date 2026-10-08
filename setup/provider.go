@@ -11,9 +11,9 @@ import (
 	"github.com/basenana/friday/core/providers"
 	"github.com/basenana/friday/core/providers/anthropics"
 	"github.com/basenana/friday/core/providers/fallback"
+	"github.com/basenana/friday/core/providers/jev"
 	"github.com/basenana/friday/core/providers/openai"
 	"github.com/basenana/friday/core/providers/openairesponse"
-	"github.com/basenana/friday/core/providers/openrouterdecision"
 	"github.com/basenana/friday/core/types"
 )
 
@@ -187,8 +187,8 @@ func CreateDecisionProviderFromModel(modelCfg config.DecisionModelConfig) (provi
 		return nil, fmt.Errorf("decision model is not configured")
 	}
 	switch modelCfg.EffectiveProvider() {
-	case "openrouter":
-		return openrouterdecision.New(modelCfg.EffectiveBaseURL(), modelCfg.Key, openrouterdecision.Model{
+	case "jev":
+		return jev.New(modelCfg.EffectiveBaseURL(), modelCfg.Key, jev.Model{
 			Name:  modelCfg.Model,
 			QPM:   modelCfg.QPM,
 			Proxy: modelCfg.Proxy,

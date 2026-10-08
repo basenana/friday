@@ -15,7 +15,7 @@ func TestDefaultDecisionModelConfigIsInactiveTemplate(t *testing.T) {
 	if cfg.DecisionModel.IsConfigured() {
 		t.Fatalf("decision model template unexpectedly configured: %#v", cfg.DecisionModel)
 	}
-	if cfg.DecisionModel.EffectiveProvider() != "openrouter" || cfg.DecisionModel.EffectiveBaseURL() != "https://openrouter.ai/api/v1" || cfg.DecisionModel.QPM != 20 {
+	if cfg.DecisionModel.EffectiveProvider() != "jev" || cfg.DecisionModel.EffectiveBaseURL() != "https://openrouter.ai/api/v1" || cfg.DecisionModel.QPM != 20 {
 		t.Fatalf("decision model defaults = %#v", cfg.DecisionModel)
 	}
 }

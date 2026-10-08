@@ -1,4 +1,4 @@
-package openrouterdecision
+package jev
 
 import (
 	"bytes"
@@ -34,7 +34,7 @@ type client struct {
 	limiter *rate.Limiter
 }
 
-// Error is a sanitized OpenRouter API error.
+// Error is a sanitized Jev API error.
 type Error struct {
 	StatusCode int
 	Code       int
@@ -44,9 +44,9 @@ type Error struct {
 
 func (e *Error) Error() string {
 	if e.Message == "" {
-		return fmt.Sprintf("openrouter decision request failed: HTTP %d", e.StatusCode)
+		return fmt.Sprintf("jev decision request failed: HTTP %d", e.StatusCode)
 	}
-	return fmt.Sprintf("openrouter decision request failed: HTTP %d, code %d: %s", e.StatusCode, e.Code, e.Message)
+	return fmt.Sprintf("jev decision request failed: HTTP %d, code %d: %s", e.StatusCode, e.Code, e.Message)
 }
 
 func New(baseURL, apiKey string, model Model) providers.DecisionProvider {
@@ -104,7 +104,7 @@ func (c *client) Evaluate(ctx context.Context, request providers.DecisionRequest
 
 		delay := retryDelay(err, attempt)
 		providers.NotifyRetry(ctx, providers.RetryEvent{
-			Provider:    "openrouter",
+			Provider:    "jev",
 			Model:       c.model.Name,
 			Attempt:     attempt + 1,
 			MaxAttempts: common.MaxAttempts,
@@ -120,14 +120,14 @@ func (c *client) Evaluate(ctx context.Context, request providers.DecisionRequest
 func (c *client) doRequest(ctx context.Context, body []byte) (providers.DecisionResponse, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/systemone", bytes.NewReader(body))
 	if err != nil {
-		return providers.DecisionResponse{}, fmt.Errorf("create OpenRouter decision request: %w", err)
+		return providers.DecisionResponse{}, fmt.Errorf("create Jev decision request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+c.apiKey)
 	req.Header.Set("Content-Type", "application/json")
 
 	response, err := c.http.Do(req)
 	if err != nil {
-		return providers.DecisionResponse{}, fmt.Errorf("send OpenRouter decision request: %w", err)
+		return providers.DecisionResponse{}, fmt.Errorf("send Jev decision request: %w", err)
 	}
 	defer response.Body.Close()
 

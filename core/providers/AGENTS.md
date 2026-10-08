@@ -6,7 +6,7 @@ This tree defines the provider-neutral request/response interface, reasoning and
 
 - `interface.go` defines `Client`, `Request`, optional capabilities, streaming responses, tool definitions, and usage data.
 - `decision.go` defines the independent synchronous `DecisionProvider` contract and typed noul/choice/score questions and answers.
-- `openrouterdecision/` implements OpenRouter System One over `POST /systemone` using `net/http`.
+- `jev/` implements Jev decisions over `POST /systemone` using `net/http`.
 - `common.go` implements the standard mutable request/response types.
 - `reasoning.go` resolves request, policy, and model reasoning effort.
 - `retry_observer.go` exposes retry observability.
@@ -50,7 +50,7 @@ type DecisionProvider interface {
 }
 ```
 
-`DecisionProvider` is parallel to, not an extension of, the chat `Client`. Its closed question/answer unions currently support `Noul`, `Choice`, and `Score`; the OpenRouter adapter validates JSON values before network I/O, retries only transient failures up to three physical requests, and never exposes API keys or full state in errors.
+`DecisionProvider` is parallel to, not an extension of, the chat `Client`. Its closed question/answer unions currently support `Noul`, `Choice`, and `Score`; the Jev adapter validates JSON values before network I/O, retries only transient failures up to three physical requests, and never exposes API keys or full state in errors.
 
 Optional chat interfaces expose context windows, output limits, model names, runtime routing snapshots, embeddings, and reasoning effort without forcing every custom client to implement them.
 

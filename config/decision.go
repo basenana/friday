@@ -11,7 +11,7 @@ func (m DecisionModelConfig) IsConfigured() bool {
 func (m DecisionModelConfig) EffectiveProvider() string {
 	provider := strings.ToLower(strings.TrimSpace(m.Provider))
 	if provider == "" {
-		return "openrouter"
+		return "jev"
 	}
 	return provider
 }

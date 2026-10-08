@@ -13,7 +13,7 @@ sunrise), `actor.Registry`, and the TUI/daemon paths.
 | File | Responsibility |
 |---|---|
 | `setup.go` | `AgentContext` aggregate + `NewAgent`/`NewAgentWithLifecycle` wiring order, `Option` setters, hook composition, `Chat`/`ChatWithImageRefs`, `PrintResponse`, `Close` |
-| `provider.go` | Provider construction: chat clients/model pools, independent OpenRouter decision provider factories, and image analyzer with config-signature caching |
+| `provider.go` | Provider construction: chat clients/model pools, independent Jev decision provider factories, and image analyzer with config-signature caching |
 | `memory_hook.go` | `BeforeModel` hook re-injecting the latest workspace memory into every request history at compose time (re-read from disk; persisted history is never modified) |
 | `tool_retry.go` | Tool invocation retry middleware: default 3 attempts, 500ms base exponential backoff + jitter, 30s cap; honors `Retryable()` errors and `result.Retryable`; context cancellation never retries |
 | `tool_trace.go` | Tool invocation trace middleware + `ToolTraceEvent` (start/end/error, invocation IDs, retry chains, redacted+budgeted params/results), evidence context propagation |
