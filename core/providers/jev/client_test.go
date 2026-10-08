@@ -298,6 +298,11 @@ func TestEvaluateRetriesTransientStatusesAtMostThreeTimes(t *testing.T) {
 			if got := calls.Load(); got != 3 || len(retries) != 2 || retries[0].Attempt != 2 || retries[1].Attempt != 3 {
 				t.Fatalf("calls=%d retries=%#v", got, retries)
 			}
+			for _, retry := range retries {
+				if retry.Provider != "jev" {
+					t.Fatalf("retry provider = %q, want jev", retry.Provider)
+				}
+			}
 		})
 	}
 }

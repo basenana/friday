@@ -181,15 +181,18 @@ func TestBackendContractStandardDevices(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.Sandbox.Filesystem = FilesystemConfig{}
 	executor := nativeBackendExecutor(t, cfg)
-	result := runBackendContract(t, executor,
-		"printf x > /dev/null && cat /dev/null && "+
-			"test \"$(head -c 1 /dev/zero | wc -c)\" = 1 && "+
-			"test \"$(head -c 1 /dev/random | wc -c)\" = 1 && "+
-			"test \"$(head -c 1 /dev/urandom | wc -c)\" = 1",
-		workdir, workdir)
-	requireContractSuccess(t, result)
+	for name, command := range map[string]string{
+		"null":    "printf x > /dev/null && cat /dev/null",
+		"zero":    "test \"$(head -c 1 /dev/zero | wc -c | tr -d '[:space:]')\" = 1",
+		"random":  "test \"$(head -c 1 /dev/random | wc -c | tr -d '[:space:]')\" = 1",
+		"urandom": "test \"$(head -c 1 /dev/urandom | wc -c | tr -d '[:space:]')\" = 1",
+	} {
+		t.Run(name, func(t *testing.T) {
+			requireContractSuccess(t, runBackendContract(t, executor, command, workdir, workdir))
+		})
+	}
 	for _, device := range []string{"/dev/zero", "/dev/random", "/dev/urandom"} {
-		result = runBackendContract(t, executor, "! sh -c "+shellcmd.QuoteArg("printf x > "+device), workdir, workdir)
+		result := runBackendContract(t, executor, "! sh -c "+shellcmd.QuoteArg("printf x > "+device), workdir, workdir)
 		requireContractSuccess(t, result)
 	}
 }

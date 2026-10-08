@@ -322,7 +322,23 @@ func (m *model) View() tea.View {
 	if tabs := m.renderWorktreeTabBar(); tabs != "" {
 		parts = append(parts, tabs)
 	}
-	parts = append(parts, m.viewport.View())
+	transcript := m.viewport.View()
+	if m.worktreeRequirement {
+		instruction := "Describe the requirement below · Esc cancel"
+		if m.worktreeChanging {
+			instruction = "Preparing worktree…"
+		}
+		content := accentStyle.Render("New worktree") + "\n" + mutedStyle.Render(instruction)
+		if m.worktreeDraftError != "" {
+			content += "\n\n" + errorStyle.Render(m.worktreeDraftError)
+		}
+		transcript = lipgloss.NewStyle().
+			Width(max(m.viewport.Width()-4, 1)).
+			Height(m.viewport.Height()).
+			Padding(1, 2).
+			Render(content)
+	}
+	parts = append(parts, transcript)
 	if activity := m.renderActivityLine(); activity != "" {
 		parts = append(parts, activity)
 	}

@@ -10,11 +10,13 @@ import (
 
 	"github.com/basenana/friday/bus"
 	"github.com/basenana/friday/core/actor/events"
+	"github.com/basenana/friday/core/types"
 )
 
 type worktreeTabStatus string
 
 const (
+	worktreeDraftTabID                       = "__new_worktree__"
 	worktreeTabIdle        worktreeTabStatus = "idle"
 	worktreeTabRunning     worktreeTabStatus = "running"
 	worktreeTabWaiting     worktreeTabStatus = "waiting"
@@ -34,6 +36,40 @@ type worktreeTab struct {
 type worktreeTabHit struct {
 	ID         string
 	Start, End int
+}
+
+func (m *model) setWorktreeDraft(active bool) {
+	wasActive := m.worktreeRequirement
+	if active && !wasActive {
+		m.worktreeDraftText = m.textarea.Value()
+		m.worktreeDraftFiles = append([]types.ImageContent(nil), m.attachments...)
+		m.worktreeDraftError = ""
+		m.textarea.Reset()
+		m.attachments = nil
+		m.composerGeneration++
+	}
+	m.worktreeRequirement = active
+	for i := range m.worktreeTabs {
+		if m.worktreeTabs[i].ID == worktreeDraftTabID {
+			m.worktreeTabs = append(m.worktreeTabs[:i], m.worktreeTabs[i+1:]...)
+			break
+		}
+	}
+	if active {
+		m.worktreeTabs = append(m.worktreeTabs, worktreeTab{ID: worktreeDraftTabID, Label: "New worktree", Status: worktreeTabIdle})
+	} else if wasActive {
+		m.textarea.SetValue(m.worktreeDraftText)
+		m.attachments = append([]types.ImageContent(nil), m.worktreeDraftFiles...)
+		m.worktreeDraftText = ""
+		m.worktreeDraftFiles = nil
+		m.worktreeDraftError = ""
+	}
+}
+
+func (m *model) finishWorktreeDraft() {
+	m.worktreeDraftText = ""
+	m.worktreeDraftFiles = nil
+	m.setWorktreeDraft(false)
 }
 
 func nextWorktreeTabStatus(current worktreeTabStatus, event events.Event) worktreeTabStatus {
@@ -247,6 +283,9 @@ func (m *model) refreshWorktreeTabs() {
 		tabs = append(tabs, worktreeTab{ID: item.ID, Label: label, Path: item.Path, Session: session, Status: status})
 	}
 	m.worktreeTabs = tabs
+	if m.worktreeRequirement {
+		m.setWorktreeDraft(true)
+	}
 }
 
 func (m *model) resetWorktreeStatusFeeds() []tea.Cmd {
@@ -352,7 +391,9 @@ func (m *model) initialWaitCommands() []tea.Cmd {
 
 func (m *model) renderWorktreeTabBar() string {
 	active := ""
-	if m.worktreeRuntime != nil {
+	if m.worktreeRequirement {
+		active = worktreeDraftTabID
+	} else if m.worktreeRuntime != nil {
 		active = m.worktreeRuntime.id
 	}
 	rendered, hits := renderWorktreeTabs(m.worktreeTabs, active, m.width)

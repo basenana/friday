@@ -57,7 +57,7 @@ github.com/aymerick/douceur/parser
 # github.com/bahlo/generic-list-go v0.2.0
 ## explicit; go 1.18
 github.com/bahlo/generic-list-go
-# github.com/basenana/friday/core v0.0.0-20260918112627-c57b27b6d491
+# github.com/basenana/friday/core v0.0.0-20261008112813-171331c05751
 ## explicit; go 1.25.0
 # github.com/buger/jsonparser v1.1.1
 ## explicit; go 1.13

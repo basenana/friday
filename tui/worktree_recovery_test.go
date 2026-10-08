@@ -19,6 +19,64 @@ import (
 
 const worktreeLoopPhaseNamespace = "coder.loop.phase"
 
+func TestWorktreeRuntimeSupervisorRestoresExternalWorktreeWithNewSession(t *testing.T) {
+	fixture := newWorktreeRuntimeTestFixture(t)
+	external := filepath.Join(t.TempDir(), "external")
+	runWorktreeRuntimeGit(t, fixture.service.ProjectCodeRoot(), "worktree", "add", "-b", "external", external, "HEAD")
+
+	if err := fixture.supervisor.Restore(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	items, err := fixture.service.List(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var externalID string
+	for _, item := range items {
+		if samePath(item.Path, external) {
+			if !item.Registered {
+				t.Fatal("external worktree was not registered")
+			}
+			externalID = item.ID
+			break
+		}
+	}
+	if externalID == "" {
+		t.Fatal("external worktree was not discovered")
+	}
+	runtime := fixture.supervisor.runtimes[externalID]
+	if runtime == nil || runtime.sessionID == "" {
+		t.Fatalf("external runtime = %#v", runtime)
+	}
+	if current, err := runtime.manager.CurrentID(); err != nil || current != runtime.sessionID {
+		t.Fatalf("external current session = %q, %v; want %q", current, err, runtime.sessionID)
+	}
+}
+
+func TestWorktreeRuntimeSupervisorRestoresExternalDetachedWorktree(t *testing.T) {
+	fixture := newWorktreeRuntimeTestFixture(t)
+	detached := filepath.Join(t.TempDir(), "detached")
+	runWorktreeRuntimeGit(t, fixture.service.ProjectCodeRoot(), "worktree", "add", "--detach", detached, "HEAD")
+
+	if err := fixture.supervisor.Restore(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	items, err := fixture.service.List(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range items {
+		if samePath(item.Path, detached) {
+			runtime := fixture.supervisor.runtimes[item.ID]
+			if !item.Registered || runtime == nil || runtime.sessionID == "" {
+				t.Fatalf("detached worktree = %#v runtime = %#v", item, runtime)
+			}
+			return
+		}
+	}
+	t.Fatal("detached worktree was not discovered")
+}
+
 func TestWorktreeRuntimeSupervisorRecoversPersistedLoops(t *testing.T) {
 	fixture := newWorktreeRuntimeTestFixture(t)
 	ctx := context.Background()

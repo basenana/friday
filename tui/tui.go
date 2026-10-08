@@ -226,6 +226,9 @@ type model struct {
 	worktreeSupervisor    *worktreeRuntimeSupervisor
 	worktreeRuntime       *worktreeRuntime
 	pendingWorktreePrompt string
+	worktreeDraftText     string
+	worktreeDraftFiles    []types.ImageContent
+	worktreeDraftError    string
 	worktreeChanging      bool
 	worktreeGeneration    uint64
 	worktreeTabs          []worktreeTab
@@ -1312,6 +1315,14 @@ func (m *model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	switch msg.Code {
 	case tea.KeyEsc:
+		if m.worktreeRequirement {
+			m.setWorktreeDraft(false)
+			m.textarea.Placeholder = "Send a message…  / commands · Ctrl+P image · Ctrl+G editor"
+			m.composerGeneration++
+			m.menu = menuState{}
+			m.layout()
+			return m, nil
+		}
 		if m.running {
 			return m.cancelRun()
 		}
@@ -1407,8 +1418,7 @@ func (m *model) submitComposer() (tea.Model, tea.Cmd) {
 		return m.handleSlash(text)
 	}
 	if m.worktreeMode && m.worktreeRequirement {
-		m.worktreeRequirement = false
-		m.textarea.Placeholder = "Send a message…  / commands · Ctrl+P image · Ctrl+G editor"
+		m.textarea.SetValue(text)
 		return m, m.createWorktree(text)
 	}
 	m.recordPrompt(text)
