@@ -268,6 +268,42 @@ func TestPasteImageActionAttachesClipboardImage(t *testing.T) {
 }
 
 func TestCtrlPReadsClipboardImage(t *testing.T) {
+	t.Setenv("SSH_CONNECTION", "client server")
+
+	m, _, _ := newTestModel(t)
+	m.clipboardImageReader = func(context.Context) (types.ImageContent, error) {
+		return types.ImageContent{Type: types.ImageTypeBase64, MediaType: "image/png", Data: "cG5n", Filename: "clipboard.png"}, nil
+	}
+
+	updated, cmd := m.Update(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
+	if cmd == nil {
+		t.Fatal("Ctrl+P returned nil command")
+	}
+	updated, _ = updated.(*model).Update(cmd())
+	if got := updated.(*model).attachments; len(got) != 1 || got[0].Filename != "clipboard.png" {
+		t.Fatalf("attachments = %#v, want clipboard.png", got)
+	}
+}
+
+func TestClipboardImageErrorExplainsRemoteUsageOverSSH(t *testing.T) {
+	t.Setenv("SSH_CONNECTION", "client server")
+
+	m, _, _ := newTestModel(t)
+	updated, _ := m.Update(clipboardImageLoadedMsg{
+		err:        errors.New("clipboard unavailable"),
+		generation: m.composerGeneration,
+		sessionID:  m.sessionID,
+	})
+	got := updated.(*model).messages[len(updated.(*model).messages)-1].content
+	if !strings.Contains(got, "ssh -Y") || !strings.Contains(got, "xclip -selection clipboard -t image/png -o") {
+		t.Fatalf("remote clipboard error = %q, want SSH and xclip usage", got)
+	}
+}
+
+func TestCtrlPReadsHostClipboardOutsideSSH(t *testing.T) {
+	t.Setenv("SSH_CONNECTION", "")
+	t.Setenv("SSH_TTY", "")
+
 	m, _, _ := newTestModel(t)
 	m.clipboardImageReader = func(context.Context) (types.ImageContent, error) {
 		return types.ImageContent{Type: types.ImageTypeBase64, MediaType: "image/jpeg", Data: "anBlZw==", Filename: "clipboard.jpg"}, nil
