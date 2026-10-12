@@ -58,8 +58,23 @@ func TestClientFactory_ClientForConfiguredForksPrimary(t *testing.T) {
 	if !ok {
 		t.Fatalf("client = %T, want forked client", got)
 	}
-	if forked.policy != (providers.ClientPolicy{PreferredModel: "gpt-4o-mini", Effort: "high"}) {
-		t.Fatalf("fork policy = %+v", forked.policy)
+	want := providers.ClientPolicy{PreferredModel: "gpt-4o-mini", Effort: "high", StrictModel: true}
+	if forked.policy != want {
+		t.Fatalf("fork policy = %+v, want %+v", forked.policy, want)
+	}
+}
+
+func TestClientFactory_ClientForEffortOnlyDoesNotLockModel(t *testing.T) {
+	primary := &forkableClient{fakeClient: fakeClient{name: "primary"}}
+	f := NewClientFactory(primary)
+	got, err := f.ClientFor("", "high")
+	if err != nil {
+		t.Fatalf("ClientFor error: %v", err)
+	}
+	forked := got.(*forkableClient)
+	want := providers.ClientPolicy{Effort: "high"}
+	if forked.policy != want {
+		t.Fatalf("fork policy = %+v, want %+v", forked.policy, want)
 	}
 }
 

@@ -40,10 +40,10 @@ func (h *Hook) BeforeAgent(_ context.Context, _ *session.Session, req session.Ag
 }
 
 func newAgentTool(store Store) *tools.Tool {
-	modelDescription := "Configured model name; empty inherits the session model."
+	modelDescription := "Configured model name. Non-empty hard-locks this Agent to that model name; same-name endpoints may retry, but other model names are excluded. Empty removes the Agent override and inherits the Session model."
 	if catalog, ok := store.(interface{ ModelNames() []string }); ok {
 		if names := catalog.ModelNames(); len(names) > 0 {
-			modelDescription = "Configured model name; empty inherits the session model. Must be one of: " + strings.Join(names, ", ")
+			modelDescription += " Must be one of: " + strings.Join(names, ", ")
 		}
 	}
 	return tools.NewTool(AgentToolName,

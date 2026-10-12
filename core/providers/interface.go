@@ -28,12 +28,15 @@ type Client interface {
 	StructuredPredict(ctx context.Context, request Request, model any) error
 }
 
-// ClientPolicy describes request-routing defaults applied by a forkable
-// multi-model client. PreferredModel is a model name, not an endpoint ID, so
-// every configured endpoint exposing that name is promoted together.
+// ClientPolicy describes request-routing policy applied by a forkable
+// multi-model client. Non-empty fork policy values override shared Session
+// policy values. PreferredModel is a model name, not an endpoint ID, so every
+// configured endpoint exposing that name is promoted together. StrictModel
+// limits candidates to endpoints with that model name.
 type ClientPolicy struct {
 	PreferredModel string
 	Effort         string
+	StrictModel    bool
 }
 
 // ForkableClient creates a lightweight policy view while sharing the same

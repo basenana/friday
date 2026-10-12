@@ -147,11 +147,14 @@ The coder engine drives friday's interactive coding agent (used by the TUI):
 Named Agents load at startup from `~/.friday/agents/<name>/AGENT-SPEC.md` and
 project-local `.friday/agents/<name>/AGENT-SPEC.md`; project definitions
 override HOME definitions with the same name. Specs use permissive YAML
-frontmatter plus a Markdown system prompt. Optional `model` and `effort`
-frontmatter select defaults from the shared model pool; Session overrides have
-higher priority. Loaded Agents reuse tools, hooks, and session services, are
-exposed through `run_task`, and can handle one TUI turn through
-`/agent-name <task>`.
+frontmatter plus a Markdown system prompt. Non-empty `model` and `effort`
+frontmatter override the corresponding Session values; omitted fields inherit
+and follow the Session. An Agent model is hard-locked by model name: all
+same-name endpoints remain eligible, but fallback never crosses to another
+model name. Explicit request effort remains higher priority than Agent effort.
+Loaded Agents reuse tools, hooks, and session services, are exposed through
+`run_task`, and can handle one TUI turn through `/agent-name <task>`. Internal
+compaction and session-memory helpers continue to use the main Session client.
 
 ### Planning (`core/planning/`)
 

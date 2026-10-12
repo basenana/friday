@@ -563,11 +563,17 @@ An Agent's stable system prompt is the composed workspace prompt (`AGENTS.md`,
 `SOUL.md`, and `IDENTITY.md`) followed by a blank line and the Markdown body of
 `AGENT-SPEC.md`. Request hooks continue to add Skills, Memory/history, project
 instructions, MCP, and subagent/collaboration context. Agent client views share
-the Session's configured model pool and rate limiters. In Default Mode the
-runtime priority is Session override, then Agent frontmatter, then model
-configuration. In Plan Mode, `collaboration.plan.reasoning_effort` supplies the
-default when the normally selected Session, Agent, or model effort is empty or
-`default`; an explicit non-default effort continues to take priority.
+the Session's configured model pool and rate limiters. A non-empty Agent
+`model` or `effort` overrides the corresponding Session value; an omitted
+field inherits the Session value and follows later Session changes. An Agent
+model override is hard-locked by model name: Friday may retry every configured
+endpoint with that name, but never falls back to another model name. Explicit
+request effort remains highest priority, followed by Agent effort, Session
+effort, and model configuration. In Plan Mode,
+`collaboration.plan.reasoning_effort` supplies the default when the normally
+selected request, Agent, Session, or model effort is empty or `default`.
+Internal compaction, overflow-summary, and asynchronous session-memory calls
+continue to use the main Session client.
 
 ---
 

@@ -45,8 +45,11 @@ func TestAgentToolCreateUpdateModelFields(t *testing.T) {
 	schema := tool.JsonSchema()
 	properties := schema["properties"].(map[string]any)
 	modelProperty := properties["model"].(map[string]any)
-	if description, _ := modelProperty["description"].(string); !strings.Contains(description, "MiniMax-M3, glm-5.3") {
-		t.Fatalf("model description = %q", description)
+	description, _ := modelProperty["description"].(string)
+	for _, want := range []string{"hard-locks", "Empty removes", "MiniMax-M3, glm-5.3"} {
+		if !strings.Contains(description, want) {
+			t.Fatalf("model description = %q, want %q", description, want)
+		}
 	}
 
 	result, payload := invokeAgentTool(t, tool, map[string]any{

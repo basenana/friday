@@ -32,7 +32,11 @@ func (f *ClientFactory) ClientFor(model, effort string) (providers.Client, error
 	if !ok {
 		return nil, fmt.Errorf("provider client does not support isolated agent views")
 	}
-	return forkable.Fork(providers.ClientPolicy{PreferredModel: model, Effort: effort}), nil
+	return forkable.Fork(providers.ClientPolicy{
+		PreferredModel: model,
+		Effort:         effort,
+		StrictModel:    model != "",
+	}), nil
 }
 
 // BuildAgent constructs a coreagents.Agent for the given spec, with tools

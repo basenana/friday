@@ -64,11 +64,12 @@ Optional chat interfaces expose context windows, output limits, model names, run
 
 ## Reasoning and fallback
 
-- Reasoning effort resolution honors explicit request/session/agent policy before model defaults; `default` does not override a concrete value.
+- Reasoning effort resolution is explicit request, non-empty Agent view policy, Session policy, then model defaults; `default` does not override a concrete value.
+- Non-empty fork view model/effort values override shared Session policy; empty values inherit and follow the Session.
 - Fallback candidates are grouped/routed by request class and policy version.
 - A request tries each eligible physical candidate at most once.
 - Successful routing is sticky for the relevant client policy view, while forked views keep independent runtime snapshots.
-- A preferred model promotes every configured endpoint exposing that model name; it is not an endpoint key.
+- A preferred model promotes every configured endpoint exposing that model name; it is not an endpoint key. `StrictModel` keeps all same-name endpoints eligible but excludes every other model name.
 - Aggregate failure must retain actionable per-candidate errors.
 
 ## Tests

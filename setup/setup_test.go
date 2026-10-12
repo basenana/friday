@@ -2,6 +2,7 @@ package setup
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -28,6 +29,51 @@ import (
 type recordingProviderClient struct {
 	mu       sync.Mutex
 	requests []providers.Request
+}
+
+type modelRouteClient struct {
+	mu                sync.Mutex
+	calls             int
+	nonStreamingCalls int
+	structuredCalls   int
+	err               error
+}
+
+func (c *modelRouteClient) Completion(_ context.Context, _ providers.Request) providers.Response {
+	c.mu.Lock()
+	c.calls++
+	c.mu.Unlock()
+	resp := providers.NewCommonResponse()
+	if c.err != nil {
+		resp.Err <- c.err
+	} else {
+		resp.Stream <- providers.Delta{Content: "expert response"}
+	}
+	close(resp.Stream)
+	close(resp.Err)
+	return resp
+}
+
+func (c *modelRouteClient) CompletionNonStreaming(context.Context, providers.Request) (string, error) {
+	c.mu.Lock()
+	c.calls++
+	c.nonStreamingCalls++
+	c.mu.Unlock()
+	return "expert response", c.err
+}
+
+func (c *modelRouteClient) StructuredPredict(context.Context, providers.Request, any) error {
+	c.mu.Lock()
+	c.calls++
+	c.structuredCalls++
+	c.mu.Unlock()
+	return c.err
+}
+
+func (c *modelRouteClient) callCounts() (total, nonStreaming, structured int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.calls, c.nonStreamingCalls, c.structuredCalls
 }
 
 type projectResourceProbeClient struct {
@@ -450,6 +496,85 @@ func TestDiskAgentReusesPrimaryClientPromptAndSubagentToolRegistration(t *testin
 		if !strings.Contains(sideCheckPrompt, phrase) {
 			t.Fatalf("side-checker system prompt missing %q:\n%s", phrase, sideCheckPrompt)
 		}
+	}
+}
+
+func TestRunTaskUsesStrictDiskAgentModel(t *testing.T) {
+	tests := []struct {
+		name        string
+		expertError error
+		wantError   bool
+	}{
+		{name: "success"},
+		{name: "expert failure does not reach main model", expertError: errors.New("connection refused"), wantError: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			base := t.TempDir()
+			cfg := config.DefaultConfig()
+			cfg.DataDir = filepath.Join(base, "data")
+			cfg.Workspace = filepath.Join(base, "workspace")
+			cfg.Memory.Enabled = false
+			cfg.Sandbox.Sandbox.Enabled = false
+			cfg.Model.Model = "main-model"
+			cfg.Models = []config.ModelConfig{{Provider: "openai", Model: "expert-model"}}
+
+			agentDir := filepath.Join(cfg.DataDirPath(), "agents", "expert")
+			if err := os.MkdirAll(agentDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			spec := "---\nname: expert\ndescription: Test expert\nmodel: expert-model\nmax_loop_times: 1\n---\nReturn the expert result."
+			if err := os.WriteFile(filepath.Join(agentDir, coderagents.SpecFilename), []byte(spec), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			mainClient := &modelRouteClient{}
+			expertClient := &modelRouteClient{err: test.expertError}
+			pool := fallback.NewModelPool([]fallback.ModelEntry{
+				{Client: mainClient, Name: "main-model", Key: "main/one"},
+				{Client: expertClient, Name: "expert-model", Key: "expert/one"},
+			})
+			policy := fallback.NewSessionPolicy(providers.ClientPolicy{PreferredModel: "main-model"})
+			store := file.NewFileSessionStore(cfg.SessionsPath())
+			mgr := sessions.NewManager(store, filepath.Join(cfg.DataDirPath(), "current"), "")
+			agentCtx, err := NewAgent(mgr, cfg, WithModelPool(pool), WithSessionPolicy(policy), WithTemporary(true))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer agentCtx.Close()
+
+			req := &api.Request{}
+			if err := agentCtx.Session.RunHooks(context.Background(), types.SessionHookBeforeAgent, coresession.HookPayload{AgentRequest: req}); err != nil {
+				t.Fatal(err)
+			}
+			var runTask *tools.Tool
+			for _, tool := range req.Tools {
+				if tool.Name == "run_task" {
+					runTask = tool
+					break
+				}
+			}
+			if runTask == nil {
+				t.Fatal("run_task tool was not registered")
+			}
+			result, err := runTask.Handler(context.Background(), &tools.Request{
+				SessionID: agentCtx.Session.Root.ID,
+				Arguments: map[string]interface{}{"tasks": []any{
+					map[string]interface{}{"agent_name": "expert", "task": "answer from the expert"},
+				}},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result == nil || result.IsError != test.wantError {
+				t.Fatalf("run_task result = %#v, want error=%v", result, test.wantError)
+			}
+			expertTotal, expertNonStreaming, expertStructured := expertClient.callCounts()
+			mainTotal, _, _ := mainClient.callCounts()
+			if expertTotal != 1 || expertNonStreaming != 0 || expertStructured != 0 || mainTotal != 0 {
+				t.Fatalf("model calls: expert total=%d non-streaming=%d structured=%d main=%d", expertTotal, expertNonStreaming, expertStructured, mainTotal)
+			}
+		})
 	}
 }
 

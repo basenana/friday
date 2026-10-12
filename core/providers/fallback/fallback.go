@@ -92,7 +92,7 @@ func NewModelPool(entries []ModelEntry) *ModelPool {
 	return &ModelPool{models: append([]ModelEntry(nil), entries...)}
 }
 
-func (p *ModelPool) NewClient(policy *SessionPolicy, defaults providers.ClientPolicy, opts ...FallbackOption) *FallbackClient {
+func (p *ModelPool) NewClient(policy *SessionPolicy, viewPolicy providers.ClientPolicy, opts ...FallbackOption) *FallbackClient {
 	cfg := defaultConfig()
 	for _, opt := range opts {
 		opt(&cfg)
@@ -103,7 +103,7 @@ func (p *ModelPool) NewClient(policy *SessionPolicy, defaults providers.ClientPo
 	return &FallbackClient{
 		pool:            p,
 		sessionPolicy:   policy,
-		defaults:        defaults,
+		viewPolicy:      viewPolicy,
 		maxTotalRetries: cfg.maxTotalRetries,
 		logger:          logger.New("fallback"),
 	}
@@ -115,7 +115,7 @@ func (p *ModelPool) NewClient(policy *SessionPolicy, defaults providers.ClientPo
 type FallbackClient struct {
 	pool            *ModelPool
 	sessionPolicy   *SessionPolicy
-	defaults        providers.ClientPolicy
+	viewPolicy      providers.ClientPolicy
 	maxTotalRetries int
 	logger          logger.Logger
 	route           atomic.Pointer[clientRouteState]
@@ -168,13 +168,12 @@ func NewFallbackClient(entries []ModelEntry, opts ...FallbackOption) *FallbackCl
 }
 
 // Fork returns a lightweight agent view over the same immutable model pool.
-// Session policy remains authoritative; defaults apply only when the session
-// has no explicit value.
-func (fc *FallbackClient) Fork(defaults providers.ClientPolicy) providers.Client {
+// Non-empty view policy values override the shared Session policy.
+func (fc *FallbackClient) Fork(viewPolicy providers.ClientPolicy) providers.Client {
 	if fc == nil || fc.pool == nil {
 		return fc
 	}
-	return fc.pool.NewClient(fc.sessionPolicy, defaults, WithMaxTotalRetries(fc.maxTotalRetries))
+	return fc.pool.NewClient(fc.sessionPolicy, viewPolicy, WithMaxTotalRetries(fc.maxTotalRetries))
 }
 
 // SessionPolicy returns the mutable Session policy shared by this view and
@@ -441,7 +440,7 @@ func (fc *FallbackClient) Entries() []ModelEntry {
 	}
 	policy, version := fc.effectivePolicyState()
 	state := fc.ensureRouteState(policy, version)
-	candidates := fc.candidatesForClass(policy.PreferredModel, requestClassText)
+	candidates := fc.candidatesForClass(policy.PreferredModel, policy.StrictModel, requestClassText)
 	if state != nil {
 		candidates = rotateCandidates(candidates, state.text.poolIndex)
 	}
@@ -451,14 +450,17 @@ func (fc *FallbackClient) Entries() []ModelEntry {
 // Fallback manually advances both active routes. It preserves the historical
 // behavior of preferring another image-capable entry when the current entry
 // supports images. Automatic fallback promotion uses the exact successful
-// endpoint instead. No-op if only one model is configured. Safe for
-// concurrent use.
+// endpoint instead. No-op if only one model is configured or the view is
+// strict-model locked. Safe for concurrent use.
 func (fc *FallbackClient) Fallback() {
 	if fc == nil || fc.pool == nil || len(fc.pool.models) <= 1 {
 		return
 	}
 	for {
 		policy, version := fc.effectivePolicyState()
+		if policy.StrictModel {
+			return
+		}
 		current := fc.ensureRouteState(policy, version)
 		if current == nil {
 			return
@@ -506,7 +508,7 @@ func (fc *FallbackClient) candidateModels(req providers.Request, policy provider
 		class = requestClassImage
 	}
 	state := fc.ensureRouteState(policy, policyVersion)
-	candidates := fc.candidatesForClass(policy.PreferredModel, class)
+	candidates := fc.candidatesForClass(policy.PreferredModel, policy.StrictModel, class)
 	if state == nil {
 		return candidates, class, nil
 	}
@@ -519,11 +521,12 @@ func (fc *FallbackClient) candidateModels(req providers.Request, policy provider
 
 func (fc *FallbackClient) effectivePolicyState() (providers.ClientPolicy, uint64) {
 	policy, version := fc.sessionPolicy.snapshot()
-	if policy.PreferredModel == "" {
-		policy.PreferredModel = fc.defaults.PreferredModel
+	if fc.viewPolicy.PreferredModel != "" {
+		policy.PreferredModel = fc.viewPolicy.PreferredModel
+		policy.StrictModel = fc.viewPolicy.StrictModel
 	}
-	if policy.Effort == "" {
-		policy.Effort = fc.defaults.Effort
+	if fc.viewPolicy.Effort != "" {
+		policy.Effort = fc.viewPolicy.Effort
 	}
 	return policy, version
 }
@@ -592,8 +595,8 @@ func (fc *FallbackClient) ensureRouteState(policy providers.ClientPolicy, policy
 }
 
 func (fc *FallbackClient) initialRouteState(policy providers.ClientPolicy, policyVersion uint64) *clientRouteState {
-	textCandidates := fc.candidatesForClass(policy.PreferredModel, requestClassText)
-	imageCandidates := fc.candidatesForClass(policy.PreferredModel, requestClassImage)
+	textCandidates := fc.candidatesForClass(policy.PreferredModel, policy.StrictModel, requestClassText)
+	imageCandidates := fc.candidatesForClass(policy.PreferredModel, policy.StrictModel, requestClassImage)
 	textIndex, imageIndex := -1, -1
 	if len(textCandidates) > 0 {
 		textIndex = textCandidates[0].poolIndex
@@ -663,8 +666,8 @@ func (c requestClass) String() string {
 	return "text"
 }
 
-func (fc *FallbackClient) candidatesForClass(preferred string, class requestClass) []modelCandidate {
-	candidates := fc.orderedCandidates(preferred)
+func (fc *FallbackClient) candidatesForClass(preferred string, strict bool, class requestClass) []modelCandidate {
+	candidates := fc.orderedCandidates(preferred, strict)
 	if class != requestClassImage || !fc.SupportsImage() {
 		return candidates
 	}
@@ -680,7 +683,7 @@ func (fc *FallbackClient) candidatesForClass(preferred string, class requestClas
 	return append(imageCapable, textOnly...)
 }
 
-func (fc *FallbackClient) orderedCandidates(preferred string) []modelCandidate {
+func (fc *FallbackClient) orderedCandidates(preferred string, strict bool) []modelCandidate {
 	if fc == nil || fc.pool == nil {
 		return nil
 	}
@@ -693,6 +696,9 @@ func (fc *FallbackClient) orderedCandidates(preferred string) []modelCandidate {
 		} else {
 			rest = append(rest, candidate)
 		}
+	}
+	if strict && preferred != "" {
+		return preferredModels
 	}
 	if len(preferredModels) == 0 {
 		return rest

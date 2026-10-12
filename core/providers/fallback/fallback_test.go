@@ -427,40 +427,96 @@ func TestModelPoolPromotesEveryEndpointWithPreferredName(t *testing.T) {
 	}
 }
 
-func TestForkPolicyPriorityAndDefaultEffort(t *testing.T) {
+func TestForkPolicyOverridesSessionModelAndEffort(t *testing.T) {
 	a := &fakeClient{name: "a"}
 	b := &fakeClient{name: "b"}
 	pool := NewModelPool([]ModelEntry{{Client: a, Name: "a"}, {Client: b, Name: "b"}})
-	session := NewSessionPolicy(providers.ClientPolicy{})
+	session := NewSessionPolicy(providers.ClientPolicy{PreferredModel: "a", Effort: "low"})
 	root := pool.NewClient(session, providers.ClientPolicy{})
 	agent := root.Fork(providers.ClientPolicy{PreferredModel: "b", Effort: "high"})
 
-	agentReq := providers.NewRequest("sys")
-	providers.SetRequestDefaultReasoningEffort(agentReq, "medium")
-	if _, err := agent.CompletionNonStreaming(context.Background(), agentReq); err != nil {
-		t.Fatal(err)
-	}
-	if b.callCount() != 1 || b.effort() != "high" {
-		t.Fatalf("agent defaults not applied: calls=%d effort=%q", b.callCount(), b.effort())
-	}
-
-	session.Update(providers.ClientPolicy{PreferredModel: "a", Effort: "low"})
-	sessionReq := providers.NewRequest("sys")
-	providers.SetRequestDefaultReasoningEffort(sessionReq, "medium")
-	if _, err := agent.CompletionNonStreaming(context.Background(), sessionReq); err != nil {
-		t.Fatal(err)
-	}
-	if a.callCount() != 1 || a.effort() != "low" {
-		t.Fatalf("session policy did not override agent: calls=%d effort=%q", a.callCount(), a.effort())
-	}
-
 	req := providers.NewRequest("sys")
-	providers.SetRequestReasoningEffort(req, "max")
+	providers.SetRequestDefaultReasoningEffort(req, "medium")
 	if _, err := agent.CompletionNonStreaming(context.Background(), req); err != nil {
 		t.Fatal(err)
 	}
-	if a.effort() != "max" {
-		t.Fatalf("request effort = %q, want max", a.effort())
+	if a.callCount() != 0 || b.callCount() != 1 || b.effort() != "high" {
+		t.Fatalf("agent policy not applied: a=%d b=%d effort=%q", a.callCount(), b.callCount(), b.effort())
+	}
+
+	session.Update(providers.ClientPolicy{PreferredModel: "a", Effort: "medium"})
+	if _, err := agent.CompletionNonStreaming(context.Background(), providers.NewRequest("updated session")); err != nil {
+		t.Fatal(err)
+	}
+	if a.callCount() != 0 || b.callCount() != 2 || b.effort() != "high" {
+		t.Fatalf("session update overrode agent policy: a=%d b=%d effort=%q", a.callCount(), b.callCount(), b.effort())
+	}
+
+	explicit := providers.NewRequest("explicit request")
+	providers.SetRequestReasoningEffort(explicit, "max")
+	if _, err := agent.CompletionNonStreaming(context.Background(), explicit); err != nil {
+		t.Fatal(err)
+	}
+	if b.effort() != "max" {
+		t.Fatalf("request effort = %q, want max", b.effort())
+	}
+}
+
+func TestForkWithoutModelOrEffortFollowsSessionPolicy(t *testing.T) {
+	a := &fakeClient{name: "a"}
+	b := &fakeClient{name: "b"}
+	session := NewSessionPolicy(providers.ClientPolicy{PreferredModel: "a", Effort: "low"})
+	agent := NewModelPool([]ModelEntry{{Client: a, Name: "a"}, {Client: b, Name: "b"}}).
+		NewClient(session, providers.ClientPolicy{}).
+		Fork(providers.ClientPolicy{})
+
+	if _, err := agent.CompletionNonStreaming(context.Background(), providers.NewRequest("first")); err != nil {
+		t.Fatal(err)
+	}
+	session.Update(providers.ClientPolicy{PreferredModel: "b", Effort: "high"})
+	if _, err := agent.CompletionNonStreaming(context.Background(), providers.NewRequest("second")); err != nil {
+		t.Fatal(err)
+	}
+	if a.callCount() != 1 || b.callCount() != 1 || b.effort() != "high" {
+		t.Fatalf("fork did not follow session: a=%d b=%d effort=%q", a.callCount(), b.callCount(), b.effort())
+	}
+}
+
+func TestStrictModelDoesNotFallbackToAnotherModelName(t *testing.T) {
+	preferred := &fakeClient{name: "b", nonStreamErrs: []error{errors.New("unavailable")}}
+	other := &fakeClient{name: "a"}
+	client := NewModelPool([]ModelEntry{{Client: other, Name: "a"}, {Client: preferred, Name: "b"}}).
+		NewClient(NewSessionPolicy(providers.ClientPolicy{PreferredModel: "a"}), providers.ClientPolicy{
+			PreferredModel: "b",
+			StrictModel:    true,
+		})
+
+	if _, err := client.CompletionNonStreaming(context.Background(), providers.NewRequest("strict")); err == nil {
+		t.Fatal("strict model failure should exhaust the request")
+	}
+	if preferred.callCount() != 1 || other.callCount() != 0 {
+		t.Fatalf("strict route calls: preferred=%d other=%d", preferred.callCount(), other.callCount())
+	}
+}
+
+func TestStrictModelRetriesEveryEndpointWithSameName(t *testing.T) {
+	first := &fakeClient{name: "b", nonStreamErrs: []error{errors.New("unavailable")}}
+	second := &fakeClient{name: "b"}
+	other := &fakeClient{name: "a"}
+	client := NewModelPool([]ModelEntry{
+		{Client: other, Name: "a", Key: "a/one"},
+		{Client: first, Name: "b", Key: "b/one"},
+		{Client: second, Name: "b", Key: "b/two"},
+	}).NewClient(NewSessionPolicy(providers.ClientPolicy{PreferredModel: "a"}), providers.ClientPolicy{
+		PreferredModel: "b",
+		StrictModel:    true,
+	})
+
+	if _, err := client.CompletionNonStreaming(context.Background(), providers.NewRequest("strict")); err != nil {
+		t.Fatal(err)
+	}
+	if first.callCount() != 1 || second.callCount() != 1 || other.callCount() != 0 {
+		t.Fatalf("strict route calls: first=%d second=%d other=%d", first.callCount(), second.callCount(), other.callCount())
 	}
 }
 
