@@ -42,7 +42,7 @@ func BuildReport(task, content string) Report {
 	return report
 }
 
-func BuildExploreReport(task, content string) Report {
+func BuildSideCheckReport(task, content string) Report {
 	sections := extractReportSections(content,
 		"Task",
 		"Findings",
@@ -57,7 +57,7 @@ func BuildExploreReport(task, content string) Report {
 		Findings:            firstNonEmpty(strings.TrimSpace(sections["Findings"]), strings.TrimSpace(content)),
 		FilesExamined:       firstNonEmptyList(splitReportList(firstNonEmpty(sections["Files Examined"], sections["Files Touched"])), extractFileList(content)),
 		OpenQuestions:       splitReportList(sections["Open Questions"]),
-		RecommendedNextStep: "Use these findings to decide the next main-thread action.",
+		RecommendedNextStep: "Use these findings to continue the parent task.",
 	}
 	if next := strings.TrimSpace(sections["Recommended Next Step"]); next != "" {
 		report.RecommendedNextStep = next

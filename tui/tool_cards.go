@@ -231,13 +231,17 @@ func (m *model) presentBuiltinTool(block *chatBlock, args map[string]any) (toolP
 		return toolPresentation{title: "Wait for task", body: fields(labeledValue("task", value("task_id")), labeledValue("timeout", timeout)), specialized: true}, true
 	case "kill_task":
 		return toolPresentation{title: "Stop task", body: labeledValue("task", value("task_id")), specialized: true}, true
-	case "explore":
-		tasks, _ := args["tasks"].([]any)
-		lines := make([]string, 0, len(tasks))
-		for i, task := range tasks {
-			lines = append(lines, fmt.Sprintf("%d. %s", i+1, terminalSafe(stringValue(task))))
+	case "run_side_checks":
+		checks, _ := args["checks"].([]any)
+		lines := make([]string, 0, len(checks))
+		for i, check := range checks {
+			lines = append(lines, fmt.Sprintf("%d. %s", i+1, terminalSafe(stringValue(check))))
 		}
-		return toolPresentation{title: taskCountTitle("Explore", len(tasks)), body: strings.Join(lines, "\n"), specialized: true}, true
+		title := "Run side check"
+		if len(checks) != 1 {
+			title = fmt.Sprintf("Run %d side checks", len(checks))
+		}
+		return toolPresentation{title: title, body: strings.Join(lines, "\n"), specialized: true}, true
 	case "run_task":
 		tasks, _ := args["tasks"].([]any)
 		lines := make([]string, 0, len(tasks))

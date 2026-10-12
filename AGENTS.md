@@ -120,7 +120,7 @@ Sessions support forking for sub-agent execution (`core/session/session.go:57-75
 
 Orchestrates expert sub-agents:
 - `hook.go` - Registers `BeforeAgent` and `BeforeModel` hooks to inject subagent tools
-- `tool.go` - Batched `explore` and `run_task` tools execute independent subagent work under a shared concurrency limit
+- `tool.go` - Batched `run_side_checks` and `run_task` tools execute independent subagent work under a shared concurrency limit
 
 ### Actor Runtime (`actor/`, `bus/`, `core/actor/`)
 

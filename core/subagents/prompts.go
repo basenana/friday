@@ -7,43 +7,47 @@ import (
 )
 
 const (
-	EXPLORE_SYSTEM_PROMPT = `<explore>
-You can use "explore" to launch a short-lived clone in a forked session for research and codebase investigation.
+	SIDE_CHECK_SYSTEM_PROMPT = `<run_side_checks>
+You can use "run_side_checks" to perform focused, read-only checks that support the current task.
 
-Use "explore" when:
-- the answer requires reading multiple files, tracing call paths, or broad search
-- you want to keep exploratory work out of the main thread
-- you only need findings, not intermediate steps
+Each check runs in a short-lived fork that inherits a snapshot of the current conversation history, project context, hooks, and session state. The checker already knows the context visible in this conversation. Provide only the additional question, scope, constraints, and expected evidence needed for that check.
 
-Do not use "explore" when:
-- the lookup is trivial or limited to one or two obvious files
-- you need to make changes directly
-- a named expert is a better fit; use "run_task" for specialized expert work
+Use "run_side_checks" when you need to:
+- verify a specific assumption before continuing
+- inspect a narrow code path or behavior
+- locate a definition, reference, configuration, or existing test
+- compare a small number of relevant files
+- confirm whether a proposed change has a particular local consequence
+- obtain one concrete fact that is missing from the current reasoning
 
-Each clone is stateless and returns one report. Before calling the tool, identify every investigation that can run independently now and submit all of them together in one tasks array. The runtime queues excess work and keeps all available parallel slots busy, so do not serialize independent investigations or split them into artificial waves. Use a one-item array only when the investigation is genuinely indivisible. Give every item complete context, scope, and requested findings. Put dependent investigations in a later call after their prerequisites finish, and do not invent duplicate or low-value tasks merely to increase parallelism.
-</explore>
+Do not use "run_side_checks" for:
+- broad or open-ended research
+- general repository exploration without a concrete question
+- implementing changes or editing files
+- delegating the primary task
+- work that clearly belongs to a named expert; use "run_task" instead
+- questions that can be answered immediately from the context already available
+- dependent checks whose inputs require another check to finish first
+
+A single check is normal and does not need to be split. Submit multiple checks together only when they are genuinely independent and useful to the current task. Every check in one call receives the same parent-context snapshot and cannot see results produced by sibling checks.
+
+Do not create duplicate, artificial, or unnecessarily narrow checks merely to increase parallelism. Prefer the smallest number of checks that can resolve the current uncertainty.
+
+The returned reports are evidence for the parent task. Evaluate and synthesize them instead of repeating them verbatim.
+</run_side_checks>
 `
 
-	EXPLORE_DESCRIPTION_PROMPT = `Launch short-lived clones in forked sessions to investigate independent tasks concurrently and return an ordered batch of structured reports.
+	SIDE_CHECK_DESCRIPTION_PROMPT = `Run focused, read-only side checks in short-lived child agents that inherit the current conversation context, and return an ordered batch of structured reports.
 
-Use this tool for:
-- reading multiple files or tracing execution paths
-- broad search, root-cause investigation, or architecture discovery
-- gathering facts before you decide or implement
+Use this tool to verify a concrete assumption, inspect a narrow code path, locate definitions or references, compare a small number of relevant files, confirm local behavior, or obtain a specific fact needed by the current task.
 
-Avoid this tool for:
-- trivial single-file lookups
-- direct edits or implementation work
-- tasks that clearly belong to a named expert
+Each checker receives a snapshot of the conversation history and project context available when this tool is called. Do not repeat context that is already visible. Add only the precise question, any extra scope or constraints, and the evidence expected.
 
-Submit every independent investigation that can run now in one tasks array. The runtime automatically queues work above the active concurrency limit while keeping available slots busy; task count itself is not limited. Do not make several sequential calls for work that has no dependency.
+A single check is normal. Include multiple checks in one call only when they are independent and can run concurrently. Checks in the same call cannot consume one another's results. Submit dependent checks in a later call after their prerequisites are known.
 
-Write each task so it includes:
-- the question to answer or issue to investigate
-- relevant scope, files, subsystems, or hypotheses when known
-- the exact findings you want back in the report
+Do not use this tool for broad research, open-ended repository exploration, implementation work, file modification, delegation of the primary task, or work that belongs to a named expert. Use run_task for specialized expert work.
 
-Each clone is stateless. Put all required context in every item. Submit dependent work only after its prerequisite report arrives, avoid duplicate or artificial tasks, and summarize the returned reports to the user.`
+Keep every check narrowly scoped. Do not create duplicate or artificial checks to increase parallelism.`
 
 	EXPERT_SYSTEM_PROMPT = `<run_task>
 You can use "run_task" to delegate work to named expert agents with specialized capabilities.
@@ -54,7 +58,8 @@ Use "run_task" when:
 - specialized processing is better than handling the work yourself
 
 Do not use "run_task" when:
-- the work is general exploration; use "explore" instead
+- the work is a focused, read-only verification or factual check that supports the current task; use "run_side_checks" instead
+- the work is broad, open-ended research without a matching expert
 - the task is trivial
 - no expert description matches the need
 
@@ -80,14 +85,14 @@ Notes:
 3. Avoid duplicate, overlapping, artificially narrow, or low-value tasks
 4. Successful results remain valid when another item fails; correct and retry only failed items
 5. Results are returned only to you; synthesize relevant parts for the user
-6. For general investigation or broad research, prefer "explore"
+6. For a focused, read-only verification or factual check that depends on the current conversation context, use run_side_checks
 `
 )
 
 func initSystemPrompts(opt Option, experts []ExpertAgent) []string {
 	var prompts []string
-	if opt.SelfAgent != nil && strings.TrimSpace(opt.ExploreSystemPrompt) != "" {
-		prompts = append(prompts, opt.ExploreSystemPrompt)
+	if opt.SideCheckAgent != nil && strings.TrimSpace(opt.SideCheckSystemPrompt) != "" {
+		prompts = append(prompts, opt.SideCheckSystemPrompt)
 	}
 	if len(experts) > 0 && strings.TrimSpace(opt.RunTaskSystemPrompt) != "" {
 		prompts = append(prompts, opt.RunTaskSystemPrompt)

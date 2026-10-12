@@ -1,6 +1,6 @@
-# subagents — Forked expert delegation and parallel exploration
+# subagents — Forked expert delegation and focused side checks
 
-This package injects the `explore` and `run_task` tools into agents, forks session context for delegated work, enforces shared concurrency limits, and formats structured child reports for the parent conversation.
+This package injects the `run_side_checks` and `run_task` tools into agents, forks session context for delegated work, enforces shared concurrency limits, and formats structured child reports for the parent conversation.
 
 ## Files
 
@@ -31,7 +31,7 @@ The hook reads `AgentProvider` for every invocation so long-lived sessions see a
 
 ## Delegation invariants
 
-- The default shared limit is four running child agents. `explore` and `run_task` consume the same semaphore.
+- The default shared limit is four running child agents. `run_side_checks` and `run_task` consume the same semaphore.
 - One tool invocation may contain multiple independent tasks; execution can be concurrent but returned reports preserve input order.
 - Partial success is retained. One child failure does not erase successful sibling reports.
 - Each child works in a session fork and that fork is released on every success, failure, and cancellation path.

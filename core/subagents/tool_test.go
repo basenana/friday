@@ -71,28 +71,54 @@ func TestRunTaskContractUsesBatchTasksAndAgentEnum(t *testing.T) {
 	}
 }
 
+func TestSideCheckContractUsesFocusedChecks(t *testing.T) {
+	hook := &Subagents{
+		option:                   Option{SideCheckAgent: &ExpertAgent{Name: "side_checker", Agent: &fakeAgent{response: "done"}}},
+		sideCheckToolDescription: SIDE_CHECK_DESCRIPTION_PROMPT,
+		parallel:                 make(chan struct{}, 2),
+	}
+	tool := hook.buildSideCheckTool(session.New("session", nil))
+	if tool.Name != "run_side_checks" {
+		t.Fatalf("tool name = %q", tool.Name)
+	}
+	checks, exists := tool.InputSchema.Properties["checks"].(map[string]any)
+	if !exists {
+		t.Fatal("checks field missing")
+	}
+	if _, limited := checks["maxItems"]; limited {
+		t.Fatal("check count must not be limited by the schema")
+	}
+	items := checks["items"].(map[string]any)
+	if description, _ := items["description"].(string); !strings.Contains(description, "read-only") {
+		t.Fatalf("check item description = %q", description)
+	}
+	if errors := tool.ValidateDefinition(2); len(errors) != 0 {
+		t.Fatalf("side-check definition errors: %v", errors)
+	}
+}
+
 func TestBatchSchemasDoNotLimitQueuedTaskCount(t *testing.T) {
 	const taskCount = 25
 	hook := &Subagents{
 		option: Option{
-			SelfAgent:    &ExpertAgent{Name: "explore", Agent: &fakeAgent{response: "done"}},
-			ExpertAgents: []ExpertAgent{{Name: "worker", Agent: &fakeAgent{response: "done"}}},
+			SideCheckAgent: &ExpertAgent{Name: "side_checker", Agent: &fakeAgent{response: "done"}},
+			ExpertAgents:   []ExpertAgent{{Name: "worker", Agent: &fakeAgent{response: "done"}}},
 		},
-		exploreToolDescription: "Explore tasks concurrently.",
-		runTaskToolDescription: "Delegate tasks concurrently.",
-		parallel:               make(chan struct{}, 2),
+		sideCheckToolDescription: "Run focused checks concurrently.",
+		runTaskToolDescription:   "Delegate tasks concurrently.",
+		parallel:                 make(chan struct{}, 2),
 	}
-	exploreArgs := map[string]any{"tasks": make([]any, 0, taskCount)}
+	sideCheckArgs := map[string]any{"checks": make([]any, 0, taskCount)}
 	runTaskArgs := map[string]any{"tasks": make([]any, 0, taskCount)}
 	for i := range taskCount {
-		exploreArgs["tasks"] = append(exploreArgs["tasks"].([]any), fmt.Sprintf("investigate-%d", i))
+		sideCheckArgs["checks"] = append(sideCheckArgs["checks"].([]any), fmt.Sprintf("check-%d", i))
 		runTaskArgs["tasks"] = append(runTaskArgs["tasks"].([]any), map[string]any{
 			"agent_name": "worker",
 			"task":       fmt.Sprintf("work-%d", i),
 		})
 	}
-	if issue := hook.buildExploreTool(session.New("explore", nil)).ValidateArguments(exploreArgs); issue != "" {
-		t.Fatalf("explore rejected queued tasks above parallelism: %s", issue)
+	if issue := hook.buildSideCheckTool(session.New("side-check", nil)).ValidateArguments(sideCheckArgs); issue != "" {
+		t.Fatalf("run_side_checks rejected queued checks above parallelism: %s", issue)
 	}
 	if issue := hook.buildRunTaskTool(session.New("expert", nil)).ValidateArguments(runTaskArgs); issue != "" {
 		t.Fatalf("run_task rejected queued tasks above parallelism: %s", issue)
@@ -110,26 +136,32 @@ func TestNewHookConfiguresSharedActiveTaskLimit(t *testing.T) {
 	}
 }
 
-func TestPromptsRequireImmediateBatchedParallelism(t *testing.T) {
+func TestSideCheckPromptsDefineFocusedContextAwareChecks(t *testing.T) {
 	for name, prompt := range map[string]string{
-		"explore system":      EXPLORE_SYSTEM_PROMPT,
-		"explore description": EXPLORE_DESCRIPTION_PROMPT,
-		"expert system":       EXPERT_SYSTEM_PROMPT,
-		"expert description":  EXPERT_DESCRIPTION_PROMPT,
+		"system":      SIDE_CHECK_SYSTEM_PROMPT,
+		"description": SIDE_CHECK_DESCRIPTION_PROMPT,
 	} {
 		lower := strings.ToLower(prompt)
-		for _, phrase := range []string{"tasks array", "independent"} {
+		for _, phrase := range []string{
+			"read-only",
+			"current conversation",
+			"single check is normal",
+			"cannot",
+			"broad",
+			"run_task",
+		} {
 			if !strings.Contains(lower, phrase) {
 				t.Fatalf("%s prompt does not clearly describe %q", name, phrase)
 			}
 		}
-		if !strings.Contains(lower, "parallel") && !strings.Contains(lower, "concurr") {
-			t.Fatalf("%s prompt does not clearly require concurrent execution", name)
-		}
 	}
-	if !strings.Contains(strings.ToLower(EXPLORE_DESCRIPTION_PROMPT), "task count itself is not limited") ||
-		!strings.Contains(strings.ToLower(EXPERT_DESCRIPTION_PROMPT), "task count itself is not limited") {
-		t.Fatal("tool descriptions must distinguish queued task count from active concurrency")
+	for name, prompt := range map[string]string{
+		"expert system":      EXPERT_SYSTEM_PROMPT,
+		"expert description": EXPERT_DESCRIPTION_PROMPT,
+	} {
+		if !strings.Contains(prompt, "run_side_checks") {
+			t.Fatalf("%s does not direct focused read-only checks to run_side_checks", name)
+		}
 	}
 }
 
@@ -137,41 +169,50 @@ func TestSubagentTaskPromptsDefineDelegatedExecution(t *testing.T) {
 	for name, tc := range map[string]struct {
 		task         string
 		prompt       string
+		modeMarker   string
 		reportMarker string
 	}{
-		"explore": {
-			task:         "investigate the parser",
-			prompt:       injectExploreReportRequest("investigate the parser"),
-			reportMarker: "- Findings (key discoveries, organized by topic)",
+		"side check": {
+			task:         "verify the parser behavior",
+			prompt:       injectSideCheckReportRequest("verify the parser behavior"),
+			modeMarker:   "<side_check_execution>",
+			reportMarker: "- Findings",
 		},
 		"run_task": {
 			task:         "fix the parser",
 			prompt:       injectStructuredReportRequest("fix the parser"),
+			modeMarker:   "<subagent_execution>",
 			reportMarker: "- What Changed",
 		},
 	} {
 		if !strings.HasPrefix(tc.prompt, tc.task+"\n\n") {
 			t.Fatalf("%s task prompt does not preserve the assigned task first:\n%s", name, tc.prompt)
 		}
-		modeIndex := strings.Index(tc.prompt, "<subagent_execution>")
+		modeIndex := strings.Index(tc.prompt, tc.modeMarker)
 		reportIndex := strings.Index(tc.prompt, tc.reportMarker)
 		if modeIndex < 0 || reportIndex < 0 || modeIndex >= reportIndex {
 			t.Fatalf("%s task prompt must put delegated execution guidance before the report contract:\n%s", name, tc.prompt)
 		}
 
 		lower := strings.ToLower(tc.prompt)
-		for _, phrase := range []string{
-			"delegated subagent mode",
-			"focus exclusively on the assigned task",
-			"work independently using the tools already available",
-			"do not call run_task or explore",
-			"do not delegate or dispatch nested subtasks",
-			"do not stop at a plan",
-			"detailed, evidence-based result",
-			"verification performed",
-			"reasonable scoped assumptions",
-			"thorough and specific while avoiding irrelevant narration",
-		} {
+		phrases := []string{"do not delegate", "evidence"}
+		if name == "side check" {
+			phrases = append(phrases,
+				"focused side check",
+				"current conversation history",
+				"do not call run_side_checks or run_task",
+				"do not broaden the check into general research",
+				"stop once the question is answered",
+			)
+		} else {
+			phrases = append(phrases,
+				"delegated subagent mode",
+				"focus exclusively on the assigned task",
+				"do not call run_task or run_side_checks",
+				"do not stop at a plan",
+			)
+		}
+		for _, phrase := range phrases {
 			if !strings.Contains(lower, phrase) {
 				t.Fatalf("%s task prompt does not clearly require %q:\n%s", name, phrase, tc.prompt)
 			}
@@ -352,28 +393,64 @@ func TestRunTaskBatchExplainsUnknownExpertWithoutDiscardingSuccess(t *testing.T)
 	}
 }
 
-func TestExploreBatchReleasesEveryForkedSession(t *testing.T) {
+func TestSideCheckBatchReleasesEveryForkedSession(t *testing.T) {
 	sess := newTestSession(t)
 	forker := &recordingForker{root: sess}
-	self := &ExpertAgent{Name: "explore", Agent: &fakeAgent{response: "## Findings\ndone"}}
-	handler := callExploreToolWithForker(self, sess, forker, nil, make(chan struct{}, 2))
-	rawTasks := make([]any, 9)
-	for i := range rawTasks {
-		rawTasks[i] = fmt.Sprintf("inspect-%d", i)
+	sideChecker := &ExpertAgent{Name: "side_checker", Agent: &fakeAgent{response: "## Findings\ndone"}}
+	handler := callSideCheckToolWithForker(sideChecker, sess, forker, nil, make(chan struct{}, 2))
+	rawChecks := make([]any, 9)
+	for i := range rawChecks {
+		rawChecks[i] = fmt.Sprintf("check-%d", i)
 	}
 	result, err := handler(context.Background(), &tools.Request{
 		SessionID: sess.Root.ID,
-		Arguments: map[string]any{"tasks": rawTasks},
+		Arguments: map[string]any{"checks": rawChecks},
 	})
 	if err != nil || result == nil || result.IsError {
-		t.Fatalf("explore batch failed: result=%#v err=%v", result, err)
+		t.Fatalf("side-check batch failed: result=%#v err=%v", result, err)
 	}
 	forks, releases := forker.counts()
-	if forks != len(rawTasks) || releases != forks {
-		t.Fatalf("fork/release counts = %d/%d, want %d/%d", forks, releases, len(rawTasks), len(rawTasks))
+	if forks != len(rawChecks) || releases != forks {
+		t.Fatalf("fork/release counts = %d/%d, want %d/%d", forks, releases, len(rawChecks), len(rawChecks))
 	}
 	if children := sess.ChildrenSnapshot(); len(children) != 0 {
 		t.Fatalf("released sessions remain attached: %d", len(children))
+	}
+}
+
+func TestSideCheckInheritsParentConversation(t *testing.T) {
+	sess := newTestSession(t)
+	sess.AppendMessage(&types.Message{Role: types.RoleUser, Content: "parent context"})
+	forker := &recordingForker{root: sess}
+	requests := make(chan *api.Request, 1)
+	sideChecker := &ExpertAgent{Name: "side_checker", Agent: &fakeAgent{chatFunc: func(_ context.Context, req *api.Request) *api.Response {
+		requests <- req
+		resp := api.NewResponse()
+		go func() {
+			api.SendDelta(resp, types.Delta{Content: "## Findings\nverified"})
+			resp.Close()
+		}()
+		return resp
+	}}}
+	handler := callSideCheckToolWithForker(sideChecker, sess, forker, nil, make(chan struct{}, 1))
+
+	result, err := handler(context.Background(), &tools.Request{
+		SessionID: sess.Root.ID,
+		Arguments: map[string]any{"checks": []any{"verify using the parent context"}},
+	})
+	if err != nil || result == nil || result.IsError {
+		t.Fatalf("side check failed: result=%#v err=%v", result, err)
+	}
+	req := <-requests
+	if req.Session == sess || req.Session.ID == sess.ID {
+		t.Fatalf("side checker did not receive a session fork: %#v", req.Session)
+	}
+	history := req.Session.GetHistory()
+	if len(history) != 1 || history[0].Role != types.RoleUser || history[0].Content != "parent context" {
+		t.Fatalf("forked conversation = %#v, want parent context", history)
+	}
+	if !strings.Contains(req.UserMessage, "verify using the parent context") || !strings.Contains(req.UserMessage, "<side_check_execution>") {
+		t.Fatalf("delegated check prompt = %q", req.UserMessage)
 	}
 }
 
@@ -632,15 +709,15 @@ func TestCallSubagentTool_AntiNestingGuard(t *testing.T) {
 	}
 }
 
-func TestCallExploreTool_AntiNestingGuard(t *testing.T) {
+func TestCallSideCheckTool_AntiNestingGuard(t *testing.T) {
 	sess := newTestSession(t)
-	self := &ExpertAgent{Name: "explore", Agent: &fakeAgent{response: "should-not-happen"}}
-	handler := callExploreTool(self, sess, nil)
+	sideChecker := &ExpertAgent{Name: "side_checker", Agent: &fakeAgent{response: "should-not-happen"}}
+	handler := callSideCheckTool(sideChecker, sess, nil)
 
 	req := &tools.Request{
 		SessionID: "forked-" + sess.Root.ID,
 		Arguments: map[string]interface{}{
-			"tasks": []any{"nested explore"},
+			"checks": []any{"nested side check"},
 		},
 	}
 	result, err := handler(context.Background(), req)

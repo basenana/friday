@@ -18,8 +18,6 @@ const (
 	ToolWaitTask  = "wait_task"
 )
 
-// DefaultAgentName is the name used for the main chat agent when referenced
-// from config.
 const (
-	NameExplorer = "explorer"
+	NameSideChecker = "side_checker"
 )

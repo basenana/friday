@@ -505,15 +505,15 @@ func NewAgent(sessionMgr SessionManager, cfg *config.Config, opts ...Option) (*A
 		Invoker:      toolInvoker,
 	})
 
-	// Build the explorer with a filtered tool set. It reuses the main system
+	// Build the side checker with a filtered tool set. It reuses the main system
 	// prompt so forked sessions share the same cache prefix.
 	factory := coderagents.NewClientFactory(client)
 	factory.SetInvoker(toolInvoker)
-	exploreSpec := coderagents.ExplorerSpec()
-	exploreSpec.SystemPrompt = workspace.ComposeSystemPrompt(loaded)
-	exploreAgent, err := factory.BuildAgent(exploreSpec, allTools)
+	sideCheckerSpec := coderagents.SideCheckerSpec()
+	sideCheckerSpec.SystemPrompt = coderagents.ComposeSystemPrompt(workspacePrompt, sideCheckerSpec.SystemPrompt)
+	sideCheckerAgent, err := factory.BuildAgent(sideCheckerSpec, allTools)
 	if err != nil {
-		return nil, fmt.Errorf("build explore agent: %w", err)
+		return nil, fmt.Errorf("build side-checker agent: %w", err)
 	}
 
 	expertProvider, err := coderagents.NewExpertProvider(agentRegistry, factory, workspacePrompt, allTools, validateAgentSpec)
@@ -522,9 +522,9 @@ func NewAgent(sessionMgr SessionManager, cfg *config.Config, opts ...Option) (*A
 	}
 
 	subagentHook := subagents.NewHook(client, subagents.Option{
-		SelfAgent: &subagents.ExpertAgent{
-			Name:  coderagents.NameExplorer,
-			Agent: exploreAgent,
+		SideCheckAgent: &subagents.ExpertAgent{
+			Name:  coderagents.NameSideChecker,
+			Agent: sideCheckerAgent,
 		},
 		AgentProvider: expertProvider,
 		SessionForker: lifecycle,

@@ -63,28 +63,28 @@ func TestCoder_Commands_PlanEntersPersistentMode(t *testing.T) {
 	}
 }
 
-// TestCoder_ToolPolicy_ExplorerIsolation verifies that the explorer's deny
+// TestCoder_ToolPolicy_SideCheckerIsolation verifies that the side checker's deny
 // list actually filters out write/bash tools.
-func TestCoder_ToolPolicy_ExplorerIsolation(t *testing.T) {
+func TestCoder_ToolPolicy_SideCheckerIsolation(t *testing.T) {
 	cfg := loadConfig(t)
 	exec := newExecutor(t, cfg)
 	workdir := t.TempDir()
 	allTools := newBashFsTools(t, exec, workdir)
 
-	spec := coderagents.ExplorerSpec()
+	spec := coderagents.SideCheckerSpec()
 	filtered := spec.ToolPolicy.Apply(allTools)
 
 	for _, tool := range filtered {
 		switch tool.Name {
 		case "fs_write", "fs_edit", "fs_delete", "bash":
-			t.Errorf("explorer policy should not allow %q", tool.Name)
+			t.Errorf("side-checker policy should not allow %q", tool.Name)
 		}
 	}
 }
 
-// TestCoder_ExplorerReadOnlyE2E verifies the explorer agent can read but not
+// TestCoder_SideCheckerReadOnlyE2E verifies the side-checker agent can read but not
 // modify files when given its deny-listed tool set.
-func TestCoder_ExplorerReadOnlyE2E(t *testing.T) {
+func TestCoder_SideCheckerReadOnlyE2E(t *testing.T) {
 	cfg := loadConfig(t)
 
 	withRetry(t, cfg, func(attempt int) error {
@@ -92,29 +92,29 @@ func TestCoder_ExplorerReadOnlyE2E(t *testing.T) {
 		exec := newExecutor(t, cfg)
 		workdir := t.TempDir()
 
-		// Plant a file for the explorer to read.
-		const payload = "explorer-payload-98765"
+		// Plant a file for the side checker to read.
+		const payload = "side-checker-payload-98765"
 		target := filepath.Join(workdir, "target.txt")
 		if err := os.WriteFile(target, []byte(payload), 0o644); err != nil {
 			return err
 		}
 
-		// Build explorer with deny-listed tools (no write/bash).
-		explorerSpec := coderagents.ExplorerSpec()
-		explorerTools := explorerSpec.ToolPolicy.Apply(newBashFsTools(t, exec, workdir))
+		// Build the side checker with deny-listed tools (no write/bash).
+		sideCheckerSpec := coderagents.SideCheckerSpec()
+		sideCheckerTools := sideCheckerSpec.ToolPolicy.Apply(newBashFsTools(t, exec, workdir))
 
 		factory := coderagents.NewClientFactory(client)
-		explorerAgent, err := factory.BuildAgent(explorerSpec, explorerTools)
+		sideCheckerAgent, err := factory.BuildAgent(sideCheckerSpec, sideCheckerTools)
 		if err != nil {
 			return err
 		}
 
 		hook := subagents.NewHook(client, subagents.Option{
-			SelfAgent: &subagents.ExpertAgent{
-				Name:  coderagents.NameExplorer,
-				Agent: explorerAgent,
+			SideCheckAgent: &subagents.ExpertAgent{
+				Name:  coderagents.NameSideChecker,
+				Agent: sideCheckerAgent,
 			},
-			ExploreTools: explorerTools,
+			SideCheckTools: sideCheckerTools,
 		})
 
 		sess := newTestSession(t, client)
@@ -126,7 +126,7 @@ func TestCoder_ExplorerReadOnlyE2E(t *testing.T) {
 
 		resp := mainAgent.Chat(ctx, &api.Request{
 			Session:     sess,
-			UserMessage: "Use the explore tool to read target.txt in the working directory and report its exact contents.",
+			UserMessage: "Use run_side_checks to verify the exact contents of target.txt in the working directory.",
 		})
 		content, _ := collectResponse(t, ctx, resp)
 
@@ -136,11 +136,11 @@ func TestCoder_ExplorerReadOnlyE2E(t *testing.T) {
 			return err
 		}
 		if string(got) != payload {
-			return errAssertion{msg: "target.txt was modified by explorer"}
+			return errAssertion{msg: "target.txt was modified by side checker"}
 		}
 		// The report should mention the payload.
 		if !strings.Contains(strings.ToLower(content), strings.ToLower(payload)) {
-			return errAssertion{msg: "explorer report did not surface payload; got: " + truncate(content, 300)}
+			return errAssertion{msg: "side-checker report did not surface payload; got: " + truncate(content, 300)}
 		}
 		return nil
 	})

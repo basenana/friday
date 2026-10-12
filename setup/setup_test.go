@@ -337,7 +337,7 @@ func TestNewAgentInstallsWorktreeContextOnlyWhenConfigured(t *testing.T) {
 	}
 }
 
-func TestDiskAgentReusesPrimaryClientPromptAndRunTaskRegistration(t *testing.T) {
+func TestDiskAgentReusesPrimaryClientPromptAndSubagentToolRegistration(t *testing.T) {
 	base := t.TempDir()
 	cfg := config.DefaultConfig()
 	cfg.DataDir = filepath.Join(base, "data")
@@ -393,21 +393,63 @@ func TestDiskAgentReusesPrimaryClientPromptAndRunTaskRegistration(t *testing.T) 
 		t.Fatalf("disk expert coding contract count = %d", got)
 	}
 	foundRunTask := false
+	foundSideChecks := false
 	for _, tool := range requests[0].ToolDefines() {
-		if tool.GetName() != "run_task" {
-			continue
-		}
-		foundRunTask = true
-		tasks := tool.GetParameters()["properties"].(map[string]interface{})["tasks"].(map[string]interface{})
-		items := tasks["items"].(map[string]interface{})
-		properties := items["properties"].(map[string]interface{})
-		enum := properties["agent_name"].(map[string]interface{})["enum"].([]string)
-		if len(enum) != 1 || enum[0] != "reviewer" {
-			t.Fatalf("run_task agent enum = %#v", enum)
+		switch tool.GetName() {
+		case "run_side_checks":
+			foundSideChecks = true
+			checks := tool.GetParameters()["properties"].(map[string]interface{})["checks"].(map[string]interface{})
+			if _, limited := checks["maxItems"]; limited {
+				t.Fatal("run_side_checks schema unexpectedly limits queued checks")
+			}
+		case "run_task":
+			foundRunTask = true
+			tasks := tool.GetParameters()["properties"].(map[string]interface{})["tasks"].(map[string]interface{})
+			items := tasks["items"].(map[string]interface{})
+			properties := items["properties"].(map[string]interface{})
+			enum := properties["agent_name"].(map[string]interface{})["enum"].([]string)
+			if len(enum) != 1 || enum[0] != "reviewer" {
+				t.Fatalf("run_task agent enum = %#v", enum)
+			}
 		}
 	}
 	if !foundRunTask {
 		t.Fatal("run_task tool was not registered")
+	}
+	if !foundSideChecks {
+		t.Fatal("run_side_checks tool was not registered")
+	}
+
+	hookRequest := &api.Request{}
+	if err := agentCtx.Session.RunHooks(context.Background(), types.SessionHookBeforeAgent, coresession.HookPayload{AgentRequest: hookRequest}); err != nil {
+		t.Fatal(err)
+	}
+	var sideCheckTool *tools.Tool
+	for _, tool := range hookRequest.Tools {
+		if tool.Name == "run_side_checks" {
+			sideCheckTool = tool
+			break
+		}
+	}
+	if sideCheckTool == nil {
+		t.Fatal("run_side_checks handler was not installed")
+	}
+	result, err := sideCheckTool.Handler(context.Background(), &tools.Request{
+		SessionID: agentCtx.Session.ID,
+		Arguments: map[string]interface{}{"checks": []interface{}{"Confirm the inherited prompt."}},
+	})
+	if err != nil || result == nil || result.IsError {
+		t.Fatalf("run_side_checks failed: result=%#v err=%v", result, err)
+	}
+	requests = client.snapshot()
+	if len(requests) != 2 {
+		t.Fatalf("provider calls after side check = %d, want 2", len(requests))
+	}
+	sideCheckPrompt := requests[1].SystemPrompt()
+	for _, phrase := range []string{"You are the side checker for an ongoing task", "Project coding baseline:"} {
+		if !strings.Contains(sideCheckPrompt, phrase) {
+			t.Fatalf("side-checker system prompt missing %q:\n%s", phrase, sideCheckPrompt)
+		}
 	}
 }
 

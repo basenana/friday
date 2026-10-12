@@ -230,19 +230,19 @@ func TestSubagent_ToolsPassthrough(t *testing.T) {
 	})
 }
 
-// TestSubagent_Explore verifies the explore tool forks a sub-session and
+// TestSubagent_SideChecks verifies run_side_checks forks sub-sessions and
 // returns a structured report of what it found.
-func TestSubagent_Explore(t *testing.T) {
+func TestSubagent_SideChecks(t *testing.T) {
 	cfg := loadConfig(t)
 	client := newClient(t, cfg, "chat")
 	exec := newExecutor(t, cfg)
 	workdir := t.TempDir()
 	workerTools := newBashFsTools(t, exec, workdir)
 
-	// Drop two files for independent explore clones to investigate in one batch.
+	// Drop two files for independent side checks to verify in one batch.
 	payloads := map[string]string{
-		"target-one.txt": "hello-from-explore-target-one",
-		"target-two.txt": "hello-from-explore-target-two",
+		"target-one.txt": "hello-from-side-check-target-one",
+		"target-two.txt": "hello-from-side-check-target-two",
 	}
 	for name, payload := range payloads {
 		if err := os.WriteFile(filepath.Join(workdir, name), []byte(payload), 0o644); err != nil {
@@ -250,13 +250,13 @@ func TestSubagent_Explore(t *testing.T) {
 		}
 	}
 
-	exploreAgent := agents.New(client, agents.Option{
+	sideCheckerAgent := agents.New(client, agents.Option{
 		Tools:        workerTools,
 		MaxLoopTimes: 5,
 	})
 	hook := subagents.NewHook(client, subagents.Option{
-		SelfAgent:    &subagents.ExpertAgent{Name: "explore", Agent: exploreAgent},
-		ExploreTools: workerTools,
+		SideCheckAgent: &subagents.ExpertAgent{Name: "side_checker", Agent: sideCheckerAgent},
+		SideCheckTools: workerTools,
 	})
 
 	sess := newTestSession(t, client)
@@ -268,14 +268,14 @@ func TestSubagent_Explore(t *testing.T) {
 
 	resp := mainAgent.Chat(ctx, &api.Request{
 		Session:     sess,
-		UserMessage: "Use one explore call with two independent tasks in its tasks array: read target-one.txt and read target-two.txt. Report both exact contents.",
+		UserMessage: "Use one run_side_checks call with two independent checks in its checks array: verify the exact contents of target-one.txt and target-two.txt. Report both exact contents.",
 	})
 	content, _ := collectResponse(t, ctx, resp)
 
-	assertHistoryHasToolCall(t, sess, "explore")
+	assertHistoryHasToolCall(t, sess, "run_side_checks")
 	for _, payload := range payloads {
 		if !strings.Contains(strings.ToLower(content), strings.ToLower(payload)) {
-			t.Errorf("batched explore report did not surface %q; got: %s", payload, truncate(content, 500))
+			t.Errorf("batched side-check report did not surface %q; got: %s", payload, truncate(content, 500))
 		}
 	}
 }

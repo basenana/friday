@@ -23,36 +23,36 @@ func fuzzyMatching(s1, s2 string) bool {
 	return s1 == s2
 }
 
-func callExploreTool(self *ExpertAgent, sess *session.Session, exploreTools []*tools.Tool) tools.ToolHandlerFunc {
-	return callExploreToolWithForker(self, sess, nil, exploreTools, make(chan struct{}, defaultMaxParallelSubagents))
+func callSideCheckTool(sideChecker *ExpertAgent, sess *session.Session, sideCheckTools []*tools.Tool) tools.ToolHandlerFunc {
+	return callSideCheckToolWithForker(sideChecker, sess, nil, sideCheckTools, make(chan struct{}, defaultMaxParallelSubagents))
 }
 
-func callExploreToolWithForker(self *ExpertAgent, sess *session.Session, forker SessionForker, exploreTools []*tools.Tool, parallel chan struct{}) tools.ToolHandlerFunc {
+func callSideCheckToolWithForker(sideChecker *ExpertAgent, sess *session.Session, forker SessionForker, sideCheckTools []*tools.Tool, parallel chan struct{}) tools.ToolHandlerFunc {
 	return func(ctx context.Context, request *tools.Request) (*tools.Result, error) {
 		if request.SessionID != sess.Root.ID {
 			return nestedSubagentError(), nil
 		}
 
-		tasks, issue := parseExploreTasks(request.Arguments)
+		checks, issue := parseSideChecks(request.Arguments)
 		if issue != "" {
 			return tools.NewToolResultActionableError(
-				"Invalid explore batch:\n"+issue,
-				"provide a non-empty tasks array whose items are complete, independent investigation requests, then retry the corrected batch.",
+				"Invalid run_side_checks batch:\n"+issue,
+				"provide a non-empty checks array whose items are focused, independent, read-only questions, then retry the corrected batch.",
 			), nil
 		}
 
-		batch := make([]batchTask, len(tasks))
-		for i, task := range tasks {
-			batch[i] = batchTask{Agent: "explore", Task: task}
+		batch := make([]batchTask, len(checks))
+		for i, check := range checks {
+			batch[i] = batchTask{Agent: "side_check", Task: check}
 		}
 		results := runBatch(ctx, batch, parallel, func(taskCtx context.Context, index int, task batchTask) batchTaskResult {
-			output, err := executeExploreTask(taskCtx, self, sess, forker, exploreTools, task.Task, index, len(batch))
+			output, err := executeSideCheck(taskCtx, sideChecker, sess, forker, sideCheckTools, task.Task, index, len(batch))
 			if err != nil {
-				return failedBatchTask(task, err, exploreFailureSuggestion(err))
+				return failedBatchTask(task, err, sideCheckFailureSuggestion(err))
 			}
 			return successfulBatchTask(task, output)
 		})
-		return batchToolResult("explore", results), nil
+		return batchToolResult("run_side_checks", results), nil
 	}
 }
 
@@ -98,30 +98,30 @@ type batchTaskResult struct {
 	Suggestion string
 }
 
-func parseExploreTasks(arguments map[string]interface{}) ([]string, string) {
-	rawTasks, ok := arguments["tasks"].([]any)
+func parseSideChecks(arguments map[string]interface{}) ([]string, string) {
+	rawChecks, ok := arguments["checks"].([]any)
 	if !ok {
-		return nil, "- tasks must be an array of strings."
+		return nil, "- checks must be an array of strings."
 	}
-	if len(rawTasks) == 0 {
-		return nil, "- tasks must contain at least one investigation."
+	if len(rawChecks) == 0 {
+		return nil, "- checks must contain at least one side check."
 	}
-	tasks := make([]string, len(rawTasks))
+	checks := make([]string, len(rawChecks))
 	var issues []string
-	for i, raw := range rawTasks {
-		task, ok := raw.(string)
+	for i, raw := range rawChecks {
+		check, ok := raw.(string)
 		if !ok {
-			issues = append(issues, fmt.Sprintf("- tasks[%d] must be a string.", i))
+			issues = append(issues, fmt.Sprintf("- checks[%d] must be a string.", i))
 			continue
 		}
-		task = strings.TrimSpace(task)
-		if task == "" {
-			issues = append(issues, fmt.Sprintf("- tasks[%d] must not be blank.", i))
+		check = strings.TrimSpace(check)
+		if check == "" {
+			issues = append(issues, fmt.Sprintf("- checks[%d] must not be blank.", i))
 			continue
 		}
-		tasks[i] = task
+		checks[i] = check
 	}
-	return tasks, strings.Join(issues, "\n")
+	return checks, strings.Join(issues, "\n")
 }
 
 func parseExpertTasks(arguments map[string]interface{}) ([]batchTask, string) {
@@ -283,13 +283,13 @@ func runContextForChild(ctx context.Context, agent agents.Agent) (context.Contex
 	return context.WithCancel(ctx)
 }
 
-func executeExploreTask(ctx context.Context, self *ExpertAgent, sess *session.Session, forker SessionForker, exploreTools []*tools.Tool, task string, index, total int) (output string, retErr error) {
+func executeSideCheck(ctx context.Context, sideChecker *ExpertAgent, sess *session.Session, forker SessionForker, sideCheckTools []*tools.Tool, check string, index, total int) (output string, retErr error) {
 	subSession, release, err := forkSubSession(sess, forker)
 	if err != nil {
-		return "", fmt.Errorf("create explore session: %w", err)
+		return "", fmt.Errorf("create side-check session: %w", err)
 	}
-	ctx, span := tracing.Start(ctx, "explore.call", tracing.WithAttributes(
-		tracing.TruncateAttr("explore.input", task),
+	ctx, span := tracing.Start(ctx, "side_check.call", tracing.WithAttributes(
+		tracing.TruncateAttr("side_check.input", check),
 		tracing.IntVal("batch.index", index+1),
 		tracing.IntVal("batch.size", total),
 		tracing.String("session.id", subSession.ID),
@@ -297,14 +297,14 @@ func executeExploreTask(ctx context.Context, self *ExpertAgent, sess *session.Se
 		tracing.String("session.root_id", subSession.Root.ID),
 	))
 	defer span.End()
-	sess.PublishEvent(subagentEvent(types.EventSubagentStart, "explore", task, subSession.ID, index, total))
+	sess.PublishEvent(subagentEvent(types.EventSubagentStart, "side_check", check, subSession.ID, index, total))
 	defer func() {
 		if release != nil {
 			if err := release(); err != nil {
 				if retErr == nil {
-					retErr = fmt.Errorf("release explore session: %w", err)
+					retErr = fmt.Errorf("release side-check session: %w", err)
 				} else {
-					retErr = fmt.Errorf("%v; release explore session: %w", retErr, err)
+					retErr = fmt.Errorf("%v; release side-check session: %w", retErr, err)
 				}
 			}
 		}
@@ -313,21 +313,21 @@ func executeExploreTask(ctx context.Context, self *ExpertAgent, sess *session.Se
 			eventOutput = retErr.Error()
 			span.SetStatus(tracing.StatusError, eventOutput)
 		} else {
-			span.SetAttributes(tracing.TruncateAttr("explore.output", output))
+			span.SetAttributes(tracing.TruncateAttr("side_check.output", output))
 			span.SetStatus(tracing.StatusOK, "")
 		}
-		sess.PublishEvent(subagentEvent(types.EventSubagentFinish, "explore", eventOutput, subSession.ID, index, total))
+		sess.PublishEvent(subagentEvent(types.EventSubagentFinish, "side_check", eventOutput, subSession.ID, index, total))
 	}()
 
-	runCtx, cancelRun := runContextForChild(ctx, self.Agent)
+	runCtx, cancelRun := runContextForChild(ctx, sideChecker.Agent)
 	defer cancelRun()
-	content, err := api.ReadAllContent(runCtx, self.Agent.Chat(runCtx, &api.Request{
-		Session: subSession, UserMessage: injectExploreReportRequest(task), Tools: exploreTools,
+	content, err := api.ReadAllContent(runCtx, sideChecker.Agent.Chat(runCtx, &api.Request{
+		Session: subSession, UserMessage: injectSideCheckReportRequest(check), Tools: sideCheckTools,
 	}))
 	if err != nil {
 		return "", err
 	}
-	return FormatReport(BuildExploreReport(task, content)), nil
+	return FormatReport(BuildSideCheckReport(check, content)), nil
 }
 
 func executeExpertTask(ctx context.Context, agents []ExpertAgent, sess *session.Session, forker SessionForker, subagentTools []*tools.Tool, task batchTask, index, total int) (output string, retErr error) {
@@ -418,15 +418,15 @@ func subagentEvent(eventType types.EventType, agent, value, sessionID string, in
 func nestedSubagentError() *tools.Result {
 	return tools.NewToolResultActionableError(
 		"Subagent mode active: nested subagent creation is not supported.",
-		"complete every assigned task directly with the tools already available in this subagent; do not call explore or run_task again.",
+		"complete every assigned task directly with the tools already available in this subagent; do not call run_side_checks or run_task again.",
 	)
 }
 
-func exploreFailureSuggestion(err error) string {
+func sideCheckFailureSuggestion(err error) string {
 	if ctxSuggestion := cancellationSuggestion(err); ctxSuggestion != "" {
 		return ctxSuggestion
 	}
-	return "Correct the reported exploration prerequisite and retry only this failed investigation; keep all successful reports from the batch."
+	return "Correct the reported prerequisite and retry only this failed side check; keep all successful reports from the batch."
 }
 
 func expertFailureSuggestion(err error) string {
@@ -455,26 +455,38 @@ You are operating in delegated subagent mode. The parent agent assigned you one 
 
 - Focus exclusively on the assigned task and its stated scope.
 - Work independently using the tools already available to you.
-- Do not call run_task or explore, and do not delegate or dispatch nested subtasks.
+- Do not call run_task or run_side_checks, and do not delegate or dispatch nested subtasks.
 - Perform the investigation, implementation, and verification permitted by your current tools and permissions.
 - Do not stop at a plan or a description of what could be done; complete as much of the task as possible.
 - Return a detailed, evidence-based result. Include important findings, actions taken, files involved, verification performed, remaining risks, and blockers the parent agent needs to know.
 - If information is incomplete, make reasonable scoped assumptions and state them clearly instead of abandoning the task.
 </subagent_execution>`
 
-func injectExploreReportRequest(task string) string {
-	return strings.TrimSpace(task) + `
+func injectSideCheckReportRequest(check string) string {
+	return strings.TrimSpace(check) + `
 
-` + subagentModePrompt + `
+<side_check_execution>
+You are performing one focused side check for an ongoing parent task.
+
+The current conversation history and project context have already been provided through the forked session. Investigate only the additional check written above.
+
+- Complete the check directly with the read-only tools available to you.
+- Do not modify files or external state.
+- Do not call run_side_checks or run_task.
+- Do not delegate or create nested subtasks.
+- Do not broaden the check into general research.
+- Stop once the question is answered with sufficient evidence.
+- If the requested fact cannot be verified, explain exactly what evidence is missing.
+</side_check_execution>
 
 Return a single final report with these exact sections:
-- Task (what was asked)
-- Findings (key discoveries, organized by topic)
-- Files Examined (list of files read or searched, with brief notes on what was found)
-- Open Questions (things that remain unclear or need further investigation)
-- Recommended Next Step (what the caller should do with these findings)
+- Task
+- Findings
+- Files Examined
+- Open Questions
+- Recommended Next Step
 
-Make the report thorough and specific while avoiding irrelevant narration. Focus on facts and evidence, not speculation.`
+Make the report specific and evidence-based. Include relevant file references, but avoid unrelated narration or exploratory suggestions.`
 }
 
 func injectStructuredReportRequest(task string) string {

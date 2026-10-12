@@ -1,6 +1,7 @@
 package agents
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/basenana/friday/core/providers"
@@ -45,24 +46,32 @@ func TestRegistry_ListReturnsAllRegistered(t *testing.T) {
 	}
 }
 
-func TestExplorerSpec_HasReadOnlyDenyPolicy(t *testing.T) {
-	spec := ExplorerSpec()
+func TestSideCheckerSpec_HasReadOnlyDenyPolicy(t *testing.T) {
+	spec := SideCheckerSpec()
+	if spec.Name != NameSideChecker {
+		t.Fatalf("side-checker name = %q, want %q", spec.Name, NameSideChecker)
+	}
 	denied := make(map[string]struct{}, len(spec.ToolPolicy.Deny))
 	for _, n := range spec.ToolPolicy.Deny {
 		denied[n] = struct{}{}
 	}
 	for _, mustDeny := range []string{ToolFsWrite, ToolFsEdit, ToolFsDelete, ToolBash} {
 		if _, ok := denied[mustDeny]; !ok {
-			t.Errorf("explorer policy missing deny for %q", mustDeny)
+			t.Errorf("side-checker policy missing deny for %q", mustDeny)
 		}
 	}
-	if spec.MaxLoopTimes != 100 {
-		t.Errorf("explorer MaxLoopTimes = %d, want 100", spec.MaxLoopTimes)
+	if spec.MaxLoopTimes != 50 {
+		t.Errorf("side-checker MaxLoopTimes = %d, want 50", spec.MaxLoopTimes)
 	}
 	if spec.Mode != ModeSubagent {
-		t.Errorf("explorer Mode = %v, want ModeSubagent", spec.Mode)
+		t.Errorf("side-checker Mode = %v, want ModeSubagent", spec.Mode)
 	}
 	if spec.Effort != providers.ReasoningEffortNone {
-		t.Errorf("explorer Effort = %q, want none", spec.Effort)
+		t.Errorf("side-checker Effort = %q, want none", spec.Effort)
+	}
+	for _, phrase := range []string{"focused, read-only question", "conversation and project context", "Stop as soon as", "## Files Examined"} {
+		if !strings.Contains(spec.SystemPrompt, phrase) {
+			t.Errorf("side-checker prompt missing %q", phrase)
+		}
 	}
 }

@@ -27,7 +27,7 @@ func TestBuiltinToolCardPresentations(t *testing.T) {
 		{"list_tasks", `{}`, "List background tasks", "status · all"},
 		{"wait_task", `{"task_id":"abc"}`, "Wait for task", "timeout · 60s"},
 		{"kill_task", `{"task_id":"abc"}`, "Stop task", "task · abc"},
-		{"explore", `{"tasks":["inspect the TUI","inspect events"]}`, "Explore 2 tasks", "2. inspect events"},
+		{"run_side_checks", `{"checks":["inspect the TUI","inspect events"]}`, "Run 2 side checks", "2. inspect events"},
 		{"run_task", `{"tasks":[{"agent_name":"analyst","task":"analyze changes"},{"agent_name":"writer","task":"document changes"}]}`, "Delegate 2 tasks", "writer · document changes"},
 		{"run_blocking_subagents", `{"tasks":["inspect UI","inspect events"]}`, "Run 2 subagents", "2. inspect events"},
 	}
@@ -191,16 +191,16 @@ func TestShowCommandRevealsSpecializedToolDetails(t *testing.T) {
 	m, _, _ := newTestModel(t)
 	m.width, m.height = 80, 30
 	m.messages = []chatBlock{{
-		id: "call-specialized", kind: blockToolCall, toolName: "explore",
-		toolArgs: `{"tasks":["inspect events"]}`, toolArgsComplete: true,
-		toolOutput: "full exploration report", success: true,
+		id: "call-specialized", kind: blockToolCall, toolName: "run_side_checks",
+		toolArgs: `{"checks":["inspect events"]}`, toolArgsComplete: true,
+		toolOutput: "full side-check report", success: true,
 	}}
 	m.handleShowCommand([]string{"call-spe"})
 	if m.detail == nil {
 		t.Fatal("show command did not open tool details")
 	}
 	detail := terminalSafe(m.detail.View(m.width))
-	if !strings.Contains(detail, "inspect events") || !strings.Contains(detail, "full exploration report") {
+	if !strings.Contains(detail, "inspect events") || !strings.Contains(detail, "full side-check report") {
 		t.Fatalf("detail = %q", detail)
 	}
 }
@@ -246,18 +246,18 @@ func TestFailedReadFileKeepsPathBeforeError(t *testing.T) {
 	}
 }
 
-func TestFailedExploreKeepsTaskBeforeError(t *testing.T) {
+func TestFailedSideCheckKeepsCheckBeforeError(t *testing.T) {
 	configureTheme(true)
 	m := &model{width: 120}
 	block := &chatBlock{
-		toolName: "explore", toolArgs: `{"tasks":["inspect the TUI tool card rendering"]}`, toolArgsComplete: true,
+		toolName: "run_side_checks", toolArgs: `{"checks":["inspect the TUI tool card rendering"]}`, toolArgsComplete: true,
 		toolOutput: "Error: Subagent mode active: nested subagent creation is not supported.\nSuggestion: complete the assigned task directly.",
 	}
 	card := terminalSafe(m.renderToolCard(block))
 	taskIndex := strings.Index(card, "1. inspect the TUI tool card rendering")
 	errorIndex := strings.Index(card, "Error")
 	if taskIndex < 0 || errorIndex < 0 || taskIndex > errorIndex {
-		t.Fatalf("failed explore card should show its task before the error: %q", card)
+		t.Fatalf("failed side-check card should show its check before the error: %q", card)
 	}
 }
 

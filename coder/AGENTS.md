@@ -15,7 +15,7 @@ The `coder` tree assembles disk-defined expert agents, slash commands, guarded c
 - `router.go` routes requests between the primary and experts.
 - `policy.go` filters tool access by agent role.
 - `tools.go` resolves named tools.
-- `explorer.go` defines the read-only explorer role.
+- `side_checker.go` defines the focused, read-only side-checker role.
 - `prompts.go` and `prompts_compose.go` build coder prompts.
 
 ### Other subpackages
@@ -79,7 +79,7 @@ scope and `current.<scope>` for worktree scopes. Session visibility is
 - Agent specs are loaded from the user's Friday home first and then from the project, so the project definition overrides the same named home definition.
 - Reloading is transactional: parse and validate the new set before replacing the last valid registry.
 - Tool policy is enforced when building an expert; a prompt declaration alone is not a security boundary.
-- Explorer remains read-only. Do not add mutating tools to its policy casually.
+- The side checker remains read-only. Do not add mutating tools to its policy casually.
 - Dynamic routing reads the current provider so hot reload does not require rebuilding the primary agent.
 
 ## Project instruction handling

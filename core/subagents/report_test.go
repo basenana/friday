@@ -30,9 +30,9 @@ func TestExtractReportSections_ColonFormat(t *testing.T) {
 	}
 }
 
-func TestBuildExploreReport_FillsFilesExamined(t *testing.T) {
+func TestBuildSideCheckReport_FillsFilesExamined(t *testing.T) {
 	content := "## Task\nread hello.txt\n## Findings\nit says hello\n## Files Examined\n- hello.txt\n"
-	report := BuildExploreReport("read hello.txt", content)
+	report := BuildSideCheckReport("read hello.txt", content)
 	if report.Task != "read hello.txt" {
 		t.Fatalf("task mismatch: %q", report.Task)
 	}

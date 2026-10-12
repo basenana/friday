@@ -12,11 +12,11 @@ import (
 )
 
 type Subagents struct {
-	option                 Option
-	exploreToolDescription string
-	runTaskToolDescription string
-	agents                 AgentProvider
-	parallel               chan struct{}
+	option                   Option
+	sideCheckToolDescription string
+	runTaskToolDescription   string
+	agents                   AgentProvider
+	parallel                 chan struct{}
 }
 
 const defaultMaxParallelSubagents = 4
@@ -51,8 +51,8 @@ func (a *Subagents) BeforeAgent(ctx context.Context, sess *session.Session, req 
 	// Always inject tools so forked sessions share the same tool definitions
 	// (cache prefix consistency). Recursion is prevented at the tool handler level.
 	var toolsToAdd []*tools.Tool
-	if a.option.SelfAgent != nil {
-		toolsToAdd = append(toolsToAdd, a.buildExploreTool(sess))
+	if a.option.SideCheckAgent != nil {
+		toolsToAdd = append(toolsToAdd, a.buildSideCheckTool(sess))
 	}
 	experts := a.expertAgents()
 	if len(experts) > 0 {
@@ -73,22 +73,26 @@ func (a *Subagents) BeforeModel(ctx context.Context, sess *session.Session, req 
 	return nil
 }
 
-func (a *Subagents) buildExploreTool(sess *session.Session) *tools.Tool {
-	return tools.NewTool("explore",
-		tools.WithDescription(a.exploreToolDescription),
-		tools.WithArray("tasks",
+func (a *Subagents) buildSideCheckTool(sess *session.Session) *tools.Tool {
+	return tools.NewTool("run_side_checks",
+		tools.WithDescription(a.sideCheckToolDescription),
+		tools.WithArray("checks",
 			tools.Required(),
 			tools.MinItems(1),
 			tools.UniqueItems(true),
-			tools.Items(map[string]interface{}{"type": "string", "minLength": 1}),
-			tools.Description("All independent investigations that can run now. Each task must be self-contained and include its scope and expected findings; dependent tasks belong in a later call."),
+			tools.Items(map[string]interface{}{
+				"type":        "string",
+				"minLength":   1,
+				"description": "One concrete, read-only question to verify for the current task.",
+			}),
+			tools.Description("Focused, independent side checks to run using the current conversation context. Each item must ask one concrete question, define any additional scope that is not already clear from the conversation, and state the evidence expected. A single check is normal. Checks in the same batch must not depend on one another."),
 		),
-		tools.WithExample(map[string]interface{}{"tasks": []interface{}{
-			"Trace the authentication call path and report the relevant files and control flow.",
-			"Inspect cache invalidation behavior and report correctness risks with file references.",
+		tools.WithExample(map[string]interface{}{"checks": []interface{}{
+			"Confirm whether Session.Fork copies registered hooks. Cite the relevant fields and methods.",
+			"Check whether runBatch preserves result order when checks complete out of order. Cite the implementation and tests.",
 		}}),
 		tools.WithToolNoHardLimit(),
-		tools.WithToolHandler(callExploreToolWithForker(a.option.SelfAgent, sess, a.option.SessionForker, a.option.ExploreTools, a.parallel)),
+		tools.WithToolHandler(callSideCheckToolWithForker(a.option.SideCheckAgent, sess, a.option.SessionForker, a.option.SideCheckTools, a.parallel)),
 	)
 }
 
@@ -186,11 +190,11 @@ func NewHook(_ providers.Client, opt Option) *Subagents {
 	if opt.MaxParallelSubagents <= 0 {
 		opt.MaxParallelSubagents = defaultMaxParallelSubagents
 	}
-	if opt.ExploreSystemPrompt == "" {
-		opt.ExploreSystemPrompt = EXPLORE_SYSTEM_PROMPT
+	if opt.SideCheckSystemPrompt == "" {
+		opt.SideCheckSystemPrompt = SIDE_CHECK_SYSTEM_PROMPT
 	}
-	if opt.ExploreDescriptionPrompt == "" {
-		opt.ExploreDescriptionPrompt = EXPLORE_DESCRIPTION_PROMPT
+	if opt.SideCheckDescriptionPrompt == "" {
+		opt.SideCheckDescriptionPrompt = SIDE_CHECK_DESCRIPTION_PROMPT
 	}
 	if opt.RunTaskSystemPrompt == "" {
 		opt.RunTaskSystemPrompt = EXPERT_SYSTEM_PROMPT
@@ -200,44 +204,44 @@ func NewHook(_ providers.Client, opt Option) *Subagents {
 	}
 
 	return &Subagents{
-		option:                 opt,
-		exploreToolDescription: opt.ExploreDescriptionPrompt,
-		runTaskToolDescription: opt.RunTaskDescriptionPrompt,
-		agents:                 agentProvider,
-		parallel:               make(chan struct{}, opt.MaxParallelSubagents),
+		option:                   opt,
+		sideCheckToolDescription: opt.SideCheckDescriptionPrompt,
+		runTaskToolDescription:   opt.RunTaskDescriptionPrompt,
+		agents:                   agentProvider,
+		parallel:                 make(chan struct{}, opt.MaxParallelSubagents),
 	}
 }
 
 func cloneOption(opt Option) Option {
 	cloned := opt
-	if opt.SelfAgent != nil {
-		self := *opt.SelfAgent
-		cloned.SelfAgent = &self
+	if opt.SideCheckAgent != nil {
+		sideCheck := *opt.SideCheckAgent
+		cloned.SideCheckAgent = &sideCheck
 	}
 	cloned.ExpertAgents = append([]ExpertAgent(nil), opt.ExpertAgents...)
-	cloned.ExploreTools = append([]*tools.Tool(nil), opt.ExploreTools...)
+	cloned.SideCheckTools = append([]*tools.Tool(nil), opt.SideCheckTools...)
 	cloned.ExpertTools = append([]*tools.Tool(nil), opt.ExpertTools...)
 	return cloned
 }
 
 type Option struct {
-	ExploreSystemPrompt      string
-	ExploreDescriptionPrompt string
+	SideCheckSystemPrompt      string
+	SideCheckDescriptionPrompt string
 
 	RunTaskSystemPrompt      string
 	RunTaskDescriptionPrompt string
 
-	ExploreTools []*tools.Tool
-	ExpertTools  []*tools.Tool
+	SideCheckTools []*tools.Tool
+	ExpertTools    []*tools.Tool
 
-	SelfAgent    *ExpertAgent
-	ExpertAgents []ExpertAgent
+	SideCheckAgent *ExpertAgent
+	ExpertAgents   []ExpertAgent
 	// AgentProvider is preferred over ExpertAgents for dynamic catalogs.
 	// ExpertAgents remains as a backwards-compatible static source.
 	AgentProvider AgentProvider
 	SessionForker SessionForker
 
-	// MaxParallelSubagents limits actively running explore and expert tasks
+	// MaxParallelSubagents limits actively running side-check and expert tasks
 	// across all batches created by this hook. Queued task count is unlimited.
 	// Values <= 0 use the default of 4.
 	MaxParallelSubagents int
