@@ -608,7 +608,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if msg.err != nil {
-			m.appendBlock(chatBlock{kind: blockError, content: "paste image: " + msg.err.Error()})
+			content := "paste image: " + msg.err.Error()
+			if strings.TrimSpace(os.Getenv("SSH_CONNECTION")) != "" || strings.TrimSpace(os.Getenv("SSH_TTY")) != "" {
+				content += "; remote usage: start XQuartz locally, reconnect with ssh -Y <host>, ensure $DISPLAY is set, then verify xclip -selection clipboard -t image/png -o >/dev/null"
+			}
+			m.appendBlock(chatBlock{kind: blockError, content: content})
 		} else {
 			m.attachments = append(m.attachments, msg.image)
 			m.layout()

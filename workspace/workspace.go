@@ -181,10 +181,14 @@ func (w *Workspace) SkillsPath() string {
 
 // SkillsPaths returns skill directories from lowest to highest priority so it
 // can be passed directly to skills.NewLoader (later directories override
-// earlier ones).
+// earlier ones). The standard global agent-skills directory is the lowest
+// priority source.
 func (w *Workspace) SkillsPaths() []string {
 	roots := w.ResourceRoots("skills")
-	paths := make([]string, 0, len(roots))
+	paths := make([]string, 0, len(roots)+1)
+	if home, err := os.UserHomeDir(); err == nil {
+		paths = append(paths, filepath.Join(home, ".agents", "skills"))
+	}
 	for _, root := range roots {
 		paths = append(paths, root.Path)
 	}

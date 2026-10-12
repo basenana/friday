@@ -31,7 +31,32 @@ func TestNewWorkspace(t *testing.T) {
 	}
 }
 
+func TestSkillsPathsIncludesGlobalAgentSkillsAtLowestPriority(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	project := t.TempDir()
+	fridayHome := t.TempDir()
+
+	ws := NewWorkspace(project, t.TempDir(), fridayHome)
+	want := []string{
+		filepath.Join(home, ".agents", "skills"),
+		filepath.Join(fridayHome, "skills"),
+		filepath.Join(project, "skills"),
+	}
+	got := ws.SkillsPaths()
+	if len(got) != len(want) {
+		t.Fatalf("SkillsPaths() = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("SkillsPaths()[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
 func TestLayeredWorkspaceProjectOverridesAndFallsBack(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
 	project := t.TempDir()
 	global := t.TempDir()
 	memory := t.TempDir()
@@ -82,9 +107,13 @@ func TestLayeredWorkspaceProjectOverridesAndFallsBack(t *testing.T) {
 		t.Fatalf("deleting project override did not reveal global file: %q", got)
 	}
 
-	wantSkills := []string{filepath.Join(global, "skills"), filepath.Join(project, "skills")}
+	wantSkills := []string{
+		filepath.Join(home, ".agents", "skills"),
+		filepath.Join(global, "skills"),
+		filepath.Join(project, "skills"),
+	}
 	gotSkills := ws.SkillsPaths()
-	if len(gotSkills) != len(wantSkills) || gotSkills[0] != wantSkills[0] || gotSkills[1] != wantSkills[1] {
+	if len(gotSkills) != len(wantSkills) || gotSkills[0] != wantSkills[0] || gotSkills[1] != wantSkills[1] || gotSkills[2] != wantSkills[2] {
 		t.Fatalf("SkillsPaths() = %v, want %v", gotSkills, wantSkills)
 	}
 	wantMCP := []string{filepath.Join(global, "mcp"), filepath.Join(project, "mcp")}
