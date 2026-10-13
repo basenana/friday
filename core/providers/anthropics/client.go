@@ -33,6 +33,9 @@ type Model struct {
 	Proxy              string
 	ContextWindow      int64
 	InsecureSkipVerify bool
+	// Timeout caps one HTTP request including streaming body reads.
+	// Zero uses defaultHTTPTimeout (15m).
+	Timeout time.Duration
 }
 
 type client struct {
@@ -540,6 +543,17 @@ func New(host, apiKey string, model Model) providers.Client {
 	return newClient(host, apiKey, model)
 }
 
+const defaultHTTPTimeout = 15 * time.Minute
+
+// effectiveHTTPTimeout returns the per-request HTTP timeout configured on the
+// model, defaulting to 15m when unset.
+func effectiveHTTPTimeout(model Model) time.Duration {
+	if model.Timeout > 0 {
+		return model.Timeout
+	}
+	return defaultHTTPTimeout
+}
+
 func newClient(host, apiKey string, model Model) *client {
 	tp := &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: model.InsecureSkipVerify}}
 	if model.Proxy == "" {
@@ -553,9 +567,10 @@ func newClient(host, apiKey string, model Model) *client {
 	cli := &http.Client{
 		Transport: tp,
 		// Covers the whole request including streaming body reads: one LLM API
-		// call — dead stream or very long generation — is hard-bounded at 15m.
-		// This is the only per-call bound now that stream idle is log-only.
-		Timeout: 15 * time.Minute,
+		// call — dead stream or very long generation — is hard-bounded by the
+		// configured timeout, defaulting to 15m when unset. This is the only
+		// per-call bound now that stream idle is log-only.
+		Timeout: effectiveHTTPTimeout(model),
 	}
 
 	anthropicClient := anthropic.NewClient(

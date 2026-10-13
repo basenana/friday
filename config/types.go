@@ -11,6 +11,7 @@ type Config struct {
 	Workspace     string               `yaml:"workspace" json:"workspace"`
 	Memory        MemoryConfig         `yaml:"memory" json:"memory"`
 	Session       SessionConfig        `yaml:"session" json:"session"`
+	Agent         AgentConfig          `yaml:"agent" json:"agent"`
 	Log           LogConfig            `yaml:"log" json:"log"`
 	Sandbox       *sandbox.Config      `yaml:"sandbox" json:"sandbox"`
 	TUI           TUIConfig            `yaml:"tui" json:"tui"`
@@ -68,6 +69,10 @@ type ModelConfig struct {
 	Proxy           string  `yaml:"proxy" json:"proxy"`
 	ReasoningEffort string  `yaml:"reasoning_effort" json:"reasoning_effort"` // thinking-mode effort: default/none/low/medium/high/xhigh/max
 	ReasoningSplit  bool    `yaml:"reasoning_split" json:"reasoning_split"`
+	// Timeout caps one LLM HTTP request including the full streaming body
+	// read, as a Go duration string ("2h"). Empty uses the provider
+	// default of 15m.
+	Timeout string `yaml:"timeout" json:"timeout"`
 }
 
 type DecisionModelConfig struct {
@@ -77,6 +82,10 @@ type DecisionModelConfig struct {
 	Model    string `yaml:"model" json:"model"`
 	QPM      int64  `yaml:"qpm" json:"qpm"`
 	Proxy    string `yaml:"proxy" json:"proxy"`
+	// Timeout caps one decision-model HTTP request including streaming
+	// body reads, as a Go duration string ("2h"). Empty uses the provider
+	// default of 15m.
+	Timeout string `yaml:"timeout" json:"timeout"`
 }
 
 type MemoryConfig struct {
@@ -86,6 +95,13 @@ type MemoryConfig struct {
 
 type SessionConfig struct {
 	DefaultAgent string `yaml:"default_agent" json:"default_agent"`
+}
+
+type AgentConfig struct {
+	// TurnTimeout caps one top-level agent turn (all LLM calls, tool
+	// execution, and subagent work) as a Go duration string. Empty means
+	// no agent-level deadline.
+	TurnTimeout string `yaml:"turn_timeout" json:"turn_timeout"`
 }
 
 func DefaultConfig() *Config {

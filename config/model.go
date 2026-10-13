@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"slices"
 	"strings"
+	"time"
 )
 
 // ModelIdentity uniquely identifies one configured provider endpoint. Model
@@ -63,6 +64,33 @@ func canonicalServer(raw string) string {
 	u.Path = strings.TrimRight(u.Path, "/")
 	u.Fragment = ""
 	return strings.TrimRight(u.String(), "/")
+}
+
+// parseTimeoutString returns 0 for empty (unset), the parsed duration when
+// valid, and an error for unparseable or non-positive values. It is the single
+// timeout-parsing seam so callers never re-parse raw strings.
+func parseTimeoutString(raw, fieldPath string) (time.Duration, error) {
+	if strings.TrimSpace(raw) == "" {
+		return 0, nil
+	}
+	d, err := time.ParseDuration(strings.TrimSpace(raw))
+	if err != nil {
+		return 0, fmt.Errorf("invalid %s %q: must be a Go duration like \"2h\" or \"30m\"", fieldPath, raw)
+	}
+	if d <= 0 {
+		return 0, fmt.Errorf("invalid %s %q: must be positive", fieldPath, raw)
+	}
+	return d, nil
+}
+
+// TimeoutDuration returns the per-request LLM timeout. Zero means "use the
+// provider default (15m)".
+func (m ModelConfig) TimeoutDuration() time.Duration {
+	d, err := parseTimeoutString(m.Timeout, "model.timeout")
+	if err != nil {
+		return 0
+	}
+	return d
 }
 
 // ChatModels returns the complete ordered model catalog: model is the
@@ -248,5 +276,8 @@ func (m *ModelConfig) overlay(src ModelConfig) {
 	}
 	if strings.TrimSpace(src.Proxy) != "" {
 		m.Proxy = src.Proxy
+	}
+	if strings.TrimSpace(src.Timeout) != "" {
+		m.Timeout = src.Timeout
 	}
 }

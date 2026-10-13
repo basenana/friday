@@ -20,10 +20,24 @@ import (
 
 const defaultBaseURL = "https://openrouter.ai/api/v1"
 
+const defaultHTTPTimeout = 15 * time.Minute
+
 type Model struct {
 	Name  string
 	QPM   int64
 	Proxy string
+	// Timeout caps one HTTP request including streaming body reads.
+	// Zero uses defaultHTTPTimeout (15m).
+	Timeout time.Duration
+}
+
+// effectiveHTTPTimeout returns the per-request HTTP timeout configured on the
+// model, defaulting to 15m when unset.
+func effectiveHTTPTimeout(model Model) time.Duration {
+	if model.Timeout > 0 {
+		return model.Timeout
+	}
+	return defaultHTTPTimeout
 }
 
 type client struct {
@@ -75,7 +89,7 @@ func New(baseURL, apiKey string, model Model) providers.DecisionProvider {
 		model:   model,
 		http: &http.Client{
 			Transport: transport,
-			Timeout:   15 * time.Minute,
+			Timeout:   effectiveHTTPTimeout(model),
 		},
 		limiter: rate.NewLimiter(rate.Limit(float64(model.QPM)/60), burst),
 	}

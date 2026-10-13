@@ -574,7 +574,7 @@ func NewAgent(sessionMgr SessionManager, cfg *config.Config, opts ...Option) (*A
 		Workspace:   ws,
 		Lifecycle:   lifecycle,
 		Session:     sess,
-		Agent:       routedAgent,
+		Agent:       newTimeoutAgent(routedAgent, cfg.Agent.TurnTimeoutDuration()),
 		Memory:      memSys,
 		TaskManager: taskManager,
 		Approver:    approver,

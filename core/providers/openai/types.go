@@ -2,6 +2,7 @@ package openai
 
 import (
 	"encoding/xml"
+	"time"
 )
 
 type Model struct {
@@ -17,6 +18,9 @@ type Model struct {
 	Proxy              string
 	ContextWindow      int64
 	InsecureSkipVerify bool
+	// Timeout caps one HTTP request including streaming body reads.
+	// Zero uses defaultHTTPTimeout (15m).
+	Timeout time.Duration
 }
 
 type ToolUse struct {

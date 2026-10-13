@@ -250,6 +250,17 @@ func homeFridayDir() (string, error) {
 	return filepath.Join(absHome, ".friday"), nil
 }
 
+// TurnTimeoutDuration returns the top-level agent turn timeout. Zero means
+// no agent-level deadline. Unparseable values fall back to zero; validate()
+// already rejects them at load time.
+func (a AgentConfig) TurnTimeoutDuration() time.Duration {
+	d, err := parseTimeoutString(a.TurnTimeout, "agent.turn_timeout")
+	if err != nil {
+		return 0
+	}
+	return d
+}
+
 func (c *Config) validate() error {
 	if strings.TrimSpace(c.Collaboration.Plan.ReasoningEffort) == "" {
 		c.Collaboration.Plan.ReasoningEffort = providers.ReasoningEffortMedium
@@ -271,6 +282,29 @@ func (c *Config) validate() error {
 	}
 	if e := c.Collaboration.Plan.ReasoningEffort; !providers.IsValidReasoningEffort(e) {
 		return fmt.Errorf("invalid collaboration.plan.reasoning_effort %q: must be one of default, none, low, medium, high, xhigh, max", e)
+	}
+	if c.Model != nil {
+		if _, err := parseTimeoutString(c.Model.Timeout, "model.timeout"); err != nil {
+			return err
+		}
+	}
+	for _, m := range c.Models {
+		if _, err := parseTimeoutString(m.Timeout, fmt.Sprintf("models[%s].timeout", m.Model)); err != nil {
+			return err
+		}
+	}
+	if c.ImageModel != nil {
+		if _, err := parseTimeoutString(c.ImageModel.Timeout, "image_model.timeout"); err != nil {
+			return err
+		}
+	}
+	if c.DecisionModel != nil {
+		if _, err := parseTimeoutString(c.DecisionModel.Timeout, "decision_model.timeout"); err != nil {
+			return err
+		}
+	}
+	if _, err := parseTimeoutString(c.Agent.TurnTimeout, "agent.turn_timeout"); err != nil {
+		return err
 	}
 	if c.Sandbox != nil {
 		if err := c.Sandbox.Validate(); err != nil {

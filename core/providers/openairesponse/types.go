@@ -1,5 +1,7 @@
 package openairesponse
 
+import "time"
+
 // Model contains settings shared by all calls made through the Responses API.
 type Model struct {
 	Name               string
@@ -11,4 +13,7 @@ type Model struct {
 	Proxy              string
 	ContextWindow      int64
 	InsecureSkipVerify bool
+	// Timeout caps one HTTP request including streaming body reads.
+	// Zero uses defaultHTTPTimeout (15m).
+	Timeout time.Duration
 }

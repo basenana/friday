@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/basenana/friday/core/providers"
@@ -1445,5 +1446,40 @@ func TestResponseHandleEventConcurrentWithTokensReads(t *testing.T) {
 	got := resp.Tokens()
 	if got.CompletionTokens != 1000 {
 		t.Fatalf("expected 1000 accumulated completion tokens, got %d", got.CompletionTokens)
+	}
+}
+
+func TestClientTimeoutConfigurable(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		time.Sleep(500 * time.Millisecond)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"msg-1","type":"message","role":"assistant","model":"claude-test","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":1,"output_tokens":1}}`))
+	}))
+	defer server.Close()
+
+	maxTokens := int64(1024)
+	client := newClient(server.URL, "key", Model{Name: "claude-test", MaxTokens: &maxTokens, Timeout: 100 * time.Millisecond})
+	start := time.Now()
+	_, err := client.CompletionNonStreaming(context.Background(), providers.NewRequest("hello"))
+	if err == nil {
+		t.Fatal("expected request to hit the configured timeout")
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("completion took %v, want fast timeout failure", elapsed)
+	}
+	if !strings.Contains(err.Error(), "Client.Timeout exceeded") && !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("error = %v, want timeout failure", err)
+	}
+}
+
+func TestEffectiveHTTPTimeoutDefaults(t *testing.T) {
+	if got := effectiveHTTPTimeout(Model{}); got != 15*time.Minute {
+		t.Fatalf("default timeout = %v, want 15m", got)
+	}
+	if got := effectiveHTTPTimeout(Model{Timeout: 2 * time.Hour}); got != 2*time.Hour {
+		t.Fatalf("configured timeout = %v, want 2h", got)
+	}
+	if got := effectiveHTTPTimeout(Model{Timeout: -time.Second}); got != 15*time.Minute {
+		t.Fatalf("negative timeout = %v, want default", got)
 	}
 }

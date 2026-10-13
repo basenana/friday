@@ -53,7 +53,7 @@ func (a *imageAnalyzer) Analyze(ctx context.Context, prompt, modelOverride strin
 }
 
 func (a *imageAnalyzer) clientForModel(modelCfg config.ModelConfig) (providers.Client, error) {
-	key := fmt.Sprintf("%s|%s|%s|%s|%d|%d|%g|%d|%s|%s|%t",
+	key := fmt.Sprintf("%s|%s|%s|%s|%d|%d|%g|%d|%s|%s|%t|%s",
 		modelCfg.Provider,
 		modelCfg.BaseURL,
 		modelCfg.Key,
@@ -65,6 +65,7 @@ func (a *imageAnalyzer) clientForModel(modelCfg config.ModelConfig) (providers.C
 		modelCfg.Proxy,
 		modelCfg.ReasoningEffort,
 		modelCfg.ReasoningSplit,
+		modelCfg.Timeout,
 	)
 
 	a.mu.Lock()
@@ -138,6 +139,7 @@ func CreateProviderClientFromModel(modelCfg config.ModelConfig) (providers.Clien
 			QPM:             modelCfg.QPM,
 			Proxy:           modelCfg.Proxy,
 			ContextWindow:   modelCfg.ContextWindow,
+			Timeout:         modelCfg.TimeoutDuration(),
 		}), nil
 	case "openai", "":
 		host := modelCfg.BaseURL
@@ -154,6 +156,7 @@ func CreateProviderClientFromModel(modelCfg config.ModelConfig) (providers.Clien
 			QPM:             modelCfg.QPM,
 			Proxy:           modelCfg.Proxy,
 			ContextWindow:   modelCfg.ContextWindow,
+			Timeout:         modelCfg.TimeoutDuration(),
 		}), nil
 	case "openai-response", "openai-responses":
 		host := modelCfg.BaseURL
@@ -169,6 +172,7 @@ func CreateProviderClientFromModel(modelCfg config.ModelConfig) (providers.Clien
 			QPM:             modelCfg.QPM,
 			Proxy:           modelCfg.Proxy,
 			ContextWindow:   modelCfg.ContextWindow,
+			Timeout:         modelCfg.TimeoutDuration(),
 		}), nil
 	default:
 		return nil, fmt.Errorf("unknown provider: %s", modelCfg.Provider)

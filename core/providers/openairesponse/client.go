@@ -27,6 +27,17 @@ import (
 
 const providerName = "openai-response"
 
+const defaultHTTPTimeout = 15 * time.Minute
+
+// effectiveHTTPTimeout returns the per-request HTTP timeout configured on the
+// model, defaulting to 15m when unset.
+func effectiveHTTPTimeout(model Model) time.Duration {
+	if model.Timeout > 0 {
+		return model.Timeout
+	}
+	return defaultHTTPTimeout
+}
+
 type client struct {
 	openai     openaisdk.Client
 	model      Model
@@ -43,9 +54,10 @@ func New(host, apiKey string, model Model) providers.Client {
 	}
 
 	// Covers the whole request including streaming body reads: one LLM API
-	// call — dead stream or very long generation — is hard-bounded at 15m.
-	// This is the only per-call bound now that stream idle is log-only.
-	httpClient := &http.Client{Transport: transport, Timeout: 15 * time.Minute}
+	// call — dead stream or very long generation — is hard-bounded by the
+	// configured timeout, defaulting to 15m when unset. This is the only
+	// per-call bound now that stream idle is log-only.
+	httpClient := &http.Client{Transport: transport, Timeout: effectiveHTTPTimeout(model)}
 	sdkClient := openaisdk.NewClient(
 		option.WithBaseURL(host),
 		option.WithAPIKey(apiKey),
