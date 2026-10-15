@@ -202,6 +202,26 @@ func TestRegistryModelPoolReturnsOwnedPool(t *testing.T) {
 	}
 }
 
+func TestRegistryLoadsSkillsFromWorkdir(t *testing.T) {
+	workdir := t.TempDir()
+	skillDir := filepath.Join(workdir, ".agents", "skills", "verify-current-feature")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("---\nname: verify-current-feature\ndescription: Verify the current feature\n---\nVerify it."), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	r := newTestRegistry(t, func(cfg *RegistryConfig) {
+		cfg.Workdir = workdir
+	})
+	t.Cleanup(r.ShutdownAll)
+
+	if _, err := r.SkillRegistry().Get("verify-current-feature"); err != nil {
+		t.Fatalf("workdir skill was not loaded: %v", err)
+	}
+}
+
 func TestRegistryProjectResourcesFlowIntoSetup(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "missing-project-resources")
 	r := newTestRegistry(t, func(cfg *RegistryConfig) {

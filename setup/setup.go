@@ -364,7 +364,7 @@ func NewAgent(sessionMgr SessionManager, cfg *config.Config, opts ...Option) (*A
 	collaborationHook := collaboration.NewHook(collaborationProvider(sessionMgr), cfg.Collaboration.Plan.ReasoningEffort)
 	skillRegistry := options.skillRegistry
 	if skillRegistry == nil {
-		skillLoader := skills.NewLoader(ws.SkillsPaths()...)
+		skillLoader := skills.NewLoader(ws.SkillsPathsFor(workdir)...)
 		if err := skillLoader.Load(); err != nil {
 			logger.New("setup").Warnw("failed to load skills", "error", err)
 		}

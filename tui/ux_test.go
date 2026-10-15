@@ -1354,6 +1354,49 @@ func TestEventLogRestoresTranscript(t *testing.T) {
 	}
 }
 
+func TestIncompleteEventLogFallsBackToNewerHistory(t *testing.T) {
+	m, _, store := newTestModel(t)
+	m.closeSession()
+	m.registry.Shutdown(m.sessionID)
+
+	startedAt := time.Date(2026, 10, 14, 16, 35, 0, 0, time.FixedZone("CST", 8*60*60))
+	if err := store.AppendMessages(m.sessionID,
+		types.Message{Role: types.RoleUser, Content: "before event log", Time: startedAt.Add(-time.Minute)},
+		types.Message{Role: types.RoleAssistant, Content: "history after stale events", Time: startedAt.Add(150 * time.Second)},
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	sink, err := store.OpenEventSink(context.Background(), m.sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	persisted := []events.Event{
+		events.NewEvent(events.KindRunStarted, "stale-run"),
+		events.NewEvent(events.KindCustom, "stale-run").WithName(events.CustomInputAccepted).WithPayload(events.InputAcceptedBody{TurnID: "stale-run", Text: "event input"}),
+		events.NewEvent(events.KindStepStarted, "stale-run"),
+		events.NewEvent(events.KindRunStarted, "later-run"),
+		events.NewEvent(events.KindRunFinished, "later-run").WithPayload(events.RunFinishedData{StopReason: "end_turn"}),
+	}
+	for i := range persisted {
+		persisted[i].Timestamp = startedAt.Add(time.Duration(i) * time.Minute)
+		if err := sink.Append(context.Background(), persisted[i]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := sink.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	projection, err := buildTranscriptProjection(m.sessMgr, m.cfg, m.workdir, m.width, m.height, m.sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(projection.messages) != 2 || projection.messages[0].content != "before event log" || projection.messages[1].content != "history after stale events" {
+		t.Fatalf("restored messages = %#v", projection.messages)
+	}
+}
+
 func TestRunFinishedKeepsFormNamedByOpenInterrupt(t *testing.T) {
 	m, _, _ := newTestModel(t)
 	m.currentRunID = "run-waiting"

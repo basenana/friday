@@ -823,7 +823,7 @@ func historyContainsToolResult(history []types.Message, want string) bool {
 	return false
 }
 
-func TestBeforeModelMicroCompactStripsOldImagesButKeepsLatest(t *testing.T) {
+func TestBeforeModelMicroCompactStripsImagesFromCompletedUserTurns(t *testing.T) {
 	largeToolResult := strings.Repeat("tool output ", 200)
 	oldImage := &types.ImageContent{Type: types.ImageTypeBase64, MediaType: "image/png", Data: "old-image-data"}
 	latestOldImage := types.ImageContent{Type: types.ImageTypeBase64, MediaType: "image/png", Data: "latest-old-image-data"}
@@ -848,9 +848,9 @@ func TestBeforeModelMicroCompactStripsOldImagesButKeepsLatest(t *testing.T) {
 	))
 
 	mgr := New(nil, Config{
-		ContextWindow:      1200,
-		SoftThresholdRatio: 0.40,
-		HardThresholdRatio: 0.60,
+		ContextWindow:      5000,
+		SoftThresholdRatio: 0.20,
+		HardThresholdRatio: 0.90,
 		MaxToolResultChars: 80,
 	})
 
@@ -872,14 +872,55 @@ func TestBeforeModelMicroCompactStripsOldImagesButKeepsLatest(t *testing.T) {
 	if oldImageKept {
 		t.Fatalf("expected old-group image to be stripped from projection")
 	}
-	if !latestImageKept {
-		t.Fatalf("expected the latest image message to keep its image even in an old group")
+	if latestImageKept {
+		t.Fatalf("expected image from a completed user turn to be stripped from projection")
 	}
 	// Session history keeps both images (projection only).
 	for _, msg := range sess.GetHistory() {
 		if msg.Content == "Analyze this old screenshot." && len(msg.ImageContents()) == 0 {
 			t.Fatalf("expected session history to retain the old image")
 		}
+	}
+}
+
+func TestBeforeModelStripsHistoricalImagesBelowCompactThreshold(t *testing.T) {
+	historicalImage := types.ImageContent{Type: types.ImageTypeBase64, MediaType: "image/png", Data: "large-image-data"}
+	sess := session.New("sess-stale-image", nil, session.WithHistory(
+		types.Message{Role: types.RoleUser, Content: "Review this screenshot.", Images: []types.ImageContent{historicalImage}},
+		types.Message{Role: types.RoleAssistant, Content: "Reviewed."},
+		types.Message{Role: types.RoleUser, Content: "Now answer a text-only question."},
+	))
+
+	mgr := New(nil, Config{ContextWindow: 400_000})
+	req := providers.NewRequest("", sess.GetHistory()...)
+	if err := mgr.BeforeModel(stdctx.Background(), sess, req); err != nil {
+		t.Fatalf("BeforeModel failed: %v", err)
+	}
+
+	if got := len(req.History()[0].ImageContents()); got != 0 {
+		t.Fatalf("projected historical images = %d, want 0", got)
+	}
+	if got := len(sess.GetHistory()[0].ImageContents()); got != 1 {
+		t.Fatalf("durable historical images = %d, want 1", got)
+	}
+}
+
+func TestBeforeModelKeepsImagesFromCurrentUserTurn(t *testing.T) {
+	currentImage := types.ImageContent{Type: types.ImageTypeBase64, MediaType: "image/png", Data: "current-image-data"}
+	sess := session.New("sess-current-image", nil, session.WithHistory(
+		types.Message{Role: types.RoleUser, Content: "Earlier question."},
+		types.Message{Role: types.RoleAssistant, Content: "Earlier answer."},
+		types.Message{Role: types.RoleUser, Content: "Review this screenshot.", Images: []types.ImageContent{currentImage}},
+	))
+
+	mgr := New(nil, Config{ContextWindow: 400_000})
+	req := providers.NewRequest("", sess.GetHistory()...)
+	if err := mgr.BeforeModel(stdctx.Background(), sess, req); err != nil {
+		t.Fatalf("BeforeModel failed: %v", err)
+	}
+
+	if got := len(req.History()[2].ImageContents()); got != 1 {
+		t.Fatalf("projected current-turn images = %d, want 1", got)
 	}
 }
 

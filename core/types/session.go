@@ -154,6 +154,13 @@ func (m Message) EstimatedTokens() int64 {
 			total += 1000
 		}
 	}
+	for _, image := range cp.Images {
+		if image.Type == ImageTypeURL {
+			total += len([]rune(image.URL))
+		} else if image.Type == ImageTypeBase64 {
+			total += 1000
+		}
+	}
 
 	for _, tc := range cp.ToolCalls {
 		total += len([]rune(tc.ID)) + len([]rune(tc.Name)) + len([]rune(tc.Arguments))

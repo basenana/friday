@@ -110,6 +110,37 @@ func buildTranscriptProjectionMode(sessMgr sessionRuntime, cfg *config.Config, w
 	if err != nil {
 		return transcriptProjection{}, err
 	}
+	var lastEventAt, lastMessageAt time.Time
+	openRuns := make(map[string]time.Time)
+	for _, evt := range persisted {
+		if evt.Timestamp.After(lastEventAt) {
+			lastEventAt = evt.Timestamp
+		}
+		switch evt.Type {
+		case events.KindRunStarted:
+			openRuns[evt.RunID] = evt.Timestamp
+		case events.KindRunFinished, events.KindRunError:
+			delete(openRuns, evt.RunID)
+		default:
+			if _, ok := openRuns[evt.RunID]; ok {
+				openRuns[evt.RunID] = evt.Timestamp
+			}
+		}
+	}
+	for _, msg := range history {
+		if msg.Time.After(lastMessageAt) {
+			lastMessageAt = msg.Time
+		}
+	}
+	staleEvents := !lastEventAt.IsZero() && lastMessageAt.After(lastEventAt)
+	for _, runLastEventAt := range openRuns {
+		staleEvents = staleEvents || lastMessageAt.After(runLastEventAt)
+	}
+	// A stale or interrupted event range must not hide durable conversation history.
+	if staleEvents {
+		persisted = nil
+		cutoff = 0
+	}
 	for _, msg := range history {
 		if cutoff != 0 && !msg.Time.IsZero() && msg.Time.UnixNano() >= cutoff {
 			continue
