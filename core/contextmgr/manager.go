@@ -70,7 +70,7 @@ func New(llm providers.Client, cfg Config) *Manager {
 func (m *Manager) BeforeModel(ctx stdctx.Context, sess *session.Session, req providers.Request) error {
 	st := sess.EnsureContextState()
 	st.PromptBudget = m.buildBudget(sess)
-	history := req.History()
+	history := stripImagesOutsideCurrentTurn(req.History())
 	budget := st.PromptBudget
 
 	projected := history
@@ -166,6 +166,30 @@ func (m *Manager) BeforeModel(ctx stdctx.Context, sess *session.Session, req pro
 		"projected_tokens", projectedTokens,
 	)
 	return nil
+}
+
+func stripImagesOutsideCurrentTurn(history []types.Message) []types.Message {
+	currentInput := -1
+	for i := len(history) - 1; i >= 0; i-- {
+		if history[i].Role == types.RoleUser || history[i].Role == types.RoleAgent {
+			currentInput = i
+			break
+		}
+	}
+
+	projected := history
+	cloned := false
+	for i, msg := range history {
+		if i == currentInput || !messageHasImage(msg) {
+			continue
+		}
+		if !cloned {
+			projected = cloneMessages(history)
+			cloned = true
+		}
+		projected[i] = stripMessageImages(projected[i])
+	}
+	return projected
 }
 
 func (m *Manager) applyMicroCompact(ctx stdctx.Context, sess *session.Session, st *session.ContextState, history []types.Message, fullTokens int64) ([]types.Message, int64, bool, error) {

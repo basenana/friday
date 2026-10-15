@@ -11,9 +11,11 @@ import (
 	"strings"
 
 	"github.com/basenana/friday/core/types"
+	"github.com/basenana/friday/sandbox"
 )
 
 const maxClipboardImageBytes = 20 * 1024 * 1024
+const maxClipboardProcessedImageBytes = 5 * 1024 * 1024
 const maxClipboardCommandOutputBytes = maxClipboardImageBytes*4/3 + 4096
 
 type clipboardCommandRunner func(context.Context, string, ...string) ([]byte, error)
@@ -151,10 +153,7 @@ func readLinuxClipboardImage(ctx context.Context, run clipboardCommandRunner) (t
 		if len(data) > maxClipboardImageBytes {
 			return types.ImageContent{}, fmt.Errorf("clipboard image exceeds %d MiB", maxClipboardImageBytes/(1024*1024))
 		}
-		return types.ImageContent{
-			Type: types.ImageTypeBase64, MediaType: candidate.mime,
-			Filename: candidate.filename, Data: base64.StdEncoding.EncodeToString(data),
-		}, nil
+		return optimizeClipboardImage(data, candidate.mime, candidate.filename)
 	}
 	return types.ImageContent{}, fmt.Errorf("clipboard image unavailable; attempted backends: %s", strings.Join(failures, "; "))
 }
@@ -170,7 +169,14 @@ func clipboardBase64Image(mimeType, filename, data string) (types.ImageContent, 
 	if len(decoded) > maxClipboardImageBytes {
 		return types.ImageContent{}, fmt.Errorf("clipboard image exceeds %d MiB", maxClipboardImageBytes/(1024*1024))
 	}
-	return types.ImageContent{
-		Type: types.ImageTypeBase64, MediaType: mimeType, Filename: filename, Data: data,
-	}, nil
+	return optimizeClipboardImage(decoded, mimeType, filename)
+}
+
+func optimizeClipboardImage(data []byte, mimeType, filename string) (types.ImageContent, error) {
+	optimized, err := sandbox.OptimizeImageForModel(data, mimeType, maxClipboardProcessedImageBytes)
+	if err != nil {
+		return types.ImageContent{}, fmt.Errorf("cannot optimize clipboard image: %w", err)
+	}
+	optimized.Filename = filename
+	return *optimized, nil
 }

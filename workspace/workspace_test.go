@@ -54,6 +54,34 @@ func TestSkillsPathsIncludesGlobalAgentSkillsAtLowestPriority(t *testing.T) {
 	}
 }
 
+func TestSkillsPathsForWorkdirIncludesAgentCompatibilityRoots(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	project := t.TempDir()
+	fridayHome := t.TempDir()
+	workdir := t.TempDir()
+
+	ws := NewWorkspace(project, t.TempDir(), fridayHome)
+	want := []string{
+		filepath.Join(home, ".agents", "skills"),
+		filepath.Join(fridayHome, "skills"),
+		filepath.Join(workdir, ".agent"),
+		filepath.Join(workdir, ".agent", "skills"),
+		filepath.Join(workdir, ".agents"),
+		filepath.Join(workdir, ".agents", "skills"),
+		filepath.Join(project, "skills"),
+	}
+	got := ws.SkillsPathsFor(workdir)
+	if len(got) != len(want) {
+		t.Fatalf("SkillsPathsFor() = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("SkillsPathsFor()[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
 func TestLayeredWorkspaceProjectOverridesAndFallsBack(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

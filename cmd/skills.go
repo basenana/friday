@@ -42,7 +42,8 @@ var skillsListCmd = &cobra.Command{
 	Long:  `List all installed skills with their descriptions.`,
 	Run: func(cmd *cobra.Command, args []string) {
 		ws := configuredWorkspace(cfg)
-		loader := skills.NewLoader(ws.SkillsPaths()...)
+		workdir, _ := os.Getwd()
+		loader := skills.NewLoader(ws.SkillsPathsFor(workdir)...)
 		if err := loader.Load(); err != nil {
 			fmt.Fprintf(os.Stderr, "failed to load skills: %v\n", err)
 			os.Exit(1)
@@ -75,7 +76,8 @@ var skillsDeleteCmd = &cobra.Command{
 		skillName := args[0]
 
 		ws := configuredWorkspace(cfg)
-		loader := skills.NewLoader(ws.SkillsPaths()...)
+		workdir, _ := os.Getwd()
+		loader := skills.NewLoader(ws.SkillsPathsFor(workdir)...)
 		if err := loader.Load(); err != nil {
 			fmt.Fprintf(os.Stderr, "failed to load skills: %v\n", err)
 			os.Exit(1)

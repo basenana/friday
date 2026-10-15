@@ -294,7 +294,7 @@ func TestDecisionMicroCompactWithoutCandidatesSkipsProvider(t *testing.T) {
 	}
 }
 
-func TestDecisionMicroCompactPreservesLatestOldImage(t *testing.T) {
+func TestDecisionMicroCompactStripsImageFromCompletedUserTurn(t *testing.T) {
 	provider := &recordingDecisionProvider{response: decisionAnswers(map[string]float64{
 		"call_t1": 0, "result_t1": 0,
 		"call_t2": 1, "result_t2": 1,
@@ -311,8 +311,8 @@ func TestDecisionMicroCompactPreservesLatestOldImage(t *testing.T) {
 	for _, msg := range req.History() {
 		found = found || msg.Image != nil && msg.Image.Data == "image-data"
 	}
-	if !found {
-		t.Fatal("latest old image was removed from projection")
+	if found {
+		t.Fatal("image from completed user turn remained in projection")
 	}
 	if sess.GetHistory()[0].Image == nil || sess.GetHistory()[0].Image.Data != "image-data" {
 		t.Fatal("session image was mutated")

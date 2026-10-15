@@ -184,13 +184,35 @@ func (w *Workspace) SkillsPath() string {
 // earlier ones). The standard global agent-skills directory is the lowest
 // priority source.
 func (w *Workspace) SkillsPaths() []string {
+	return w.SkillsPathsFor("")
+}
+
+// SkillsPathsFor includes skill roots from the active worktree. Compatibility
+// roots stay below the explicit project workspace so project skills win.
+func (w *Workspace) SkillsPathsFor(workdir string) []string {
 	roots := w.ResourceRoots("skills")
-	paths := make([]string, 0, len(roots)+1)
+	paths := make([]string, 0, len(roots)+5)
 	if home, err := os.UserHomeDir(); err == nil {
 		paths = append(paths, filepath.Join(home, ".agents", "skills"))
 	}
+	compatAdded := workdir == ""
 	for _, root := range roots {
+		if !compatAdded && root.Scope == ScopeProject {
+			workdir = normalizeRoot(workdir)
+			paths = append(paths,
+				filepath.Join(workdir, ".agent"), filepath.Join(workdir, ".agent", "skills"),
+				filepath.Join(workdir, ".agents"), filepath.Join(workdir, ".agents", "skills"),
+			)
+			compatAdded = true
+		}
 		paths = append(paths, root.Path)
+	}
+	if !compatAdded {
+		workdir = normalizeRoot(workdir)
+		paths = append(paths,
+			filepath.Join(workdir, ".agent"), filepath.Join(workdir, ".agent", "skills"),
+			filepath.Join(workdir, ".agents"), filepath.Join(workdir, ".agents", "skills"),
+		)
 	}
 	return paths
 }

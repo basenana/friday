@@ -221,6 +221,12 @@ func optimizeImageForModel(data []byte, mediaType string, maxBytes int64) (*type
 	return nil, fmt.Errorf("image is still too large after resizing and compression")
 }
 
+// OptimizeImageForModel applies the image tool's resize and compression rules
+// for callers that already have the encoded image bytes.
+func OptimizeImageForModel(data []byte, mediaType string, maxBytes int64) (*types.ImageContent, error) {
+	return optimizeImageForModel(data, mediaType, maxBytes)
+}
+
 func downloadImage(ctx context.Context, exec *Executor, imageURL string, maxBytes int64) ([]byte, string, error) {
 	validated, err := validateNetworkURLAccess(exec, imageURL)
 	if err != nil {

@@ -40,6 +40,7 @@ func (w *Workspace) Load(opts ...LoadOption) (*LoadedContent, error)
 func WithMemoryDays(days int) LoadOption
 func (w *Workspace) Layers() []Layer
 func (w *Workspace) ResourceRoots(relativePath string) []ResourceRoot
+func (w *Workspace) SkillsPathsFor(workdir string) []string
 func (w *Workspace) MCPRoots() []ResourceRoot
 func (w *Workspace) WritablePath(relativePath string) (string, error)
 func (w *Workspace) InitWithParams(params *TemplateParams) ([]string, error)
@@ -59,7 +60,7 @@ Also: `type Layer struct { Root string; Scope Scope; Writable bool }` with
 - `NewFromConfig` builds the HOME→project overlay; if the project's active workspace **is** the HOME workspace (shared), that layer stays read-only — `WritablePath` then returns `ErrReadOnlyWorkspace` so project operations cannot mutate inherited global resources. A project-path symlink to HOME keeps project scope.
 - A missing file loads as empty (`("", nil)`); only `Required: true` (AGENTS.md) errors.
 - Memory window: `DefaultMemoryDays = 2` (today + yesterday); dates parsed from filenames (`2006-01-02`); logs whose content is empty or just `# <date>` are skipped; MEMORY.md empty/`# MEMORY.md` is skipped. Memory lands in `MemoryHistory` as `types.Message{Role: RoleAgent}` under `[Long-Term Memory]` / `[Recent Memory Context]` headers.
-- `SkillsPaths()` returns low→high priority, directly consumable by `skills.NewLoader` (later dirs override); `MCPRoots()` retains each dir's trust `Scope`.
+- `SkillsPaths()` returns the configured low→high priority roots. `SkillsPathsFor(workdir)` additionally inserts `<workdir>/.agent`, `<workdir>/.agent/skills`, `<workdir>/.agents`, and `<workdir>/.agents/skills` below the explicit project workspace; all are directly consumable by `skills.NewLoader` (later dirs override). `MCPRoots()` retains each dir's trust `Scope`.
 - `FileState` keys live in `app_state.json` / `user_state_<userID>.json` as one JSON map per scope; `Get` on a missing key returns a plain error (not a sentinel); `SetRoot` is deprecated.
 
 ## Tests

@@ -146,6 +146,40 @@ func TestLoaderStoresAbsoluteSkillPathFromRelativeRoot(t *testing.T) {
 	}
 }
 
+func TestLoaderSupportsDirectAndNestedAgentSkillRoots(t *testing.T) {
+	workdir := t.TempDir()
+	directRoot := filepath.Join(workdir, ".agent")
+	nestedRoot := filepath.Join(directRoot, "skills")
+	writeSkill := func(root, dir, description string) {
+		t.Helper()
+		path := filepath.Join(root, dir)
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		content := "---\nname: shared\ndescription: " + description + "\n---\ninstructions"
+		if err := os.WriteFile(filepath.Join(path, "SKILL.md"), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeSkill(directRoot, "direct", "direct")
+	writeSkill(nestedRoot, "nested", "nested")
+
+	loader := NewLoader(directRoot, nestedRoot)
+	if err := loader.Load(); err != nil {
+		t.Fatal(err)
+	}
+	if len(loader.loadErrors) != 0 {
+		t.Fatalf("load errors = %v, want none", loader.loadErrors)
+	}
+	skill, err := loader.Get("shared")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if skill.Description != "nested" {
+		t.Fatalf("description = %q, want nested root to override direct root", skill.Description)
+	}
+}
+
 func TestLoaderListFilesRejectsPathTraversal(t *testing.T) {
 	root := t.TempDir()
 	skillDir := filepath.Join(root, "disk-skill")

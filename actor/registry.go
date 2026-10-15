@@ -144,7 +144,7 @@ func NewRegistry(sessMgr setup.SessionManager, appCfg *config.Config, cfg Regist
 		workdir = workdirOrPWD()
 	}
 	ws := workspace.NewFromConfig(appCfg)
-	skillLoader := skills.NewLoader(ws.SkillsPaths()...)
+	skillLoader := skills.NewLoader(ws.SkillsPathsFor(workdir)...)
 	if err := skillLoader.Load(); err != nil {
 		logger.New("actor.registry").Warnw("failed to load skills", "error", err)
 	}
