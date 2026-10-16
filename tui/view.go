@@ -306,6 +306,7 @@ func truncateLines(s string, maxLines int) string {
 }
 
 func (m *model) View() tea.View {
+	m.attachmentHits = nil
 	if m.quitting {
 		return m.newView("")
 	}
@@ -368,6 +369,16 @@ func (m *model) View() tea.View {
 			parts = append(parts, m.renderMenu())
 		}
 		if attachments := m.renderAttachments(); attachments != "" {
+			y := 0
+			for _, part := range parts {
+				y += lipgloss.Height(part)
+			}
+			x := 0
+			for i, image := range m.attachments {
+				label := attachmentLabel(image.Filename, i)
+				m.attachmentHits = append(m.attachmentHits, attachmentHit{Index: i, X: x + ansi.StringWidth(label) - 2, Y: y})
+				x += ansi.StringWidth(label) + 1
+			}
 			parts = append(parts, attachments)
 		}
 		parts = append(parts, inputBoxStyle.Width(max(m.width-2, 10)).Render(m.textarea.View()))
@@ -415,13 +426,16 @@ func (m *model) renderAttachments() string {
 	}
 	labels := make([]string, 0, len(m.attachments))
 	for i, image := range m.attachments {
-		name := image.Filename
-		if name == "" {
-			name = fmt.Sprintf("image-%d", i+1)
-		}
-		labels = append(labels, "[image: "+name+" ×]")
+		labels = append(labels, attachmentLabel(image.Filename, i))
 	}
 	return strings.Join(labels, " ")
+}
+
+func attachmentLabel(name string, index int) string {
+	if name == "" {
+		name = fmt.Sprintf("image-%d", index+1)
+	}
+	return "[image: " + name + " ×]"
 }
 
 func (m *model) newView(content string) tea.View {

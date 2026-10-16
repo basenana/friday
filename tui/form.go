@@ -353,6 +353,22 @@ func (m *model) updateForm(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 }
 
+func (m *model) pasteForm(content string) (tea.Model, tea.Cmd) {
+	f := m.form
+	if f == nil || f.submitting || f.confirmCancel {
+		return m, nil
+	}
+	field := f.current()
+	if field == nil || !isTextField(field.schema.Type) && f.questionEditorIndex() < 0 {
+		return m, nil
+	}
+	var cmd tea.Cmd
+	f.editor, cmd = f.editor.Update(tea.PasteMsg{Content: content})
+	f.dirty = true
+	f.err = ""
+	return m, cmd
+}
+
 func (m *model) updateQuestionForm(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	f := m.form
 	field := f.current()

@@ -541,6 +541,25 @@ func TestWorktreeCreationFailureStaysVisibleInDraftTab(t *testing.T) {
 	}
 }
 
+func TestWorktreeDraftCarriesImagesIntoInitialTurn(t *testing.T) {
+	fixture := newWorktreeRuntimeTestFixture(t)
+	runtime, err := fixture.supervisor.Activate(context.Background(), fixture.mainID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := newWorktreeRuntimeTestModel(t, fixture, runtime)
+	m.worktreeTabs = []worktreeTab{{ID: runtime.id, Label: "main"}}
+	m.setWorktreeDraft(true)
+	m.textarea.SetValue("inspect this screenshot")
+	m.attachments = []types.ImageContent{{Filename: "screenshot.png"}}
+
+	_, cmd := m.submitComposer()
+	prepared := worktreePreparedFromCommand(t, cmd)
+	if len(prepared.runtime.images) != 1 || prepared.runtime.images[0].Filename != "screenshot.png" {
+		t.Fatalf("prepared worktree images = %#v, want screenshot.png", prepared.runtime.images)
+	}
+}
+
 func TestBareWorktreeMessageRunsInCurrentRuntime(t *testing.T) {
 	m, _, _ := newLoadedProjectTestModel(t)
 	m.worktreeMode = true

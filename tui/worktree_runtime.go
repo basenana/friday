@@ -60,6 +60,7 @@ type preparedWorktreeRuntime struct {
 	feed        *bus.Feed
 	revision    uint64
 	requirement string
+	images      []types.ImageContent
 	projection  transcriptProjection
 	history     []string
 	latestPlan  *planning.Artifact

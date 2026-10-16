@@ -330,6 +330,42 @@ func TestBackspaceOnEmptyComposerRemovesLastAttachment(t *testing.T) {
 	}
 }
 
+func TestCtrlBackspaceRemovesLastAttachmentAndKeepsComposerText(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	m.textarea.SetValue("keep this text")
+	m.attachments = []types.ImageContent{{Filename: "first.png"}, {Filename: "second.png"}}
+
+	updated, _ := m.updateKey(tea.KeyPressMsg{Code: tea.KeyBackspace, Mod: tea.ModCtrl})
+	got := updated.(*model)
+	if got.textarea.Value() != "keep this text" {
+		t.Fatalf("composer text = %q, want preserved", got.textarea.Value())
+	}
+	if len(got.attachments) != 1 || got.attachments[0].Filename != "first.png" {
+		t.Fatalf("attachments = %#v, want only first.png", got.attachments)
+	}
+}
+
+func TestClickAttachmentCloseRemovesSelectedImageAndKeepsComposerText(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	m.width, m.height = 100, 30
+	m.textarea.SetValue("keep this text")
+	m.attachments = []types.ImageContent{{Filename: "first.png"}, {Filename: "second.png"}}
+	_ = m.View()
+	if len(m.attachmentHits) != 2 {
+		t.Fatalf("attachment hit targets = %#v, want 2", m.attachmentHits)
+	}
+	hit := m.attachmentHits[0]
+
+	updated, _ := m.Update(tea.MouseClickMsg{X: hit.X, Y: hit.Y, Button: tea.MouseLeft})
+	got := updated.(*model)
+	if got.textarea.Value() != "keep this text" {
+		t.Fatalf("composer text = %q, want preserved", got.textarea.Value())
+	}
+	if len(got.attachments) != 1 || got.attachments[0].Filename != "second.png" {
+		t.Fatalf("attachments = %#v, want only second.png", got.attachments)
+	}
+}
+
 func TestEscIgnoresLateClipboardImageResult(t *testing.T) {
 	m, _, _ := newTestModel(t)
 	m.clipboardImageReader = func(context.Context) (types.ImageContent, error) {
@@ -878,6 +914,26 @@ func TestPastedTextExitsHistoryNavigation(t *testing.T) {
 	}
 	if m.historyIndex != -1 {
 		t.Fatalf("history index after paste = %d, want -1", m.historyIndex)
+	}
+}
+
+func TestPastedTextUpdatesActiveFormEditor(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	f, err := newFormState("confirm", map[string]any{
+		"fields": []any{map[string]any{
+			"name": "reason", "type": "text", "label": "Reason",
+		}},
+	}, 80)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.form = f
+
+	updated, _ := m.Update(tea.PasteMsg{Content: "pasted confirmation"})
+	m = updated.(*model)
+	m.form.commitEditor()
+	if got := m.form.fields[0].text; got != "pasted confirmation" {
+		t.Fatalf("pasted form value = %q, want %q", got, "pasted confirmation")
 	}
 }
 

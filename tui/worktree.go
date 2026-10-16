@@ -14,6 +14,7 @@ import (
 	codebasepkg "github.com/basenana/friday/coder/codebase"
 	codercmds "github.com/basenana/friday/coder/commands"
 	"github.com/basenana/friday/config"
+	"github.com/basenana/friday/core/types"
 	"github.com/basenana/friday/sessions"
 	fridayworktree "github.com/basenana/friday/worktree"
 )
@@ -162,11 +163,15 @@ func (m *model) createWorktree(requirement string) tea.Cmd {
 	token := m.worktreeGeneration
 	supervisor := m.worktreeSupervisor
 	width, height := m.width, m.height
+	images := append([]types.ImageContent(nil), m.attachments...)
 	operation := func() tea.Msg {
 		if supervisor == nil {
 			return worktreePreparedMsg{token: token, err: fmt.Errorf("worktree runtime supervisor is unavailable")}
 		}
 		prepared, err := supervisor.prepareCreatedActivation(context.Background(), requirement, width, height)
+		if prepared != nil {
+			prepared.images = images
+		}
 		return worktreePreparedMsg{token: token, runtime: prepared, err: err}
 	}
 	return tea.Batch(operation, m.armSpinner())
@@ -390,7 +395,7 @@ func (m *model) commitPreparedWorktree(msg worktreePreparedMsg) tea.Cmd {
 	waitCmd := tea.Batch(append([]tea.Cmd{m.waitForActorEvent()}, statusWaits...)...)
 	if strings.TrimSpace(prepared.requirement) != "" {
 		m.recordPrompt(prepared.requirement)
-		_, promptCmd := m.startUserTurn(prepared.requirement, nil)
+		_, promptCmd := m.startUserTurn(prepared.requirement, prepared.images)
 		return tea.Batch(waitCmd, promptCmd)
 	}
 	return waitCmd

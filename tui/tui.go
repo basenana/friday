@@ -194,6 +194,11 @@ type menuItem struct {
 	value, label, description string
 }
 
+type attachmentHit struct {
+	Index int
+	X, Y  int
+}
+
 // sessionRuntime is the narrow persisted capability used by the TUI after a
 // root has been selected. Project mode supplies project.Manager; legacy mode
 // supplies sessions.Manager.
@@ -262,6 +267,7 @@ type model struct {
 
 	textarea             textarea.Model
 	attachments          []types.ImageContent
+	attachmentHits       []attachmentHit
 	clipboardImageReader clipboardImageReader
 	composerGeneration   uint64
 	viewport             viewport.Model
@@ -587,6 +593,17 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.BackgroundColorMsg:
 		m.applyTheme(msg.IsDark())
 		return m, nil
+	case tea.PasteMsg:
+		if m.form != nil {
+			return m.pasteForm(msg.Content)
+		}
+		oldValue := m.textarea.Value()
+		var cmd tea.Cmd
+		m.textarea, cmd = m.textarea.Update(msg)
+		if m.textarea.Value() != oldValue {
+			m.afterComposerEdit()
+		}
+		return m, cmd
 	case editorFinishedMsg:
 		if msg.err != nil {
 			m.appendBlock(chatBlock{kind: blockError, content: "editor: " + msg.err.Error()})
@@ -855,6 +872,16 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, cmd
 	case tea.MouseClickMsg:
+		if msg.Button == tea.MouseLeft {
+			for _, hit := range m.attachmentHits {
+				if msg.X == hit.X && msg.Y == hit.Y && hit.Index < len(m.attachments) {
+					m.attachments = append(m.attachments[:hit.Index], m.attachments[hit.Index+1:]...)
+					m.attachmentHits = nil
+					m.layout()
+					return m, nil
+				}
+			}
+		}
 		if m.canSwitchWorktree() && msg.Button == tea.MouseLeft && msg.Y >= 0 && msg.Y < 3 {
 			if target := worktreeTabAt(m.worktreeTabHits, msg.X); target != "" && (m.worktreeRuntime == nil || target != m.worktreeRuntime.id) {
 				return m, m.selectWorktree(target)
@@ -1283,8 +1310,15 @@ func (m *model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.invalidateRendered()
 		return m, tea.ClearScreen
 	}
+	if msg.Code == tea.KeyBackspace && msg.Mod.Contains(tea.ModCtrl) && len(m.attachments) > 0 {
+		m.attachments = m.attachments[:len(m.attachments)-1]
+		m.attachmentHits = nil
+		m.layout()
+		return m, nil
+	}
 	if msg.Code == tea.KeyBackspace && m.textarea.Value() == "" && len(m.attachments) > 0 {
 		m.attachments = m.attachments[:len(m.attachments)-1]
+		m.attachmentHits = nil
 		m.layout()
 		return m, nil
 	}
