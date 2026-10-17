@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	coresession "github.com/basenana/friday/core/session"
+	coresession "git.hypo.xyz/agents/friday/core/session"
 )
 
 func TestPersistentTaskManagerRestoresCompletedTask(t *testing.T) {

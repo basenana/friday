@@ -9,11 +9,11 @@ import (
 	"strings"
 	"testing"
 
-	coderagents "github.com/basenana/friday/coder/agents"
-	codercmds "github.com/basenana/friday/coder/commands"
-	"github.com/basenana/friday/core/agents"
-	"github.com/basenana/friday/core/api"
-	"github.com/basenana/friday/core/subagents"
+	coderagents "git.hypo.xyz/agents/friday/coder/agents"
+	codercmds "git.hypo.xyz/agents/friday/coder/commands"
+	"git.hypo.xyz/agents/friday/core/agents"
+	"git.hypo.xyz/agents/friday/core/api"
+	"git.hypo.xyz/agents/friday/core/subagents"
 )
 
 // TestCoder_CommandRegistry verifies the command registry registers and

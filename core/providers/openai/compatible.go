@@ -8,12 +8,12 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/basenana/friday/core/providers"
-	"github.com/basenana/friday/core/types"
+	"git.hypo.xyz/agents/friday/core/providers"
+	"git.hypo.xyz/agents/friday/core/types"
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/packages/param"
 
-	"github.com/basenana/friday/core/logger"
+	"git.hypo.xyz/agents/friday/core/logger"
 )
 
 // Deprecated: compatibleClient is not used. Do not use for new integrations.

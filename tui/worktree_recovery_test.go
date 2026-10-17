@@ -10,11 +10,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/basenana/friday/bus"
-	coderloop "github.com/basenana/friday/coder/loop"
-	"github.com/basenana/friday/core/actor/events"
-	coresession "github.com/basenana/friday/core/session"
-	fridayworktree "github.com/basenana/friday/worktree"
+	"git.hypo.xyz/agents/friday/bus"
+	coderloop "git.hypo.xyz/agents/friday/coder/loop"
+	"git.hypo.xyz/agents/friday/core/actor/events"
+	coresession "git.hypo.xyz/agents/friday/core/session"
+	fridayworktree "git.hypo.xyz/agents/friday/worktree"
 )
 
 const worktreeLoopPhaseNamespace = "coder.loop.phase"

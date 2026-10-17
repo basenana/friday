@@ -8,12 +8,12 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/basenana/friday/config"
-	"github.com/basenana/friday/core/providers"
-	"github.com/basenana/friday/core/providers/fallback"
-	"github.com/basenana/friday/sessions"
-	"github.com/basenana/friday/sessions/file"
-	"github.com/basenana/friday/workspace"
+	"git.hypo.xyz/agents/friday/config"
+	"git.hypo.xyz/agents/friday/core/providers"
+	"git.hypo.xyz/agents/friday/core/providers/fallback"
+	"git.hypo.xyz/agents/friday/sessions"
+	"git.hypo.xyz/agents/friday/sessions/file"
+	"git.hypo.xyz/agents/friday/workspace"
 )
 
 type setupDecisionProvider struct {

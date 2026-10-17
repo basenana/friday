@@ -9,12 +9,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/basenana/friday/core/agents"
-	"github.com/basenana/friday/core/api"
-	"github.com/basenana/friday/core/session"
-	"github.com/basenana/friday/core/tools"
-	"github.com/basenana/friday/core/tracing"
-	"github.com/basenana/friday/core/types"
+	"git.hypo.xyz/agents/friday/core/agents"
+	"git.hypo.xyz/agents/friday/core/api"
+	"git.hypo.xyz/agents/friday/core/session"
+	"git.hypo.xyz/agents/friday/core/tools"
+	"git.hypo.xyz/agents/friday/core/tracing"
+	"git.hypo.xyz/agents/friday/core/types"
 )
 
 func fuzzyMatching(s1, s2 string) bool {

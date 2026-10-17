@@ -16,17 +16,17 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/basenana/friday/core/actor/events"
-	"github.com/basenana/friday/core/actor/sink"
-	"github.com/basenana/friday/core/agents"
-	"github.com/basenana/friday/core/api"
-	"github.com/basenana/friday/core/collaboration"
-	corelogger "github.com/basenana/friday/core/logger"
-	"github.com/basenana/friday/core/planning"
-	"github.com/basenana/friday/core/session"
-	coretools "github.com/basenana/friday/core/tools"
-	"github.com/basenana/friday/core/tracing"
-	"github.com/basenana/friday/core/types"
+	"git.hypo.xyz/agents/friday/core/actor/events"
+	"git.hypo.xyz/agents/friday/core/actor/sink"
+	"git.hypo.xyz/agents/friday/core/agents"
+	"git.hypo.xyz/agents/friday/core/api"
+	"git.hypo.xyz/agents/friday/core/collaboration"
+	corelogger "git.hypo.xyz/agents/friday/core/logger"
+	"git.hypo.xyz/agents/friday/core/planning"
+	"git.hypo.xyz/agents/friday/core/session"
+	coretools "git.hypo.xyz/agents/friday/core/tools"
+	"git.hypo.xyz/agents/friday/core/tracing"
+	"git.hypo.xyz/agents/friday/core/types"
 )
 
 // ErrUnknownForm is returned by ResolveForm when no waiter exists.

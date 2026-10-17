@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/basenana/friday/core/tools"
+	"git.hypo.xyz/agents/friday/core/tools"
 )
 
 // benchSearchWorkerCounts mirrors the plan's worker sweep: 1 is the closest

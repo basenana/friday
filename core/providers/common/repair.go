@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/basenana/friday/core/types"
+	"git.hypo.xyz/agents/friday/core/types"
 )
 
 // RepairToolHistory performs only unambiguous, provider-agnostic cleanup.

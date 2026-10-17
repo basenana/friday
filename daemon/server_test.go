@@ -13,10 +13,10 @@ import (
 	"github.com/coder/websocket"
 	eventbus "github.com/hyponet/eventbus/bus"
 
-	"github.com/basenana/friday/bus"
-	coreactor "github.com/basenana/friday/core/actor"
-	"github.com/basenana/friday/core/actor/events"
-	"github.com/basenana/friday/sessions"
+	"git.hypo.xyz/agents/friday/bus"
+	coreactor "git.hypo.xyz/agents/friday/core/actor"
+	"git.hypo.xyz/agents/friday/core/actor/events"
+	"git.hypo.xyz/agents/friday/sessions"
 )
 
 type fakeRegistry struct {

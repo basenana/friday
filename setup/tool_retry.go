@@ -6,7 +6,7 @@ import (
 	"math/rand"
 	"time"
 
-	"github.com/basenana/friday/core/tools"
+	"git.hypo.xyz/agents/friday/core/tools"
 	"github.com/google/uuid"
 )
 

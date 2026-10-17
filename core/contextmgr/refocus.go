@@ -8,12 +8,12 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/basenana/friday/core/logger"
-	"github.com/basenana/friday/core/providers"
-	"github.com/basenana/friday/core/session"
-	"github.com/basenana/friday/core/tools"
-	"github.com/basenana/friday/core/tracing"
-	"github.com/basenana/friday/core/types"
+	"git.hypo.xyz/agents/friday/core/logger"
+	"git.hypo.xyz/agents/friday/core/providers"
+	"git.hypo.xyz/agents/friday/core/session"
+	"git.hypo.xyz/agents/friday/core/tools"
+	"git.hypo.xyz/agents/friday/core/tracing"
+	"git.hypo.xyz/agents/friday/core/types"
 )
 
 const (

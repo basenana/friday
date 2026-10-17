@@ -3,8 +3,8 @@ package codebase
 import (
 	"testing"
 
-	"github.com/basenana/friday/core/tools"
-	"github.com/basenana/friday/sandbox"
+	"git.hypo.xyz/agents/friday/core/tools"
+	"git.hypo.xyz/agents/friday/sandbox"
 )
 
 func TestContextToolsExcludeMutationAndShell(t *testing.T) {

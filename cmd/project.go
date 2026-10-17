@@ -7,9 +7,9 @@ import (
 	"os"
 	"path/filepath"
 
-	projectpkg "github.com/basenana/friday/coder/project"
-	"github.com/basenana/friday/config"
-	fridayworktree "github.com/basenana/friday/worktree"
+	projectpkg "git.hypo.xyz/agents/friday/coder/project"
+	"git.hypo.xyz/agents/friday/config"
+	fridayworktree "git.hypo.xyz/agents/friday/worktree"
 )
 
 func classifyProjectDirectory(ctx context.Context, cwd string) (bool, error) {

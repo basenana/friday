@@ -13,7 +13,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/basenana/friday/sandbox"
+	"git.hypo.xyz/agents/friday/sandbox"
 )
 
 type gitState struct {

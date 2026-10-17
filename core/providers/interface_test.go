@@ -3,7 +3,7 @@ package providers
 import (
 	"testing"
 
-	"github.com/basenana/friday/core/types"
+	"git.hypo.xyz/agents/friday/core/types"
 )
 
 // baseRequest intentionally implements only Request, proving optional

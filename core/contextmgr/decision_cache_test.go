@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/basenana/friday/core/session"
-	"github.com/basenana/friday/core/types"
+	"git.hypo.xyz/agents/friday/core/session"
+	"git.hypo.xyz/agents/friday/core/types"
 )
 
 func TestDecisionCacheEpochStableWithinUserTurn(t *testing.T) {

@@ -12,17 +12,17 @@ import (
 
 	eventbus "github.com/hyponet/eventbus/bus"
 
-	"github.com/basenana/friday/bus"
-	coderloop "github.com/basenana/friday/coder/loop"
-	"github.com/basenana/friday/coder/project"
-	"github.com/basenana/friday/core/actor/events"
-	"github.com/basenana/friday/core/logger"
-	"github.com/basenana/friday/core/planning"
-	"github.com/basenana/friday/core/providers/fallback"
-	coresession "github.com/basenana/friday/core/session"
-	"github.com/basenana/friday/core/types"
-	"github.com/basenana/friday/sandbox"
-	"github.com/basenana/friday/sessions"
+	"git.hypo.xyz/agents/friday/bus"
+	coderloop "git.hypo.xyz/agents/friday/coder/loop"
+	"git.hypo.xyz/agents/friday/coder/project"
+	"git.hypo.xyz/agents/friday/core/actor/events"
+	"git.hypo.xyz/agents/friday/core/logger"
+	"git.hypo.xyz/agents/friday/core/planning"
+	"git.hypo.xyz/agents/friday/core/providers/fallback"
+	coresession "git.hypo.xyz/agents/friday/core/session"
+	"git.hypo.xyz/agents/friday/core/types"
+	"git.hypo.xyz/agents/friday/sandbox"
+	"git.hypo.xyz/agents/friday/sessions"
 )
 
 type Options struct {

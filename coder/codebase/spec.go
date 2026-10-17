@@ -10,9 +10,9 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/basenana/friday/core/logger"
-	"github.com/basenana/friday/core/providers"
-	"github.com/basenana/friday/core/providers/fallback"
+	"git.hypo.xyz/agents/friday/core/logger"
+	"git.hypo.xyz/agents/friday/core/providers"
+	"git.hypo.xyz/agents/friday/core/providers/fallback"
 	"gopkg.in/yaml.v3"
 )
 

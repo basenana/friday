@@ -10,8 +10,8 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/basenana/friday/core/types"
-	"github.com/basenana/friday/sandbox"
+	"git.hypo.xyz/agents/friday/core/types"
+	"git.hypo.xyz/agents/friday/sandbox"
 )
 
 const maxClipboardImageBytes = 20 * 1024 * 1024

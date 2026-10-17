@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/basenana/friday/core/providers"
+	"git.hypo.xyz/agents/friday/core/providers"
 )
 
 const successResponse = `{

@@ -10,11 +10,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/basenana/friday/actor"
-	"github.com/basenana/friday/bus"
-	coreactor "github.com/basenana/friday/core/actor"
-	"github.com/basenana/friday/core/actor/events"
-	"github.com/basenana/friday/core/types"
+	"git.hypo.xyz/agents/friday/actor"
+	"git.hypo.xyz/agents/friday/bus"
+	coreactor "git.hypo.xyz/agents/friday/core/actor"
+	"git.hypo.xyz/agents/friday/core/actor/events"
+	"git.hypo.xyz/agents/friday/core/types"
 )
 
 // newActorEnv builds a Registry environment: a sessions.Manager + config +

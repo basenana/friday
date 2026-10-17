@@ -3,7 +3,7 @@ package common
 import (
 	"testing"
 
-	"github.com/basenana/friday/core/types"
+	"git.hypo.xyz/agents/friday/core/types"
 )
 
 func TestApplyTokenFallbackWithOverhead(t *testing.T) {

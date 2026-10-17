@@ -4,7 +4,7 @@ This file provides guidance for the `core` module — the reusable agent framewo
 
 ## Module Overview
 
-The `core` module is a standalone Go module (`github.com/basenana/friday/core`) providing:
+The `core` module is a standalone Go module (`git.hypo.xyz/agents/friday/core`) providing:
 - Agent interfaces and implementations (ReAct loop)
 - LLM provider clients (OpenAI, Anthropic)
 - Session management with hook system

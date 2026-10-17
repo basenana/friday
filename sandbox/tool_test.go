@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/basenana/friday/core/tools"
+	"git.hypo.xyz/agents/friday/core/tools"
 )
 
 func TestBashToolKeepsFunctionalOptions(t *testing.T) {

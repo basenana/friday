@@ -4,8 +4,8 @@ import (
 	"context"
 	"errors"
 
-	"github.com/basenana/friday/core/actor/events"
-	"github.com/basenana/friday/sessions"
+	"git.hypo.xyz/agents/friday/core/actor/events"
+	"git.hypo.xyz/agents/friday/sessions"
 )
 
 type SessionCatalog interface {

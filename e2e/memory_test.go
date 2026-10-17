@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/basenana/friday/core/types"
-	"github.com/basenana/friday/memory"
-	"github.com/basenana/friday/setup"
+	"git.hypo.xyz/agents/friday/core/types"
+	"git.hypo.xyz/agents/friday/memory"
+	"git.hypo.xyz/agents/friday/setup"
 )
 
 // TestMemory_DailyLogWrite verifies that MemorySystem.Write appends to the

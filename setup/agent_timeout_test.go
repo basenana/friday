@@ -8,14 +8,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/basenana/friday/config"
-	"github.com/basenana/friday/core/agents"
-	"github.com/basenana/friday/core/api"
-	"github.com/basenana/friday/core/providers/fallback"
-	"github.com/basenana/friday/core/types"
-	"github.com/basenana/friday/sessions"
-	"github.com/basenana/friday/sessions/file"
-	"github.com/basenana/friday/workspace"
+	"git.hypo.xyz/agents/friday/config"
+	"git.hypo.xyz/agents/friday/core/agents"
+	"git.hypo.xyz/agents/friday/core/api"
+	"git.hypo.xyz/agents/friday/core/providers/fallback"
+	"git.hypo.xyz/agents/friday/core/types"
+	"git.hypo.xyz/agents/friday/sessions"
+	"git.hypo.xyz/agents/friday/sessions/file"
+	"git.hypo.xyz/agents/friday/workspace"
 )
 
 // stuckAgent returns a stream that never terminates and ignores its context,

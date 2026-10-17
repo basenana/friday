@@ -10,14 +10,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/basenana/friday/core/agents"
-	"github.com/basenana/friday/core/agents/research"
-	"github.com/basenana/friday/core/agents/simple"
-	"github.com/basenana/friday/core/agents/summarize"
-	"github.com/basenana/friday/core/api"
-	"github.com/basenana/friday/core/planning"
-	"github.com/basenana/friday/core/planning/lats"
-	"github.com/basenana/friday/core/types"
+	"git.hypo.xyz/agents/friday/core/agents"
+	"git.hypo.xyz/agents/friday/core/agents/research"
+	"git.hypo.xyz/agents/friday/core/agents/simple"
+	"git.hypo.xyz/agents/friday/core/agents/summarize"
+	"git.hypo.xyz/agents/friday/core/api"
+	"git.hypo.xyz/agents/friday/core/planning"
+	"git.hypo.xyz/agents/friday/core/planning/lats"
+	"git.hypo.xyz/agents/friday/core/types"
 )
 
 // TestPlanning_TodoCreate verifies that the planning TODO hook injects the

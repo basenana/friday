@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/basenana/friday/core/providers"
-	"github.com/basenana/friday/core/providers/fallback"
-	"github.com/basenana/friday/core/types"
-	"github.com/basenana/friday/setup"
+	"git.hypo.xyz/agents/friday/core/providers"
+	"git.hypo.xyz/agents/friday/core/providers/fallback"
+	"git.hypo.xyz/agents/friday/core/types"
+	"git.hypo.xyz/agents/friday/setup"
 )
 
 // TestProvider_OpenAI_Streaming verifies that the OpenAI provider returns

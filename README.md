@@ -22,7 +22,7 @@ Text in, text out. Pipe-friendly. No GUI, no cloud dependency, no account requir
 ## Installation
 
 ```bash
-git clone https://github.com/basenana/friday.git
+git clone https://git.hypo.xyz/agents/friday.git
 cd friday
 make build
 ```

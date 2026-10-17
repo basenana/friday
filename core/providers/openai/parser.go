@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/basenana/friday/core/providers"
-	"github.com/basenana/friday/core/providers/common"
+	"git.hypo.xyz/agents/friday/core/providers"
+	"git.hypo.xyz/agents/friday/core/providers/common"
 )
 
 var thinkingTags = []struct {

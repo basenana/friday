@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/basenana/friday/coder/project"
+	"git.hypo.xyz/agents/friday/coder/project"
 )
 
 func overlayTestPath(t *testing.T) (dir, path string) {

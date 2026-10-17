@@ -3,7 +3,7 @@ package actor
 import (
 	"context"
 
-	"github.com/basenana/friday/core/actor/events"
+	"git.hypo.xyz/agents/friday/core/actor/events"
 )
 
 // TurnStartInfo carries the metadata of a turn about to be driven.

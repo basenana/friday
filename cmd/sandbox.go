@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/basenana/friday/sandbox"
+	"git.hypo.xyz/agents/friday/sandbox"
 	"github.com/spf13/cobra"
 )
 

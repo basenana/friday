@@ -3,7 +3,7 @@ package api
 import (
 	"context"
 
-	"github.com/basenana/friday/core/session"
+	"git.hypo.xyz/agents/friday/core/session"
 )
 
 const (

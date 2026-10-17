@@ -9,8 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/basenana/friday/coder/project"
-	fridayworktree "github.com/basenana/friday/worktree"
+	"git.hypo.xyz/agents/friday/coder/project"
+	fridayworktree "git.hypo.xyz/agents/friday/worktree"
 )
 
 // ProjectAllowDoc is the on-disk document for per-project sandbox command

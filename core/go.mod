@@ -1,4 +1,4 @@
-module github.com/basenana/friday/core
+module git.hypo.xyz/agents/friday/core
 
 go 1.25.0
 

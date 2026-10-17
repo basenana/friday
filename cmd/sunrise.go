@@ -8,10 +8,10 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/basenana/friday/config"
-	"github.com/basenana/friday/memory"
-	"github.com/basenana/friday/sessions"
-	"github.com/basenana/friday/setup"
+	"git.hypo.xyz/agents/friday/config"
+	"git.hypo.xyz/agents/friday/memory"
+	"git.hypo.xyz/agents/friday/sessions"
+	"git.hypo.xyz/agents/friday/setup"
 )
 
 var sunriseCmd = &cobra.Command{

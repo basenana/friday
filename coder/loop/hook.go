@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/basenana/friday/core/providers"
-	"github.com/basenana/friday/core/session"
-	"github.com/basenana/friday/core/tools"
+	"git.hypo.xyz/agents/friday/core/providers"
+	"git.hypo.xyz/agents/friday/core/session"
+	"git.hypo.xyz/agents/friday/core/tools"
 )
 
 type Hook struct{}

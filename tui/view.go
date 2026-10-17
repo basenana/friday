@@ -10,9 +10,9 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
-	codebasepkg "github.com/basenana/friday/coder/codebase"
-	"github.com/basenana/friday/core/planning"
-	"github.com/basenana/friday/core/providers"
+	codebasepkg "git.hypo.xyz/agents/friday/coder/codebase"
+	"git.hypo.xyz/agents/friday/core/planning"
+	"git.hypo.xyz/agents/friday/core/providers"
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/x/ansi"
 )

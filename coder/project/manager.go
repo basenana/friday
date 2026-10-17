@@ -10,11 +10,11 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/basenana/friday/core/collaboration"
-	"github.com/basenana/friday/core/planning"
-	"github.com/basenana/friday/core/providers"
-	coresession "github.com/basenana/friday/core/session"
-	"github.com/basenana/friday/sessions"
+	"git.hypo.xyz/agents/friday/core/collaboration"
+	"git.hypo.xyz/agents/friday/core/planning"
+	"git.hypo.xyz/agents/friday/core/providers"
+	coresession "git.hypo.xyz/agents/friday/core/session"
+	"git.hypo.xyz/agents/friday/sessions"
 )
 
 // Manager provides project-scoped root-session selection while delegating all

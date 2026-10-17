@@ -10,11 +10,11 @@ import (
 	tea "charm.land/bubbletea/v2"
 	eventbus "github.com/hyponet/eventbus/bus"
 
-	"github.com/basenana/friday/bus"
-	coderloop "github.com/basenana/friday/coder/loop"
-	"github.com/basenana/friday/core/actor/events"
-	"github.com/basenana/friday/core/session"
-	"github.com/basenana/friday/core/types"
+	"git.hypo.xyz/agents/friday/bus"
+	coderloop "git.hypo.xyz/agents/friday/coder/loop"
+	"git.hypo.xyz/agents/friday/core/actor/events"
+	"git.hypo.xyz/agents/friday/core/session"
+	"git.hypo.xyz/agents/friday/core/types"
 )
 
 func TestComposerPublishesImageOnlyInput(t *testing.T) {

@@ -5,8 +5,8 @@ import (
 
 	eventbus "github.com/hyponet/eventbus/bus"
 
-	"github.com/basenana/friday/bus"
-	coreactor "github.com/basenana/friday/core/actor"
+	"git.hypo.xyz/agents/friday/bus"
+	coreactor "git.hypo.xyz/agents/friday/core/actor"
 )
 
 // OutBridge forwards an actor's event stream to the bus, translating each

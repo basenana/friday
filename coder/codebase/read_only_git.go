@@ -5,9 +5,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/basenana/friday/core/tools"
-	"github.com/basenana/friday/sandbox"
-	"github.com/basenana/friday/shellcmd"
+	"git.hypo.xyz/agents/friday/core/tools"
+	"git.hypo.xyz/agents/friday/sandbox"
+	"git.hypo.xyz/agents/friday/shellcmd"
 )
 
 const readOnlyGitToolName = "codebase_git_history"

@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/basenana/friday/core/providers"
-	"github.com/basenana/friday/core/tools"
+	"git.hypo.xyz/agents/friday/core/providers"
+	"git.hypo.xyz/agents/friday/core/tools"
 )
 
 // fakeClient is a minimal providers.Client for factory tests.

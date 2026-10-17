@@ -8,10 +8,10 @@ import (
 
 	"github.com/spf13/cobra"
 
-	projectpkg "github.com/basenana/friday/coder/project"
-	"github.com/basenana/friday/config"
-	"github.com/basenana/friday/sessions"
-	"github.com/basenana/friday/tui"
+	projectpkg "git.hypo.xyz/agents/friday/coder/project"
+	"git.hypo.xyz/agents/friday/config"
+	"git.hypo.xyz/agents/friday/sessions"
+	"git.hypo.xyz/agents/friday/tui"
 )
 
 var tuiSessionID string

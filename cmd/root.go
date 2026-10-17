@@ -9,11 +9,11 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/basenana/friday/config"
-	"github.com/basenana/friday/sessions"
-	"github.com/basenana/friday/sessions/file"
-	"github.com/basenana/friday/utils/logger"
-	"github.com/basenana/friday/workspace"
+	"git.hypo.xyz/agents/friday/config"
+	"git.hypo.xyz/agents/friday/sessions"
+	"git.hypo.xyz/agents/friday/sessions/file"
+	"git.hypo.xyz/agents/friday/utils/logger"
+	"git.hypo.xyz/agents/friday/workspace"
 )
 
 var (

@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/basenana/friday/core/tools"
+	"git.hypo.xyz/agents/friday/core/tools"
 )
 
 func TestLoadSkillToolReturnsAbsoluteDirectoryPath(t *testing.T) {

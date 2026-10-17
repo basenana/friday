@@ -3,10 +3,10 @@ package agents
 import (
 	"fmt"
 
-	coreagents "github.com/basenana/friday/core/agents"
-	"github.com/basenana/friday/core/providers"
-	"github.com/basenana/friday/core/subagents"
-	"github.com/basenana/friday/core/tools"
+	coreagents "git.hypo.xyz/agents/friday/core/agents"
+	"git.hypo.xyz/agents/friday/core/providers"
+	"git.hypo.xyz/agents/friday/core/subagents"
+	"git.hypo.xyz/agents/friday/core/tools"
 )
 
 // ClientFactory builds providers.Client instances per AgentSpec.

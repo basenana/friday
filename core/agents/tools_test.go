@@ -7,9 +7,9 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	"github.com/basenana/friday/core/session"
-	"github.com/basenana/friday/core/tools"
-	"github.com/basenana/friday/core/types"
+	"git.hypo.xyz/agents/friday/core/session"
+	"git.hypo.xyz/agents/friday/core/tools"
+	"git.hypo.xyz/agents/friday/core/types"
 )
 
 func TestMarshalToolResultForModelIncludesFYI(t *testing.T) {

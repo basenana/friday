@@ -9,7 +9,7 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/basenana/friday/core/types"
+	"git.hypo.xyz/agents/friday/core/types"
 )
 
 // EventKind is the AG-UI event type discriminator.

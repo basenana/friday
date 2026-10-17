@@ -14,14 +14,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/basenana/friday/core/actor/events"
-	"github.com/basenana/friday/core/collaboration"
-	"github.com/basenana/friday/core/contextmgr"
-	corelogger "github.com/basenana/friday/core/logger"
-	"github.com/basenana/friday/core/planning"
-	"github.com/basenana/friday/core/providers"
-	"github.com/basenana/friday/core/types"
-	"github.com/basenana/friday/sessions"
+	"git.hypo.xyz/agents/friday/core/actor/events"
+	"git.hypo.xyz/agents/friday/core/collaboration"
+	"git.hypo.xyz/agents/friday/core/contextmgr"
+	corelogger "git.hypo.xyz/agents/friday/core/logger"
+	"git.hypo.xyz/agents/friday/core/planning"
+	"git.hypo.xyz/agents/friday/core/providers"
+	"git.hypo.xyz/agents/friday/core/types"
+	"git.hypo.xyz/agents/friday/sessions"
 )
 
 func TestConcurrentMetadataUpdatesAcrossStoreInstances(t *testing.T) {

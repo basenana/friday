@@ -3,7 +3,7 @@ package commands
 import (
 	"strings"
 
-	"github.com/basenana/friday/core/collaboration"
+	"git.hypo.xyz/agents/friday/core/collaboration"
 )
 
 // --- /plan ---

@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/basenana/friday/core/session"
+	"git.hypo.xyz/agents/friday/core/session"
 )
 
 func TestReadStateMissingRecordStaysAbsent(t *testing.T) {

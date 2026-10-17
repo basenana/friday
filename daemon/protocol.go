@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/basenana/friday/core/types"
+	"git.hypo.xyz/agents/friday/core/types"
 )
 
 const ProtocolVersion = 1

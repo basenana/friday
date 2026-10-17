@@ -10,13 +10,13 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/basenana/friday/bus"
-	codebasepkg "github.com/basenana/friday/coder/codebase"
-	codercmds "github.com/basenana/friday/coder/commands"
-	"github.com/basenana/friday/config"
-	"github.com/basenana/friday/core/types"
-	"github.com/basenana/friday/sessions"
-	fridayworktree "github.com/basenana/friday/worktree"
+	"git.hypo.xyz/agents/friday/bus"
+	codebasepkg "git.hypo.xyz/agents/friday/coder/codebase"
+	codercmds "git.hypo.xyz/agents/friday/coder/commands"
+	"git.hypo.xyz/agents/friday/config"
+	"git.hypo.xyz/agents/friday/core/types"
+	"git.hypo.xyz/agents/friday/sessions"
+	fridayworktree "git.hypo.xyz/agents/friday/worktree"
 )
 
 type worktreeSwitchMsg struct {

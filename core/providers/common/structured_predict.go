@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/basenana/friday/core/logger"
-	"github.com/basenana/friday/core/providers"
+	"git.hypo.xyz/agents/friday/core/logger"
+	"git.hypo.xyz/agents/friday/core/providers"
 )
 
 func StructuredPredictWithFallback(

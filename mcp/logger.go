@@ -1,7 +1,7 @@
 package mcp
 
 import (
-	corelogger "github.com/basenana/friday/core/logger"
+	corelogger "git.hypo.xyz/agents/friday/core/logger"
 	mcpgo "github.com/mark3labs/mcp-go/util"
 )
 

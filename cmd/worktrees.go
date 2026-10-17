@@ -9,11 +9,11 @@ import (
 
 	"github.com/spf13/cobra"
 
-	codebasepkg "github.com/basenana/friday/coder/codebase"
-	projectpkg "github.com/basenana/friday/coder/project"
-	"github.com/basenana/friday/config"
-	"github.com/basenana/friday/sessions"
-	fridayworktree "github.com/basenana/friday/worktree"
+	codebasepkg "git.hypo.xyz/agents/friday/coder/codebase"
+	projectpkg "git.hypo.xyz/agents/friday/coder/project"
+	"git.hypo.xyz/agents/friday/config"
+	"git.hypo.xyz/agents/friday/sessions"
+	fridayworktree "git.hypo.xyz/agents/friday/worktree"
 )
 
 var worktreesRemoveDeleteBranch bool

@@ -4,8 +4,8 @@ import (
 	"context"
 	"strconv"
 
-	"github.com/basenana/friday/core/actor/events"
-	"github.com/basenana/friday/core/types"
+	"git.hypo.xyz/agents/friday/core/actor/events"
+	"git.hypo.xyz/agents/friday/core/types"
 )
 
 // Translator converts core deltas/events into AG-UI-shaped actor events.

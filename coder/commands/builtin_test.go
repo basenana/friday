@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/basenana/friday/core/collaboration"
+	"git.hypo.xyz/agents/friday/core/collaboration"
 )
 
 func actionAt[T Action](t *testing.T, result *Result, index int) T {

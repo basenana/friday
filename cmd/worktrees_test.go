@@ -10,11 +10,11 @@ import (
 	"strings"
 	"testing"
 
-	projectpkg "github.com/basenana/friday/coder/project"
-	"github.com/basenana/friday/core/types"
-	"github.com/basenana/friday/sessions"
-	sessionfile "github.com/basenana/friday/sessions/file"
-	fridayworktree "github.com/basenana/friday/worktree"
+	projectpkg "git.hypo.xyz/agents/friday/coder/project"
+	"git.hypo.xyz/agents/friday/core/types"
+	"git.hypo.xyz/agents/friday/sessions"
+	sessionfile "git.hypo.xyz/agents/friday/sessions/file"
+	fridayworktree "git.hypo.xyz/agents/friday/worktree"
 	"github.com/spf13/pflag"
 )
 

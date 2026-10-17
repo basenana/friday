@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/basenana/friday/core/providers"
-	"github.com/basenana/friday/core/tracing"
-	"github.com/basenana/friday/core/types"
+	"git.hypo.xyz/agents/friday/core/providers"
+	"git.hypo.xyz/agents/friday/core/tracing"
+	"git.hypo.xyz/agents/friday/core/types"
 )
 
 var (

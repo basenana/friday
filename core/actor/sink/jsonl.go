@@ -11,7 +11,7 @@ import (
 	"os"
 	"sync"
 
-	"github.com/basenana/friday/core/actor/events"
+	"git.hypo.xyz/agents/friday/core/actor/events"
 )
 
 // sinkFlushThreshold bounds the JSONL write buffer. Streaming produces on

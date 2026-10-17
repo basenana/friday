@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/basenana/friday/core/actor/events"
+	"git.hypo.xyz/agents/friday/core/actor/events"
 )
 
 func countLines(t *testing.T, path string) int {

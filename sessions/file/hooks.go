@@ -1,7 +1,7 @@
 package file
 
 import (
-	"github.com/basenana/friday/core/types"
+	"git.hypo.xyz/agents/friday/core/types"
 )
 
 type LoadHistoryHook struct {

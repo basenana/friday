@@ -3,7 +3,7 @@ package agents
 import (
 	"context"
 
-	"github.com/basenana/friday/core/api"
+	"git.hypo.xyz/agents/friday/core/api"
 )
 
 type Agent interface {

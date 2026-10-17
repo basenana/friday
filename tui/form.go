@@ -13,8 +13,8 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/basenana/friday/bus"
-	"github.com/basenana/friday/core/actor/cards"
+	"git.hypo.xyz/agents/friday/bus"
+	"git.hypo.xyz/agents/friday/core/actor/cards"
 )
 
 type formFieldState struct {

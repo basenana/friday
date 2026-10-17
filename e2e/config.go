@@ -9,7 +9,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/basenana/friday/config"
+	"git.hypo.xyz/agents/friday/config"
 )
 
 // E2EConfig is the top-level configuration for e2e tests.

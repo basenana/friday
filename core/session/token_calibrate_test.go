@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/basenana/friday/core/types"
+	"git.hypo.xyz/agents/friday/core/types"
 )
 
 func TestEstimateHistoryTokens_UsesBackfilledTokens(t *testing.T) {

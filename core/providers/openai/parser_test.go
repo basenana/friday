@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/basenana/friday/core/providers"
+	"git.hypo.xyz/agents/friday/core/providers"
 	openaisdk "github.com/openai/openai-go"
 )
 

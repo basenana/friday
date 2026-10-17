@@ -11,12 +11,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/basenana/friday/config"
-	"github.com/basenana/friday/core/api"
-	"github.com/basenana/friday/core/providers/fallback"
-	"github.com/basenana/friday/core/tools"
-	"github.com/basenana/friday/sessions"
-	"github.com/basenana/friday/sessions/file"
+	"git.hypo.xyz/agents/friday/config"
+	"git.hypo.xyz/agents/friday/core/api"
+	"git.hypo.xyz/agents/friday/core/providers/fallback"
+	"git.hypo.xyz/agents/friday/core/tools"
+	"git.hypo.xyz/agents/friday/sessions"
+	"git.hypo.xyz/agents/friday/sessions/file"
 )
 
 func TestProjectWorktreeAccessBoundary(t *testing.T) {

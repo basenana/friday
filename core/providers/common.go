@@ -3,7 +3,7 @@ package providers
 import (
 	"sync"
 
-	"github.com/basenana/friday/core/types"
+	"git.hypo.xyz/agents/friday/core/types"
 )
 
 type CommonResponse struct {

@@ -13,9 +13,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/basenana/friday/core/providers"
-	"github.com/basenana/friday/core/session"
-	"github.com/basenana/friday/core/types"
+	"git.hypo.xyz/agents/friday/core/providers"
+	"git.hypo.xyz/agents/friday/core/session"
+	"git.hypo.xyz/agents/friday/core/types"
 )
 
 type recordingDecisionProvider struct {

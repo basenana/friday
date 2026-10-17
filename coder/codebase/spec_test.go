@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/basenana/friday/core/providers/fallback"
+	"git.hypo.xyz/agents/friday/core/providers/fallback"
 )
 
 func TestDefaultSpecRoundTrip(t *testing.T) {

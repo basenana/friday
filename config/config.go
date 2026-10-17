@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/basenana/friday/core/providers"
-	"github.com/basenana/friday/sandbox"
+	"git.hypo.xyz/agents/friday/core/providers"
+	"git.hypo.xyz/agents/friday/sandbox"
 	"gopkg.in/yaml.v3"
 )
 

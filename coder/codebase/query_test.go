@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/basenana/friday/core/api"
-	coresession "github.com/basenana/friday/core/session"
-	"github.com/basenana/friday/core/tools"
+	"git.hypo.xyz/agents/friday/core/api"
+	coresession "git.hypo.xyz/agents/friday/core/session"
+	"git.hypo.xyz/agents/friday/core/tools"
 )
 
 func TestQueryValidationUsesTrimmedUnicodeRunes(t *testing.T) {

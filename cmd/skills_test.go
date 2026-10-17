@@ -4,7 +4,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/basenana/friday/skills"
+	"git.hypo.xyz/agents/friday/skills"
 )
 
 func TestEnsureSkillDeletionAllowed(t *testing.T) {

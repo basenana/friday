@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/basenana/friday/core/api"
-	"github.com/basenana/friday/skills"
+	"git.hypo.xyz/agents/friday/core/api"
+	"git.hypo.xyz/agents/friday/skills"
 )
 
 // skillsDir returns the absolute path of e2e/testdata (which contains the

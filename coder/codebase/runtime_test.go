@@ -11,15 +11,15 @@ import (
 
 	eventbus "github.com/hyponet/eventbus/bus"
 
-	"github.com/basenana/friday/coder/project"
-	"github.com/basenana/friday/core/actor/events"
-	"github.com/basenana/friday/core/providers"
-	"github.com/basenana/friday/core/providers/fallback"
-	"github.com/basenana/friday/core/tools"
-	"github.com/basenana/friday/core/types"
-	"github.com/basenana/friday/sandbox"
-	"github.com/basenana/friday/sessions"
-	sessionfile "github.com/basenana/friday/sessions/file"
+	"git.hypo.xyz/agents/friday/coder/project"
+	"git.hypo.xyz/agents/friday/core/actor/events"
+	"git.hypo.xyz/agents/friday/core/providers"
+	"git.hypo.xyz/agents/friday/core/providers/fallback"
+	"git.hypo.xyz/agents/friday/core/tools"
+	"git.hypo.xyz/agents/friday/core/types"
+	"git.hypo.xyz/agents/friday/sandbox"
+	"git.hypo.xyz/agents/friday/sessions"
+	sessionfile "git.hypo.xyz/agents/friday/sessions/file"
 )
 
 type runtimeTestClient struct{}

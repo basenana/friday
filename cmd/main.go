@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/basenana/friday/config"
-	corelogger "github.com/basenana/friday/core/logger"
-	"github.com/basenana/friday/utils/logger"
+	"git.hypo.xyz/agents/friday/config"
+	corelogger "git.hypo.xyz/agents/friday/core/logger"
+	"git.hypo.xyz/agents/friday/utils/logger"
 )
 
 func main() {

@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/basenana/friday/core/providers"
+	"git.hypo.xyz/agents/friday/core/providers"
 )
 
 func TestBackgroundTaskAutomationAuthorizesBeforeStart(t *testing.T) {

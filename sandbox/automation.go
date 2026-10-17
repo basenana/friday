@@ -7,7 +7,7 @@ import (
 	"math"
 	"time"
 
-	"github.com/basenana/friday/core/providers"
+	"git.hypo.xyz/agents/friday/core/providers"
 )
 
 const automationAssessTimeout = 15 * time.Second

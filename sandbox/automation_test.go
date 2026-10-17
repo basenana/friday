@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/basenana/friday/core/providers"
+	"git.hypo.xyz/agents/friday/core/providers"
 )
 
 type fakeDecisionProvider struct {

@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/basenana/friday/core/providers"
+	"git.hypo.xyz/agents/friday/core/providers"
 )
 
 func decisionProviderWith(values ...float64) *fakeDecisionProvider {

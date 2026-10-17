@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/basenana/friday/core/types"
+	"git.hypo.xyz/agents/friday/core/types"
 )
 
 func TestCompactEventPayloads(t *testing.T) {

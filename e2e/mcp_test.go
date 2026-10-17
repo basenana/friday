@@ -13,8 +13,8 @@ import (
 
 	mcpserver "github.com/mark3labs/mcp-go/server"
 
-	"github.com/basenana/friday/core/tools"
-	"github.com/basenana/friday/mcp"
+	"git.hypo.xyz/agents/friday/core/tools"
+	"git.hypo.xyz/agents/friday/mcp"
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 
 	mcpc "github.com/mark3labs/mcp-go/client"

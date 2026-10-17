@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/basenana/friday/core/api"
-	"github.com/basenana/friday/core/session"
+	"git.hypo.xyz/agents/friday/core/api"
+	"git.hypo.xyz/agents/friday/core/session"
 )
 
 type changingAgentProvider struct{ agents []ExpertAgent }

@@ -7,9 +7,9 @@ import (
 	"encoding/json"
 	"errors"
 
-	"github.com/basenana/friday/core/logger"
-	"github.com/basenana/friday/core/session"
-	"github.com/basenana/friday/core/types"
+	"git.hypo.xyz/agents/friday/core/logger"
+	"git.hypo.xyz/agents/friday/core/session"
+	"git.hypo.xyz/agents/friday/core/types"
 )
 
 const (

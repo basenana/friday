@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/basenana/friday/core/api"
-	"github.com/basenana/friday/core/contextmgr"
-	"github.com/basenana/friday/core/types"
+	"git.hypo.xyz/agents/friday/core/api"
+	"git.hypo.xyz/agents/friday/core/contextmgr"
+	"git.hypo.xyz/agents/friday/core/types"
 )
 
 // TestContextMgr_MicroCompact verifies that micro compaction triggers when

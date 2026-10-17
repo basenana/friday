@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/basenana/friday/core/tools"
-	"github.com/basenana/friday/workspace"
+	"git.hypo.xyz/agents/friday/core/tools"
+	"git.hypo.xyz/agents/friday/workspace"
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
 )

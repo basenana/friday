@@ -7,14 +7,14 @@ import (
 
 	eventbus "github.com/hyponet/eventbus/bus"
 
-	"github.com/basenana/friday/bus"
-	coreactor "github.com/basenana/friday/core/actor"
-	"github.com/basenana/friday/core/actor/events"
-	"github.com/basenana/friday/core/api"
-	"github.com/basenana/friday/core/collaboration"
-	"github.com/basenana/friday/core/planning"
-	coresession "github.com/basenana/friday/core/session"
-	"github.com/basenana/friday/core/tools"
+	"git.hypo.xyz/agents/friday/bus"
+	coreactor "git.hypo.xyz/agents/friday/core/actor"
+	"git.hypo.xyz/agents/friday/core/actor/events"
+	"git.hypo.xyz/agents/friday/core/api"
+	"git.hypo.xyz/agents/friday/core/collaboration"
+	"git.hypo.xyz/agents/friday/core/planning"
+	coresession "git.hypo.xyz/agents/friday/core/session"
+	"git.hypo.xyz/agents/friday/core/tools"
 )
 
 type bridgePlanRuntime struct{ mode collaboration.Mode }

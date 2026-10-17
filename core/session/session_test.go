@@ -4,9 +4,9 @@ import (
 	"context"
 	"testing"
 
-	corelogger "github.com/basenana/friday/core/logger"
-	"github.com/basenana/friday/core/providers"
-	"github.com/basenana/friday/core/types"
+	corelogger "git.hypo.xyz/agents/friday/core/logger"
+	"git.hypo.xyz/agents/friday/core/providers"
+	"git.hypo.xyz/agents/friday/core/types"
 )
 
 // helpers

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/basenana/friday/core/session"
+	"git.hypo.xyz/agents/friday/core/session"
 )
 
 type Report struct {

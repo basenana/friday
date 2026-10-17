@@ -9,7 +9,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/basenana/friday/core/logger"
+	"git.hypo.xyz/agents/friday/core/logger"
 )
 
 // SpecProvider supplies the current declarative agent catalog.

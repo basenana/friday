@@ -19,7 +19,7 @@ package providers
 import (
 	"context"
 
-	"github.com/basenana/friday/core/types"
+	"git.hypo.xyz/agents/friday/core/types"
 )
 
 type Client interface {

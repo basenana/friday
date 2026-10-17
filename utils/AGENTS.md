@@ -57,7 +57,7 @@ func RequestShutdown()
 - `CutToSafeLength` truncates by runes (not bytes) and adds a truncation header; `GrepC` returns matching lines with C lines of context.
 - `utils/logger.Init()` configures stdout JSON logging, but TUI-reachable runtime code must not call it. Normal CLI startup uses `InitWithFile`.
 - If the log file cannot be opened, the logger silently discards output — it must never fall back to terminal output and corrupt the TUI.
-- New code should create named loggers through `github.com/basenana/friday/core/logger`; `utils/logger` is the application-level zap wiring/adapter retained for existing bootstrap consumers (`cmd/main.go`, `cmd/root.go`, `sessions/manager.go`).
+- New code should create named loggers through `git.hypo.xyz/agents/friday/core/logger`; `utils/logger` is the application-level zap wiring/adapter retained for existing bootstrap consumers (`cmd/main.go`, `cmd/root.go`, `sessions/manager.go`).
 - `HandleTerminalSignal` exits with status 2 on the second Ctrl-C. Signal channels are buffered so shutdown is not lost while a lifecycle hook is running.
 - The root helper package and `utils/signal` currently have no callers. Treat them as legacy/deletion candidates, not patterns to expand; this document does not authorize deleting them.
 

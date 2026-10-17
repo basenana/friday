@@ -7,12 +7,12 @@ import (
 
 	eventbus "github.com/hyponet/eventbus/bus"
 
-	"github.com/basenana/friday/bus/bridge"
-	coreactor "github.com/basenana/friday/core/actor"
-	"github.com/basenana/friday/core/actor/events"
-	"github.com/basenana/friday/core/logger"
-	sessionusage "github.com/basenana/friday/sessions/usage"
-	"github.com/basenana/friday/setup"
+	"git.hypo.xyz/agents/friday/bus/bridge"
+	coreactor "git.hypo.xyz/agents/friday/core/actor"
+	"git.hypo.xyz/agents/friday/core/actor/events"
+	"git.hypo.xyz/agents/friday/core/logger"
+	sessionusage "git.hypo.xyz/agents/friday/sessions/usage"
+	"git.hypo.xyz/agents/friday/setup"
 )
 
 // managedActor is the Registry's per-session entry. It pairs the

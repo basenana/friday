@@ -1,6 +1,6 @@
 package events
 
-import "github.com/basenana/friday/core/types"
+import "git.hypo.xyz/agents/friday/core/types"
 
 // Custom event payloads. The Event.Name field discriminates between
 // these; payloads are intentionally permissive maps to keep the actor

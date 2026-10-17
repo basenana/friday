@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/basenana/friday/core/api"
-	"github.com/basenana/friday/core/types"
+	"git.hypo.xyz/agents/friday/core/api"
+	"git.hypo.xyz/agents/friday/core/types"
 )
 
 type Agent interface {

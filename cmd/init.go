@@ -8,8 +8,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/basenana/friday/config"
-	"github.com/basenana/friday/workspace"
+	"git.hypo.xyz/agents/friday/config"
+	"git.hypo.xyz/agents/friday/workspace"
 )
 
 var initCmd = &cobra.Command{

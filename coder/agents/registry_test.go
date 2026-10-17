@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/basenana/friday/core/providers"
+	"git.hypo.xyz/agents/friday/core/providers"
 )
 
 func TestRegistry_RegisterAndGet(t *testing.T) {

@@ -10,7 +10,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/basenana/friday/workspace"
+	"git.hypo.xyz/agents/friday/workspace"
 )
 
 type TransportType string

@@ -4,9 +4,9 @@ import (
 	"context"
 	"testing"
 
-	coreagents "github.com/basenana/friday/core/agents"
-	"github.com/basenana/friday/core/api"
-	"github.com/basenana/friday/core/subagents"
+	coreagents "git.hypo.xyz/agents/friday/core/agents"
+	"git.hypo.xyz/agents/friday/core/api"
+	"git.hypo.xyz/agents/friday/core/subagents"
 )
 
 type recordingAgent struct {

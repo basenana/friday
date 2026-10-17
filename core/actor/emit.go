@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/basenana/friday/core/actor/cards"
-	"github.com/basenana/friday/core/actor/events"
+	"git.hypo.xyz/agents/friday/core/actor/cards"
+	"git.hypo.xyz/agents/friday/core/actor/events"
 )
 
 // cardEmitter is the narrow interface the card tools need from the

@@ -5,7 +5,7 @@ import (
 	"errors"
 	"sync"
 
-	"github.com/basenana/friday/core/types"
+	"git.hypo.xyz/agents/friday/core/types"
 )
 
 var errInboxClosed = errors.New("actor: inbox closed")

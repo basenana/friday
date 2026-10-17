@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/basenana/friday/core/tools"
+	"git.hypo.xyz/agents/friday/core/tools"
 	"github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/client/transport"
 	"github.com/mark3labs/mcp-go/mcp"

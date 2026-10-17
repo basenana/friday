@@ -13,8 +13,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/basenana/friday/core/logger"
-	coretools "github.com/basenana/friday/core/tools"
+	"git.hypo.xyz/agents/friday/core/logger"
+	coretools "git.hypo.xyz/agents/friday/core/tools"
 )
 
 const (

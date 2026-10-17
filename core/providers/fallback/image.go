@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/basenana/friday/core/providers"
-	"github.com/basenana/friday/core/types"
+	"git.hypo.xyz/agents/friday/core/providers"
+	"git.hypo.xyz/agents/friday/core/types"
 )
 
 // AnySupportsImage returns true if at least one entry supports image input.

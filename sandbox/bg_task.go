@@ -13,8 +13,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/basenana/friday/core/logger"
-	"github.com/basenana/friday/core/tools"
+	"git.hypo.xyz/agents/friday/core/logger"
+	"git.hypo.xyz/agents/friday/core/tools"
 )
 
 type TaskStatus string

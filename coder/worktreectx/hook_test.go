@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/basenana/friday/core/providers"
-	coresession "github.com/basenana/friday/core/session"
+	"git.hypo.xyz/agents/friday/core/providers"
+	coresession "git.hypo.xyz/agents/friday/core/session"
 )
 
 func TestHookInjectsImmutableWorktreeContextWithoutPersistingHistory(t *testing.T) {

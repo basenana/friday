@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/basenana/friday/shellcmd"
+	"git.hypo.xyz/agents/friday/shellcmd"
 )
 
 const backendContractHelperEnv = "FRIDAY_BACKEND_CONTRACT_HELPER"

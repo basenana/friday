@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/basenana/friday/core/logger"
+	"git.hypo.xyz/agents/friday/core/logger"
 )
 
 // ErrDeleteUnsupported is returned when the registry's underlying provider

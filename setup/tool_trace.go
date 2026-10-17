@@ -9,8 +9,8 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/basenana/friday/core/logger"
-	"github.com/basenana/friday/core/tools"
+	"git.hypo.xyz/agents/friday/core/logger"
+	"git.hypo.xyz/agents/friday/core/tools"
 	"github.com/google/uuid"
 )
 

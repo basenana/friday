@@ -29,7 +29,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/basenana/friday/core/actor/events"
+	"git.hypo.xyz/agents/friday/core/actor/events"
 )
 
 // Envelope is the message carried on the bus. It embeds the actor

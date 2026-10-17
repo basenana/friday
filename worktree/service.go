@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/basenana/friday/coder/project"
-	"github.com/basenana/friday/sessions"
+	"git.hypo.xyz/agents/friday/coder/project"
+	"git.hypo.xyz/agents/friday/sessions"
 )
 
 type Worktree struct {

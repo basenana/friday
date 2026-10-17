@@ -3,7 +3,7 @@ package agents
 import (
 	"testing"
 
-	"github.com/basenana/friday/core/tools"
+	"git.hypo.xyz/agents/friday/core/tools"
 )
 
 func makeTools(names ...string) []*tools.Tool {

@@ -11,7 +11,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/basenana/friday/setup"
+	"git.hypo.xyz/agents/friday/setup"
 )
 
 var (

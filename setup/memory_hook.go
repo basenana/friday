@@ -3,10 +3,10 @@ package setup
 import (
 	"context"
 
-	"github.com/basenana/friday/core/providers"
-	coreSession "github.com/basenana/friday/core/session"
-	"github.com/basenana/friday/core/types"
-	"github.com/basenana/friday/workspace"
+	"git.hypo.xyz/agents/friday/core/providers"
+	coreSession "git.hypo.xyz/agents/friday/core/session"
+	"git.hypo.xyz/agents/friday/core/types"
+	"git.hypo.xyz/agents/friday/workspace"
 )
 
 // memoryHook injects fresh workspace memory content into each model request

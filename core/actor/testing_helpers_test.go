@@ -3,8 +3,8 @@ package actor
 import (
 	"context"
 
-	"github.com/basenana/friday/core/providers"
-	"github.com/basenana/friday/core/types"
+	"git.hypo.xyz/agents/friday/core/providers"
+	"git.hypo.xyz/agents/friday/core/types"
 )
 
 // fakeProvider is a no-op providers.Client used only to satisfy

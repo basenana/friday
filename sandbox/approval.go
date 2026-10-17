@@ -9,9 +9,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	coreactor "github.com/basenana/friday/core/actor"
-	"github.com/basenana/friday/core/actor/cards"
-	"github.com/basenana/friday/core/actor/events"
+	coreactor "git.hypo.xyz/agents/friday/core/actor"
+	"git.hypo.xyz/agents/friday/core/actor/cards"
+	"git.hypo.xyz/agents/friday/core/actor/events"
 )
 
 // ApprovalDecision is the user's answer to a sandbox approval form.

@@ -1,6 +1,6 @@
 package agents
 
-import "github.com/basenana/friday/core/providers"
+import "git.hypo.xyz/agents/friday/core/providers"
 
 // SideCheckerSpec returns the AgentSpec for the read-only side-checker
 // subagent. Its deny-list policy keeps new read-only tools available while

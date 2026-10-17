@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	coderagents "github.com/basenana/friday/coder/agents"
-	"github.com/basenana/friday/workspace"
+	coderagents "git.hypo.xyz/agents/friday/coder/agents"
+	"git.hypo.xyz/agents/friday/workspace"
 )
 
 type fixedCatalog struct{ names []string }

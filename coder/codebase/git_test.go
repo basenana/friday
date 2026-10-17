@@ -8,7 +8,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/basenana/friday/sandbox"
+	"git.hypo.xyz/agents/friday/sandbox"
 )
 
 func TestCollectGitStateAndCoverage(t *testing.T) {

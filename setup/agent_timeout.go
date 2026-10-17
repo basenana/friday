@@ -4,8 +4,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/basenana/friday/core/agents"
-	"github.com/basenana/friday/core/api"
+	"git.hypo.xyz/agents/friday/core/agents"
+	"git.hypo.xyz/agents/friday/core/api"
 )
 
 // timeoutAgent wraps an Agent so every top-level Chat call runs under a

@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	coreactor "github.com/basenana/friday/core/actor"
-	"github.com/basenana/friday/core/actor/events"
+	coreactor "git.hypo.xyz/agents/friday/core/actor"
+	"git.hypo.xyz/agents/friday/core/actor/events"
 )
 
 // fakePrompter implements FormPrompter with scripted decisions. WaitForForm

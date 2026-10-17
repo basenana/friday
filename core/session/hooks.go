@@ -4,9 +4,9 @@ import (
 	"context"
 	"time"
 
-	"github.com/basenana/friday/core/providers"
-	"github.com/basenana/friday/core/tools"
-	"github.com/basenana/friday/core/types"
+	"git.hypo.xyz/agents/friday/core/providers"
+	"git.hypo.xyz/agents/friday/core/tools"
+	"git.hypo.xyz/agents/friday/core/types"
 )
 
 // HookHandler is a function that can be registered to run at specific points in the session lifecycle.

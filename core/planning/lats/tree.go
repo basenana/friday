@@ -6,9 +6,9 @@ import (
 	"math"
 	"sync"
 
-	"github.com/basenana/friday/core/session"
-	"github.com/basenana/friday/core/tracing"
-	"github.com/basenana/friday/core/types"
+	"git.hypo.xyz/agents/friday/core/session"
+	"git.hypo.xyz/agents/friday/core/tracing"
+	"git.hypo.xyz/agents/friday/core/types"
 	"github.com/google/uuid"
 )
 

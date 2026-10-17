@@ -12,8 +12,8 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/basenana/friday/config"
-	"github.com/basenana/friday/shellcmd"
+	"git.hypo.xyz/agents/friday/config"
+	"git.hypo.xyz/agents/friday/shellcmd"
 )
 
 type reviewEnvironment struct {

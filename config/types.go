@@ -1,6 +1,6 @@
 package config
 
-import "github.com/basenana/friday/sandbox"
+import "git.hypo.xyz/agents/friday/sandbox"
 
 type Config struct {
 	Model         *ModelConfig         `yaml:"model" json:"model"`

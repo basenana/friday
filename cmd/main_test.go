@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/basenana/friday/utils/logger"
+	"git.hypo.xyz/agents/friday/utils/logger"
 )
 
 func TestLogOuterSandboxWarningWritesFileOnce(t *testing.T) {

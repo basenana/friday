@@ -7,9 +7,9 @@ import (
 	"sync"
 	"testing"
 
-	coresession "github.com/basenana/friday/core/session"
-	"github.com/basenana/friday/sessions"
-	sessionfile "github.com/basenana/friday/sessions/file"
+	coresession "git.hypo.xyz/agents/friday/core/session"
+	"git.hypo.xyz/agents/friday/sessions"
+	sessionfile "git.hypo.xyz/agents/friday/sessions/file"
 )
 
 func TestLifecycleChildrenAndClose(t *testing.T) {

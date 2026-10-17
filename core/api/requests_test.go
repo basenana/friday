@@ -3,7 +3,7 @@ package api
 import (
 	"testing"
 
-	"github.com/basenana/friday/core/types"
+	"git.hypo.xyz/agents/friday/core/types"
 )
 
 func TestRequestInputMessage(t *testing.T) {

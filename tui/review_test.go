@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/basenana/friday/config"
-	"github.com/basenana/friday/shellcmd"
+	"git.hypo.xyz/agents/friday/config"
+	"git.hypo.xyz/agents/friday/shellcmd"
 )
 
 func TestResolveVSCodeReviewLaunchFallsBackToMacOSOpen(t *testing.T) {

@@ -1,7 +1,7 @@
 package common
 
 import (
-	"github.com/basenana/friday/core/types"
+	"git.hypo.xyz/agents/friday/core/types"
 )
 
 // TokenEstimateFactor is the empirical factor for estimating tokens from rune count

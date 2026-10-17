@@ -7,11 +7,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/basenana/friday/core/actor/events"
-	"github.com/basenana/friday/core/api"
-	"github.com/basenana/friday/core/session"
-	coretools "github.com/basenana/friday/core/tools"
-	"github.com/basenana/friday/core/types"
+	"git.hypo.xyz/agents/friday/core/actor/events"
+	"git.hypo.xyz/agents/friday/core/api"
+	"git.hypo.xyz/agents/friday/core/session"
+	coretools "git.hypo.xyz/agents/friday/core/tools"
+	"git.hypo.xyz/agents/friday/core/types"
 )
 
 // newPingTool returns a trivial tool used by tests to verify extra

@@ -3,8 +3,8 @@ package bridge
 import (
 	"testing"
 
-	"github.com/basenana/friday/bus"
-	"github.com/basenana/friday/core/actor/events"
+	"git.hypo.xyz/agents/friday/bus"
+	"git.hypo.xyz/agents/friday/core/actor/events"
 )
 
 func toolStart(id, name string) events.Event {

@@ -6,8 +6,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/basenana/friday/core/session"
-	"github.com/basenana/friday/core/types"
+	"git.hypo.xyz/agents/friday/core/session"
+	"git.hypo.xyz/agents/friday/core/types"
 )
 
 func TestBackPropagate_RunningAverage(t *testing.T) {

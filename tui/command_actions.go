@@ -17,17 +17,17 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
-	fridaymcp "github.com/basenana/friday/mcp"
+	fridaymcp "git.hypo.xyz/agents/friday/mcp"
 
-	"github.com/basenana/friday/config"
-	"github.com/basenana/friday/core/collaboration"
-	"github.com/basenana/friday/core/planning"
-	"github.com/basenana/friday/core/providers"
-	"github.com/basenana/friday/core/session"
-	"github.com/basenana/friday/core/types"
-	"github.com/basenana/friday/sandbox"
-	"github.com/basenana/friday/sessions"
-	sessionusage "github.com/basenana/friday/sessions/usage"
+	"git.hypo.xyz/agents/friday/config"
+	"git.hypo.xyz/agents/friday/core/collaboration"
+	"git.hypo.xyz/agents/friday/core/planning"
+	"git.hypo.xyz/agents/friday/core/providers"
+	"git.hypo.xyz/agents/friday/core/session"
+	"git.hypo.xyz/agents/friday/core/types"
+	"git.hypo.xyz/agents/friday/sandbox"
+	"git.hypo.xyz/agents/friday/sessions"
+	sessionusage "git.hypo.xyz/agents/friday/sessions/usage"
 )
 
 type selectorKind string

@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/basenana/friday/core/api"
-	"github.com/basenana/friday/core/types"
-	"github.com/basenana/friday/sandbox"
+	"git.hypo.xyz/agents/friday/core/api"
+	"git.hypo.xyz/agents/friday/core/types"
+	"git.hypo.xyz/agents/friday/sandbox"
 )
 
 // TestReact_FsWriteRead verifies the agent can use fs_write then fs_read in

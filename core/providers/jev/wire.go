@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/basenana/friday/core/providers"
+	"git.hypo.xyz/agents/friday/core/providers"
 )
 
 type wireRequest struct {

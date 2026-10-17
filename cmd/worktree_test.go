@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	projectpkg "github.com/basenana/friday/coder/project"
-	"github.com/basenana/friday/config"
-	fridayworktree "github.com/basenana/friday/worktree"
+	projectpkg "git.hypo.xyz/agents/friday/coder/project"
+	"git.hypo.xyz/agents/friday/config"
+	fridayworktree "git.hypo.xyz/agents/friday/worktree"
 )
 
 func TestSingularWorktreeCommandRemoved(t *testing.T) {

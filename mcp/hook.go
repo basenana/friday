@@ -4,8 +4,8 @@ import (
 	"context"
 	"sort"
 
-	coresession "github.com/basenana/friday/core/session"
-	"github.com/basenana/friday/core/tools"
+	coresession "git.hypo.xyz/agents/friday/core/session"
+	"git.hypo.xyz/agents/friday/core/tools"
 )
 
 // ToolProvider is the narrow capability required by Hook. Implementations own

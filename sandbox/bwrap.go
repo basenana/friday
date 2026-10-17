@@ -10,7 +10,7 @@ import (
 	"runtime"
 	"sync"
 
-	"github.com/basenana/friday/shellcmd"
+	"git.hypo.xyz/agents/friday/shellcmd"
 )
 
 // Bwrap implements Sandbox using Linux bubblewrap.

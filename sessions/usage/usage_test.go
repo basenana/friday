@@ -7,10 +7,10 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/basenana/friday/core/providers"
-	coresession "github.com/basenana/friday/core/session"
-	sessionfile "github.com/basenana/friday/sessions/file"
-	"github.com/basenana/friday/sessions/usage"
+	"git.hypo.xyz/agents/friday/core/providers"
+	coresession "git.hypo.xyz/agents/friday/core/session"
+	sessionfile "git.hypo.xyz/agents/friday/sessions/file"
+	"git.hypo.xyz/agents/friday/sessions/usage"
 )
 
 func TestHookAggregatesRootAndForkCallsByModelAndEndpoint(t *testing.T) {

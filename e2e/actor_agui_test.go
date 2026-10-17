@@ -10,12 +10,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/basenana/friday/config"
-	aguiactor "github.com/basenana/friday/core/actor"
-	"github.com/basenana/friday/core/actor/events"
-	"github.com/basenana/friday/sessions"
-	"github.com/basenana/friday/sessions/file"
-	"github.com/basenana/friday/setup"
+	"git.hypo.xyz/agents/friday/config"
+	aguiactor "git.hypo.xyz/agents/friday/core/actor"
+	"git.hypo.xyz/agents/friday/core/actor/events"
+	"git.hypo.xyz/agents/friday/sessions"
+	"git.hypo.xyz/agents/friday/sessions/file"
+	"git.hypo.xyz/agents/friday/setup"
 )
 
 // These tests exercise the core/actor package (inbox + AG-UI event stream)

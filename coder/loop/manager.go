@@ -10,9 +10,9 @@ import (
 
 	eventbus "github.com/hyponet/eventbus/bus"
 
-	"github.com/basenana/friday/bus"
-	"github.com/basenana/friday/core/actor/events"
-	"github.com/basenana/friday/core/session"
+	"git.hypo.xyz/agents/friday/bus"
+	"git.hypo.xyz/agents/friday/core/actor/events"
+	"git.hypo.xyz/agents/friday/core/session"
 )
 
 type phase int

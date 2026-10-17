@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/basenana/friday/core/actor/events"
+	"git.hypo.xyz/agents/friday/core/actor/events"
 )
 
 func TestEventStreamDefaultSubscriberCapacity(t *testing.T) {

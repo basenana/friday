@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/basenana/friday/sessions"
-	sessionfile "github.com/basenana/friday/sessions/file"
+	"git.hypo.xyz/agents/friday/sessions"
+	sessionfile "git.hypo.xyz/agents/friday/sessions/file"
 )
 
 func openTestProject(t *testing.T, root, data string, manager *sessions.Manager) (*Project, *Manager) {

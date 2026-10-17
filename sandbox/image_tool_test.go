@@ -13,8 +13,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/basenana/friday/core/tools"
-	"github.com/basenana/friday/core/types"
+	"git.hypo.xyz/agents/friday/core/tools"
+	"git.hypo.xyz/agents/friday/core/types"
 )
 
 type stubImageAnalyzer struct {

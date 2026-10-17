@@ -1,7 +1,7 @@
 package logger
 
 import (
-	corelogger "github.com/basenana/friday/core/logger"
+	corelogger "git.hypo.xyz/agents/friday/core/logger"
 
 	"go.uber.org/zap"
 )

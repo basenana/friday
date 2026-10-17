@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"sync"
 
-	"github.com/basenana/friday/core/state"
+	"git.hypo.xyz/agents/friday/core/state"
 )
 
 type FileState struct {

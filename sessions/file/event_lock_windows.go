@@ -6,7 +6,7 @@ import (
 	"errors"
 	"os"
 
-	"github.com/basenana/friday/sessions"
+	"git.hypo.xyz/agents/friday/sessions"
 	"golang.org/x/sys/windows"
 )
 

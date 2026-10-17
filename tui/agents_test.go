@@ -8,9 +8,9 @@ import (
 	tea "charm.land/bubbletea/v2"
 	eventbus "github.com/hyponet/eventbus/bus"
 
-	"github.com/basenana/friday/bus"
-	coderagents "github.com/basenana/friday/coder/agents"
-	"github.com/basenana/friday/core/actor/events"
+	"git.hypo.xyz/agents/friday/bus"
+	coderagents "git.hypo.xyz/agents/friday/coder/agents"
+	"git.hypo.xyz/agents/friday/core/actor/events"
 )
 
 func registerTestAgent(m *model, name, description string) {

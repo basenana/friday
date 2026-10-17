@@ -11,13 +11,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/basenana/friday/core/agents"
-	"github.com/basenana/friday/core/logger"
-	"github.com/basenana/friday/core/providers"
-	"github.com/basenana/friday/core/providers/fallback"
-	coresession "github.com/basenana/friday/core/session"
-	"github.com/basenana/friday/core/types"
-	"github.com/basenana/friday/sandbox"
+	"git.hypo.xyz/agents/friday/core/agents"
+	"git.hypo.xyz/agents/friday/core/logger"
+	"git.hypo.xyz/agents/friday/core/providers"
+	"git.hypo.xyz/agents/friday/core/providers/fallback"
+	coresession "git.hypo.xyz/agents/friday/core/session"
+	"git.hypo.xyz/agents/friday/core/types"
+	"git.hypo.xyz/agents/friday/sandbox"
 )
 
 // stubProvider streams one configured completion per call, mirroring the way

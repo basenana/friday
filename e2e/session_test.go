@@ -10,10 +10,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/basenana/friday/core/api"
-	"github.com/basenana/friday/core/session"
-	"github.com/basenana/friday/core/types"
-	"github.com/basenana/friday/sessions/file"
+	"git.hypo.xyz/agents/friday/core/api"
+	"git.hypo.xyz/agents/friday/core/session"
+	"git.hypo.xyz/agents/friday/core/types"
+	"git.hypo.xyz/agents/friday/sessions/file"
 )
 
 // TestSession_Persistence verifies that conversation history is written to

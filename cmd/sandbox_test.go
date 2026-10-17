@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/basenana/friday/config"
-	"github.com/basenana/friday/sandbox"
+	"git.hypo.xyz/agents/friday/config"
+	"git.hypo.xyz/agents/friday/sandbox"
 )
 
 func TestSandboxAllowCommandPersistsProjectGrant(t *testing.T) {

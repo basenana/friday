@@ -5,13 +5,13 @@ import (
 	"errors"
 	"time"
 
-	"github.com/basenana/friday/core/actor/events"
-	actorsink "github.com/basenana/friday/core/actor/sink"
-	"github.com/basenana/friday/core/collaboration"
-	"github.com/basenana/friday/core/planning"
-	"github.com/basenana/friday/core/providers"
-	coresession "github.com/basenana/friday/core/session"
-	"github.com/basenana/friday/core/types"
+	"git.hypo.xyz/agents/friday/core/actor/events"
+	actorsink "git.hypo.xyz/agents/friday/core/actor/sink"
+	"git.hypo.xyz/agents/friday/core/collaboration"
+	"git.hypo.xyz/agents/friday/core/planning"
+	"git.hypo.xyz/agents/friday/core/providers"
+	coresession "git.hypo.xyz/agents/friday/core/session"
+	"git.hypo.xyz/agents/friday/core/types"
 )
 
 // ErrEventWriterActive reports that another Friday process owns the session's

@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/basenana/friday/sessions"
+	"git.hypo.xyz/agents/friday/sessions"
 )
 
 func TestFilterOldSessions(t *testing.T) {

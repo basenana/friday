@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/basenana/friday/setup"
-	"github.com/basenana/friday/workspace"
+	"git.hypo.xyz/agents/friday/setup"
+	"git.hypo.xyz/agents/friday/workspace"
 )
 
 // TestWorkspace_LoadAllSystemPrompts verifies all three system-prompt files

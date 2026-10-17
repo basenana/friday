@@ -4,11 +4,11 @@ import (
 	"context"
 	"time"
 
-	projectpkg "github.com/basenana/friday/coder/project"
-	"github.com/basenana/friday/config"
-	"github.com/basenana/friday/core/actor/events"
-	"github.com/basenana/friday/core/types"
-	"github.com/basenana/friday/sessions"
+	projectpkg "git.hypo.xyz/agents/friday/coder/project"
+	"git.hypo.xyz/agents/friday/config"
+	"git.hypo.xyz/agents/friday/core/actor/events"
+	"git.hypo.xyz/agents/friday/core/types"
+	"git.hypo.xyz/agents/friday/sessions"
 )
 
 func loadSessionPromptHistory(manager *projectpkg.Manager, sessionID string) ([]string, error) {

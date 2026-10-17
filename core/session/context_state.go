@@ -4,7 +4,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/basenana/friday/core/types"
+	"git.hypo.xyz/agents/friday/core/types"
 )
 
 const (

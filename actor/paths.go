@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	coreactor "github.com/basenana/friday/core/actor"
+	coreactor "git.hypo.xyz/agents/friday/core/actor"
 )
 
 // newFilePathValidator is the default card path policy for friday:

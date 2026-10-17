@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/basenana/friday/core/tools"
+	"git.hypo.xyz/agents/friday/core/tools"
 )
 
 func TestWrapToolsWithTrace_EmitsStartAndFailureEvents(t *testing.T) {

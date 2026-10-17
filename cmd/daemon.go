@@ -10,8 +10,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/basenana/friday/actor"
-	fridaydaemon "github.com/basenana/friday/daemon"
+	"git.hypo.xyz/agents/friday/actor"
+	fridaydaemon "git.hypo.xyz/agents/friday/daemon"
 )
 
 var daemonPort int

@@ -10,8 +10,8 @@ import (
 	"charm.land/bubbletea/v2"
 	eventbus "github.com/hyponet/eventbus/bus"
 
-	"github.com/basenana/friday/bus"
-	"github.com/basenana/friday/core/actor/events"
+	"git.hypo.xyz/agents/friday/bus"
+	"git.hypo.xyz/agents/friday/core/actor/events"
 )
 
 func writeTestSkill(t *testing.T, m *model, dirName, name, description, instructions string) {

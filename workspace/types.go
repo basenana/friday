@@ -1,7 +1,7 @@
 package workspace
 
 import (
-	"github.com/basenana/friday/core/types"
+	"git.hypo.xyz/agents/friday/core/types"
 )
 
 // FileRole determines how a workspace file is used

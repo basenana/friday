@@ -9,14 +9,14 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/basenana/friday/bus"
-	coderagents "github.com/basenana/friday/coder/agents"
-	codebasepkg "github.com/basenana/friday/coder/codebase"
-	codercmds "github.com/basenana/friday/coder/commands"
-	"github.com/basenana/friday/core/collaboration"
-	"github.com/basenana/friday/core/planning"
-	"github.com/basenana/friday/sessions"
-	"github.com/basenana/friday/skills"
+	"git.hypo.xyz/agents/friday/bus"
+	coderagents "git.hypo.xyz/agents/friday/coder/agents"
+	codebasepkg "git.hypo.xyz/agents/friday/coder/codebase"
+	codercmds "git.hypo.xyz/agents/friday/coder/commands"
+	"git.hypo.xyz/agents/friday/core/collaboration"
+	"git.hypo.xyz/agents/friday/core/planning"
+	"git.hypo.xyz/agents/friday/sessions"
+	"git.hypo.xyz/agents/friday/skills"
 )
 
 func (m *model) handleSlash(text string) (tea.Model, tea.Cmd) {

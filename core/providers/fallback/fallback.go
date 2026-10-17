@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"sync/atomic"
 
-	"github.com/basenana/friday/core/logger"
-	"github.com/basenana/friday/core/providers"
-	"github.com/basenana/friday/core/tracing"
+	"git.hypo.xyz/agents/friday/core/logger"
+	"git.hypo.xyz/agents/friday/core/providers"
+	"git.hypo.xyz/agents/friday/core/tracing"
 )
 
 // ModelCapabilities describes what input modes a model supports.

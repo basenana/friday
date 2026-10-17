@@ -6,8 +6,8 @@ import (
 
 	eventbus "github.com/hyponet/eventbus/bus"
 
-	"github.com/basenana/friday/core/actor/events"
-	"github.com/basenana/friday/core/types"
+	"git.hypo.xyz/agents/friday/core/actor/events"
+	"git.hypo.xyz/agents/friday/core/types"
 )
 
 // Input message kinds carried on the inbox topic.

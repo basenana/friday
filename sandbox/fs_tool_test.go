@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/basenana/friday/core/tools"
+	"git.hypo.xyz/agents/friday/core/tools"
 )
 
 func TestFsToolSurfaceIncludesSearchAndOmitsMkdir(t *testing.T) {

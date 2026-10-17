@@ -11,10 +11,10 @@ import (
 
 	eventbus "github.com/hyponet/eventbus/bus"
 
-	"github.com/basenana/friday/bus"
-	coderloop "github.com/basenana/friday/coder/loop"
-	"github.com/basenana/friday/core/actor/events"
-	coresession "github.com/basenana/friday/core/session"
+	"git.hypo.xyz/agents/friday/bus"
+	coderloop "git.hypo.xyz/agents/friday/coder/loop"
+	"git.hypo.xyz/agents/friday/core/actor/events"
+	coresession "git.hypo.xyz/agents/friday/core/session"
 )
 
 func TestDefaultWorktreeRuntimeLifecycle(t *testing.T) {

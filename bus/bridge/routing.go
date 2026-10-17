@@ -1,8 +1,8 @@
 package bridge
 
 import (
-	"github.com/basenana/friday/bus"
-	"github.com/basenana/friday/core/actor/events"
+	"git.hypo.xyz/agents/friday/bus"
+	"git.hypo.xyz/agents/friday/core/actor/events"
 )
 
 // RouteEvent maps an actor event to its bus topic for session sid.

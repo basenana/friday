@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/basenana/friday/config"
-	"github.com/basenana/friday/workspace"
+	"git.hypo.xyz/agents/friday/config"
+	"git.hypo.xyz/agents/friday/workspace"
 )
 
 func TestRunInitCreatesMinimalProjectWorkspace(t *testing.T) {

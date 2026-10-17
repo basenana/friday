@@ -7,7 +7,7 @@ package sink
 import (
 	"context"
 
-	"github.com/basenana/friday/core/actor/events"
+	"git.hypo.xyz/agents/friday/core/actor/events"
 )
 
 // EventSink is an append-only event log. Implementations must be

@@ -8,10 +8,10 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/basenana/friday/core/planning"
-	"github.com/basenana/friday/core/providers"
-	coresession "github.com/basenana/friday/core/session"
-	"github.com/basenana/friday/core/types"
+	"git.hypo.xyz/agents/friday/core/planning"
+	"git.hypo.xyz/agents/friday/core/providers"
+	coresession "git.hypo.xyz/agents/friday/core/session"
+	"git.hypo.xyz/agents/friday/core/types"
 )
 
 type baseOnlyStore struct{ Store }

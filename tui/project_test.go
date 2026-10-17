@@ -8,15 +8,15 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/basenana/friday/actor"
-	codebasepkg "github.com/basenana/friday/coder/codebase"
-	codercmds "github.com/basenana/friday/coder/commands"
-	projectpkg "github.com/basenana/friday/coder/project"
-	"github.com/basenana/friday/config"
-	"github.com/basenana/friday/core/actor/events"
-	"github.com/basenana/friday/core/types"
-	"github.com/basenana/friday/sessions"
-	sessionfile "github.com/basenana/friday/sessions/file"
+	"git.hypo.xyz/agents/friday/actor"
+	codebasepkg "git.hypo.xyz/agents/friday/coder/codebase"
+	codercmds "git.hypo.xyz/agents/friday/coder/commands"
+	projectpkg "git.hypo.xyz/agents/friday/coder/project"
+	"git.hypo.xyz/agents/friday/config"
+	"git.hypo.xyz/agents/friday/core/actor/events"
+	"git.hypo.xyz/agents/friday/core/types"
+	"git.hypo.xyz/agents/friday/sessions"
+	sessionfile "git.hypo.xyz/agents/friday/sessions/file"
 )
 
 func newLoadedProjectTestModel(t *testing.T) (*model, *projectpkg.Manager, *sessionfile.FileSessionStore) {

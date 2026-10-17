@@ -12,9 +12,9 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/basenana/friday/bus"
-	codebasepkg "github.com/basenana/friday/coder/codebase"
-	"github.com/basenana/friday/core/actor/events"
+	"git.hypo.xyz/agents/friday/bus"
+	codebasepkg "git.hypo.xyz/agents/friday/coder/codebase"
+	"git.hypo.xyz/agents/friday/core/actor/events"
 )
 
 // actorEventMsg wraps an events.Event delivered into the Bubble Tea loop.

@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"time"
 
-	fridaymcp "github.com/basenana/friday/mcp"
+	fridaymcp "git.hypo.xyz/agents/friday/mcp"
 	"github.com/spf13/cobra"
 )
 

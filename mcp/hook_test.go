@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/basenana/friday/core/api"
-	"github.com/basenana/friday/core/tools"
+	"git.hypo.xyz/agents/friday/core/api"
+	"git.hypo.xyz/agents/friday/core/tools"
 )
 
 type changingToolProvider struct{ tools []*tools.Tool }

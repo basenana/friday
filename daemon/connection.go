@@ -10,8 +10,8 @@ import (
 	"github.com/coder/websocket"
 	eventbus "github.com/hyponet/eventbus/bus"
 
-	"github.com/basenana/friday/bus"
-	coretypes "github.com/basenana/friday/core/types"
+	"git.hypo.xyz/agents/friday/bus"
+	coretypes "git.hypo.xyz/agents/friday/core/types"
 )
 
 const (

@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	coretools "github.com/basenana/friday/core/tools"
+	coretools "git.hypo.xyz/agents/friday/core/tools"
 )
 
 func makeShowCardTools(a *Actor) []*coretools.Tool {

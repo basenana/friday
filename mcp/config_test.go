@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/basenana/friday/workspace"
+	"git.hypo.xyz/agents/friday/workspace"
 )
 
 func TestLoadConfigRootsLayersAndInfersTransports(t *testing.T) {

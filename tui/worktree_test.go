@@ -11,12 +11,12 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/basenana/friday/bus"
-	codercmds "github.com/basenana/friday/coder/commands"
-	coderloop "github.com/basenana/friday/coder/loop"
-	projectpkg "github.com/basenana/friday/coder/project"
-	"github.com/basenana/friday/core/actor/events"
-	"github.com/basenana/friday/core/types"
+	"git.hypo.xyz/agents/friday/bus"
+	codercmds "git.hypo.xyz/agents/friday/coder/commands"
+	coderloop "git.hypo.xyz/agents/friday/coder/loop"
+	projectpkg "git.hypo.xyz/agents/friday/coder/project"
+	"git.hypo.xyz/agents/friday/core/actor/events"
+	"git.hypo.xyz/agents/friday/core/types"
 )
 
 func TestLinkedWorktreeSessionActionsStayInTheirScope(t *testing.T) {

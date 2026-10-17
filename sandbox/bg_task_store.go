@@ -7,7 +7,7 @@ import (
 	"sort"
 	"time"
 
-	coresession "github.com/basenana/friday/core/session"
+	coresession "git.hypo.xyz/agents/friday/core/session"
 )
 
 const (

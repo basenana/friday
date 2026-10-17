@@ -10,12 +10,12 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/basenana/friday/core/api"
-	"github.com/basenana/friday/core/promptcontext"
-	"github.com/basenana/friday/core/providers"
-	coresession "github.com/basenana/friday/core/session"
-	"github.com/basenana/friday/core/tools"
-	"github.com/basenana/friday/core/types"
+	"git.hypo.xyz/agents/friday/core/api"
+	"git.hypo.xyz/agents/friday/core/promptcontext"
+	"git.hypo.xyz/agents/friday/core/providers"
+	coresession "git.hypo.xyz/agents/friday/core/session"
+	"git.hypo.xyz/agents/friday/core/tools"
+	"git.hypo.xyz/agents/friday/core/types"
 )
 
 func TestProjectConversationHistoryKeepsOnlyIndependentUserAssistantText(t *testing.T) {

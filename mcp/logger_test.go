@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	corelogger "github.com/basenana/friday/core/logger"
+	corelogger "git.hypo.xyz/agents/friday/core/logger"
 )
 
 type mcpLogEntry struct {

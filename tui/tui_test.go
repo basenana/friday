@@ -16,16 +16,16 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
-	"github.com/basenana/friday/actor"
-	codebasepkg "github.com/basenana/friday/coder/codebase"
-	codercmds "github.com/basenana/friday/coder/commands"
-	"github.com/basenana/friday/config"
-	"github.com/basenana/friday/core/actor/events"
-	actorsink "github.com/basenana/friday/core/actor/sink"
-	"github.com/basenana/friday/core/planning"
-	"github.com/basenana/friday/core/types"
-	"github.com/basenana/friday/sessions"
-	sessionfile "github.com/basenana/friday/sessions/file"
+	"git.hypo.xyz/agents/friday/actor"
+	codebasepkg "git.hypo.xyz/agents/friday/coder/codebase"
+	codercmds "git.hypo.xyz/agents/friday/coder/commands"
+	"git.hypo.xyz/agents/friday/config"
+	"git.hypo.xyz/agents/friday/core/actor/events"
+	actorsink "git.hypo.xyz/agents/friday/core/actor/sink"
+	"git.hypo.xyz/agents/friday/core/planning"
+	"git.hypo.xyz/agents/friday/core/types"
+	"git.hypo.xyz/agents/friday/sessions"
+	sessionfile "git.hypo.xyz/agents/friday/sessions/file"
 )
 
 type historyProgramModel struct{ inner *model }

@@ -7,11 +7,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/basenana/friday/core/actor/cards"
-	"github.com/basenana/friday/core/actor/events"
-	"github.com/basenana/friday/core/collaboration"
-	"github.com/basenana/friday/core/planning"
-	coretools "github.com/basenana/friday/core/tools"
+	"git.hypo.xyz/agents/friday/core/actor/cards"
+	"git.hypo.xyz/agents/friday/core/actor/events"
+	"git.hypo.xyz/agents/friday/core/collaboration"
+	"git.hypo.xyz/agents/friday/core/planning"
+	coretools "git.hypo.xyz/agents/friday/core/tools"
 )
 
 func makeRequestUserInputTool(a *Actor) *coretools.Tool {

@@ -11,14 +11,14 @@ import (
 	"testing"
 	"time"
 
-	codebasepkg "github.com/basenana/friday/coder/codebase"
-	projectpkg "github.com/basenana/friday/coder/project"
-	"github.com/basenana/friday/config"
-	"github.com/basenana/friday/core/types"
-	"github.com/basenana/friday/sessions"
-	sessionfile "github.com/basenana/friday/sessions/file"
-	"github.com/basenana/friday/utils/logger"
-	fridayworktree "github.com/basenana/friday/worktree"
+	codebasepkg "git.hypo.xyz/agents/friday/coder/codebase"
+	projectpkg "git.hypo.xyz/agents/friday/coder/project"
+	"git.hypo.xyz/agents/friday/config"
+	"git.hypo.xyz/agents/friday/core/types"
+	"git.hypo.xyz/agents/friday/sessions"
+	sessionfile "git.hypo.xyz/agents/friday/sessions/file"
+	"git.hypo.xyz/agents/friday/utils/logger"
+	fridayworktree "git.hypo.xyz/agents/friday/worktree"
 )
 
 func TestProjectWorktreeCommandsLifecycle(t *testing.T) {

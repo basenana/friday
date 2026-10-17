@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/basenana/friday/sandbox"
+	"git.hypo.xyz/agents/friday/sandbox"
 )
 
 // Native Seatbelt and bubblewrap behavior is tested by sandbox's backend

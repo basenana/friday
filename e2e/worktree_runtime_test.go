@@ -14,15 +14,15 @@ import (
 
 	eventbus "github.com/hyponet/eventbus/bus"
 
-	fridaybus "github.com/basenana/friday/bus"
-	"github.com/basenana/friday/coder/commands"
-	coderloop "github.com/basenana/friday/coder/loop"
-	projectpkg "github.com/basenana/friday/coder/project"
-	"github.com/basenana/friday/core/actor/events"
-	coresession "github.com/basenana/friday/core/session"
-	"github.com/basenana/friday/sessions"
-	sessionfile "github.com/basenana/friday/sessions/file"
-	fridayworktree "github.com/basenana/friday/worktree"
+	fridaybus "git.hypo.xyz/agents/friday/bus"
+	"git.hypo.xyz/agents/friday/coder/commands"
+	coderloop "git.hypo.xyz/agents/friday/coder/loop"
+	projectpkg "git.hypo.xyz/agents/friday/coder/project"
+	"git.hypo.xyz/agents/friday/core/actor/events"
+	coresession "git.hypo.xyz/agents/friday/core/session"
+	"git.hypo.xyz/agents/friday/sessions"
+	sessionfile "git.hypo.xyz/agents/friday/sessions/file"
+	fridayworktree "git.hypo.xyz/agents/friday/worktree"
 )
 
 // lifecycleScopeManager returns the session manager of one worktree's scope.

@@ -3,9 +3,9 @@ package commands
 import (
 	"context"
 
-	"github.com/basenana/friday/config"
-	"github.com/basenana/friday/core/collaboration"
-	"github.com/basenana/friday/sessions"
+	"git.hypo.xyz/agents/friday/config"
+	"git.hypo.xyz/agents/friday/core/collaboration"
+	"git.hypo.xyz/agents/friday/sessions"
 )
 
 // Result is what a command returns. Actions are applied in order, which keeps

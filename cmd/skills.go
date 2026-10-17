@@ -16,7 +16,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/basenana/friday/skills"
+	"git.hypo.xyz/agents/friday/skills"
 )
 
 const (

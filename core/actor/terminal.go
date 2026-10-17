@@ -1,6 +1,6 @@
 package actor
 
-import "github.com/basenana/friday/core/actor/events"
+import "git.hypo.xyz/agents/friday/core/actor/events"
 
 // IsTerminal reports whether an event marks the end of a turn.
 // Terminal events are never dropped by the EventStream: when a

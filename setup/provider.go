@@ -7,14 +7,14 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/basenana/friday/config"
-	"github.com/basenana/friday/core/providers"
-	"github.com/basenana/friday/core/providers/anthropics"
-	"github.com/basenana/friday/core/providers/fallback"
-	"github.com/basenana/friday/core/providers/jev"
-	"github.com/basenana/friday/core/providers/openai"
-	"github.com/basenana/friday/core/providers/openairesponse"
-	"github.com/basenana/friday/core/types"
+	"git.hypo.xyz/agents/friday/config"
+	"git.hypo.xyz/agents/friday/core/providers"
+	"git.hypo.xyz/agents/friday/core/providers/anthropics"
+	"git.hypo.xyz/agents/friday/core/providers/fallback"
+	"git.hypo.xyz/agents/friday/core/providers/jev"
+	"git.hypo.xyz/agents/friday/core/providers/openai"
+	"git.hypo.xyz/agents/friday/core/providers/openairesponse"
+	"git.hypo.xyz/agents/friday/core/types"
 )
 
 const imageToolSystemPrompt = "You are an image understanding assistant. Analyze the provided image carefully and answer the user's prompt accurately and concisely."

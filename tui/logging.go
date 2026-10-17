@@ -4,8 +4,8 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/basenana/friday/core/actor/events"
-	corelogger "github.com/basenana/friday/core/logger"
+	"git.hypo.xyz/agents/friday/core/actor/events"
+	corelogger "git.hypo.xyz/agents/friday/core/logger"
 )
 
 const maxTUILogTextRunes = 2048

@@ -9,7 +9,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/basenana/friday/core/logger"
+	"git.hypo.xyz/agents/friday/core/logger"
 
 	"gopkg.in/yaml.v3"
 )

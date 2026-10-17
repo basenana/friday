@@ -11,10 +11,10 @@ import (
 	"strconv"
 	"strings"
 
-	coderagents "github.com/basenana/friday/coder/agents"
-	"github.com/basenana/friday/core/providers"
-	fridaymcp "github.com/basenana/friday/mcp"
-	"github.com/basenana/friday/workspace"
+	coderagents "git.hypo.xyz/agents/friday/coder/agents"
+	"git.hypo.xyz/agents/friday/core/providers"
+	fridaymcp "git.hypo.xyz/agents/friday/mcp"
+	"git.hypo.xyz/agents/friday/workspace"
 )
 
 type Store interface {

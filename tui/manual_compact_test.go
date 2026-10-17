@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	codercmds "github.com/basenana/friday/coder/commands"
-	"github.com/basenana/friday/core/session"
+	codercmds "git.hypo.xyz/agents/friday/coder/commands"
+	"git.hypo.xyz/agents/friday/core/session"
 )
 
 type manualCompactorStub struct {

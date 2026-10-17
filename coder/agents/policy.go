@@ -1,6 +1,6 @@
 package agents
 
-import "github.com/basenana/friday/core/tools"
+import "git.hypo.xyz/agents/friday/core/tools"
 
 // ToolPolicy controls which tools an agent is permitted to use.
 //

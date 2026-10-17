@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	"charm.land/lipgloss/v2"
-	"github.com/basenana/friday/core/collaboration"
+	"git.hypo.xyz/agents/friday/core/collaboration"
 	"github.com/charmbracelet/x/ansi"
 )
 

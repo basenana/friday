@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/basenana/friday/coder/project"
-	"github.com/basenana/friday/sessions"
-	sessionfile "github.com/basenana/friday/sessions/file"
+	"git.hypo.xyz/agents/friday/coder/project"
+	"git.hypo.xyz/agents/friday/sessions"
+	sessionfile "git.hypo.xyz/agents/friday/sessions/file"
 )
 
 type adoptFixture struct {

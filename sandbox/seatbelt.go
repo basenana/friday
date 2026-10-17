@@ -12,7 +12,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/basenana/friday/shellcmd"
+	"git.hypo.xyz/agents/friday/shellcmd"
 )
 
 //go:embed seatbelt_base.sb
