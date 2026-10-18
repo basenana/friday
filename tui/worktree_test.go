@@ -16,6 +16,7 @@ import (
 	coderloop "git.hypo.xyz/agents/friday/coder/loop"
 	projectpkg "git.hypo.xyz/agents/friday/coder/project"
 	"git.hypo.xyz/agents/friday/core/actor/events"
+	"git.hypo.xyz/agents/friday/core/collaboration"
 	"git.hypo.xyz/agents/friday/core/types"
 )
 
@@ -557,6 +558,36 @@ func TestWorktreeDraftCarriesImagesIntoInitialTurn(t *testing.T) {
 	prepared := worktreePreparedFromCommand(t, cmd)
 	if len(prepared.runtime.images) != 1 || prepared.runtime.images[0].Filename != "screenshot.png" {
 		t.Fatalf("prepared worktree images = %#v, want screenshot.png", prepared.runtime.images)
+	}
+}
+
+func TestWorktreeDraftPlanCommandTargetsNewSession(t *testing.T) {
+	fixture := newWorktreeRuntimeTestFixture(t)
+	runtime, err := fixture.supervisor.Activate(context.Background(), fixture.mainID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := newWorktreeRuntimeTestModel(t, fixture, runtime)
+	mainSessionID := m.sessionID
+	m.setWorktreeDraft(true)
+	m.textarea.SetValue("/plan design this change")
+
+	_, cmd := m.submitComposer()
+	if !m.worktreeChanging {
+		t.Fatal("draft /plan did not start worktree creation")
+	}
+	prepared := worktreePreparedFromCommand(t, cmd)
+	if prepared.runtime.mode != collaboration.ModePlan {
+		t.Fatalf("prepared worktree mode = %q, want %q", prepared.runtime.mode, collaboration.ModePlan)
+	}
+	if got := fixture.sessions.CollaborationMode(prepared.runtime.runtime.sessionID); got != collaboration.ModePlan {
+		t.Fatalf("new worktree session mode = %q, want %q", got, collaboration.ModePlan)
+	}
+	if got := fixture.sessions.CollaborationMode(mainSessionID); got != collaboration.ModeDefault {
+		t.Fatalf("main worktree session mode = %q, want %q", got, collaboration.ModeDefault)
+	}
+	if prepared.runtime.requirement != "design this change" {
+		t.Fatalf("prepared worktree requirement = %q", prepared.runtime.requirement)
 	}
 }
 

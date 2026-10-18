@@ -14,6 +14,7 @@ import (
 	codebasepkg "git.hypo.xyz/agents/friday/coder/codebase"
 	codercmds "git.hypo.xyz/agents/friday/coder/commands"
 	"git.hypo.xyz/agents/friday/config"
+	"git.hypo.xyz/agents/friday/core/collaboration"
 	"git.hypo.xyz/agents/friday/core/types"
 	"git.hypo.xyz/agents/friday/sessions"
 	fridayworktree "git.hypo.xyz/agents/friday/worktree"
@@ -163,12 +164,16 @@ func (m *model) createWorktree(requirement string) tea.Cmd {
 	token := m.worktreeGeneration
 	supervisor := m.worktreeSupervisor
 	width, height := m.width, m.height
+	mode := m.worktreeDraftMode
+	if mode == "" {
+		mode = collaboration.ModeDefault
+	}
 	images := append([]types.ImageContent(nil), m.attachments...)
 	operation := func() tea.Msg {
 		if supervisor == nil {
 			return worktreePreparedMsg{token: token, err: fmt.Errorf("worktree runtime supervisor is unavailable")}
 		}
-		prepared, err := supervisor.prepareCreatedActivation(context.Background(), requirement, width, height)
+		prepared, err := supervisor.prepareCreatedActivation(context.Background(), requirement, width, height, mode)
 		if prepared != nil {
 			prepared.images = images
 		}

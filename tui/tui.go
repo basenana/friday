@@ -234,6 +234,7 @@ type model struct {
 	worktreeDraftText     string
 	worktreeDraftFiles    []types.ImageContent
 	worktreeDraftError    string
+	worktreeDraftMode     collaboration.Mode
 	worktreeChanging      bool
 	worktreeGeneration    uint64
 	worktreeTabs          []worktreeTab
@@ -1427,6 +1428,20 @@ func (m *model) submitComposer() (tea.Model, tea.Cmd) {
 	}
 	m.textarea.Reset()
 	m.menu = menuState{}
+	if m.worktreeMode && m.worktreeRequirement {
+		name, rawArgs, args := parseSlash(text)
+		if name == "plan" {
+			if len(args) == 1 && strings.EqualFold(args[0], "off") {
+				m.worktreeDraftMode = collaboration.ModeDefault
+				return m, nil
+			}
+			m.worktreeDraftMode = collaboration.ModePlan
+			if rawArgs == "" {
+				return m, nil
+			}
+			return m, m.createWorktree(rawArgs)
+		}
+	}
 	if strings.HasPrefix(text, "/") {
 		m.recordPrompt(text)
 		name, _, _ := parseSlash(text)

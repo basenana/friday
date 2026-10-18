@@ -10,6 +10,7 @@ import (
 
 	"git.hypo.xyz/agents/friday/bus"
 	"git.hypo.xyz/agents/friday/core/actor/events"
+	"git.hypo.xyz/agents/friday/core/collaboration"
 	"git.hypo.xyz/agents/friday/core/types"
 )
 
@@ -44,6 +45,7 @@ func (m *model) setWorktreeDraft(active bool) {
 		m.worktreeDraftText = m.textarea.Value()
 		m.worktreeDraftFiles = append([]types.ImageContent(nil), m.attachments...)
 		m.worktreeDraftError = ""
+		m.worktreeDraftMode = collaboration.ModeDefault
 		m.textarea.Reset()
 		m.attachments = nil
 		m.composerGeneration++
@@ -69,6 +71,7 @@ func (m *model) setWorktreeDraft(active bool) {
 func (m *model) finishWorktreeDraft() {
 	m.worktreeDraftText = ""
 	m.worktreeDraftFiles = nil
+	m.worktreeDraftMode = collaboration.ModeDefault
 	m.setWorktreeDraft(false)
 }
 

@@ -543,7 +543,7 @@ func (s *worktreeRuntimeSupervisor) prepareActivation(ctx context.Context, workt
 	return prepared, nil
 }
 
-func (s *worktreeRuntimeSupervisor) prepareCreatedActivation(ctx context.Context, requirement string, width, height int) (*preparedWorktreeRuntime, error) {
+func (s *worktreeRuntimeSupervisor) prepareCreatedActivation(ctx context.Context, requirement string, width, height int, mode collaboration.Mode) (*preparedWorktreeRuntime, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -558,6 +558,9 @@ func (s *worktreeRuntimeSupervisor) prepareCreatedActivation(ctx context.Context
 		return nil, err
 	}
 	candidate, err := s.resolveRuntime(ctx, created.Worktree.Path)
+	if err == nil {
+		err = s.sessions.SetMode(candidate.runtime.sessionID, mode)
+	}
 	if err == nil {
 		var prepared *preparedWorktreeRuntime
 		prepared, err = s.prepareRuntimeActivation(ctx, candidate.runtime, width, height, requirement)
